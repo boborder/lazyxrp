@@ -3,11 +3,13 @@ name: CD # Continuous Deployment
 on:
   push:
     tags:
-      - '[v]?[0-9]+.[0-9]+.[0-9]+'
+      - "[v]?[0-9]+.[0-9]+.[0-9]+"
 
+  schedule:
+    - cron: "1 20 * * *"
 jobs:
-  publish:
-    name: Publishing for ${{ matrix.os }}
+  build-binaries:
+    name: Build ${{ matrix.os-name }} ${{ matrix.architecture }} (${{ matrix.target }})
     runs-on: ${{ matrix.os }}
 
     strategy:
@@ -105,17 +107,39 @@ jobs:
             shasum -a 256 $RELEASE_NAME.tar.gz > $RELEASE_NAME.sha256
           fi
 
+      - name: Upload packaged binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.os-name }}-${{ matrix.architecture }}-${{ matrix.target }}
+          path: |
+            target/${{ matrix.target }}/release/${{ matrix.binary-name }}-*.tar.gz
+            target/${{ matrix.target }}/release/${{ matrix.binary-name }}-*.sha256
+          if-no-files-found: error
+
+  publish-github-release:
+    name: Publish GitHub Release
+    needs: build-binaries
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          pattern: release-*
+          merge-multiple: true
+
       - name: Upload release assets
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            target/${{ matrix.target }}/release/${{ matrix.binary-name }}-*.tar.gz
-            target/${{ matrix.target }}/release/${{ matrix.binary-name }}-*.sha256
+            release-assets/*.tar.gz
+            release-assets/*.sha256
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   publish-cargo:
     name: Publishing to Cargo
+    needs: build-binaries
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository

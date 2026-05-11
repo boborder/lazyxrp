@@ -1,6 +1,6 @@
 [package]
 name = "lazyxrp"
-version = "0.1.0"
+version = "0.1.2"
 edition = "2024"
 description = "Terminal UI for the XRP Ledger — monitor accounts, order books, NFTs, trust lines, and AMM pools"
 authors = ["boborder"]
@@ -55,8 +55,10 @@ secrecy = { version = "0.10", features = ["serde"] }
 xrpl-rust = "1.1"
 url = "2"
 reqwest = { version = "0.13", features = ["json"] }
-# Transitive `openssl-sys`: vendored build so Linux cross targets (e.g. i686 via `cross`)
-# do not require target OpenSSL dev packages in the CI image.
+# Linux GNU only: vendored OpenSSL so `cross` targets (i686/aarch64) do not need target
+# OpenSSL dev packages. Omit on Windows/macOS — MSVC+vendored needs Perl modules GitHub
+# runners often lack; those platforms use Schannel/Secure Transport via `native-tls`.
+[target.'cfg(all(target_os = "linux", target_env = "gnu"))'.dependencies]
 openssl = { version = "0.10", features = ["vendored"] }
 
 [build-dependencies]
