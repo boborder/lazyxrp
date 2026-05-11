@@ -1,6 +1,6 @@
 [package]
 name = "lazyxrp"
-version = "0.1.3"
+version = "0.1.4"
 edition = "2024"
 description = "Terminal UI for the XRP Ledger — monitor accounts, order books, NFTs, trust lines, and AMM pools"
 authors = ["boborder"]

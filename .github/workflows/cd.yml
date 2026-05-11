@@ -120,6 +120,9 @@ jobs:
     name: Publish GitHub Release
     needs: build-binaries
     runs-on: ubuntu-latest
+    # Default GITHUB_TOKEN is often read-only; releases need write on contents.
+    permissions:
+      contents: write
     steps:
       - name: Download release artifacts
         uses: actions/download-artifact@v4
