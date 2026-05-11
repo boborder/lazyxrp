@@ -1,0 +1,596 @@
+use std::time::Duration;
+
+use secrecy::ExposeSecret;
+use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
+use tokio_util::sync::CancellationToken;
+
+use crate::action::Action;
+use crate::network::Network;
+use crate::signing::{self, SigningConfig};
+
+use super::backoff::next_backoff_secs;
+use super::client::{RPC_TIMEOUT, RpcClient, is_not_found_error, xrp_to_drops};
+use super::types::{
+    AccountSetSubmitParams, BookPair, PaymentSubmitParams, PollCommand, PollContext,
+};
+
+pub fn start_poll_task(
+    ctx: PollContext,
+    refresh_rx: UnboundedReceiver<PollCommand>,
+    poll_trigger_rx: UnboundedReceiver<()>,
+    action_tx: UnboundedSender<Action>,
+    cancel: CancellationToken,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(run_poll_loop(
+        ctx,
+        refresh_rx,
+        poll_trigger_rx,
+        action_tx,
+        cancel,
+    ))
+}
+
+const MIN_POLL_INTERVAL: Duration = Duration::from_secs(10);
+
+async fn poll_batch(
+    rpc: &RpcClient,
+    watch_address: &str,
+    book_pair: &BookPair,
+    action_tx: &UnboundedSender<Action>,
+) -> bool {
+    let (r_srv, r_fee, r_acc, r_book) = tokio::join!(
+        tokio::time::timeout(RPC_TIMEOUT, rpc.server_info()),
+        tokio::time::timeout(RPC_TIMEOUT, rpc.fee()),
+        tokio::time::timeout(RPC_TIMEOUT, rpc.account_info(watch_address)),
+        tokio::time::timeout(
+            RPC_TIMEOUT,
+            rpc.book_offers(
+                book_pair.gets_currency(),
+                book_pair.gets_issuer(),
+                book_pair.pays_currency(),
+                book_pair.pays_issuer(),
+                book_pair.limit
+            )
+        ),
+    );
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let (r_nfts, r_lines, r_tx) = tokio::join!(
+        tokio::time::timeout(RPC_TIMEOUT, rpc.account_nfts(watch_address)),
+        tokio::time::timeout(RPC_TIMEOUT, rpc.account_lines(watch_address)),
+        tokio::time::timeout(RPC_TIMEOUT, rpc.account_tx(watch_address, 20)),
+    );
+    let mut any_ok = false;
+    macro_rules! dispatch {
+        ($result:expr, $ok_action:expr, $label:literal) => {
+            match $result {
+                Ok(Ok(v)) => {
+                    any_ok = true;
+                    let _ = action_tx.send($ok_action(v));
+                }
+                Ok(Err(e)) => {
+                    let _ = action_tx.send(Action::XrplError(format!("{}: {e}", $label)));
+                }
+                Err(_) => {
+                    let _ = action_tx.send(Action::XrplError(format!("{}: timeout", $label)));
+                }
+            }
+        };
+    }
+    dispatch!(
+        r_srv,
+        |v| Action::XrplServerInfo(Box::new(v)),
+        "server_info"
+    );
+    dispatch!(r_fee, Action::XrplFee, "fee");
+    dispatch!(r_acc, |v| Action::XrplAccount(Box::new(v)), "account_info");
+    dispatch!(r_book, Action::XrplBookOffers, "book_offers");
+    dispatch!(r_nfts, Action::XrplAccountNfts, "account_nfts");
+    dispatch!(r_lines, Action::XrplTrustLines, "account_lines");
+    match r_tx {
+        Ok(Ok(v)) => {
+            any_ok = true;
+            let _ = action_tx.send(Action::XrplTxHistory(v));
+        }
+        Ok(Err(e)) => {
+            let msg = format!("account_tx: {e}");
+            if is_not_found_error(&msg) {
+                any_ok = true;
+                let _ = action_tx.send(Action::XrplTxHistory(vec![]));
+            } else {
+                let _ = action_tx.send(Action::XrplError(msg));
+            }
+        }
+        Err(_) => {
+            let _ = action_tx.send(Action::XrplError("account_tx: timeout".into()));
+        }
+    }
+    any_ok
+}
+
+async fn poll_wallet_overview(
+    rpc: &RpcClient,
+    seed_address: &str,
+    action_tx: &UnboundedSender<Action>,
+) -> bool {
+    match tokio::time::timeout(RPC_TIMEOUT, rpc.account_overview(seed_address)).await {
+        Ok(Ok((acc, txs))) => {
+            let _ = action_tx.send(Action::XrplWalletOverview(acc, txs));
+            true
+        }
+        Ok(Err(e)) => {
+            let _ = action_tx.send(Action::XrplError(format!("wallet_overview: {e}")));
+            false
+        }
+        Err(_) => {
+            let _ = action_tx.send(Action::XrplError("wallet_overview: timeout".into()));
+            false
+        }
+    }
+}
+
+fn account_set_params_nonempty(p: &AccountSetSubmitParams) -> bool {
+    let ds = p.domain_ascii.trim();
+    let ts = p.tick_size.trim();
+    let tr = p.transfer_rate.trim();
+    signing::resolved_account_set_flag(&p.set_flag)
+        || signing::resolved_account_set_flag(&p.clear_flag)
+        || !ds.is_empty()
+        || !ts.is_empty()
+        || !tr.is_empty()
+}
+
+async fn submit_account_set_transaction(
+    rpc: &RpcClient,
+    network: &Network,
+    params: AccountSetSubmitParams,
+    action_tx: &UnboundedSender<Action>,
+) {
+    if !account_set_params_nonempty(&params) {
+        let _ = action_tx.send(Action::AccountSetSubmitErr(
+            "nothing to change — pick a flag and/or fill domain, tick size, transfer rate".into(),
+        ));
+        return;
+    }
+    if network.is_mainnet() && !params.skip_mainnet_prompt {
+        let _ = action_tx.send(Action::AccountSetSubmitErr(
+            "mainnet: restart lazyxrp with --yes to allow AccountSet writes".into(),
+        ));
+        return;
+    }
+    let signing_config = SigningConfig::prime_seed_source(params.config_seed.clone());
+    let Some(seed) = signing_config.seed.as_ref() else {
+        let _ = action_tx.send(Action::AccountSetSubmitErr(
+            "no signing seed — set XRPL_SEED or config [xrpl.signing] seed".into(),
+        ));
+        return;
+    };
+    let wallet = match signing::wallet_from_family_seed(seed.expose_secret(), 0) {
+        Ok(w) => w,
+        Err(e) => {
+            let _ = action_tx.send(Action::AccountSetSubmitErr(format!("wallet: {e:?}")));
+            return;
+        }
+    };
+    let account = wallet.classic_address.clone();
+
+    let tick_size = if params.tick_size.trim().is_empty() {
+        None
+    } else {
+        match params.tick_size.trim().parse::<u32>() {
+            Ok(n) => Some(n),
+            Err(_) => {
+                let _ = action_tx.send(Action::AccountSetSubmitErr(
+                    "tick size: invalid number (use 0 or 3–15)".into(),
+                ));
+                return;
+            }
+        }
+    };
+
+    let transfer_rate = if params.transfer_rate.trim().is_empty() {
+        None
+    } else {
+        match params.transfer_rate.trim().parse::<u32>() {
+            Ok(n) => Some(n),
+            Err(_) => {
+                let _ = action_tx.send(Action::AccountSetSubmitErr(
+                    "transfer rate: invalid number".into(),
+                ));
+                return;
+            }
+        }
+    };
+
+    let domain_trim = params.domain_ascii.trim();
+    let domain_hex = if domain_trim.is_empty() {
+        None
+    } else {
+        Some(signing::domain_ascii_to_hex(domain_trim))
+    };
+
+    let set_flag = signing::parse_account_set_flag_choice(params.set_flag.as_deref());
+    let clear_flag = signing::parse_account_set_flag_choice(params.clear_flag.as_deref());
+
+    let account_info = match tokio::time::timeout(RPC_TIMEOUT, rpc.account_info(&account)).await {
+        Ok(Ok(a)) => a,
+        Ok(Err(e)) => {
+            let _ = action_tx.send(Action::AccountSetSubmitErr(format!("account_info: {e}")));
+            return;
+        }
+        Err(_) => {
+            let _ = action_tx.send(Action::AccountSetSubmitErr("account_info: timeout".into()));
+            return;
+        }
+    };
+
+    let fee_info = match tokio::time::timeout(RPC_TIMEOUT, rpc.fee()).await {
+        Ok(Ok(f)) => f,
+        Ok(Err(e)) => {
+            let _ = action_tx.send(Action::AccountSetSubmitErr(format!("fee: {e}")));
+            return;
+        }
+        Err(_) => {
+            let _ = action_tx.send(Action::AccountSetSubmitErr("fee: timeout".into()));
+            return;
+        }
+    };
+
+    let server_info = match tokio::time::timeout(RPC_TIMEOUT, rpc.server_info()).await {
+        Ok(Ok(s)) => s,
+        Ok(Err(e)) => {
+            let _ = action_tx.send(Action::AccountSetSubmitErr(format!("server_info: {e}")));
+            return;
+        }
+        Err(_) => {
+            let _ = action_tx.send(Action::AccountSetSubmitErr("server_info: timeout".into()));
+            return;
+        }
+    };
+    let last_ledger_sequence = server_info.ledger_index.saturating_add(20);
+
+    let blob = match signing::create_and_sign_account_set(
+        seed,
+        &account,
+        account_info.sequence,
+        fee_info.open_ledger_fee_drops,
+        last_ledger_sequence,
+        set_flag,
+        clear_flag,
+        domain_hex.as_deref(),
+        tick_size,
+        transfer_rate,
+    ) {
+        Ok(b) => b,
+        Err(e) => {
+            let _ = action_tx.send(Action::AccountSetSubmitErr(format!("sign: {e}")));
+            return;
+        }
+    };
+
+    match tokio::time::timeout(RPC_TIMEOUT, rpc.submit_signed_tx(&blob)).await {
+        Ok(Ok(tx)) => {
+            let _ = action_tx.send(Action::AccountSetSubmitOk(tx.hash.clone()));
+            let _ = action_tx.send(Action::RefreshAccount);
+            let _ = action_tx.send(Action::RefreshTxHistory);
+        }
+        Ok(Err(e)) => {
+            let _ = action_tx.send(Action::AccountSetSubmitErr(format!("submit: {e}")));
+        }
+        Err(_) => {
+            let _ = action_tx.send(Action::AccountSetSubmitErr("submit: timeout".into()));
+        }
+    }
+}
+
+fn resolve_wallet_payment_destination(trimmed: &str) -> color_eyre::Result<String> {
+    use xrpl::core::addresscodec::{
+        is_valid_classic_address, is_valid_xaddress, xaddress_to_classic_address,
+    };
+    if trimmed.is_empty() {
+        return Err(color_eyre::eyre::eyre!("destination is empty"));
+    }
+    if is_valid_classic_address(trimmed) {
+        return Ok(trimmed.to_string());
+    }
+    if is_valid_xaddress(trimmed) {
+        let (classic, _, _) = xaddress_to_classic_address(trimmed)
+            .map_err(|e| color_eyre::eyre::eyre!("invalid X-address: {e:?}"))?;
+        return Ok(classic);
+    }
+    Err(color_eyre::eyre::eyre!(
+        "invalid destination (need classic `r…` or X-address)"
+    ))
+}
+
+async fn submit_payment_transaction(
+    rpc: &RpcClient,
+    network: &Network,
+    params: PaymentSubmitParams,
+    action_tx: &UnboundedSender<Action>,
+) {
+    if params.amount_xrp.trim().is_empty() {
+        let _ = action_tx.send(Action::PaymentSubmitErr(
+            "amount is empty — enter XRP to send".into(),
+        ));
+        return;
+    }
+    let destination_resolved = match resolve_wallet_payment_destination(params.destination.trim()) {
+        Ok(d) => d,
+        Err(e) => {
+            let _ = action_tx.send(Action::PaymentSubmitErr(format!("{e}")));
+            return;
+        }
+    };
+    if network.is_mainnet() && !params.skip_mainnet_prompt {
+        let _ = action_tx.send(Action::PaymentSubmitErr(
+            "mainnet: restart lazyxrp with --yes to allow Payment writes".into(),
+        ));
+        return;
+    }
+    let signing_config = SigningConfig::prime_seed_source(params.config_seed.clone());
+    let Some(seed) = signing_config.seed.as_ref() else {
+        let _ = action_tx.send(Action::PaymentSubmitErr(
+            "no signing seed — set XRPL_SEED or config [xrpl.signing] seed".into(),
+        ));
+        return;
+    };
+    let wallet = match signing::wallet_from_family_seed(seed.expose_secret(), 0) {
+        Ok(w) => w,
+        Err(e) => {
+            let _ = action_tx.send(Action::PaymentSubmitErr(format!("wallet: {e:?}")));
+            return;
+        }
+    };
+    let account = wallet.classic_address.clone();
+    if account == destination_resolved {
+        let _ = action_tx.send(Action::PaymentSubmitErr(
+            "destination matches source account".into(),
+        ));
+        return;
+    }
+
+    let amount_drops = match xrp_to_drops(params.amount_xrp.trim()) {
+        Ok(d) => d,
+        Err(e) => {
+            let _ = action_tx.send(Action::PaymentSubmitErr(format!("amount: {e}")));
+            return;
+        }
+    };
+    if amount_drops == 0 {
+        let _ = action_tx.send(Action::PaymentSubmitErr(
+            "amount must be greater than zero".into(),
+        ));
+        return;
+    }
+
+    let account_info = match tokio::time::timeout(RPC_TIMEOUT, rpc.account_info(&account)).await {
+        Ok(Ok(a)) => a,
+        Ok(Err(e)) => {
+            let _ = action_tx.send(Action::PaymentSubmitErr(format!("account_info: {e}")));
+            return;
+        }
+        Err(_) => {
+            let _ = action_tx.send(Action::PaymentSubmitErr("account_info: timeout".into()));
+            return;
+        }
+    };
+
+    let balance_drops = xrp_to_drops(&account_info.balance_xrp).unwrap_or(0);
+    let fee_info = match tokio::time::timeout(RPC_TIMEOUT, rpc.fee()).await {
+        Ok(Ok(f)) => f,
+        Ok(Err(e)) => {
+            let _ = action_tx.send(Action::PaymentSubmitErr(format!("fee: {e}")));
+            return;
+        }
+        Err(_) => {
+            let _ = action_tx.send(Action::PaymentSubmitErr("fee: timeout".into()));
+            return;
+        }
+    };
+    let fee_drops = fee_info.open_ledger_fee_drops;
+    if balance_drops < amount_drops + u64::from(fee_drops) {
+        let total_need = amount_drops.saturating_add(u64::from(fee_drops));
+        let _ = action_tx.send(Action::PaymentSubmitErr(format!(
+            "insufficient balance: have {balance_drops} drops, need {total_need} (amount {amount_drops} + fee {fee_drops})"
+        )));
+        return;
+    }
+
+    let server_info = match tokio::time::timeout(RPC_TIMEOUT, rpc.server_info()).await {
+        Ok(Ok(s)) => s,
+        Ok(Err(e)) => {
+            let _ = action_tx.send(Action::PaymentSubmitErr(format!("server_info: {e}")));
+            return;
+        }
+        Err(_) => {
+            let _ = action_tx.send(Action::PaymentSubmitErr("server_info: timeout".into()));
+            return;
+        }
+    };
+    let last_ledger_sequence = server_info.ledger_index.saturating_add(20);
+
+    let blob = match signing::create_and_sign_payment(
+        seed,
+        &account,
+        &destination_resolved,
+        params.amount_xrp.trim(),
+        account_info.sequence,
+        fee_drops,
+        last_ledger_sequence,
+        network,
+    ) {
+        Ok(b) => b,
+        Err(e) => {
+            let _ = action_tx.send(Action::PaymentSubmitErr(format!("sign: {e}")));
+            return;
+        }
+    };
+
+    match tokio::time::timeout(RPC_TIMEOUT, rpc.submit_signed_tx(&blob)).await {
+        Ok(Ok(tx)) => {
+            let _ = action_tx.send(Action::PaymentSubmitOk(tx.hash.clone()));
+            let _ = action_tx.send(Action::RefreshAccount);
+            let _ = action_tx.send(Action::RefreshTxHistory);
+        }
+        Ok(Err(e)) => {
+            let _ = action_tx.send(Action::PaymentSubmitErr(format!("submit: {e}")));
+        }
+        Err(_) => {
+            let _ = action_tx.send(Action::PaymentSubmitErr("submit: timeout".into()));
+        }
+    }
+}
+
+fn dispatch_timed<T, F>(
+    action_tx: &UnboundedSender<Action>,
+    label: &str,
+    result: Result<color_eyre::Result<T>, tokio::time::error::Elapsed>,
+    ok_action: F,
+) where
+    F: FnOnce(T) -> Action,
+{
+    match result {
+        Ok(Ok(value)) => {
+            let _ = action_tx.send(ok_action(value));
+        }
+        Ok(Err(e)) => {
+            let _ = action_tx.send(Action::XrplError(format!("{label}: {e}")));
+        }
+        Err(_) => {
+            let _ = action_tx.send(Action::XrplError(format!("{label}: timeout")));
+        }
+    }
+}
+
+async fn run_poll_loop(
+    ctx: PollContext,
+    mut refresh_rx: UnboundedReceiver<PollCommand>,
+    mut poll_trigger_rx: UnboundedReceiver<()>,
+    action_tx: UnboundedSender<Action>,
+    cancel: CancellationToken,
+) {
+    let PollContext {
+        rpc_url,
+        watch_address,
+        book_pair,
+        poll_interval,
+        seed_address,
+        network_watch,
+    } = ctx;
+    let rpc = match RpcClient::connect(&rpc_url) {
+        Ok(rpc) => rpc,
+        Err(err) => {
+            let _ = action_tx.send(Action::XrplError(format!("rpc init failed: {err}")));
+            return;
+        }
+    };
+    let mut backoff_secs: u64 = 0;
+    let mut tick = tokio::time::interval(poll_interval.max(Duration::from_millis(500)));
+    let mut price_tick = tokio::time::interval(Duration::from_secs(90));
+    let mut last_poll: Option<std::time::Instant> = None;
+    loop {
+        tokio::select! {
+            _ = cancel.cancelled() => return,
+            _ = tick.tick() => {
+                if backoff_secs > 0 {
+                    tokio::time::sleep(Duration::from_secs(backoff_secs)).await;
+                }
+                let batch_ok = poll_batch(&rpc, &watch_address, &book_pair, &action_tx).await;
+                if let Some(ref addr) = seed_address {
+                    poll_wallet_overview(&rpc, addr, &action_tx).await;
+                }
+                if batch_ok {
+                    backoff_secs = 0;
+                } else {
+                    backoff_secs = next_backoff_secs(backoff_secs);
+                }
+                last_poll = Some(std::time::Instant::now());
+            }
+            Some(()) = poll_trigger_rx.recv() => {
+                if let Some(last) = last_poll
+                    && last.elapsed() < MIN_POLL_INTERVAL
+                {
+                    continue;
+                }
+                if backoff_secs > 0 {
+                    tokio::time::sleep(Duration::from_secs(backoff_secs)).await;
+                }
+                let batch_ok = poll_batch(&rpc, &watch_address, &book_pair, &action_tx).await;
+                if let Some(ref addr) = seed_address {
+                    poll_wallet_overview(&rpc, addr, &action_tx).await;
+                }
+                if batch_ok {
+                    backoff_secs = 0;
+                } else {
+                    backoff_secs = next_backoff_secs(backoff_secs);
+                }
+                last_poll = Some(std::time::Instant::now());
+            }
+            _ = price_tick.tick() => {
+                match tokio::time::timeout(RPC_TIMEOUT, rpc.xrp_rlusd_price(book_pair.pays_currency(), &book_pair.issuer)).await {
+                    Ok(Ok(p)) => { let _ = action_tx.send(Action::XrplRlusdPrice(p)); }
+                    Ok(Err(e)) => { let _ = action_tx.send(Action::XrplError(format!("price: {e}"))); }
+                    Err(_) => { let _ = action_tx.send(Action::XrplError("price: timeout".into())); }
+                }
+            }
+            Some(cmd) = refresh_rx.recv() => {
+                match cmd {
+                    PollCommand::Account => dispatch_timed(
+                        &action_tx,
+                        "account_info",
+                        tokio::time::timeout(RPC_TIMEOUT, rpc.account_info(&watch_address)).await,
+                        |account| Action::XrplAccount(Box::new(account)),
+                    ),
+                    PollCommand::Book => dispatch_timed(
+                        &action_tx,
+                        "book_offers",
+                        tokio::time::timeout(
+                            RPC_TIMEOUT,
+                            rpc.book_offers(
+                                book_pair.gets_currency(),
+                                book_pair.gets_issuer(),
+                                book_pair.pays_currency(),
+                                book_pair.pays_issuer(),
+                                book_pair.limit,
+                            ),
+                        )
+                        .await,
+                        Action::XrplBookOffers,
+                    ),
+                    PollCommand::Nfts => dispatch_timed(
+                        &action_tx,
+                        "account_nfts",
+                        tokio::time::timeout(RPC_TIMEOUT, rpc.account_nfts(&watch_address)).await,
+                        Action::XrplAccountNfts,
+                    ),
+                    PollCommand::Lines => dispatch_timed(
+                        &action_tx,
+                        "account_lines",
+                        tokio::time::timeout(RPC_TIMEOUT, rpc.account_lines(&watch_address)).await,
+                        Action::XrplTrustLines,
+                    ),
+                    PollCommand::TxHistory => dispatch_timed(
+                        &action_tx,
+                        "account_tx",
+                        tokio::time::timeout(RPC_TIMEOUT, rpc.account_tx(&watch_address, 20)).await,
+                        Action::XrplTxHistory,
+                    ),
+                    PollCommand::LedgerObjects => dispatch_timed(
+                        &action_tx,
+                        "account_objects",
+                        tokio::time::timeout(RPC_TIMEOUT, rpc.account_objects(&watch_address)).await,
+                        Action::XrplLedgerObjects,
+                    ),
+                    PollCommand::AccountSetSubmit(params) => {
+                        let network = *network_watch.borrow();
+                        submit_account_set_transaction(&rpc, &network, params, &action_tx).await;
+                    }
+                    PollCommand::PaymentSubmit(params) => {
+                        let network = *network_watch.borrow();
+                        submit_payment_transaction(&rpc, &network, params, &action_tx).await;
+                    }
+                }
+            }
+        }
+    }
+}

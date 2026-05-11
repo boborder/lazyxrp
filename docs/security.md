@@ -100,7 +100,7 @@ Phase 3 実装前に対応することを推奨。
 
 **ファイル:** `src/config.rs`（`Config::new` の `json5::from_str(CONFIG)`）
 
-**過去・現状とも:** 組み込み JSON5 の不正は開発時検知すべきであり、`expect("embedded .config/config.json5 is malformed — this is a build-time bug")` で明示。実運用でユーザーが書き換える対象ではない。
+**過去・現状とも:** 組み込み JSON5 の不正は開発時検知すべきであり、`expect("embedded config.json5 is malformed — this is a build-time bug")` で明示。実運用でユーザーが書き換える対象ではない。
 
 ---
 

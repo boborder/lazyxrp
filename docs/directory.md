@@ -8,6 +8,7 @@ lazyxrp/
 ├── Cargo.lock
 ├── build.rs
 ├── README.md
+├── config.json5
 ├── .env.example
 ├── install.sh
 ├── .mise.toml
@@ -16,7 +17,14 @@ lazyxrp/
 │   ├── main.rs
 │   ├── app.rs
 │   ├── xrpl/
-│   │   └── mod.rs
+│   │   ├── mod.rs
+│   │   ├── backoff.rs
+│   │   ├── client.rs
+│   │   ├── cli_exec.rs
+│   │   ├── json_util.rs
+│   │   ├── poll.rs
+│   │   ├── types.rs
+│   │   └── ws.rs
 │   ├── cli.rs
 │   ├── action.rs
 │   ├── config.rs
@@ -79,6 +87,7 @@ lazyxrp/
 ## 2. ルート直下ファイル
 
 - `Cargo.toml`: クレート定義と依存関係、features 設定。
+- `config.json5`: キーバインド等の組み込みデフォルト（`src/config.rs` の `include_str!` 対象）。ユーザー設定 `config.toml` とは別物。
 - `Cargo.lock`: 依存の固定バージョン。
 - `build.rs`: ビルド時の補助処理。
 - `README.md`: 利用者向けの概要と起動手順。
@@ -91,7 +100,7 @@ lazyxrp/
 
 - `main.rs`: 起動エントリーポイント。`watch` と CLI モードの分岐、ネットワーク/エンドポイント/シードの優先順位解決を担当。
 - `app.rs`: TUI アプリ本体。イベントループ、コンポーネント管理、バックグラウンド処理起動を担当。
-- `xrpl/mod.rs`: XRPL RPC/WS 通信、ポーリング、CLI コマンド実行ロジックを担当（XRP 文字列→drops などの変換もここに集約）。
+- `xrpl/`: XRPL 連携一式。`mod.rs` は再エクスポートのみ。`client.rs`（`RpcClient`・JSON-RPC・レスポンスパース・`xrp_to_drops`）、`json_util.rs`（JSON パスヘルパ）、`types.rs`（行データ型・`BookPair`・`PollContext` / `PollCommand`）、`poll.rs`（定期ポーリング・ウォレット送信パス）、`ws.rs`（WebSocket）、`cli_exec.rs`（非 TUI の `execute_cli_command`）、`backoff.rs`（再接続間隔）。
 - `cli.rs`: コマンドライン引数とサブコマンド定義。
 - `action.rs`: アプリ内部で流す `Action` 定義。
 - `config.rs`: 既定値 + 設定ファイルのロードとマージ、`XRPL_*` 環境変数（シード・RPC/WS・ネットワーク）の反映。

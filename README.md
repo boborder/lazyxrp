@@ -2,6 +2,8 @@
 
 Terminal UI for the XRP Ledger — monitor accounts, order books, NFTs, trust lines, and AMM pools.
 
+Repository: https://github.com/boborder/lazyxrp
+
 ## Features
 
 Watch mode uses **five top-level tabs** (jump with number keys `1`–`5`):
@@ -59,7 +61,7 @@ lazyxrp send <r-destination> --amount 10                        # amount is a de
 
 ## Key Bindings
 
-Default bindings ship in the embedded `.config/config.json5` and merge with your user config. Common keys:
+Default bindings ship in the embedded repo-root `config.json5` and merge with your user config. Common keys:
 
 | Key | Action |
 |-----|--------|
@@ -72,6 +74,7 @@ Default bindings ship in the embedded `.config/config.json5` and merge with your
 | `o` | Refresh ledger objects (`account_objects` — Checks / MPT / DID / PayChan / Escrow, etc.) |
 | `?` | Toggle help overlay |
 | `q` / `Ctrl-c` / `Ctrl-d` | Quit |
+| `Ctrl-z` | Suspend（端末が SIGTSTP を扱う場合） |
 
 ## Network Selection
 
@@ -133,3 +136,7 @@ cargo run --bin lazyxrp -- --network testnet info
 
 - [XRPL Rust SDK](https://github.com/XRPLF/xrpl-rust)
 - [XRPL Documentation](https://xrpl.org/docs)
+
+## License
+
+MIT — see `LICENSE` in this repository.

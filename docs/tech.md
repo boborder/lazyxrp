@@ -31,7 +31,7 @@
 - `directories`（`Cargo.toml` `6`、`Cargo.lock` `6.0.0` — `ProjectDirs`）
 - `serde`（`Cargo.toml` `1`、`Cargo.lock` `1.0.228`、`derive`）
 - `serde_json`（`Cargo.toml` `1`、`Cargo.lock` `1.0.149`）
-- `json5`（`Cargo.toml` `1`、`Cargo.lock` 直接依存 `1.3.1` — 埋め込み `config.json5` のパース。`config` クレート経由などトランジティブに **`json5 0.4.x` が併存**しうる）
+- `json5`（`Cargo.toml` `1`、`Cargo.lock` 直接依存 `1.3.1` — リポジトリ直下の埋め込み `config.json5` のパース。`config` クレート経由などトランジティブに **`json5 0.4.x` が併存**しうる）
 
 ### 監視性・障害対応
 

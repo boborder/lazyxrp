@@ -11,7 +11,7 @@ use serde::{Deserialize, de::Deserializer, de::Error as _};
 
 use crate::{action::Action, app::Mode, network::Network};
 
-const CONFIG: &str = include_str!("../.config/config.json5");
+const CONFIG: &str = include_str!("../config.json5");
 const CONFIG_DIR_BASENAME: &str = "lazyxrp";
 
 #[derive(Clone, Debug, Deserialize, Default)]
@@ -171,7 +171,7 @@ impl Config {
         // Security (S-007): embedded config is a compile-time constant — parse failure
         // indicates a build-time bug, not a runtime condition.
         let default_config: Config = json5::from_str(CONFIG)
-            .expect("embedded .config/config.json5 is malformed — this is a build-time bug");
+            .expect("embedded config.json5 is malformed — this is a build-time bug");
         let data_dir = data_dir();
         let config_dir = config_dir();
         let mut builder = config::Config::builder()

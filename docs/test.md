@@ -67,7 +67,9 @@ cargo clippy
 
 ## Implemented Test Cases
 
-### XRPL Core (`src/xrpl/mod.rs`)
+### XRPL Core (`src/xrpl/`)
+
+実装は `mod.rs` がサブモジュールを束ねて再エクスポートする。`types.rs`（データ型・`PollContext` / `PollCommand`）、`client.rs`（`RpcClient`・JSON-RPC・レスポンスパース・`xrp_to_drops`）、`json_util.rs`（`json_str` / `extract_json_u32`）、`poll.rs`（ポーリング・ウォレット送信）、`ws.rs`（WebSocket）、`cli_exec.rs`（`execute_cli_command`）、`backoff.rs`（WS/ポール共通バックオフ）。
 
 #### TC-001: parse_currency — XRP uppercase
 
@@ -75,10 +77,10 @@ cargo clippy
 - **Type**: Unit
 - **Size**: S
 - **Status**: [x] Done
-- **Target**: `src/xrpl/mod.rs` -> `parse_currency()`
+- **Target**: `src/xrpl/client.rs` -> `book_currency()`（旧 `parse_currency` 相当）
 - **Input**: `"XRP"`, `None`
 - **Expected Output**: `Currency::XRP(_)`
-- **Test File**: `src/xrpl/mod.rs` (inline)
+- **Test File**: （当該関数専用テストなし；`book_offers` / `amm_info` 経由で間接的に使用）
 
 #### TC-002: parse_currency — XRP case-insensitive
 
@@ -86,10 +88,10 @@ cargo clippy
 - **Type**: Unit
 - **Size**: S
 - **Status**: [x] Done
-- **Target**: `src/xrpl/mod.rs` -> `parse_currency()`
+- **Target**: `src/xrpl/client.rs` -> `book_currency()`
 - **Input**: `"xrp"`, `Some("rIssuer")`
 - **Expected Output**: `Currency::XRP(_)`
-- **Test File**: `src/xrpl/mod.rs` (inline)
+- **Test File**: （同上）
 
 #### TC-003: parse_currency — issued currency is not XRP
 
@@ -97,10 +99,10 @@ cargo clippy
 - **Type**: Unit
 - **Size**: S
 - **Status**: [x] Done
-- **Target**: `src/xrpl/mod.rs` -> `parse_currency()`
+- **Target**: `src/xrpl/client.rs` -> `book_currency()`
 - **Input**: `"USD"`, `Some("rIssuer")`
 - **Expected Output**: Not `Currency::XRP`
-- **Test File**: `src/xrpl/mod.rs` (inline)
+- **Test File**: （同上）
 
 #### TC-004: json_str — nested path returns value
 
@@ -108,10 +110,10 @@ cargo clippy
 - **Type**: Unit
 - **Size**: S
 - **Status**: [x] Done
-- **Target**: `src/xrpl/mod.rs` -> `json_str()`
+- **Target**: `src/xrpl/json_util.rs` -> `json_str()`
 - **Input**: `{"a": {"b": "hello"}}`, path `["a", "b"]`
 - **Expected Output**: `"hello"`
-- **Test File**: `src/xrpl/mod.rs` (inline)
+- **Test File**: `src/xrpl/json_util.rs` (inline)
 
 #### TC-005: json_str — missing path returns empty
 
@@ -119,10 +121,10 @@ cargo clippy
 - **Type**: Unit
 - **Size**: S
 - **Status**: [x] Done
-- **Target**: `src/xrpl/mod.rs` -> `json_str()`
+- **Target**: `src/xrpl/json_util.rs` -> `json_str()`
 - **Input**: `{"a": {}}`, path `["a", "b"]` or `["x"]`
 - **Expected Output**: `""`
-- **Test File**: `src/xrpl/mod.rs` (inline)
+- **Test File**: `src/xrpl/json_util.rs` (inline)
 
 #### TC-006: json_u32 — returns number
 
@@ -130,10 +132,10 @@ cargo clippy
 - **Type**: Unit
 - **Size**: S
 - **Status**: [x] Done
-- **Target**: `src/xrpl/mod.rs` -> `json_u32()`
+- **Target**: `src/xrpl/json_util.rs` -> `extract_json_u32()`
 - **Input**: `{"a": 42}`, path `["a"]`
 - **Expected Output**: `42`
-- **Test File**: `src/xrpl/mod.rs` (inline)
+- **Test File**: `src/xrpl/json_util.rs` (inline)
 
 #### TC-007: json_u32 — missing or non-numeric returns zero
 
@@ -141,10 +143,10 @@ cargo clippy
 - **Type**: Unit
 - **Size**: S
 - **Status**: [x] Done
-- **Target**: `src/xrpl/mod.rs` -> `json_u32()`
+- **Target**: `src/xrpl/json_util.rs` -> `extract_json_u32()`
 - **Input**: `{"a": "foo"}`, path `["a"]` or `["x"]`
 - **Expected Output**: `0`
-- **Test File**: `src/xrpl/mod.rs` (inline)
+- **Test File**: `src/xrpl/json_util.rs` (inline)
 
 #### TC-008: drops_to_xrp — basic conversion
 
@@ -152,10 +154,10 @@ cargo clippy
 - **Type**: Unit
 - **Size**: S
 - **Status**: [x] Done
-- **Target**: `src/xrpl/mod.rs` -> `drops_to_xrp()`
+- **Target**: `src/xrpl/client.rs` -> `drops_to_xrp()`
 - **Input**: `"1000000"`, `"250000"`
 - **Expected Output**: `"1.000000"`, `"0.250000"`
-- **Test File**: `src/xrpl/mod.rs` (inline)
+- **Test File**: `src/xrpl/client.rs` (inline)
 
 #### TC-009: drops_to_xrp — invalid string returns zero
 
@@ -163,10 +165,10 @@ cargo clippy
 - **Type**: Unit
 - **Size**: S
 - **Status**: [x] Done
-- **Target**: `src/xrpl/mod.rs` -> `drops_to_xrp()`
+- **Target**: `src/xrpl/client.rs` -> `drops_to_xrp()`
 - **Input**: `"not-a-number"`
 - **Expected Output**: `"0.000000"`
-- **Test File**: `src/xrpl/mod.rs` (inline)
+- **Test File**: `src/xrpl/client.rs` (inline)
 
 #### TC-010: format_amount — None returns dash
 
@@ -174,10 +176,10 @@ cargo clippy
 - **Type**: Unit
 - **Size**: S
 - **Status**: [x] Done
-- **Target**: `src/xrpl/mod.rs` -> `format_amount()`
+- **Target**: `src/xrpl/client.rs` -> `format_amount()`
 - **Input**: `None`
 - **Expected Output**: `"-"`
-- **Test File**: `src/xrpl/mod.rs` (inline)
+- **Test File**: `src/xrpl/client.rs` (inline)
 
 #### TC-011: format_amount — XRP drops string
 
@@ -185,10 +187,10 @@ cargo clippy
 - **Type**: Unit
 - **Size**: S
 - **Status**: [x] Done
-- **Target**: `src/xrpl/mod.rs` -> `format_amount()`
+- **Target**: `src/xrpl/client.rs` -> `format_amount()`
 - **Input**: `Some(json!("1000000"))`
 - **Expected Output**: `"1.000000"`
-- **Test File**: `src/xrpl/mod.rs` (inline)
+- **Test File**: `src/xrpl/client.rs` (inline)
 
 #### TC-012: format_amount — issued currency object
 
@@ -196,10 +198,10 @@ cargo clippy
 - **Type**: Unit
 - **Size**: S
 - **Status**: [x] Done
-- **Target**: `src/xrpl/mod.rs` -> `format_amount()`
+- **Target**: `src/xrpl/client.rs` -> `format_amount()`
 - **Input**: `Some(json!({"currency": "USD", "value": "1.5", "issuer": "rXyz"}))`
 - **Expected Output**: `"1.5 USD"`
-- **Test File**: `src/xrpl/mod.rs` (inline)
+- **Test File**: `src/xrpl/client.rs` (inline)
 
 #### TC-013: account_nfts — parse response into NftRow vec
 
@@ -207,10 +209,10 @@ cargo clippy
 - **Type**: Unit
 - **Size**: M
 - **Status**: [x] Done
-- **Target**: `src/xrpl/mod.rs` -> `account_nfts()`
+- **Target**: `src/xrpl/client.rs` -> `account_nfts()`
 - **Preconditions**: Mock RPC response with `account_nfts` result
 - **Expected Output**: `Vec<NftRow>` with correct fields
-- **Test File**: `src/xrpl/mod.rs` (inline)
+- **Test File**: `src/xrpl/client.rs` (inline)
 - **Notes**: Requires mocked HTTP client or test fixture JSON.
 
 #### TC-074: account_nfts — tfMutable flag (dNFT)
@@ -219,10 +221,10 @@ cargo clippy
 - **Type**: Unit
 - **Size**: S
 - **Status**: [x] Done
-- **Target**: `src/xrpl/mod.rs` -> `parse_account_nfts_value()`
+- **Target**: `src/xrpl/client.rs` -> `parse_account_nfts_value()`
 - **Input**: Fixture with `Flags: 16` (`NFTOKEN_FLAG_MUTABLE`)
 - **Expected Output**: `NftRow.is_mutable == true`; missing `Flags` → `false`
-- **Test File**: `src/xrpl/mod.rs` (inline)
+- **Test File**: `src/xrpl/client.rs` (inline)
 
 #### TC-014: account_lines — parse response into TrustLineRow vec
 
@@ -230,10 +232,10 @@ cargo clippy
 - **Type**: Unit
 - **Size**: M
 - **Status**: [x] Done
-- **Target**: `src/xrpl/mod.rs` -> `account_lines()`
+- **Target**: `src/xrpl/client.rs` -> `account_lines()`
 - **Preconditions**: Mock RPC response with `account_lines` result
 - **Expected Output**: `Vec<TrustLineRow>` with correct fields
-- **Test File**: `src/xrpl/mod.rs` (inline)
+- **Test File**: `src/xrpl/client.rs` (inline)
 
 #### TC-015: amm_info — parse response into AmmSummary
 
@@ -241,10 +243,10 @@ cargo clippy
 - **Type**: Unit
 - **Size**: M
 - **Status**: [x] Done
-- **Target**: `src/xrpl/mod.rs` -> `amm_info()`
+- **Target**: `src/xrpl/client.rs` -> `amm_info()`
 - **Preconditions**: Mock RPC response with `amm_info` result
 - **Expected Output**: `AmmSummary` with asset pair and fee
-- **Test File**: `src/xrpl/mod.rs` (inline)
+- **Test File**: `src/xrpl/client.rs` (inline)
 
 #### TC-016: account_tx — parse response into TxRow vec
 
@@ -252,10 +254,10 @@ cargo clippy
 - **Type**: Unit
 - **Size**: M
 - **Status**: [x] Done
-- **Target**: `src/xrpl/mod.rs` -> `account_tx()`
+- **Target**: `src/xrpl/client.rs` -> `account_tx()`
 - **Preconditions**: Mock RPC response with `account_tx` result
 - **Expected Output**: `Vec<TxRow>` with hash, type, result
-- **Test File**: `src/xrpl/mod.rs` (inline)
+- **Test File**: `src/xrpl/client.rs` (inline)
 
 #### TC-017: book_offers — parse response into OfferRow vec
 
@@ -263,10 +265,10 @@ cargo clippy
 - **Type**: Unit
 - **Size**: M
 - **Status**: [x] Done
-- **Target**: `src/xrpl/mod.rs` -> `book_offers()`
+- **Target**: `src/xrpl/client.rs` -> `book_offers()`
 - **Preconditions**: Mock RPC response with `book_offers` result
 - **Expected Output**: `Vec<OfferRow>` with quality and amount
-- **Test File**: `src/xrpl/mod.rs` (inline)
+- **Test File**: `src/xrpl/client.rs` (inline)
 
 #### TC-070: book_offers — issued quote uses `currency_code`
 
@@ -274,10 +276,10 @@ cargo clippy
 - **Type**: Unit
 - **Size**: S
 - **Status**: [x] Done
-- **Target**: `src/xrpl/mod.rs` -> `BookPair::pays_currency()`
+- **Target**: `src/xrpl/types.rs` -> `BookPair::pays_currency()`
 - **Input**: Display quote `RLUSD` and 160-bit `currency_code`
 - **Expected Output**: RPC currency value is the 160-bit code, not display symbol
-- **Test File**: `src/xrpl/mod.rs` (inline)
+- **Test File**: `src/xrpl/types.rs` (inline)
 
 #### TC-071: account_objects — empty array parses
 
@@ -285,10 +287,10 @@ cargo clippy
 - **Type**: Unit
 - **Size**: S
 - **Status**: [x] Done
-- **Target**: `src/xrpl/mod.rs` -> `parse_account_objects_value()`
+- **Target**: `src/xrpl/client.rs` -> `parse_account_objects_value()`
 - **Input**: `result.account_objects` = `[]`
 - **Expected Output**: empty `Vec`
-- **Test File**: `src/xrpl/mod.rs` (inline)
+- **Test File**: `src/xrpl/client.rs` (inline)
 
 #### TC-072: account_objects — mixed Check / Ticket / MPT / PayChannel / Escrow
 
@@ -296,10 +298,10 @@ cargo clippy
 - **Type**: Unit
 - **Size**: M
 - **Status**: [x] Done
-- **Target**: `src/xrpl/mod.rs` -> `parse_account_objects_value()`, `summarize_ledger_object()`
+- **Target**: `src/xrpl/client.rs` -> `parse_account_objects_value()`, `summarize_ledger_object()`
 - **Input**: JSON fixture with five `LedgerEntryType` variants
 - **Expected Output**: five `LedgerObjectRow` with types and non-empty details where applicable
-- **Test File**: `src/xrpl/mod.rs` (inline)
+- **Test File**: `src/xrpl/client.rs` (inline)
 
 #### TC-073: ledger object filters — tab visibility helpers
 
@@ -307,10 +309,10 @@ cargo clippy
 - **Type**: Unit
 - **Size**: S
 - **Status**: [x] Done
-- **Target**: `src/xrpl/mod.rs` -> `is_objects_tab_ledger_type()`, `is_pay_channel_type()`, `is_escrow_type()`
+- **Target**: `src/xrpl/types.rs` -> `is_objects_tab_ledger_type()`, `is_pay_channel_type()`, `is_escrow_type()`
 - **Input**: representative type strings
 - **Expected Output**: Objects (misc) panel excludes `PayChannel`/`Escrow` but includes `DID`; channel/escrow predicates match
-- **Test File**: `src/xrpl/mod.rs` (inline)
+- **Test File**: `src/xrpl/client.rs` (inline)（`xrpl::types` の公開 API を参照）
 
 #### TC-018: server_info/fee — parse response into summary structs
 
@@ -318,10 +320,10 @@ cargo clippy
 - **Type**: Unit
 - **Size**: M
 - **Status**: [x] Done
-- **Target**: `src/xrpl/mod.rs` -> `server_info()` / `fee()`
+- **Target**: `src/xrpl/client.rs` -> `server_info()` / `fee()`
 - **Preconditions**: Mock RPC response
 - **Expected Output**: `ServerInfoSummary`, `FeeSummary`
-- **Test File**: `src/xrpl/mod.rs` (inline)
+- **Test File**: `src/xrpl/client.rs` (inline)
 
 ### Config & Keybinds (`src/config.rs`)
 
@@ -410,7 +412,7 @@ cargo clippy
 - **Status**: [x] Done
 - **Target**: `src/config.rs` -> `Config::new()`
 - **Preconditions**: Default config file exists or built-in default used
-- **Expected Output**: `keybindings[Mode::Home]["q"] == Action::Quit`
+- **Expected Output**: `keybindings.0[&Mode::Splash][&parse_key_sequence("<q>").unwrap()] == Action::Quit`（埋め込み `config.json5` の Splash 既定）
 - **Test File**: `src/config.rs` (inline)
 
 #### TC-027: parse_key_event — simple keys
@@ -687,10 +689,10 @@ cargo clippy
 - **Type**: Integration
 - **Size**: M
 - **Status**: [x] Done
-- **Target**: `src/xrpl/mod.rs` -> `execute_cli_command(Cmd::Info, ...)`
+- **Target**: `src/xrpl/cli_exec.rs` -> `execute_cli_command(Cmd::Info, ...)`
 - **Preconditions**: Outbound HTTPS to `https://xrplcluster.com` (90s timeout)
 - **Expected Output**: `Ok(())`; server_info JSON printed
-- **Test File**: `src/xrpl/mod.rs` (`integration_live_network`)
+- **Test File**: `src/xrpl/cli_exec.rs` (`integration_live_network`)
 - **Notes**: Live mainnet RPC; CI needs network access.
 
 #### TC-051: CLI account — exits with code 0
@@ -699,10 +701,10 @@ cargo clippy
 - **Type**: Integration
 - **Size**: M
 - **Status**: [x] Done
-- **Target**: `src/xrpl/mod.rs` -> `execute_cli_command(Cmd::Account)`
+- **Target**: `src/xrpl/cli_exec.rs` -> `execute_cli_command(Cmd::Account)`
 - **Input**: Valid r-address
 - **Expected Output**: Exit code 0; account_info printed
-- **Test File**: `src/xrpl/mod.rs` (`integration_live_network`)
+- **Test File**: `src/xrpl/cli_exec.rs` (`integration_live_network`)
 
 #### TC-052: CLI book — exits with code 0
 
@@ -710,10 +712,10 @@ cargo clippy
 - **Type**: Integration
 - **Size**: M
 - **Status**: [x] Done
-- **Target**: `src/xrpl/mod.rs` -> `execute_cli_command(Cmd::Book)`
+- **Target**: `src/xrpl/cli_exec.rs` -> `execute_cli_command(Cmd::Book)`
 - **Input**: `--base XRP --quote USD --issuer <r-addr>`
 - **Expected Output**: Exit code 0; offers printed
-- **Test File**: `src/xrpl/mod.rs` (`integration_live_network`)
+- **Test File**: `src/xrpl/cli_exec.rs` (`integration_live_network`)
 
 #### TC-053: CLI summary — exits with code 0
 
@@ -721,9 +723,9 @@ cargo clippy
 - **Type**: Integration
 - **Size**: M
 - **Status**: [x] Done
-- **Target**: `src/xrpl/mod.rs` -> `execute_cli_command(Cmd::Summary)`
+- **Target**: `src/xrpl/cli_exec.rs` -> `execute_cli_command(Cmd::Summary)`
 - **Expected Output**: Exit code 0; combined output
-- **Test File**: `src/xrpl/mod.rs` (`integration_live_network`)
+- **Test File**: `src/xrpl/cli_exec.rs` (`integration_live_network`)
 
 #### TC-054: CLI nfts — exits with code 0
 
@@ -731,9 +733,9 @@ cargo clippy
 - **Type**: Integration
 - **Size**: M
 - **Status**: [x] Done
-- **Target**: `src/xrpl/mod.rs` -> `execute_cli_command(Cmd::Nfts)`
+- **Target**: `src/xrpl/cli_exec.rs` -> `execute_cli_command(Cmd::Nfts)`
 - **Expected Output**: Exit code 0; NFT list printed
-- **Test File**: `src/xrpl/mod.rs` (`integration_live_network`)
+- **Test File**: `src/xrpl/cli_exec.rs` (`integration_live_network`)
 
 #### TC-055: CLI lines — exits with code 0
 
@@ -741,9 +743,9 @@ cargo clippy
 - **Type**: Integration
 - **Size**: M
 - **Status**: [x] Done
-- **Target**: `src/xrpl/mod.rs` -> `execute_cli_command(Cmd::Lines)`
+- **Target**: `src/xrpl/cli_exec.rs` -> `execute_cli_command(Cmd::Lines)`
 - **Expected Output**: Exit code 0; trust lines printed
-- **Test File**: `src/xrpl/mod.rs` (`integration_live_network`)
+- **Test File**: `src/xrpl/cli_exec.rs` (`integration_live_network`)
 
 #### TC-056: CLI amm — exits with code 0
 
@@ -751,9 +753,9 @@ cargo clippy
 - **Type**: Integration
 - **Size**: M
 - **Status**: [x] Done
-- **Target**: `src/xrpl/mod.rs` -> `execute_cli_command(Cmd::Amm)`
+- **Target**: `src/xrpl/cli_exec.rs` -> `execute_cli_command(Cmd::Amm)`
 - **Expected Output**: Exit code 0; AMM pool printed
-- **Test File**: `src/xrpl/mod.rs` (`integration_live_network`)
+- **Test File**: `src/xrpl/cli_exec.rs` (`integration_live_network`)
 
 #### TC-057: CLI txhistory — exits with code 0
 
@@ -761,9 +763,9 @@ cargo clippy
 - **Type**: Integration
 - **Size**: M
 - **Status**: [x] Done
-- **Target**: `src/xrpl/mod.rs` -> `execute_cli_command(Cmd::TxHistory)`
+- **Target**: `src/xrpl/cli_exec.rs` -> `execute_cli_command(Cmd::TxHistory)`
 - **Expected Output**: Exit code 0; tx list printed
-- **Test File**: `src/xrpl/mod.rs` (`integration_live_network`)
+- **Test File**: `src/xrpl/cli_exec.rs` (`integration_live_network`)
 
 #### TC-058: CLI — invalid parameters error
 
@@ -782,10 +784,10 @@ cargo clippy
 - **Type**: Integration
 - **Size**: S
 - **Status**: [x] Done
-- **Target**: `src/cli.rs` / `src/xrpl/mod.rs`
+- **Target**: `src/cli.rs` / `src/xrpl/cli_exec.rs`
 - **Input**: `account not-an-address`
 - **Expected Output**: `execute_cli_command` returns `Err`
-- **Test File**: `src/xrpl/mod.rs` (`integration_live_network`)
+- **Test File**: `src/xrpl/cli_exec.rs` (`integration_live_network`)
 
 ### Watch & TUI
 
@@ -865,10 +867,10 @@ cargo clippy
 - **Type**: Functional
 - **Size**: S
 - **Status**: [x] Done
-- **Target**: `src/xrpl/mod.rs` -> `check_xrpl_error`
+- **Target**: `src/xrpl/client.rs` -> `check_xrpl_error`
 - **Input**: XRPL response with `error = "actNotFound"`
 - **Expected Output**: Function returns an error that remains classifiable as not-found
-- **Test File**: `src/xrpl/mod.rs` (inline)
+- **Test File**: `src/xrpl/client.rs` (inline)
 
 #### TC-069: XRPL submit response — requires `tesSUCCESS` and hash
 
@@ -876,10 +878,10 @@ cargo clippy
 - **Type**: Functional
 - **Size**: S
 - **Status**: [x] Done
-- **Target**: `src/xrpl/mod.rs` -> `parse_submit_success`
+- **Target**: `src/xrpl/client.rs` -> `parse_submit_success`
 - **Input**: Successful and failed `submit` response fixtures
 - **Expected Output**: Success returns `TxSummary`; failed engine result returns an error
-- **Test File**: `src/xrpl/mod.rs` (inline)
+- **Test File**: `src/xrpl/client.rs` (inline)
 
 ---
 
@@ -972,7 +974,7 @@ cargo clippy
 
 ## Coverage Goals
 
-- **Unit-tested helpers** (`parse_currency`, `drops_to_xrp`, `format_amount`, key parsing): 80%+ line coverage
+- **Unit-tested helpers** (`book_currency` / RPC 構築、`drops_to_xrp`、`format_amount`、キーパース): 80%+ line coverage
 - **Config loading & merging**: 70%+ line coverage
 - **Network/Signing resolution**: 80%+ line coverage
 - **CLI commands** (`info`/`account`/`book`/`summary`/`nfts`/`lines`/`amm`/`txhistory`): at least 1 success path each

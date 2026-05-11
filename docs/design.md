@@ -4,9 +4,9 @@
 
 - C4（システム文脈・コンテナ）: [architecture/c4-context.md](architecture/c4-context.md), [architecture/c4-containers.md](architecture/c4-containers.md)
 - 実行モードは `watch`（TUI監視）と CLI モード（`info`、`account`、`book`、`summary`、`nfts`、`lines`、`amm`、`txhistory`、`account-status`、`send` など、`src/cli.rs` の `Cmd` に定義されたサブコマンド）。
-- エントリーポイントは `src/main.rs`。`watch` 時は `create_app(...)` で `App` を構築し、その他は `xrpl::run_cli(...)` を実行する。
+- エントリーポイントは `src/main.rs`。`watch` 時は `create_app(...)` で `App` を構築し、その他は `xrpl::execute_cli_command(...)` を実行する。
 - TUI は `ratatui` + `crossterm`、非同期処理は `tokio` を使用する。
-- XRPL 通信は `src/xrpl/mod.rs` に集約し、RPC（JSON-RPC）と WS（WebSocket）を分離して扱う。
+- XRPL 通信は `src/xrpl/` 配下に分割（`client.rs`、`ws.rs`、`poll.rs` 等）し、`mod.rs` が公開 API を再エクスポートする。
 
 ## 2. モジュール責務
 
@@ -21,12 +21,13 @@
 - `Action` チャネルでコンポーネントとバックグラウンドタスクを疎結合化する。
 - `start_ws_task(...)` と `start_poll_task(...)` を起動し、終了時は `CancellationToken` で停止する。
 
-### `src/xrpl/mod.rs`
+### `src/xrpl/`（サブモジュール）
 
-- `RpcClient` が RPC リクエスト（`server_info`, `fee`, `account_info`, `book_offers`, `account_objects`、`submit` 向け `submit_signed_tx` 等）を提供する。
-- `start_ws_task(...)` が WS 購読ループを実行し、受信イベントを `Action` へ変換する。
-- `start_poll_task(...)` がポーリングループを実行し、定期/手動更新コマンドを処理する。
-- `run_cli(...)` が非 TUI コマンドの出力処理を担当する（`Send` など Phase 3 経路は `crate::signing` と連携）。
+- `client.rs`: `RpcClient` が RPC リクエスト（`server_info`, `fee`, `account_info`, `book_offers`, `account_objects`、`submit` 向け `submit_signed_tx` 等）と JSON 応答パース、`xrp_to_drops` を提供する。
+- `ws.rs`: `start_ws_task(...)` が WS 購読ループを実行し、受信イベントを `Action` へ変換する。
+- `poll.rs`: `start_poll_task(...)` がポーリングループを実行し、定期/手動更新コマンドを処理する（AccountSet/Payment の署名送信経路を含む）。
+- `cli_exec.rs`: `execute_cli_command(...)` が非 TUI の CLI 出力を担当する（`Send` などは `crate::signing` と連携）。
+- `types.rs`: パネル用行型・`BookPair`・`PollContext` / `PollCommand` 等。
 
 ### `src/components/*`
 
@@ -38,7 +39,7 @@
 
 ### `src/config.rs`
 
-- 組み込みデフォルト設定（リポジトリの `.config/config.json5` を `include_str!`）を読み込む。
+- 組み込みデフォルト設定（リポジトリ直下の `config.json5` を `include_str!`）を読み込む。
 - 設定ファイル探索先は `$XDG_CONFIG_HOME/lazyxrp/config.toml` 優先、未設定時は `~/.config/lazyxrp/config.toml` を利用する。
 - ユーザー設定ファイルをマージし、キーバインド/スタイル/XRPL 設定を最終決定する。
 
@@ -80,7 +81,7 @@
 
 ## 6. Phase 1: 読み取り拡張（FR-08〜FR-11）
 
-### 6.1 新規データ型（`src/xrpl/mod.rs`）
+### 6.1 新規データ型（`src/xrpl/types.rs` 等）
 
 ```rust
 // NFT 1件の表示行

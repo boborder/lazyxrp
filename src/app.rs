@@ -635,7 +635,6 @@ mod tests {
 
     /// TC-060
     #[test]
-    #[ignore = "requires interactive TTY and tokio runtime"]
     fn watch_app_new_does_not_panic() -> color_eyre::Result<()> {
         let app = test_app()?;
         assert_eq!(app.panels.len(), TAB_TITLES.len());
