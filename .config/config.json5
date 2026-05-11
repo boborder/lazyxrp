@@ -1,0 +1,31 @@
+{
+  "keybindings": {
+    "Splash": {
+      "<q>": "Quit", // Quit the application
+      "<Ctrl-d>": "Quit", // Another way to quit
+      "<Ctrl-c>": "Quit", // Yet another way to quit
+      "<Ctrl-z>": "Suspend", // Suspend the application
+      "<r>": "RefreshAccount",
+      "<b>": "RefreshBook",
+      "<o>": "RefreshLedgerObjects",
+      "<j>": "SelectNext",
+      "<k>": "SelectPrev",
+      "<down>": "SelectNext",
+      "<up>": "SelectPrev",
+      "<h>": "FocusPrev",
+      "<l>": "FocusNext",
+      "<right>": "FocusNext",
+      "<left>": "FocusPrev",
+      "<?>": "Help"
+    },
+  },
+  "xrpl": {
+    "network": "mainnet",
+    "account": "r3kmLJN5D28dHuH8vZNUZpMC43pEHpaocV",
+    "issuer": "rMxCKbEDwqr76QuheSUMdEGf4B9xJ8m5De",
+    "currency": "RLUSD",
+    "currency_code": "524C555344000000000000000000000000000000",
+    "offer_limit": 5,
+    "poll_interval_ms": 5000
+  }
+}

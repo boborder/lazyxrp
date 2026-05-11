@@ -1,0 +1,58 @@
+use ratatui::{
+    style::{Color, Modifier, Style},
+    widgets::{Block, BorderType, Borders},
+};
+
+// Royal Blue palette 💙✨
+pub const BORDER: Color = Color::Rgb(65, 105, 225); // Royal Blue
+pub const TITLE: Color = Color::Rgb(100, 149, 237); // Cornflower Blue
+pub const ACCENT: Color = Color::Rgb(30, 144, 255); // Dodger Blue
+pub const MUTED: Color = Color::Rgb(119, 136, 153); // Light Slate Gray
+pub const SUCCESS: Color = Color::Rgb(60, 179, 113); // Medium Sea Green
+pub const ERROR: Color = Color::Rgb(220, 20, 60); // Crimson
+pub const WARNING: Color = Color::Rgb(255, 165, 0); // Orange
+pub const HIGHLIGHT_FG: Color = Color::Rgb(255, 255, 255); // White
+pub const HIGHLIGHT_BG: Color = Color::Rgb(65, 105, 225); // Royal Blue
+
+pub fn panel_block(title: &str, is_focused: bool) -> Block<'_> {
+    let border_color = if is_focused { ACCENT } else { MUTED };
+    let title_color = if is_focused { TITLE } else { MUTED };
+    Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(Style::new().fg(border_color))
+        .title_style(Style::new().fg(title_color).add_modifier(Modifier::BOLD))
+        .title(format!(" {title} "))
+}
+
+pub fn header_row_style() -> Style {
+    Style::new()
+        .fg(ACCENT)
+        .add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
+}
+
+pub fn selected_row_style(is_focused: bool) -> Style {
+    if is_focused {
+        Style::new()
+            .fg(HIGHLIGHT_FG)
+            .bg(HIGHLIGHT_BG)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::new().fg(MUTED).add_modifier(Modifier::REVERSED)
+    }
+}
+
+pub fn dim_style() -> Style {
+    Style::new().fg(MUTED)
+}
+
+pub fn accent_style() -> Style {
+    Style::new().fg(ACCENT)
+}
+
+pub fn success_style() -> Style {
+    Style::new().fg(SUCCESS)
+}
+
+pub fn error_style() -> Style {
+    Style::new().fg(ERROR)
+}

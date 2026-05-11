@@ -1,0 +1,34 @@
+# Optional overrides for application paths.
+# data_dir = "~/.local/share/lazyxrp"
+# config_dir = "~/.config/lazyxrp"
+
+[xrpl]
+# Network preset. Determines default RPC/WS endpoints.
+# Options: mainnet | testnet | devnet   Default: mainnet
+network = "mainnet"
+
+# Custom RPC/WS endpoints. When set, these override the network preset.
+# Leave commented out to use the network preset's built-in endpoints.
+# Priority: --server CLI flag > XRPL_RPC_SERVER env > this field > network preset
+# rpc_server = "https://xrpl.ws"
+# ws_server   = "wss://xrpl.ws"
+
+# XRPL account to monitor.
+account = "r3kmLJN5D28dHuH8vZNUZpMC43pEHpaocV"
+# Issuer account for IOU/book queries.
+# Default fallback is Bitstamp USD issuer on mainnet.
+issuer = "rMxCKbEDwqr76QuheSUMdEGf4B9xJ8m5De"
+# Human-readable currency symbol for display.
+currency = "RLUSD"
+# 160-bit hexadecimal currency code used in XRPL RPC book_offers/price requests.
+# Default fallback is "USD" (3-letter code) if left empty.
+currency_code = "524C555344000000000000000000000000000000"
+# Number of offers to display in book/summary views.
+offer_limit = 5
+# Polling interval in milliseconds for watch mode.
+poll_interval_ms = 5000
+
+[xrpl.signing]
+# Signing seed for write operations (Phase 3 / future use).
+# WARNING: plain text on disk. Prefer the XRPL_SEED environment variable.
+# seed = "sXXX..."

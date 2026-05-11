@@ -1,0 +1,143 @@
+use clap::{Parser, Subcommand};
+
+use crate::{
+    config::{config_dir, data_dir},
+    network::Network,
+};
+
+#[derive(Parser, Debug)]
+#[command(name = "lazyxrp", author, version = version(), about)]
+pub struct Cli {
+    /// Tick rate, i.e. number of ticks per second
+    #[arg(short, long, value_name = "FLOAT", default_value_t = 4.0)]
+    pub tick_rate: f64,
+
+    /// Frame rate, i.e. number of frames per second
+    #[arg(short, long, value_name = "FLOAT", default_value_t = 60.0)]
+    pub frame_rate: f64,
+
+    #[arg(long)]
+    pub server: Option<String>,
+
+    #[arg(long)]
+    pub ws_server: Option<String>,
+
+    /// Network to connect to (overrides config and env)
+    #[arg(long, value_enum)]
+    pub network: Option<Network>,
+
+    /// Skip confirmation prompts for mainnet write operations
+    #[arg(long, default_value_t = false)]
+    pub yes: bool,
+
+    /// Signing seed (family seed format). Overrides XRPL_SEED env var and config.
+    #[arg(long)]
+    pub seed: Option<String>,
+
+    #[command(subcommand)]
+    pub command: Option<Cmd>,
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub enum Cmd {
+    Watch {
+        #[arg(long)]
+        account: Option<String>,
+    },
+    Info,
+    Account {
+        address: String,
+    },
+    Book {
+        #[arg(long)]
+        base: String,
+        #[arg(long)]
+        quote: String,
+        #[arg(long)]
+        issuer: Option<String>,
+        #[arg(long, default_value_t = 5)]
+        limit: u16,
+    },
+    Summary {
+        #[arg(long)]
+        account: Option<String>,
+    },
+    /// List NFTs owned by an account
+    Nfts {
+        address: String,
+    },
+    /// List trust lines for an account
+    Lines {
+        address: String,
+    },
+    /// Show AMM pool info for a currency pair
+    Amm {
+        #[arg(long)]
+        asset1: String,
+        #[arg(long)]
+        asset2: String,
+        #[arg(long)]
+        issuer1: Option<String>,
+        #[arg(long)]
+        issuer2: Option<String>,
+    },
+    /// Show recent transactions for an account
+    TxHistory {
+        address: String,
+        #[arg(long, default_value_t = 10)]
+        limit: u32,
+    },
+    /// Check if an account is activated (has XRP balance >= 10 XRP)
+    AccountStatus {
+        address: String,
+    },
+    /// Send XRP to a destination address
+    Send {
+        /// Destination account address
+        destination: String,
+        /// Amount in XRP (default: 0.000123)
+        #[arg(long, default_value = "0.000123")]
+        amount: String,
+    },
+}
+
+const VERSION_MESSAGE: &str = concat!(
+    env!("CARGO_PKG_VERSION"),
+    "-",
+    env!("VERGEN_GIT_DESCRIBE"),
+    " (",
+    env!("VERGEN_BUILD_DATE"),
+    ")"
+);
+
+pub fn version() -> String {
+    let author = clap::crate_authors!();
+
+    // let current_exe_path = PathBuf::from(clap::crate_name!()).display().to_string();
+    let config_dir_path = config_dir().display().to_string();
+    let data_dir_path = data_dir().display().to_string();
+
+    format!(
+        "\
+{VERSION_MESSAGE}
+
+Authors: {author}
+
+Config directory: {config_dir_path}
+Data directory: {data_dir_path}"
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use clap::Parser;
+
+    use super::Cli;
+
+    /// TC-058
+    #[test]
+    fn book_requires_base_and_quote_arguments() {
+        assert!(Cli::try_parse_from(["lazyxrp", "book", "--quote", "USD"]).is_err());
+        assert!(Cli::try_parse_from(["lazyxrp", "book", "--base", "XRP"]).is_err());
+    }
+}
