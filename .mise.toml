@@ -11,21 +11,7 @@ run = ". ./install.sh -q"
 description = "List local git tags"
 run = "git tag -l"
 
-[tasks.tag]
-description = "Create annotated tag v<version> from Cargo.toml (exits 1 if tag already exists)"
-run = '''
-#!/usr/bin/env bash
-set -euo pipefail
-VERSION=$(grep -m1 '^version = ' Cargo.toml | sed -E 's/^version = "([^"]+)"/\1/')
-TAG="v${VERSION}"
-if git rev-parse "$TAG" >/dev/null 2>&1; then
-  echo "error: tag $TAG already exists" >&2
-  exit 1
-fi
-git tag -a "$TAG" -m "Release $TAG"
-echo "created $TAG"
-'''
-
+# Cargo.toml を必ず更新する
 [tasks.tag-push]
 description = "Create v<version> from Cargo.toml and push that single tag to origin"
 run = '''

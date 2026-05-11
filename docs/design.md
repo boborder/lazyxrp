@@ -3,8 +3,8 @@
 ## 1. アーキテクチャ概要
 
 - C4（システム文脈・コンテナ）: [architecture/c4-context.md](architecture/c4-context.md), [architecture/c4-containers.md](architecture/c4-containers.md)
-- 実行モードは `watch`（TUI監視）と CLI モード（`info`、`account`、`book`、`summary`、`nfts`、`lines`、`amm`、`txhistory`、`account-status`、`send` など、`src/cli.rs` の `Cmd` に定義されたサブコマンド）。
-- エントリーポイントは `src/main.rs`。`watch` 時は `create_app(...)` で `App` を構築し、その他は `xrpl::execute_cli_command(...)` を実行する。
+- 実行モードは `watch`（TUI監視）、CLI のサブコマンド、`--self-uninstall`（ロギング初期化前に終了）、のいずれか。
+- エントリーポイントは `src/main.rs`。`watch` 時は `App::new` → `run`、CLI サブコマンド時は `xrpl::execute_cli_command(...)` を実行する。
 - TUI は `ratatui` + `crossterm`、非同期処理は `tokio` を使用する。
 - XRPL 通信は `src/xrpl/` 配下に分割（`client.rs`、`ws.rs`、`poll.rs` 等）し、`mod.rs` が公開 API を再エクスポートする。
 
@@ -13,6 +13,7 @@
 ### `src/main.rs`
 
 - CLI 引数を解釈して起動モードを分岐する。
+- `--self-uninstall` のときは `logging::init` の前に `Config::new` → `uninstall::run_self_uninstall` で終了（データディレクトリを作らない）。
 - 共通初期化（エラー/ロギング）を行う。
 
 ### `src/app.rs`

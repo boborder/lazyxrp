@@ -89,7 +89,7 @@
 
 - 依存解決: `cargo build`
 - コンパイルチェック: `cargo check`
-- ローカルインストール（任意）: ルート `./install.sh`（**必須は `curl` のみ**）。英語プロンプト。`--help` でオプション確認（`--method cargo|binary`、`--install-rust` / `--no-install-rust` など）。TTY は対話 + アニメ; `-q` または非 TTY は非対話。`BINARY_INSTALL=1 ./install.sh -q` でプリビルト優先の例は従来どおり。または **[mise](https://mise.jdx.dev/)** `mise run install`（`.mise.toml` のタスク経由; 詳細は `README.md`）
+- ローカルインストール（任意）: ルート `./install.sh`（**必須は `curl` のみ**）。英語プロンプト。`--help` でオプション確認（`--method cargo|binary`、`--install-rust` / `--no-install-rust` など）。**手動アンインストール**は `./install.sh --uninstall-help`（**PATH 上のバイナリから** `lazyxrp --self-uninstall` / `--yes` も可。バイナリ／`cargo uninstall` に加え、任意でユーザ設定・データ directory の削除例 Linux/macOS 別、`LAZYXRP_CONFIG` / `LAZYXRP_DATA` と `config.toml` の `data_dir` / `config_dir` 上書きの注意。README の Uninstall と同様）。TTY は対話 + アニメ; `-q` または非 TTY は非対話。ダウンロードは `curl` にリトライ／タイムアウトあり。GitHub のタグ／コミット SHA 解決は **`jq` があれば優先**（無ければ従来の grep/sed）。`BINARY_INSTALL=1 ./install.sh -q` でプリビルト優先の例は従来どおり。または **[mise](https://mise.jdx.dev/)** `mise run install`（`.mise.toml` のタスク経由; 詳細は `README.md`）
 - 実行（watch）: `cargo run --bin lazyxrp -- watch --account <r-address>`
 - seed 指定実行: `cargo run --bin lazyxrp -- watch --account <r-address> --seed sXXX...`
 - CLI実行（例）:

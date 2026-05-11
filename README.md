@@ -34,7 +34,38 @@ curl -fsSL https://raw.githubusercontent.com/boborder/lazyxrp/main/install.sh | 
 cargo install --path .
 ```
 
+**Uninstall** — `./install.sh` does not execute removal commands for you.
+
+```bash
+# From an installed lazyxrp on PATH — removes current binary + `{name}.bak` + resolved config/data dirs,
+# loads paths like `cargo run`/`Config::new` would (respects overrides in config.toml).
+# Confirmation: type yes when prompted, or use --yes to skip.
+lazyxrp --self-uninstall
+lazyxrp --self-uninstall --yes
+
+# Prebuilt or release binary (adjust path if needed)
+rm -f ~/.local/bin/lazyxrp ~/.local/bin/lazyxrp.bak
+
+# install.sh → cargo into ~/.local/bin
+cargo uninstall lazyxrp --root "$HOME/.local"
+
+# Default cargo prefix or `cargo install --path .`
+cargo uninstall lazyxrp
+
+# Optional — same dirs as --self-uninstall when you have no binary (see src/config.rs; no LAZYXRP_*)
+rm -rf ~/.config/lazyxrp ~/.local/share/com.kdheepak.lazyxrp   # Linux / typical XDG
+# macOS: rm -rf "$HOME/Library/Application Support/lazyxrp" \
+#           "$HOME/Library/Application Support/com.kdheepak.lazyxrp"
+# Custom data_dir/config_dir or LAZYXRP_CONFIG / LAZYXRP_DATA → remove those paths instead.
+```
+
+`cargo uninstall` is still needed when you want Cargo’s metadata cleaned up for a given prefix; `--self-uninstall` only deletes files and directories.
+
+`./install.sh --uninstall-help` prints the same reference.
+
 ## Quick Start
+
+Global flags (before subcommands): `--network`, `--yes` (skip confirmations for **mainnet writes** and **`--self-uninstall`**), `--tick-rate` / `--frame-rate`, `--server` / `--ws-server`, `--seed`.
 
 ```bash
 # TUI watch mode
@@ -115,22 +146,32 @@ cp .config/lazyxrp/config.toml "${XDG_CONFIG_HOME:-$HOME/.config}/lazyxrp/config
 
 ## Development
 
+From the repo root you can use [`mise`](https://mise.jdx.dev/) (`mise run install` runs `./install.sh -q`) or plain Cargo.
+
 ```bash
+cargo fmt
 cargo check
 cargo test
 cargo run --bin lazyxrp -- watch --account <r-address>
 cargo run --bin lazyxrp -- --network testnet info
 ```
 
+## Contributing
+
+Start with [`AGENTS.md`](./AGENTS.md) — minimal bar is `cargo fmt` / `cargo check`, and keep `docs/` aligned when you change behavior or documented workflows. Policy detail: [`docs/agents/README.md`](./docs/agents/README.md).
+
 ## Documentation
 
 - `docs/requirements.md` — functional & non-functional requirements
 - `docs/design.md` — architecture & data flow
 - `docs/tech.md` — tech stack & versions
+- `docs/test.md` — testing notes & expectations
 - `docs/tasks.md` — task status
 - `docs/directory.md` — directory structure
+- `docs/reference.md` — supplementary reference
 - `docs/problems.md` — known issues
 - `docs/security.md` — threat model & hardening notes
+- `docs/architecture/` — C4 context & containers
 
 ## References
 

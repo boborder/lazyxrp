@@ -61,6 +61,7 @@ lazyxrp/
 │   │       ├── theme.rs
 │   │       └── widgets.rs
 │   ├── tui.rs
+│   ├── uninstall.rs
 │   ├── logging.rs
 │   └── errors.rs
 └── docs/
@@ -92,13 +93,14 @@ lazyxrp/
 - `build.rs`: ビルド時の補助処理。
 - `README.md`: 利用者向けの概要と起動手順。
 - `.env.example`: `XRPL_*` 環境変数の例（任意。一覧は `docs/tech.md` と実装を参照）。
-- `install.sh`: インタラクティブインストーラ（必須は `curl` のみ）。プロンプトとメッセージは英語。`--help` で CLI 一覧（`--method cargo|binary`、`--install-rust` / `--no-install-rust`、`--install-mise` / `--no-install-mise`、`-q`）。TTY 時はアニメ付き対話で、cargo / mise 未導入ならインストールを提案；非 TTY / `-q` は既定の自動応答。
+- `install.sh`: インタラクティブインストーラ（必須は `curl` のみ）。プロンプトとメッセージは英語。`--help` で CLI 一覧（`--method cargo|binary`、`--install-rust` / `--no-install-rust`、`--install-mise` / `--no-install-mise`、`-q`）。**手動アンインストール**手順のみの表示は `--uninstall-help`（`lazyxrp --self-uninstall` の案内や、任意で OS 別の設定・データ `rm` の例、`LAZYXRP_CONFIG` / `LAZYXRP_DATA` 等の注意あり）。TTY 時はアニメ付き対話で、cargo / mise 未導入ならインストールを提案；非 TTY / `-q` は既定の自動応答。
 - `.mise.toml`: [mise](https://mise.jdx.dev/) タスク（例: `install`、`tags`（一覧）、`tag`（`Cargo.toml` から注釈付きタグ作成）、`tag-push`（作成して `origin` にその1本だけ push）、`tags-push`（ローカルタグを全部 push））。
 - `AGENTS.md`: プロジェクト運用ルールと実行契約の要約（禁止事項・クイックリファレンスを含む）。詳細は `docs/agents/`（入口は `docs/agents/README.md`）。
 
 ## 3. `src/` 配下の責務
 
-- `main.rs`: 起動エントリーポイント。`watch` と CLI モードの分岐、ネットワーク/エンドポイント/シードの優先順位解決を担当。
+- `main.rs`: 起動エントリーポイント。`watch` と CLI モードの分岐、ネットワーク/エンドポイント/シードの優先順位解決を担当。`--self-uninstall` はロギング初期化前に処理。
+- `uninstall.rs`: `lazyxrp --self-uninstall` — 実行中バイナリ・同階層の `{name}.bak`、`Config` で解決した config/data ディレクトリの削除（`cargo uninstall` は呼ばない）。
 - `app.rs`: TUI アプリ本体。イベントループ、コンポーネント管理、バックグラウンド処理起動を担当。
 - `xrpl/`: XRPL 連携一式。`mod.rs` は再エクスポートのみ。`client.rs`（`RpcClient`・JSON-RPC・レスポンスパース・`xrp_to_drops`）、`json_util.rs`（JSON パスヘルパ）、`types.rs`（行データ型・`BookPair`・`PollContext` / `PollCommand`）、`poll.rs`（定期ポーリング・ウォレット送信パス）、`ws.rs`（WebSocket）、`cli_exec.rs`（非 TUI の `execute_cli_command`）、`backoff.rs`（再接続間隔）。
 - `cli.rs`: コマンドライン引数とサブコマンド定義。

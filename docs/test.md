@@ -1,10 +1,10 @@
 # Test Strategy & Case List
 
-> Last Updated: 2026-05-11
+> Last Updated: 2026-05-12
 > Target: lazyxrp (Rust TUI for XRPL)
-> Total Test Cases: 73 (P0: 10, P1: 42, P2: 20, P3: 1)
-> Implemented: 73 / 73 (100%)
-> Estimated Effort (full catalog): 40h
+> Total Test Cases: 75 (P0: 10, P1: 44, P2: 20, P3: 1)
+> Implemented: 75 / 75 (100%)
+> Estimated Effort (full catalog): 41h
 
 ---
 
@@ -15,9 +15,9 @@
 | XRPL Core         | 25         | 4  | 18 | 3  | 0  | 11h         | 25/25       |
 | Config & Keybinds | 19         | 1  | 9  | 9  | 0  | 8h          | 19/19       |
 | Network & Signing | 13         | 4  | 7  | 2  | 0  | 5h          | 13/13       |
-| CLI Integration   | 10         | 1  | 6  | 3  | 0  | 10h         | 10/10       |
+| CLI Integration   | 12         | 1  | 8  | 3  | 0  | 11h         | 12/12       |
 | Watch & TUI       | 6          | 0  | 2  | 3  | 1  | 6h          | 6/6         |
-| **Total**         | **73**     | **10** | **42** | **20** | **1** | **40h** | **73/73** |
+| **Total**         | **75**     | **10** | **44** | **20** | **1** | **41h** | **75/75** |
 
 ---
 
@@ -789,6 +789,17 @@ cargo clippy
 - **Expected Output**: `execute_cli_command` returns `Err`
 - **Test File**: `src/xrpl/cli_exec.rs` (`integration_live_network`)
 
+#### TC-076: CLI — `--self-uninstall` flag parses; backup path helper
+
+- **Priority**: P1
+- **Type**: Integration (clap) / Unit
+- **Size**: S
+- **Status**: [x] Done
+- **Target**: `src/cli.rs` (`--self-uninstall`, `--yes`), `src/uninstall.rs` (`backup_candidate`)
+- **Input**: `Cli::try_parse_from` with `--self-uninstall` / `--yes`; path suffix for `.bak`
+- **Expected Output**: Flag parsed; Windows/Unix backup names end with `.bak`
+- **Test File**: `src/cli.rs`, `src/uninstall.rs` (inline)
+
 ### Watch & TUI
 
 #### TC-060: Watch mode — startup without panic
@@ -943,6 +954,7 @@ cargo clippy
 | 35    | TC-072 | account_objects mixed types                 | M    | [x]    | 2026-05-11 |
 | 36    | TC-073 | ledger object tab filters                   | S    | [x]    | 2026-05-11 |
 | 37    | TC-074 | account_nfts tfMutable (dNFT)             | S    | [x]    | 2026-05-11 |
+| 38    | TC-076 | `--self-uninstall` parse + `.bak` path    | S    | [x]    | 2026-05-12 |
 
 ---
 
@@ -950,11 +962,11 @@ cargo clippy
 
 ### Overall
 
-- **Total Cases**: 72
-- **Implemented**: 72
-- **Passing**: 71（`cargo test` 自動テスト 82 のうち; 2026-05-11）
+- **Total Cases**: 75
+- **Implemented**: 75
+- **Passing**: 76（`cargo test`; 自動 86 のうち; 2026-05-12）
 - **Failing**: 0
-- **Ignored**: 11 (8 TUI tests require interactive TTY; 3 live/seed-dependent tests are intentionally ignored)
+- **Ignored**: 10 (TUI / live RPC / seed-dependent; see case notes)
 - **Todo**: 0
 - **Coverage**: CLI + watch paths exercised; line % not measured here
 
@@ -969,6 +981,7 @@ cargo clippy
 | 2026-05-01 | TC-060–065 | Ignored     | `App` TUI tests require TTY; isolated via `#[ignore]` |
 | 2026-05-01 | — | Refactored | `TestEnvGuard` + `env_lock()` added to fix Mutex poison across env tests |
 | 2026-05-05 | TC-068–070 | Implemented | XRPL not-found handling, submit response validation, and book_offers currency_code selection |
+| 2026-05-12 | TC-076 | Implemented | `lazyxrp --self-uninstall` CLI + uninstall helper tests |
 
 ---
 

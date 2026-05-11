@@ -11,7 +11,7 @@ Frameworks: tokio, ratatui, clap, xrpl-rust, secrecy
 
 lazyxrp は **監視・読み取り中心**で、書き込み系（Payment / AccountSet / `send` など）はユーザー操作とシードに依存する。  
 シード管理基盤があるため、その取り扱いが主なリスク面となる。  
-以下の項目（S-001〜S-008）は **対応済み** として管理している。環境変数経由の露出は `SigningConfig::load` で除去済み（S-002）。
+以下の項目（S-001〜S-008、確認事項として S-009）を管理している。環境変数経由の露出は `SigningConfig::load` で除去済み（S-002）。
 
 ---
 
@@ -84,8 +84,6 @@ Phase 3 実装前に対応することを推奨。
 
 ---
 
-## LOW
-
 ### S-006: `tui.rs` の `Drop` 実装で `unwrap()` を使用 → 対応済み
 
 **ファイル:** `src/tui.rs`（`impl Drop for Tui`）
@@ -113,6 +111,16 @@ Phase 3 実装前に対応することを推奨。
 
 ---
 
+### S-009: `--self-uninstall`（ユーザー主導でバイナリと設定データを削除）
+
+**ファイル:** `src/uninstall.rs`, `src/cli.rs`, `src/main.rs`
+
+**挙動:** `std::env::current_exe()` のファイルと、その隣の `{実行ファイル名}.bak` があれば削除し、`Config` で解決した config / data ディレクトリを `remove_dir_all` する。既定は **一覧表示のあと標準入力で `yes` を要求**。`--yes` で確認省略（CLI の既存 `--yes` フラグを共用）。
+
+**注意:** **Cargo が保持するインストールメタデータは削除しない**。`cargo install` 済み環境では、必要ならユーザーが **`cargo uninstall lazyxrp`** を別途実行する。
+
+---
+
 ## 対処優先順位
 
 | ID    | 重要度 | Phase 3 前に必須   | 工数                |
@@ -125,3 +133,4 @@ Phase 3 実装前に対応することを推奨。
 | S-006 | LOW    | いいえ             | ✅ 修正済み         |
 | S-007 | LOW    | いいえ             | ✅ 修正済み         |
 | S-008 | LOW    | S-001 対処後に解消 | ✅ S-001 対処で解消 |
+| S-009 | MEDIUM | いいえ（オプトイン） | 動作仕様として文書化 |

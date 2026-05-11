@@ -14,6 +14,7 @@ mod logging;
 mod network;
 mod signing;
 mod tui;
+mod uninstall;
 mod xrpl;
 
 fn resolve_network(args: &Cli, config: &Config) -> Network {
@@ -47,6 +48,14 @@ async fn main() -> color_eyre::Result<()> {
     crate::errors::init()?;
 
     let args = Cli::parse();
+    if args.self_uninstall {
+        if args.command.is_some() {
+            color_eyre::eyre::bail!("`--self-uninstall` cannot be combined with a subcommand");
+        }
+        let config = Config::new()?;
+        return uninstall::run_self_uninstall(&config, args.yes);
+    }
+
     let mut config = Config::new()?;
     crate::logging::init(config.resolved_data_dir())?;
     if let Some(cli_seed) = args.seed.clone() {

@@ -10,6 +10,8 @@
 set -eu
 
 # ── Configuration ────────────────────────────────────────────────────────────
+UA="lazyxrp-installer/2.1"
+CURL_RETRY=(--retry 3 --retry-delay 1 --connect-timeout 15 --max-time 300)
 REPO="boborder/lazyxrp"
 BIN_NAME="lazyxrp"
 
@@ -34,6 +36,7 @@ Usage:
 
 Options:
   -h, --help             Show this help and exit
+  --uninstall-help       Show manual uninstall commands (no removal)
   -q, --quiet            Non-interactive: minimal output; defaults for prompts
 
   --install-rust         If cargo is missing, install Rust via rustup (TTY: skip prompt)
@@ -53,6 +56,81 @@ Examples:
   ./install.sh -q --method binary
   ./install.sh --no-install-mise
   curl -fsSL https://raw.githubusercontent.com/boborder/lazyxrp/main/install.sh | sh -s -- -q --no-install-rust
+
+Manual uninstall (this script does not remove lazyxrp for you):
+
+  If you still have lazyxrp on PATH (same binary you want gone):
+    lazyxrp --self-uninstall
+    lazyxrp --self-uninstall --yes   # skip "type yes" confirmation
+
+  Prebuilt/binary install — remove the executable (and backup if present):
+    rm -f INSTALL_DIR/lazyxrp INSTALL_DIR/lazyxrp.bak
+    Replace INSTALL_DIR with your target (default: ~/.local/bin).
+
+  Source install via this script into ~/.local/bin (cargo install --root ~/.local):
+    cargo uninstall lazyxrp --root "$HOME/.local"
+
+  Globally via cargo default prefix (~/.cargo/bin, no custom --root):
+    cargo uninstall lazyxrp
+
+  One-off: cargo install --path . — same as default-prefix case:
+    cargo uninstall lazyxrp
+
+  Optional: user config + app data (matches src/config.rs + directories::ProjectDirs; skip if you use custom paths):
+
+    Linux / *BSD (typical XDG — no LAZYXRP_* overrides):
+      rm -rf ~/.config/lazyxrp ~/.local/share/com.kdheepak.lazyxrp
+
+    macOS:
+      rm -rf "$HOME/Library/Application Support/lazyxrp" \
+             "$HOME/Library/Application Support/com.kdheepak.lazyxrp"
+
+    If you set LAZYXRP_CONFIG or LAZYXRP_DATA, remove those directories instead.
+    If config.toml sets data_dir / config_dir, remove those paths too.
+
+  Optional: revert rustup/mise only if you installed them for lazyxrp and want them gone —
+    rustup self uninstall
+    https://mise.jdx.dev/ (follow upstream uninstall docs)
+EOF
+}
+
+uninstall_help() {
+    cat <<'EOF'
+lazyxrp — manual uninstall (nothing is executed by this script)
+
+0) If lazyxrp is still on your PATH (removes that binary + resolved config/data; see src/uninstall.rs):
+   lazyxrp --self-uninstall
+   lazyxrp --self-uninstall --yes
+
+1) Binary / GitHub-release install (installer copied lazyxrp to INSTALL_DIR):
+
+   rm -f INSTALL_DIR/lazyxrp INSTALL_DIR/lazyxrp.bak
+
+   Default INSTALL_DIR is ~/.local/bin. Use the same directory you chose at install.
+
+2) Source install with this installer into ~/.local/bin (cargo used --root "$HOME/.local"):
+
+   cargo uninstall lazyxrp --root "$HOME/.local"
+
+3) Cargo default install prefix (~/.cargo/bin), including `cargo install --path .`:
+
+   cargo uninstall lazyxrp
+
+4) Optional — remove user config and data (nothing runs this for you):
+
+   Linux / *BSD (typical XDG — no LAZYXRP_* overrides):
+     rm -rf ~/.config/lazyxrp ~/.local/share/com.kdheepak.lazyxrp
+
+   macOS:
+     rm -rf "$HOME/Library/Application Support/lazyxrp" \
+            "$HOME/Library/Application Support/com.kdheepak.lazyxrp"
+
+   If you use LAZYXRP_CONFIG or LAZYXRP_DATA, delete those paths. If `config.toml` sets
+   data_dir / config_dir, remove those directories too.
+
+This does NOT remove Rust, rustup, or mise unless you uninstall those tools separately.
+
+See also: ./install.sh --help
 EOF
 }
 
@@ -61,6 +139,10 @@ parse_args() {
         case "$1" in
             -h|--help)
                 usage
+                exit 0
+                ;;
+            --uninstall-help)
+                uninstall_help
                 exit 0
                 ;;
             -q|--quiet)
@@ -151,19 +233,19 @@ ensure_curl() {
 }
 
 fetch() {
-    curl -fsSL -H "User-Agent: lazyxrp-installer/2.0" "$1"
+    curl -fsSL "${CURL_RETRY[@]}" -H "User-Agent: ${UA}" "$1"
 }
 
 fetch_soft() {
-    curl -sSL \
+    curl -sSL "${CURL_RETRY[@]}" \
         -H "Accept: application/vnd.github+json" \
-        -H "User-Agent: lazyxrp-installer/2.0" \
+        -H "User-Agent: ${UA}" \
         "$1"
 }
 
 fetch_file() {
     local url="$1" dest="$2"
-    curl -fsSL --progress-bar -o "$dest" "$url"
+    curl -fsSL "${CURL_RETRY[@]}" --progress-bar -o "$dest" "$url"
 }
 
 # ── Tool Installers ─────────────────────────────────────────────────────────
@@ -192,15 +274,17 @@ offer_install_rustup() {
     [ "$do_install" = 1 ] || return 1
 
     [ "$IS_TTY" = 1 ] && step "Installing Rust via rustup" || info "Installing Rust via rustup..."
+    local rustup_init
+    rustup_init=$(mktemp)
     spinner_start "Downloading rustup-init..."
-    curl -sSf https://sh.rustup.rs -o /tmp/rustup-init.sh
+    curl -sSf "${CURL_RETRY[@]}" -o "$rustup_init" https://sh.rustup.rs
     spinner_stop
 
-    sh /tmp/rustup-init.sh -y --default-toolchain stable --no-modify-path 2>&1 \
+    sh "$rustup_init" -y --default-toolchain stable --no-modify-path 2>&1 \
         | while IFS= read -r line; do
             printf '%b  %b│%b  %s\n' "$CLEAR_LINE" "$DIM" "$RESET" "$line"
         done
-    rm -f /tmp/rustup-init.sh
+    rm -f "$rustup_init"
 
     # Source cargo env for this session
     local cargo_env="${CARGO_HOME:-$HOME/.cargo}/env"
@@ -245,7 +329,7 @@ offer_install_mise() {
     step "Installing mise"
     spinner_start "Downloading mise..."
     local mise_script
-    mise_script=$(curl -fsSL https://mise.run)
+    mise_script=$(curl -fsSL "${CURL_RETRY[@]}" https://mise.run)
     spinner_stop
 
     echo "$mise_script" | sh 2>&1 \
@@ -307,7 +391,7 @@ print_animated_banner() {
     printf '\n'
 
     local row
-    for row in $(seq 0 $(( ${#logo_lines[@]} - 1 ))); do
+    for ((row = 0; row < ${#logo_lines[@]}; row++)); do
         printf '%b  %s%b\n' "$CYAN" "${logo_lines[$row]}" "$RESET"
         sleep_tick 0.05
     done
@@ -325,7 +409,7 @@ print_subtitle() {
 }
 
 # ── Spinner ──────────────────────────────────────────────────────────────────
-SPIN_FRAMES='⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏'
+SPIN_FRAMES=(⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏)
 SPIN_PID=""
 
 spinner_start() {
@@ -333,12 +417,11 @@ spinner_start() {
     local msg="$1"
     printf '%b' "$HIDE_CURSOR"
     (
-        local i=0
+        local i=0 n=${#SPIN_FRAMES[@]}
         while true; do
-            local frame
-            frame=$(echo $SPIN_FRAMES | cut -d' ' -f$(( i % 10 + 1 )))
+            local frame=${SPIN_FRAMES[$((i % n))]}
             printf '%b  %b%s%b  %s' "$CLEAR_LINE" "$CYAN" "$frame" "$RESET" "$msg"
-            i=$(( i + 1 ))
+            i=$((i + 1))
             sleep 0.08
         done
     ) &
@@ -368,8 +451,8 @@ progress_bar() {
     printf '%b  ' "$CLEAR_LINE"
     printf '%b' "$CYAN"
     local i
-    for i in $(seq 1 "$filled"); do printf '█'; done
-    for i in $(seq 1 "$empty"); do printf '░'; done
+    for ((i = 0; i < filled; i++)); do printf '█'; done
+    for ((i = 0; i < empty; i++)); do printf '░'; done
     printf '%b %3d%%' "$RESET" "$pct"
     [ -n "$label" ] && printf '  %b%s%b' "$DIM" "$label" "$RESET"
 }
@@ -405,9 +488,9 @@ prompt_choice() {
 
     printf '\n  %b?%b  %s\n' "$MAGENTA" "$RESET" "$title"
     local i
-    for i in $(seq 0 $(( count - 1 ))); do
+    for ((i = 0; i < count; i++)); do
         local num=$(( i + 1 ))
-        if [ "$i" = 0 ]; then
+        if [ "$i" -eq 0 ]; then
             printf '     %b%b▸ %d)%b %s %b(recommended)%b\n' "$BOLD" "$CYAN" "$num" "$RESET" "${options[$i]}" "$DIM" "$RESET"
         else
             printf '       %b%d)%b %s\n' "$DIM" "$num" "$RESET" "${options[$i]}"
@@ -461,10 +544,16 @@ resolve_version() {
     fi
 
     spinner_start "Fetching latest release..."
-    VERSION=$(fetch_soft "${GITHUB_API}/releases/latest" \
-        | grep '"tag_name"' \
-        | head -1 \
-        | sed -E 's/.*"tag_name": *"([^"]+)".*/\1/')
+    local body
+    body=$(fetch_soft "${GITHUB_API}/releases/latest")
+    if has jq; then
+        VERSION=$(printf '%s' "$body" | jq -r '.tag_name // empty')
+    else
+        VERSION=$(printf '%s' "$body" \
+            | grep '"tag_name"' \
+            | head -1 \
+            | sed -E 's/.*"tag_name": *"([^"]+)".*/\1/')
+    fi
     spinner_stop
 
     if [ -n "$VERSION" ]; then
@@ -473,11 +562,17 @@ resolve_version() {
     fi
 
     spinner_start "No releases — checking latest commit..."
-    VERSION=$(fetch "${GITHUB_API}/commits/main" \
-        | grep '"sha"' \
-        | head -1 \
-        | sed -E 's/.*"sha": *"([^"]+)".*/\1/' \
-        | cut -c1-8)
+    local commits
+    commits=$(fetch "${GITHUB_API}/commits/main")
+    if has jq; then
+        VERSION=$(printf '%s' "$commits" | jq -r '.sha // empty' | cut -c1-8)
+    else
+        VERSION=$(printf '%s' "$commits" \
+            | grep '"sha"' \
+            | head -1 \
+            | sed -E 's/.*"sha": *"([^"]+)".*/\1/' \
+            | cut -c1-8)
+    fi
     spinner_stop
 
     [ -n "$VERSION" ] || die "Could not determine version"

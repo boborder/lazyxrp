@@ -26,9 +26,13 @@ pub struct Cli {
     #[arg(long, value_enum)]
     pub network: Option<Network>,
 
-    /// Skip confirmation prompts for mainnet write operations
+    /// Skip confirmation prompts (mainnet writes and `lazyxrp --self-uninstall`)
     #[arg(long, default_value_t = false)]
     pub yes: bool,
+
+    /// Remove this executable (and `{name}.bak` next to it) plus resolved config/data dirs. Does not run `cargo uninstall`; see README / `./install.sh --uninstall-help`. Conflicts with subcommands.
+    #[arg(long)]
+    pub self_uninstall: bool,
 
     /// Signing seed (family seed format). Overrides XRPL_SEED env var and config.
     #[arg(long)]
@@ -139,5 +143,19 @@ mod tests {
     fn book_requires_base_and_quote_arguments() {
         assert!(Cli::try_parse_from(["lazyxrp", "book", "--quote", "USD"]).is_err());
         assert!(Cli::try_parse_from(["lazyxrp", "book", "--base", "XRP"]).is_err());
+    }
+
+    #[test]
+    fn self_uninstall_accepts_optional_yes_flag() {
+        let c = Cli::try_parse_from(["lazyxrp", "--self-uninstall", "--yes"]).expect("parses");
+        assert!(c.self_uninstall);
+        assert!(c.yes);
+    }
+
+    #[test]
+    fn self_uninstall_plus_subcommand_is_parseable_but_invalid_at_runtime() {
+        let c = Cli::try_parse_from(["lazyxrp", "--self-uninstall", "info"]).unwrap();
+        assert!(c.self_uninstall);
+        assert!(matches!(c.command, Some(super::Cmd::Info)));
     }
 }
