@@ -1,5 +1,5 @@
 [tools]
-rust = "stable"
+rust = "1.91.0"
 # cargo-binstall = "latest"
 
 # https://mise.jdx.dev/tasks/ — run from repo root: mise run install

@@ -6,8 +6,15 @@
 #   BINARY_INSTALL  Set to 1 to skip source build even when Cargo.toml is present
 #   VERSION         Specific version for binary install (default: latest release tag)
 #   NO_VERIFY       Set to 1 to skip checksum verification (binary install only)
+#
+# GitHub Releases API (`releases/latest`): optional auth to reduce rate-limit failures —
+# set GITHUB_TOKEN or GITHUB_API_TOKEN (fine-grained: read repo metadata / contents).
 
 set -eu
+
+# ── Globals for EXIT cleanup (avoid nested trap overwriting main cleanup) ───
+TMP_DOWNLOAD_DIR=""
+PARTIAL_BIN_DEST=""
 
 # ── Configuration ────────────────────────────────────────────────────────────
 UA="lazyxrp-installer/2.1"
@@ -50,6 +57,7 @@ Options:
 
 Environment:
   INSTALL_DIR, BINARY_INSTALL, VERSION, NO_VERIFY (see script header)
+  Optional: GITHUB_TOKEN or GITHUB_API_TOKEN — authenticated GitHub REST (release / commit lookups)
 
 Examples:
   ./install.sh
@@ -243,12 +251,42 @@ fetch_soft() {
         "$1"
 }
 
+# Authenticated GitHub REST (optional; lowers risk of REST rate-limit on NAT/CI-ish IPs).
+curl_github_rest() {
+    local url="$1"
+    local token="${GITHUB_TOKEN:-${GITHUB_API_TOKEN:-}}"
+    if [ -n "$token" ]; then
+        curl -sSL "${CURL_RETRY[@]}" \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${token}" \
+            -H "User-Agent: ${UA}" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "$url"
+    else
+        fetch_soft "$url"
+    fi
+}
+
 fetch_file() {
     local url="$1" dest="$2"
     curl -fsSL "${CURL_RETRY[@]}" --progress-bar -o "$dest" "$url"
 }
 
 # ── Tool Installers ─────────────────────────────────────────────────────────
+# Toolchain pinned in repo (fallback when stdin/pipe install cannot read sibling files).
+read_pinned_toolchain_channel() {
+    local root="$1"
+    local ch=""
+    if [ -n "$root" ] && [ -f "${root}/rust-toolchain.toml" ]; then
+        ch=$(sed -n 's/^[[:space:]]*channel[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "${root}/rust-toolchain.toml" | head -1)
+    fi
+    if [ -n "$ch" ]; then
+        printf '%s\n' "$ch"
+    else
+        printf '%s\n' "1.91.0"
+    fi
+}
+
 offer_install_rustup() {
     if has cargo; then return 0; fi
 
@@ -280,7 +318,10 @@ offer_install_rustup() {
     curl -sSf "${CURL_RETRY[@]}" -o "$rustup_init" https://sh.rustup.rs
     spinner_stop
 
-    sh "$rustup_init" -y --default-toolchain stable --no-modify-path 2>&1 \
+    local default_tc
+    default_tc=$(read_pinned_toolchain_channel "$(script_dir)")
+
+    sh "$rustup_init" -y --default-toolchain "$default_tc" --no-modify-path 2>&1 \
         | while IFS= read -r line; do
             printf '%b  %b│%b  %s\n' "$CLEAR_LINE" "$DIM" "$RESET" "$line"
         done
@@ -545,7 +586,7 @@ resolve_version() {
 
     spinner_start "Fetching latest release..."
     local body
-    body=$(fetch_soft "${GITHUB_API}/releases/latest")
+    body=$(curl_github_rest "${GITHUB_API}/releases/latest")
     if has jq; then
         VERSION=$(printf '%s' "$body" | jq -r '.tag_name // empty')
     else
@@ -556,6 +597,10 @@ resolve_version() {
     fi
     spinner_stop
 
+    if [ -z "$VERSION" ] && printf '%s' "$body" | grep -qiE 'rate.?limit exceeded|secondary rate limit'; then
+        warn "GitHub API rate-limit style response — retry later or export GITHUB_TOKEN / GITHUB_API_TOKEN for authenticated requests."
+    fi
+
     if [ -n "$VERSION" ]; then
         ok "Latest release: ${BOLD}${VERSION}${RESET}"
         return
@@ -563,7 +608,7 @@ resolve_version() {
 
     spinner_start "No releases — checking latest commit..."
     local commits
-    commits=$(fetch "${GITHUB_API}/commits/main")
+    commits=$(curl_github_rest "${GITHUB_API}/commits/main")
     if has jq; then
         VERSION=$(printf '%s' "$commits" | jq -r '.sha // empty' | cut -c1-8)
     else
@@ -666,7 +711,7 @@ Install from source instead:
     info "URL: ${DIM}${DOWNLOAD_URL}${RESET}"
 
     TMP_DIR=$(mktemp -d)
-    trap 'rm -rf "$TMP_DIR"' EXIT INT TERM
+    TMP_DOWNLOAD_DIR="$TMP_DIR"
 
     if [ "$IS_TTY" = 1 ]; then
         printf '\n'
@@ -700,14 +745,22 @@ Install from source instead:
 
     DEST="${INSTALL_DIR}/${BIN_NAME}"
 
+    PARTIAL_BIN_DEST="${DEST}.partial.$$"
+    cp "$EXTRACTED" "$PARTIAL_BIN_DEST"
+    chmod 755 "$PARTIAL_BIN_DEST"
+
     if [ -f "$DEST" ]; then
         OLD_VER=$("$DEST" --version 2>/dev/null | head -1 || echo "unknown")
         info "Replacing existing binary (${OLD_VER})"
         mv "$DEST" "${DEST}.bak"
     fi
 
-    cp "$EXTRACTED" "$DEST"
-    chmod 755 "$DEST"
+    mv "$PARTIAL_BIN_DEST" "$DEST"
+    PARTIAL_BIN_DEST=""
+
+    rm -rf "$TMP_DIR"
+    TMP_DOWNLOAD_DIR=""
+    PARTIAL_BIN_DEST=""
 
     ok "Binary installed: ${BOLD}${DEST}${RESET}"
 }
@@ -800,6 +853,14 @@ hint_path_notice() {
 # ── Cleanup on exit ──────────────────────────────────────────────────────────
 cleanup() {
     spinner_stop 2>/dev/null || true
+    if [ -n "${PARTIAL_BIN_DEST:-}" ] && [ -f "$PARTIAL_BIN_DEST" ]; then
+        rm -f "$PARTIAL_BIN_DEST"
+    fi
+    PARTIAL_BIN_DEST=""
+    if [ -n "${TMP_DOWNLOAD_DIR:-}" ] && [ -d "$TMP_DOWNLOAD_DIR" ]; then
+        rm -rf "$TMP_DOWNLOAD_DIR"
+    fi
+    TMP_DOWNLOAD_DIR=""
     # `-q` forces IS_TTY=0; do not end this function with a failing `test && cmd`
     # or the EXIT trap becomes the process exit status (mise: "task failed").
     if [ "$IS_TTY" = 1 ]; then

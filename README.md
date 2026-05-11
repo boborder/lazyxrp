@@ -18,7 +18,8 @@ Watch mode uses **five top-level tabs** (jump with number keys `1`–`5`):
 
 ## Requirements
 
-- Rust stable (Edition 2024)
+- Rust **1.91+** stable (`Cargo.toml` の `rust-version`; repo は [`rust-toolchain.toml`](rust-toolchain.toml) で **1.91.0** にピン)
+- Edition 2024
 - macOS / Linux (verified on macOS arm64)
 
 ## Install
@@ -26,6 +27,9 @@ Watch mode uses **five top-level tabs** (jump with number keys `1`–`5`):
 ```bash
 # Latest release via install script (default: ~/.local/bin)
 curl -fsSL https://raw.githubusercontent.com/boborder/lazyxrp/main/install.sh | bash
+
+# If GitHub REST rate-limits anonymous API calls (busy NAT/VPN/etc.), authenticate:
+# curl -fsSL ... | env GITHUB_TOKEN=ghp_... bash
 
 # Custom install path
 curl -fsSL https://raw.githubusercontent.com/boborder/lazyxrp/main/install.sh | INSTALL_DIR=/usr/local/bin bash
@@ -35,7 +39,8 @@ cargo install lazyxrp
 # Prefer reproducible deps when the publish includes Cargo.lock:
 # cargo install lazyxrp --locked
 
-# From source (this repo)
+# From source (this repo) — clone first, run from repo root (`rust-toolchain.toml` /
+# `Cargo.toml` next to `./install.sh` if you let the installer build)
 cargo install --path .
 ```
 

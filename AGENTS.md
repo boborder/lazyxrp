@@ -6,6 +6,7 @@
 
 | Topic    | Command / note |
 |----------|------------------|
+| Rust pin | `rust-toolchain.toml` + `Cargo.toml` `rust-version`（詳細は `docs/tech.md` §1） |
 | Verify   | `cargo check` (minimum after code changes) |
 | Format   | `cargo fmt` |
 | Install  | `./install.sh` or [`mise run install`](https://mise.jdx.dev/) (see `.mise.toml`) |

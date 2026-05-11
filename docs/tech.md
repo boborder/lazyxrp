@@ -4,6 +4,7 @@
 
 - 言語: Rust
 - Edition: 2024
+- ツールチェーン: `rust-toolchain.toml` で `channel = "1.91.0"`（components: `rustfmt`, `clippy`）。MSRV 相当は `Cargo.toml` の `rust-version = "1.91"`。
 - 非同期ランタイム: Tokio（`Cargo.toml` は `1`、`Cargo.lock` 解決 `1.52.3`、`features = ["full"]`）
 - 対象OS（現確認）: macOS arm64
 
@@ -89,7 +90,7 @@
 
 - 依存解決: `cargo build`
 - コンパイルチェック: `cargo check`
-- ローカルインストール（任意）: ルート `./install.sh`（**必須は `curl` のみ**）。英語プロンプト。`--help` でオプション確認（`--method cargo|binary`、`--install-rust` / `--no-install-rust` など）。**手動アンインストール**は `./install.sh --uninstall-help`（**PATH 上のバイナリから** `lazyxrp --self-uninstall` / `--yes` も可。バイナリ／`cargo uninstall` に加え、任意でユーザ設定・データ directory の削除例 Linux/macOS 別、`LAZYXRP_CONFIG` / `LAZYXRP_DATA` と `config.toml` の `data_dir` / `config_dir` 上書きの注意。README の Uninstall と同様）。TTY は対話 + アニメ; `-q` または非 TTY は非対話。ダウンロードは `curl` にリトライ／タイムアウトあり。GitHub のタグ／コミット SHA 解決は **`jq` があれば優先**（無ければ従来の grep/sed）。`BINARY_INSTALL=1 ./install.sh -q` でプリビルト優先の例は従来どおり。または **[mise](https://mise.jdx.dev/)** `mise run install`（`.mise.toml` のタスク経由; 詳細は `README.md`）
+- ローカルインストール（任意）: ルート `./install.sh`（**必須は `curl` のみ**）。英語プロンプト。`--help` でオプション確認（`--method cargo|binary`、`--install-rust` / `--no-install-rust` など）。ソースビルドはクローン済みツリーのルートから（`Cargo.toml` / `rust-toolchain.toml` と同階）。`curl | bash` だけのとき rustup で入れる既定ツールチェーンは **リポにある `rust-toolchain.toml` の `channel` を読めるかぎりそれ**で揃える（読めずに素のstdin経路なら **`1.91.0`** フォールバック）。GitHub Releases REST は **公開 API の無認証だと環境によりレート制限**になりうるので、任意で **`GITHUB_TOKEN` / `GITHUB_API_TOKEN`**。バイナリ配置は INSTALL_DIR 上の **`*.partial.*` にコピーしてから `mv`（失敗や中断時の掃除は EXIT の `cleanup`）。**手動アンインストール**は `./install.sh --uninstall-help`（**PATH 上のバイナリから** `lazyxrp --self-uninstall` / `--yes` も可。バイナリ／`cargo uninstall` に加え、任意でユーザ設定・データ directory の削除例 Linux/macOS 別、`LAZYXRP_CONFIG` / `LAZYXRP_DATA` と `config.toml` の `data_dir` / `config_dir` 上書きの注意。README の Uninstall と同様）。TTY は対話 + アニメ; `-q` または非 TTY は非対話。ダウンロードは `curl` にリトライ／タイムアウトあり。GitHub のタグ／コミット SHA 解決は **`jq` があれば優先**（無ければ従来の grep/sed）。`BINARY_INSTALL=1 ./install.sh -q` でプリビルト優先の例は従来どおり。または **[mise](https://mise.jdx.dev/)** `mise run install`（`.mise.toml` のタスク経由; 詳細は `README.md`）
 - 実行（watch）: `cargo run --bin lazyxrp -- watch --account <r-address>`
 - seed 指定実行: `cargo run --bin lazyxrp -- watch --account <r-address> --seed sXXX...`
 - CLI実行（例）:

@@ -63,6 +63,8 @@ cargo fmt --check
 cargo clippy
 ```
 
+CI（`.github/workflows/ci.yml`）は各ジョブで `cargo … --locked`（例: `cargo test --locked --all-features --workspace`）。ローカルでもロック整合を合わせたいときは同様に `--locked` を付けられる。
+
 ---
 
 ## Implemented Test Cases
