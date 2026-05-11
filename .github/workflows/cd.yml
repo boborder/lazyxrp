@@ -69,9 +69,15 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
+      - name: Install cargo-binstall
+        if: ${{ matrix.use-cross }}
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-binstall
+
       - name: Install cross
         if: ${{ matrix.use-cross }}
-        run: cargo install cross --locked
+        run: cargo binstall cross --no-confirm
 
       - name: Build
         run: |

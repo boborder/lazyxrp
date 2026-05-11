@@ -30,7 +30,12 @@ curl -fsSL https://raw.githubusercontent.com/boborder/lazyxrp/main/install.sh | 
 # Custom install path
 curl -fsSL https://raw.githubusercontent.com/boborder/lazyxrp/main/install.sh | INSTALL_DIR=/usr/local/bin bash
 
-# From source
+# From crates.io (Rust toolchain)
+cargo install lazyxrp
+# Prefer reproducible deps when the publish includes Cargo.lock:
+# cargo install lazyxrp --locked
+
+# From source (this repo)
 cargo install --path .
 ```
 
