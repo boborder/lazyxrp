@@ -55,6 +55,9 @@ secrecy = { version = "0.10", features = ["serde"] }
 xrpl-rust = "1.1"
 url = "2"
 reqwest = { version = "0.13", features = ["json"] }
+# Transitive `openssl-sys`: vendored build so Linux cross targets (e.g. i686 via `cross`)
+# do not require target OpenSSL dev packages in the CI image.
+openssl = { version = "0.10", features = ["vendored"] }
 
 [build-dependencies]
 anyhow = "1"
