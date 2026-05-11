@@ -39,19 +39,36 @@ pub fn fmt_drops(drops: u64) -> String {
     group_digits(&drops.to_string())
 }
 
+#[cfg(unix)]
+fn local_tm_from_secs(secs: i64) -> Option<libc::tm> {
+    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+    let t_ts: libc::time_t = secs as libc::time_t;
+    let result = unsafe { libc::localtime_r(&t_ts, &mut tm) };
+    (!result.is_null()).then_some(tm)
+}
+
+#[cfg(windows)]
+fn local_tm_from_secs(secs: i64) -> Option<libc::tm> {
+    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+    let t_ts: libc::time_t = secs as libc::time_t;
+    let err = unsafe { libc::localtime_s(&mut tm, &t_ts) };
+    (err == 0).then_some(tm)
+}
+
+#[cfg(not(any(unix, windows)))]
+fn local_tm_from_secs(_secs: i64) -> Option<libc::tm> {
+    None
+}
+
 /// Format a `SystemTime` as local-time `HH:MM:SS`.
 pub fn fmt_local_hms(t: std::time::SystemTime) -> String {
     let secs = t
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0);
-    // Convert via libc::localtime_r so we honor the user's TZ.
-    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
-    let t_ts: libc::time_t = secs as libc::time_t;
-    let result = unsafe { libc::localtime_r(&t_ts, &mut tm) };
-    if result.is_null() {
+    let Some(tm) = local_tm_from_secs(secs) else {
         return "--:--:--".to_string();
-    }
+    };
     format!("{:02}:{:02}:{:02}", tm.tm_hour, tm.tm_min, tm.tm_sec)
 }
 
