@@ -2,7 +2,8 @@
 
 ## 1. アーキテクチャ概要
 
-- 実行モードは `watch`（TUI監視）と CLI モード（`info` / `account` / `book` / `summary`）の2系統。
+- C4（システム文脈・コンテナ）: [architecture/c4-context.md](architecture/c4-context.md), [architecture/c4-containers.md](architecture/c4-containers.md)
+- 実行モードは `watch`（TUI監視）と CLI モード（`info`、`account`、`book`、`summary`、`nfts`、`lines`、`amm`、`txhistory`、`account-status`、`send` など、`src/cli.rs` の `Cmd` に定義されたサブコマンド）。
 - エントリーポイントは `src/main.rs`。`watch` 時は `create_app(...)` で `App` を構築し、その他は `xrpl::run_cli(...)` を実行する。
 - TUI は `ratatui` + `crossterm`、非同期処理は `tokio` を使用する。
 - XRPL 通信は `src/xrpl/mod.rs` に集約し、RPC（JSON-RPC）と WS（WebSocket）を分離して扱う。
@@ -33,7 +34,7 @@
 - `Component` トレイトで統一し、`Action` を受けて内部状態を更新し、`draw` で描画を行う。
 - `widgets.rs` が `titled_block`（共通枠スタイル）とスピナフレームのユーティリティを提供する。
 - `StatusBar` は接続状態・最終更新経過時間・監視アカウント・リフレッシュ中スピナ・エラーを1行に表示する。
-- `WalletPanel` は seed から導出したアドレス概要と直近トランザクションを表示する。ウォレット枠にフォーカスした状態で **`t`** でモーダルを開き **AccountSet** と **Payment（XRP）** を選んでからフォームに入る。AccountSet はモーダル内で **SetFlag / ClearFlag（`parse_account_set_flag_choice` と一致するラベルのみ有効）**、domain ASCII、tick size、transfer rate を編集し、`PollCommand::AccountSetSubmit` へ。Payment は送信先（classic または X-address）と XRP 数量を入力し、`PollCommand::PaymentSubmit` 経由で `create_and_sign_payment` → `submit`。メインネット書き込みは CLI `--yes` が必要。seed 未設定・無効時の表示は従来どおり。Watch 起動時は **`main` で一度だけ構築した `Config`（`XRPL_SEED` マージ済み）を `App::new` に渡す** — `SigningConfig::prime_seed_source` が env を消したあとに `Config::new()` を再実行するとシードが復元できない。
+- `WalletPanel` は seed から導出したアドレス概要と直近トランザクションを表示する。ウォレット枠にフォーカスした状態で **`t`** でモーダルを開き **AccountSet** と **Payment（XRP）** を選んでからフォームに入る。型選択は **Tab / jk / 矢印**。AccountSet は **Tab / `[` `]`** で行移動、**`e`** 編集、**`s`** 送信。Payment はモーダル内に送信プレビュー（緑＝送信可能、橙＝未入力/不正）を出し、**Tab / `[` `]`** と **Enter**（未編集で編集開始／編集中は次フィールド）で行を動かし、**`s`** は未編集時または **^S** で送信キューへ入れる。送信前に宛先・正の数として amount を検証し、成功時はモーダルを閉じてウォレット下段に緑のメッセージ、失敗は赤を表示する。AccountSet はモーダル内で **SetFlag / ClearFlag（`parse_account_set_flag_choice` と一致するラベルのみ有効）**、domain ASCII、tick size、transfer rate を編集し、送信成功時もモーダルを閉じる。Payment は送信先（classic または X-address）と XRP 数量を入力し、`PollCommand::PaymentSubmit` 経由で `create_and_sign_payment` → `submit`。メインネット書き込みは CLI `--yes` が必要。seed 未設定・無効時の表示は従来どおり。Watch 起動時は **`main` で一度だけ構築した `Config`（`XRPL_SEED` マージ済み）を `App::new` に渡す** — `SigningConfig::prime_seed_source` が env を消したあとに `Config::new()` を再実行するとシードが復元できない。
 
 ### `src/config.rs`
 
@@ -297,4 +298,4 @@ mainnet 時は警告色（赤系）で強調する。
 
 - `start_poll_task` は `tokio::spawn` でポーリング async タスクを起動する。引数は `PollContext` 構造体で受け取る。
 - WS 起点の更新は過剰ポーリングを避けるため `MIN_POLL_INTERVAL` で間引き、通常の定期ポーリングは設定値 `poll_interval_ms` を尊重する。
-- `splash.rs` は起動スプラッシュとして使用され、`App` の `splash` フィールドに組み込まれている。`Mode::Splash` で表示制御。
+- `splash.rs` は起動スプラッシュとして使用され、`App` の `splash` フィールドに組み込まれている。`Mode::Splash` で表示制御。`Action::Tick` ごとに ASCII 行ウェーブ・ロゴ領域 80% 幅での折り返し・接続行ドット・quit ヒント括弧の 4 系統のアニメを更新する。接続先の表示はマージ後の `config.xrpl.rpc_server`（未設定時は `xrplcluster.com` の既定ホスト）で、`XRPL_RPC_SERVER` は `Config::new()` で `[xrpl] rpc_server` より優先して取り込まれる。

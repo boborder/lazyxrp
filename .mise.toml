@@ -1,0 +1,8 @@
+[tools]
+rust = "stable"
+# cargo-binstall = "latest"
+
+# https://mise.jdx.dev/tasks/ — run from repo root: mise run install
+[tasks.install]
+description = "Source ./install.sh from repo root (same as curl installer; INSTALL_DIR / --method / see install.sh --help)"
+run = ". ./install.sh -q"

@@ -4,40 +4,43 @@
 
 - 言語: Rust
 - Edition: 2024
-- 非同期ランタイム: Tokio (`tokio = 1.40.0`, `features = ["full"]`)
+- 非同期ランタイム: Tokio（`Cargo.toml` は `1`、`Cargo.lock` 解決 `1.52.3`、`features = ["full"]`）
 - 対象OS（現確認）: macOS arm64
 
 ## 2. 主要ライブラリ
 
 ### UI / CLI
 
-- `ratatui = 0.30.0`（`serde`, `macros`）
-- `crossterm = 0.28.1`（`serde`, `event-stream`）
-- `clap = 4.5.20`（`derive`, `cargo`, `wrap_help`, `unicode`, `string`, `unstable-styles`）
+- `ratatui`（`Cargo.toml` `0.30`、`Cargo.lock` `0.30.0`; `serde`, `macros`）
+- `crossterm`（`Cargo.toml` `0.29`、`Cargo.lock` `0.29.0`; `serde`, `event-stream`）
+- `strum`（`Cargo.toml` `0.28`、`Cargo.lock` `0.28.0`; `derive` — `Action` 表示など）
+- `signal-hook`（`Cargo.toml` `0.4`、`Cargo.lock` `0.4.4` — `SIGTSTP` 処理）
+- `clap`（`Cargo.toml` `4`、`Cargo.lock` `4.6.1`; `derive`, `cargo`, `wrap_help`, `unicode`, `string`, `unstable-styles`）
 
 ### XRPL / 通信
 
 - `xrpl-rust = 1.1`
-- `reqwest = 0.12`（`features = ["json"]` — `account_tx` 等で直接 JSON-RPC を投げる用途）
+- `reqwest`（`Cargo.toml` `0.13`、`Cargo.lock` 直接依存 `0.13.3`; `features = ["json"]` — `account_tx` 等で JSON-RPC）。`xrpl-rust` 経路では **`reqwest 0.12.x` がロックに併存**しうる（解像は `Cargo.lock` を正とする）。
 - `tokio-tungstenite = (xrpl-rust 経由)`
 - `url = 2`
 - Phase 3 の Payment 署名はクレート公開 API の `wallet::Wallet` + `transaction::sign`（`models::transactions::payment::Payment`）を利用し、送信時は `binarycodec::encode` した `tx_blob` を `submit` に渡す（旧 `xrpl::crypto::Keypair` 系は 1.1 ではない）。
 
 ### 設定・シリアライズ
 
-- `config = 0.14.0`
-- `serde = 1.0.211`（`derive`）
-- `serde_json = 1.0.132`
-- `json5 = 0.4.1`
+- `config`（`Cargo.toml` `0.15`、`Cargo.lock` `0.15.22`）
+- `directories`（`Cargo.toml` `6`、`Cargo.lock` `6.0.0` — `ProjectDirs`）
+- `serde`（`Cargo.toml` `1`、`Cargo.lock` `1.0.228`、`derive`）
+- `serde_json`（`Cargo.toml` `1`、`Cargo.lock` `1.0.149`）
+- `json5`（`Cargo.toml` `1`、`Cargo.lock` 直接依存 `1.3.1` — 埋め込み `config.json5` のパース。`config` クレート経由などトランジティブに **`json5 0.4.x` が併存**しうる）
 
 ### 監視性・障害対応
 
-- `tracing = 0.1.40`
-- `tracing-subscriber = 0.3.18`（`env-filter`, `serde`）
-- `tracing-error = 0.2.0`
-- `color-eyre = 0.6.3`
-- `better-panic = 0.3.0`
-- `human-panic = 2.0.2`
+- `tracing`（`Cargo.toml` `0.1`、`Cargo.lock` `0.1.44`）
+- `tracing-subscriber`（`Cargo.toml` `0.3`、`Cargo.lock` `0.3.23`; `env-filter`, `serde`）
+- `tracing-error`（`Cargo.toml` `0.2`、`Cargo.lock` `0.2.1`）
+- `color-eyre`（`Cargo.toml` `0.6`、`Cargo.lock` `0.6.5`）
+- `better-panic`（`Cargo.toml` `0.3`、`Cargo.lock` `0.3.0`）
+- `human-panic`（`Cargo.toml` `2`、`Cargo.lock` `2.0.8`）
 
 ### セキュリティ
 
@@ -55,8 +58,8 @@
 
 - ビルドスクリプト: `build.rs`
 - build-dependencies:
-  - `anyhow = 1.0.90`
-  - `vergen-gix = 9.1.0`（`build`, `cargo`）
+  - `anyhow`（`Cargo.toml` `1`、`Cargo.lock` `1.0.102`）
+  - `vergen-gix`（`Cargo.toml` `9`、`Cargo.lock` `9.1.0`; `build`, `cargo`）
 - Release profile:
   - `codegen-units = 1`
   - `lto = true`
@@ -71,8 +74,11 @@
 | `XRPL_RPC_SERVER` | カスタム RPC エンドポイント（ネットワークプリセットを上書き） |
 | `XRPL_WS_SERVER` | カスタム WS エンドポイント（ネットワークプリセットを上書き） |
 | `XRPL_SEED` | 署名用シード（Phase 3 書き込み系 TX 準備） |
+| `LAZYXRP_CONFIG` | 設定ディレクトリの明示オーバーライド（`..` は拒否） |
+| `LAZYXRP_DATA` | データディレクトリの明示オーバーライド |
+| `LAZYXRP_LOG_LEVEL` | ファイルログの既定フィルタ（`tracing-subscriber` の `EnvFilter`） |
 
-**ネットワーク・エンドポイントの優先順位:**
+起動順は `Config::new()` → `logging::init(config.resolved_data_dir())`。`Config::new()` は `XRPL_SEED` に続けて `XRPL_NETWORK` / `XRPL_RPC_SERVER` / `XRPL_WS_SERVER` を読み、設定ファイルの同項目より優先して `xrpl` に反映する（スプラッシュの接続先表示もこのマージ後の値を使う）。ログファイルはマージ後の `data_dir`（設定ファイルトップレベルキー、または空なら環境変数・XDG・フォールバック）配下に作成される。設定ファイル自体の探索パスはブートストラップの `config_dir()`（`LAZYXRP_CONFIG` / XDG 等）で決まる。
 
 ```
 --network CLI > XRPL_NETWORK > config.toml [xrpl] network > デフォルト (mainnet)
@@ -83,6 +89,7 @@
 
 - 依存解決: `cargo build`
 - コンパイルチェック: `cargo check`
+- ローカルインストール（任意）: ルート `./install.sh`（**必須は `curl` のみ**）。英語プロンプト。`--help` でオプション確認（`--method cargo|binary`、`--install-rust` / `--no-install-rust` など）。TTY は対話 + アニメ; `-q` または非 TTY は非対話。`BINARY_INSTALL=1 ./install.sh -q` でプリビルト優先の例は従来どおり。または **[mise](https://mise.jdx.dev/)** `mise run install`（`.mise.toml` のタスク経由; 詳細は `README.md`）
 - 実行（watch）: `cargo run --bin lazyxrp -- watch --account <r-address>`
 - seed 指定実行: `cargo run --bin lazyxrp -- watch --account <r-address> --seed sXXX...`
 - CLI実行（例）:

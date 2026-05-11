@@ -8,8 +8,10 @@ lazyxrp/
 ├── Cargo.lock
 ├── build.rs
 ├── README.md
+├── .env.example
+├── install.sh
+├── .mise.toml
 ├── AGENTS.md
-├── CLAUDE.md
 ├── src/
 │   ├── main.rs
 │   ├── app.rs
@@ -37,7 +39,7 @@ lazyxrp/
 │   │   │   ├── mod.rs
 │   │   │   ├── account_objects.rs
 │   │   │   ├── account_tx.rs
-│   │   │   ├── channels_escrow.rs (stub; merged into account_objects) (unused stub; merged into `account_objects.rs`)
+│   │   │   ├── channels_escrow.rs（ファイルのみ残置; `tabs/mod.rs` 未登録。Objects は `account_objects.rs` に統合）
 │   │   │   ├── market.rs
 │   │   │   └── server_overview.rs
 │   │   └── shared/
@@ -54,6 +56,15 @@ lazyxrp/
 │   ├── logging.rs
 │   └── errors.rs
 └── docs/
+    ├── agents/
+    │   ├── README.md
+    │   ├── execution-contract.md
+    │   ├── development-policy.md
+    │   ├── testing.md
+    │   └── project-reference.md
+    ├── architecture/
+    │   ├── c4-context.md
+    │   └── c4-containers.md
     ├── requirements.md
     ├── design.md
     ├── tech.md
@@ -71,8 +82,10 @@ lazyxrp/
 - `Cargo.lock`: 依存の固定バージョン。
 - `build.rs`: ビルド時の補助処理。
 - `README.md`: 利用者向けの概要と起動手順。
-- `AGENTS.md`: プロジェクト運用ルールと実行契約。
-- `CLAUDE.md`: 開発時のエージェント運用ガイド。
+- `.env.example`: `XRPL_*` 環境変数の例（任意。一覧は `docs/tech.md` と実装を参照）。
+- `install.sh`: インタラクティブインストーラ（必須は `curl` のみ）。プロンプトとメッセージは英語。`--help` で CLI 一覧（`--method cargo|binary`、`--install-rust` / `--no-install-rust`、`--install-mise` / `--no-install-mise`、`-q`）。TTY 時はアニメ付き対話で、cargo / mise 未導入ならインストールを提案；非 TTY / `-q` は既定の自動応答。
+- `.mise.toml`: [mise](https://mise.jdx.dev/) の `install` タスク定義。
+- `AGENTS.md`: プロジェクト運用ルールと実行契約の要約（禁止事項・クイックリファレンスを含む）。詳細は `docs/agents/`（入口は `docs/agents/README.md`）。
 
 ## 3. `src/` 配下の責務
 
@@ -81,7 +94,7 @@ lazyxrp/
 - `xrpl/mod.rs`: XRPL RPC/WS 通信、ポーリング、CLI コマンド実行ロジックを担当（XRP 文字列→drops などの変換もここに集約）。
 - `cli.rs`: コマンドライン引数とサブコマンド定義。
 - `action.rs`: アプリ内部で流す `Action` 定義。
-- `config.rs`: 既定値 + 設定ファイルのロードとマージ。
+- `config.rs`: 既定値 + 設定ファイルのロードとマージ、`XRPL_*` 環境変数（シード・RPC/WS・ネットワーク）の反映。
 - `components/mod.rs`: UI コンポーネント共通トレイトとサブモジュール統合。
 - `tui.rs`: TUI 基盤（描画・イベント・端末管理）の共通処理。
 - `logging.rs`: ログ初期化処理。
@@ -121,6 +134,8 @@ lazyxrp/
 
 ## 7. `docs/` 配下の責務
 
+- `agents/`: ルート `AGENTS.md` からリンクされるエージェント向け詳細。入口は `README.md`（各サブドキュメントへの索引）。実行契約全文、開発ポリシー、TDD 要約、プロジェクト参照。禁止事項の要約はルート `AGENTS.md` の「Prohibitions」。
+- `architecture/`: C4 モデル（`c4-context.md`, `c4-containers.md`）。高レベル境界とコンテナ分解。
 - `requirements.md`: 要件定義（機能/非機能）。
 - `design.md`: アーキテクチャ設計とデータフロー。
 - `tech.md`: 技術スタックと依存バージョン。

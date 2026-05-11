@@ -18,7 +18,7 @@
 | T-005 | poll/WS タスク起動のビルド安定化 | DONE | P0 | `start_poll_task` / `start_ws_task` は `tokio::spawn` 起動で `cargo check` 通過済み |
 | T-006 | `critical-section` 由来のリンクエラー安定化 | DONE | P0 | `critical-section` の `std` feature を導入済み、リンク安定化確認済み |
 | T-007 | `SplashScreen` コンポーネントの扱い整理（利用 or 削除） | DONE | P2 | 起動スプラッシュとして実装済み |
-| T-008 | 単体テストの追加（通貨変換・値抽出・整形） | DONE | P1 | `docs/test.md`（TC-ID）で追跡。`cargo test`: 65 passed、11 ignored（ローカル実行時点） |
+| T-008 | 単体テストの追加（通貨変換・値抽出・整形） | DONE | P1 | `docs/test.md`（TC-ID）で追跡。`cargo test`: 71 passed、11 ignored（ローカル実行時点） |
 | T-009 | 結合テストの追加（watch 起動/終了・CLI） | DONE | P1 | `xrpl::integration_live_network`（要外向き HTTPS）+ `app` の `Tui`/`process_actions` 系。オフライン CI は要検討 |
 | T-010 | CI で `cargo check` / `cargo test` 自動化 | DONE | P2 | `.github/workflows/ci.yml` 実装済み（test/fmt/clippy/docs）|
 | T-011 | ドキュメントの整理（docs配下の構成・リンク・責務の明確化） | DONE | P2 | `docs/*.md` の重複と参照導線を整備済み |

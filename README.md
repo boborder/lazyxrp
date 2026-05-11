@@ -105,7 +105,10 @@ cp .config/lazyxrp/config.toml "${XDG_CONFIG_HOME:-$HOME/.config}/lazyxrp/config
 | `XRPL_NETWORK` | Network preset (`mainnet` / `testnet` / `devnet`) |
 | `XRPL_RPC_SERVER` | Custom RPC endpoint (overrides network preset) |
 | `XRPL_WS_SERVER` | Custom WS endpoint (overrides network preset) |
-| `XRPL_SEED` | Signing seed (Phase 3 write TX — prefer over config file) |
+| `XRPL_SEED` | Signing seed (write TX — prefer over config file) |
+| `LAZYXRP_CONFIG` | Override config directory (`..` rejected) |
+| `LAZYXRP_DATA` | Override data directory |
+| `LAZYXRP_LOG_LEVEL` | Default file log filter (`tracing` `EnvFilter`) |
 
 ## Development
 
@@ -124,6 +127,7 @@ cargo run --bin lazyxrp -- --network testnet info
 - `docs/tasks.md` — task status
 - `docs/directory.md` — directory structure
 - `docs/problems.md` — known issues
+- `docs/security.md` — threat model & hardening notes
 
 ## References
 

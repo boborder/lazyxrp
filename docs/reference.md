@@ -27,6 +27,7 @@
 - [config crate docs](https://docs.rs/config/latest/config/)
 - [tracing crate docs](https://docs.rs/tracing/latest/tracing/)
 - [tracing-subscriber crate docs](https://docs.rs/tracing-subscriber/latest/tracing_subscriber/)
+- [secrecy crate docs](https://docs.rs/secrecy/latest/secrecy/)
 - [color-eyre crate docs](https://docs.rs/color-eyre/latest/color_eyre/)
 
 ## examples
@@ -51,4 +52,4 @@
 - `docs/tasks.md`
 - `docs/directory.md`
 - `docs/problems.md`
-- `docs/prompt_tuning_log.md`
+- `docs/security.md`

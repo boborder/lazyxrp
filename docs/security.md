@@ -9,44 +9,21 @@ Frameworks: tokio, ratatui, clap, xrpl-rust, secrecy
 
 ## Executive Summary
 
-lazyxrp は **監視・読み取り中心**で、書き込み系（Payment 送信など）は Phase 3 として段階的に追加中。  
+lazyxrp は **監視・読み取り中心**で、書き込み系（Payment / AccountSet / `send` など）はユーザー操作とシードに依存する。  
 シード管理基盤があるため、その取り扱いが主なリスク面となる。  
-致命的な脆弱性は存在しないが、**HIGH x1（設定層 `Debug` 経由のシード平文ログ、S-001）** を Phase 3 本格運用前に対処すること。環境変数経由の露出は `SigningConfig::load` で除去済み（S-002）。
+以下の項目（S-001〜S-008）は **対応済み** として管理している。環境変数経由の露出は `SigningConfig::load` で除去済み（S-002）。
 
 ---
 
 ## HIGH
 
-### S-001: `RawSigningConfig` の `Debug` derive がシードを平文でログ出力する
+### S-001: ~~`RawSigningConfig` の `Debug` derive がシードを平文でログ出力する~~ → 対応済み
 
-**ファイル:** `src/config.rs` line 39–44  
-**影響:** シードが `Debug` フォーマット経由でログや標準エラーに平文で出力される。
+**ファイル:** `src/config.rs`（`RawSigningConfig` と手動 `Debug`）
 
-```rust
-// src/config.rs:39
-#[derive(Clone, Debug, Default, Deserialize)]   // ← Debug が問題
-pub struct RawSigningConfig {
-    pub seed: Option<String>,                   // ← 平文シード
-}
-```
+**過去:** `#[derive(Debug)]` がシードを `{:?}` 経由で平文ログしうる状態だった。
 
-`Config` → `LedgerConfig` → `RawSigningConfig` のすべてが `Debug` を持つため、  
-`tracing::debug!("{:?}", config)` / `dbg!(config)` / `{:?}` フォーマットのいずれでも  
-シードが平文でログファイルや stderr に出力される。
-
-**修正方針:**  
-`RawSigningConfig` の `Debug` を手動実装してシードをマスクする。
-
-```rust
-// 修正後
-impl fmt::Debug for RawSigningConfig {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("RawSigningConfig")
-            .field("seed", &self.seed.as_ref().map(|_| "[REDACTED]"))
-            .finish()
-    }
-}
-```
+**現状:** `impl fmt::Debug for RawSigningConfig` でシードフィールドを `[REDACTED]` にマスクする。
 
 ---
 
@@ -66,32 +43,13 @@ impl fmt::Debug for RawSigningConfig {
 
 ## MEDIUM
 
-### S-003: 設定ファイルにシードが保存される場合のファイル権限チェックなし
+### S-003: 設定ファイルにシードが保存される場合のファイル権限チェックなし → 対応済み（Unix で警告）
 
-**ファイル:** `src/config.rs` line 103–130  
-**影響:** `~/.config/lazyxrp/config.toml` のパーミッションが `0644` (全ユーザー読み取り可) の場合、同一システムの他ユーザーがシードを読める。
+**ファイル:** `src/config.rs`（`warn_if_config_world_readable` と `LedgerConfig::new` 統合読み込み付近）
 
-現在、設定ファイルを読み込む際にファイルのパーミッションを検証していない。
+**過去:** 設定ファイル読み込み時に権限検証なし。
 
-**修正方針:**  
-`RawSigningConfig::seed` が `Some(_)` の場合、設定ファイルが `0600` 以外なら警告を出す。
-
-```rust
-#[cfg(unix)]
-fn warn_if_config_world_readable(path: &std::path::Path) {
-    use std::os::unix::fs::PermissionsExt;
-    if let Ok(meta) = path.metadata() {
-        let mode = meta.permissions().mode();
-        if mode & 0o044 != 0 {
-            tracing::warn!(
-                "Config file {} is world/group readable (mode {:04o}). \
-                 Consider: chmod 600 {}",
-                path.display(), mode & 0o777, path.display()
-            );
-        }
-    }
-}
-```
+**現状:** シードを含む設定ファイルについて、グループ読取・ワールド読取なら `tracing::warn!`。
 
 ---
 
@@ -119,7 +77,7 @@ Phase 3 実装前に対応することを推奨。
 
 ### S-005: `install.sh` で `NO_VERIFY=1` による検証スキップが可能
 
-**ファイル:** `install.sh` line 10, 109  
+**ファイル:** `install.sh`（環境変数 `NO_VERIFY` の説明および `verify_checksum`）  
 **影響:** ユーザーが意図せず checksum 検証を無効化したままバイナリをインストールできる。
 
 現状の設計はドキュメント化されており許容範囲だが、デフォルトの警告をより明確にすることを推奨。
@@ -128,33 +86,21 @@ Phase 3 実装前に対応することを推奨。
 
 ## LOW
 
-### S-006: `tui.rs` の `Drop` 実装で `unwrap()` を使用
+### S-006: `tui.rs` の `Drop` 実装で `unwrap()` を使用 → 対応済み
 
-**ファイル:** `src/tui.rs` line 232  
-**影響:** `Drop` 中のパニックはプロセスをアボートする。セキュリティ上の直接的な影響は低いが、ターミナル状態が復元されないリスクがある。
+**ファイル:** `src/tui.rs`（`impl Drop for Tui`）
 
-```rust
-// src/tui.rs:232
-fn drop(&mut self) {
-    self.exit().unwrap();  // ← Drop でのパニックは危険
-}
-```
+**過去:** `self.exit().unwrap()` により Drop 内パニックのリスク。
 
-**修正方針:** `let _ = self.exit();` か `if let Err(e) = self.exit() { eprintln!("tui exit error: {e}"); }` に変更。
+**現状:** `if let Err(e) = self.exit() { eprintln!(...) }`
 
 ---
 
-### S-007: 組み込み設定の `unwrap()` がパニックを引き起こす可能性
+### S-007: 組み込み設定のパース → 対応済み（ビルド時 `expect`）
 
-**ファイル:** `src/config.rs` line 104  
-**影響:** バイナリに埋め込まれた `.config/config.json5` のパースが失敗した場合、起動時パニックで即時クラッシュ。
+**ファイル:** `src/config.rs`（`Config::new` の `json5::from_str(CONFIG)`）
 
-```rust
-// src/config.rs:104
-let default_config: Config = json5::from_str(CONFIG).unwrap();
-```
-
-埋め込み値はコンパイル時に確定しているため実運用リスクは低いが、CI で検証を追加することを推奨。
+**過去・現状とも:** 組み込み JSON5 の不正は開発時検知すべきであり、`expect("embedded .config/config.json5 is malformed — this is a build-time bug")` で明示。実運用でユーザーが書き換える対象ではない。
 
 ---
 

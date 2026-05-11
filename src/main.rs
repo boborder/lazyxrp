@@ -16,21 +16,21 @@ mod signing;
 mod tui;
 mod xrpl;
 
-const RPC_SERVER_ENV: &str = "XRPL_RPC_SERVER";
-const WS_SERVER_ENV: &str = "XRPL_WS_SERVER";
-const NETWORK_ENV: &str = "XRPL_NETWORK";
-
 fn resolve_network(args: &Cli, config: &Config) -> Network {
     args.network
         .clone()
-        .or_else(|| env::var(NETWORK_ENV).ok().and_then(|s| s.parse().ok()))
+        .or_else(|| {
+            env::var(config::XRPL_NETWORK_ENV)
+                .ok()
+                .and_then(|s| s.parse().ok())
+        })
         .unwrap_or_else(|| config.xrpl.network.clone())
 }
 
 fn resolve_rpc_url(args: &Cli, config: &Config, network: &Network) -> String {
     args.server
         .clone()
-        .or_else(|| env::var(RPC_SERVER_ENV).ok())
+        .or_else(|| env::var(config::XRPL_RPC_SERVER_ENV).ok())
         .or_else(|| config.xrpl.rpc_server.clone())
         .unwrap_or_else(|| network.rpc_url().to_string())
 }
@@ -38,7 +38,7 @@ fn resolve_rpc_url(args: &Cli, config: &Config, network: &Network) -> String {
 fn resolve_ws_url(args: &Cli, config: &Config, network: &Network) -> String {
     args.ws_server
         .clone()
-        .or_else(|| env::var(WS_SERVER_ENV).ok())
+        .or_else(|| env::var(config::XRPL_WS_SERVER_ENV).ok())
         .or_else(|| config.xrpl.ws_server.clone())
         .unwrap_or_else(|| network.ws_url().to_string())
 }
@@ -46,10 +46,10 @@ fn resolve_ws_url(args: &Cli, config: &Config, network: &Network) -> String {
 #[tokio::main]
 async fn main() -> color_eyre::Result<()> {
     crate::errors::init()?;
-    crate::logging::init()?;
 
     let args = Cli::parse();
     let mut config = Config::new()?;
+    crate::logging::init(config.resolved_data_dir())?;
     if let Some(cli_seed) = args.seed.clone() {
         let t = signing::trim_family_seed(&cli_seed);
         config.xrpl.signing.seed = if t.is_empty() {
@@ -93,13 +93,13 @@ mod network_resolve_tests {
     #[test]
     fn resolve_network_cli_overrides_env() -> color_eyre::Result<()> {
         let _g = env_lock();
-        let _env = TestEnvGuard::new(&["LAZYXRP_CONFIG", "LAZYXRP_DATA", NETWORK_ENV]);
+        let _env = TestEnvGuard::new(&["LAZYXRP_CONFIG", "LAZYXRP_DATA", config::XRPL_NETWORK_ENV]);
         _env.remove("LAZYXRP_CONFIG");
         _env.remove("LAZYXRP_DATA");
         let cfg = Config::new()?;
         let cli = Cli::try_parse_from(["lazyxrp", "--network", "devnet"])
             .map_err(|e| color_eyre::eyre::eyre!("{e}"))?;
-        _env.set(NETWORK_ENV, "testnet");
+        _env.set(config::XRPL_NETWORK_ENV, "testnet");
         let n = resolve_network(&cli, &cfg);
         assert_eq!(n, Network::Devnet);
         Ok(())
@@ -124,16 +124,16 @@ network = "mainnet"
         let _env = TestEnvGuard::new(&[
             "LAZYXRP_CONFIG",
             "XDG_CONFIG_HOME",
-            RPC_SERVER_ENV,
-            WS_SERVER_ENV,
+            config::XRPL_RPC_SERVER_ENV,
+            config::XRPL_WS_SERVER_ENV,
         ]);
         let root = std::env::temp_dir().join(format!("lazyxrp-tc043-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root)?;
         std::fs::write(root.join("config.toml"), minimal_config_toml())?;
         _env.remove("XDG_CONFIG_HOME");
-        _env.remove(RPC_SERVER_ENV);
-        _env.remove(WS_SERVER_ENV);
+        _env.remove(config::XRPL_RPC_SERVER_ENV);
+        _env.remove(config::XRPL_WS_SERVER_ENV);
         _env.set("LAZYXRP_CONFIG", root.to_str().unwrap());
         let cfg = Config::new()?;
         let cli =
@@ -152,16 +152,16 @@ network = "mainnet"
         let _env = TestEnvGuard::new(&[
             "LAZYXRP_CONFIG",
             "XDG_CONFIG_HOME",
-            RPC_SERVER_ENV,
-            WS_SERVER_ENV,
+            config::XRPL_RPC_SERVER_ENV,
+            config::XRPL_WS_SERVER_ENV,
         ]);
         let root = std::env::temp_dir().join(format!("lazyxrp-tc044-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root)?;
         std::fs::write(root.join("config.toml"), minimal_config_toml())?;
         _env.remove("XDG_CONFIG_HOME");
-        _env.remove(RPC_SERVER_ENV);
-        _env.set(WS_SERVER_ENV, "wss://custom");
+        _env.remove(config::XRPL_RPC_SERVER_ENV);
+        _env.set(config::XRPL_WS_SERVER_ENV, "wss://custom");
         _env.set("LAZYXRP_CONFIG", root.to_str().unwrap());
         let cfg = Config::new()?;
         let cli = Cli::try_parse_from(["lazyxrp", "--ws-server", "wss://cli", "info"])

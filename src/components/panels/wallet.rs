@@ -39,6 +39,12 @@ const FLAG_OPTIONS: &[&str] = &[
 const ACCOUNT_SET_ROWS: usize = 5;
 
 #[derive(Clone)]
+enum SubmitFlash {
+    Success(String),
+    Error(String),
+}
+
+#[derive(Clone)]
 enum ComposerPhase {
     PickKind {
         selected: usize,
@@ -78,7 +84,7 @@ pub struct WalletPanel {
     domain: String,
     tick_size: String,
     transfer_rate: String,
-    submit_note: Option<String>,
+    submit_flash: Option<SubmitFlash>,
 }
 
 impl Default for WalletPanel {
@@ -102,7 +108,7 @@ impl Default for WalletPanel {
             domain: String::new(),
             tick_size: String::new(),
             transfer_rate: String::new(),
-            submit_note: None,
+            submit_flash: None,
         }
     }
 }
@@ -150,8 +156,35 @@ impl WalletPanel {
         })
     }
 
-    fn push_submit_feedback_line(&mut self, note: String) {
-        self.submit_note = Some(note);
+    fn set_submit_flash(&mut self, flash: SubmitFlash) {
+        self.submit_flash = Some(flash);
+    }
+
+    fn payment_validate(dest: &str, amt: &str) -> Result<(), &'static str> {
+        if dest.trim().is_empty() {
+            return Err("destination required");
+        }
+        if amt.trim().is_empty() {
+            return Err("amount required");
+        }
+        let Ok(v) = amt.trim().parse::<f64>() else {
+            return Err("amount must be a number");
+        };
+        if v <= 0.0 {
+            return Err("amount must be > 0");
+        }
+        Ok(())
+    }
+
+    fn shorten_display(s: &str, max: usize) -> String {
+        let t = s.trim();
+        if t.len() <= max {
+            return t.to_string();
+        }
+        let keep = max.saturating_sub(1).max(8);
+        let head = keep * 2 / 3;
+        let tail = keep - head;
+        format!("{}…{}", &t[..head], &t[t.len() - tail..])
     }
 
     fn account_set_edit_keys(&mut self, key: &KeyEvent) -> bool {
@@ -234,6 +267,12 @@ impl WalletPanel {
             KeyCode::Char(']') => {
                 self.field_row = (self.field_row + 1) % ACCOUNT_SET_ROWS;
             }
+            KeyCode::Tab => {
+                self.field_row = (self.field_row + 1) % ACCOUNT_SET_ROWS;
+            }
+            KeyCode::BackTab => {
+                self.field_row = (self.field_row + ACCOUNT_SET_ROWS - 1) % ACCOUNT_SET_ROWS;
+            }
             KeyCode::Char(',') if self.field_row <= 1 => {
                 if self.field_row == 0 {
                     self.set_flag_ix =
@@ -264,7 +303,7 @@ impl WalletPanel {
         let popup_h = match phase {
             ComposerPhase::PickKind { .. } => 11u16,
             ComposerPhase::AccountSet => 21u16,
-            ComposerPhase::Payment { .. } => 13u16,
+            ComposerPhase::Payment { .. } => 16u16,
         }
         .min(area.height.saturating_sub(2))
         .max(8);
@@ -305,7 +344,10 @@ impl WalletPanel {
                         Span::styled("Payment — XRP to classic `r…` or X-address", hi1),
                     ]),
                     Line::from(""),
-                    Line::from(Span::styled("j/k or ↑/↓ · Enter open · Esc close", label)),
+                    Line::from(Span::styled(
+                        "j/k · ↑/↓ · Tab · Enter open · Esc close",
+                        label,
+                    )),
                 ])
             }
             ComposerPhase::AccountSet => {
@@ -365,7 +407,7 @@ impl WalletPanel {
                     ]),
                     Line::from(""),
                     Line::from(Span::styled(
-                        format!("[ ] row · e edit · s / ^S submit · Esc ← type picker{net_note}"),
+                        format!("[ ] Tab row · e edit · s send · ^S send · Esc ← picker{net_note}"),
                         label,
                     )),
                 ])
@@ -374,27 +416,67 @@ impl WalletPanel {
                 row,
                 destination,
                 amount_xrp,
-            } => Paragraph::new(vec![
-                Line::from(vec![
-                    Span::styled(
-                        format!("Destination [{}]", if *row == 0 { "*" } else { " " }),
-                        if *row == 0 { hi } else { label },
-                    ),
-                    Span::styled(destination.clone(), value),
-                ]),
-                Line::from(vec![
-                    Span::styled(
-                        format!("Amount XRP [{}]", if *row == 1 { "*" } else { " " }),
-                        if *row == 1 { hi } else { label },
-                    ),
-                    Span::styled(amount_xrp.clone(), value),
-                ]),
-                Line::from(""),
-                Line::from(Span::styled(
-                    "[ ] row · e edit · s / ^S submit · Esc ← type picker · tf flags N/A here",
-                    label,
-                )),
-            ]),
+            } => {
+                let net_note = if self.network.is_mainnet() && !self.skip_mainnet_prompt {
+                    " · mainnet sends need --yes"
+                } else {
+                    ""
+                };
+                let d = destination.trim();
+                let a = amount_xrp.trim();
+                let (preview_text, preview_st) = if d.is_empty() && a.is_empty() {
+                    (
+                        "Type destination + XRP amount, then s to send".to_string(),
+                        label,
+                    )
+                } else if d.is_empty() {
+                    (
+                        "Need destination (classic r… or X-address)".to_string(),
+                        theme::warning_style(),
+                    )
+                } else if a.is_empty() {
+                    (
+                        "Need amount in XRP (e.g. 1.25)".to_string(),
+                        theme::warning_style(),
+                    )
+                } else {
+                    match a.parse::<f64>() {
+                        Ok(v) if v > 0.0 => (
+                            format!("▸ Send {} XRP → {}", a, Self::shorten_display(d, 30)),
+                            theme::success_style(),
+                        ),
+                        Ok(_) => ("Amount must be > 0".to_string(), theme::warning_style()),
+                        Err(_) => (
+                            "Amount must be a number".to_string(),
+                            theme::warning_style(),
+                        ),
+                    }
+                };
+                Paragraph::new(vec![
+                    Line::from(vec![
+                        Span::styled(
+                            format!("Destination [{}]", if *row == 0 { "*" } else { " " }),
+                            if *row == 0 { hi } else { label },
+                        ),
+                        Span::styled(destination.clone(), value),
+                    ]),
+                    Line::from(vec![
+                        Span::styled(
+                            format!("Amount XRP [{}]", if *row == 1 { "*" } else { " " }),
+                            if *row == 1 { hi } else { label },
+                        ),
+                        Span::styled(amount_xrp.clone(), value),
+                    ]),
+                    Line::from(""),
+                    Line::from(Span::styled(preview_text, preview_st)),
+                    Line::from(Span::styled(
+                        format!(
+                            "[ ] Tab rows · Enter edit/next field · e toggle type · s send · Esc back{net_note}",
+                        ),
+                        label,
+                    )),
+                ])
+            }
         };
         frame.render_widget(body, inner);
     }
@@ -420,16 +502,30 @@ impl Component for WalletPanel {
                 self.received = true;
             }
             Action::AccountSetSubmitOk(hash) => {
-                self.push_submit_feedback_line(format!("AccountSet submitted · {hash}"));
+                self.set_submit_flash(SubmitFlash::Success(format!(
+                    "AccountSet submitted · {hash}"
+                )));
+                if matches!(&self.composer, Some(ComposerPhase::AccountSet)) {
+                    self.composer = None;
+                    self.form_edit = false;
+                    return Ok(Some(Action::SetKeymapSuppression(false)));
+                }
             }
             Action::AccountSetSubmitErr(msg) => {
-                self.push_submit_feedback_line(format!("AccountSet error · {msg}"));
+                self.set_submit_flash(SubmitFlash::Error(format!("AccountSet · {msg}")));
             }
             Action::PaymentSubmitOk(hash) => {
-                self.push_submit_feedback_line(format!("Payment submitted · {hash}"));
+                self.set_submit_flash(SubmitFlash::Success(format!(
+                    "Payment sent · {hash} (see Recent Transactions below)"
+                )));
+                if matches!(&self.composer, Some(ComposerPhase::Payment { .. })) {
+                    self.composer = None;
+                    self.form_edit = false;
+                    return Ok(Some(Action::SetKeymapSuppression(false)));
+                }
             }
             Action::PaymentSubmitErr(msg) => {
-                self.push_submit_feedback_line(format!("Payment error · {msg}"));
+                self.set_submit_flash(SubmitFlash::Error(format!("Payment · {msg}")));
             }
             Action::NetworkChange(net) => {
                 self.network = net.clone();
@@ -477,6 +573,29 @@ impl Component for WalletPanel {
             return Ok(None);
         }
 
+        let payment_submit_pairs = match &self.composer {
+            Some(ComposerPhase::Payment {
+                destination,
+                amount_xrp,
+                ..
+            }) if matches!(key.code, KeyCode::Char('s') | KeyCode::Char('S'))
+                && (key.modifiers.contains(KeyModifiers::CONTROL) || !self.form_edit) =>
+            {
+                Some((destination.clone(), amount_xrp.clone()))
+            }
+            _ => None,
+        };
+
+        if let Some((d, a)) = payment_submit_pairs {
+            match Self::payment_validate(&d, &a) {
+                Ok(()) => return Ok(Some(Self::queue_submit_payment(d, a, self))),
+                Err(m) => {
+                    self.set_submit_flash(SubmitFlash::Error(m.to_string()));
+                    return Ok(None);
+                }
+            }
+        }
+
         match &mut self.composer {
             Some(ComposerPhase::PickKind { selected }) => {
                 match key.code {
@@ -484,6 +603,12 @@ impl Component for WalletPanel {
                         *selected = (*selected + 1) % 2;
                     }
                     KeyCode::Char('k') | KeyCode::Up => {
+                        *selected = (*selected + 2 - 1) % 2;
+                    }
+                    KeyCode::Tab => {
+                        *selected = (*selected + 1) % 2;
+                    }
+                    KeyCode::BackTab => {
                         *selected = (*selected + 2 - 1) % 2;
                     }
                     KeyCode::Enter => match *selected {
@@ -508,54 +633,31 @@ impl Component for WalletPanel {
             Some(ComposerPhase::AccountSet) => {
                 return Ok(self.handle_account_set_modal_keys(key));
             }
-            Some(ComposerPhase::Payment {
-                row,
-                destination,
-                amount_xrp,
-            }) => {
-                if !self.form_edit {
-                    match key.code {
-                        KeyCode::Char('e') | KeyCode::Char('E')
-                            if !key.modifiers.contains(KeyModifiers::CONTROL) =>
-                        {
+            Some(ComposerPhase::Payment { row, .. }) => {
+                match key.code {
+                    KeyCode::Char('e') | KeyCode::Char('E')
+                        if !key.modifiers.contains(KeyModifiers::CONTROL) =>
+                    {
+                        self.form_edit = !self.form_edit;
+                        if self.form_edit {
+                            return Ok(Some(Action::SetKeymapSuppression(true)));
+                        }
+                    }
+                    KeyCode::Enter => {
+                        if self.form_edit {
+                            *row = (*row + 1) % 2;
+                        } else {
                             self.form_edit = true;
                             return Ok(Some(Action::SetKeymapSuppression(true)));
                         }
-                        KeyCode::Char('[') => {
-                            *row = (*row + 2 - 1) % 2;
-                        }
-                        KeyCode::Char(']') => {
-                            *row = (*row + 1) % 2;
-                        }
-                        KeyCode::Char('s') | KeyCode::Char('S') => {
-                            if key.modifiers.contains(KeyModifiers::CONTROL) || !self.form_edit {
-                                return Ok(Some(Self::queue_submit_payment(
-                                    destination.clone(),
-                                    amount_xrp.clone(),
-                                    self,
-                                )));
-                            }
-                        }
-                        _ => {}
                     }
-                } else {
-                    match key.code {
-                        KeyCode::Char('e') | KeyCode::Char('E')
-                            if !key.modifiers.contains(KeyModifiers::CONTROL) =>
-                        {
-                            self.form_edit = false;
-                        }
-                        KeyCode::Char('s') | KeyCode::Char('S') => {
-                            if key.modifiers.contains(KeyModifiers::CONTROL) {
-                                return Ok(Some(Self::queue_submit_payment(
-                                    destination.clone(),
-                                    amount_xrp.clone(),
-                                    self,
-                                )));
-                            }
-                        }
-                        _ => {}
+                    KeyCode::Char('[') | KeyCode::BackTab => {
+                        *row = (*row + 2 - 1) % 2;
                     }
+                    KeyCode::Char(']') | KeyCode::Tab => {
+                        *row = (*row + 1) % 2;
+                    }
+                    _ => {}
                 }
                 return Ok(None);
             }
@@ -682,9 +784,16 @@ impl Component for WalletPanel {
             frame.render_widget(table, bottom);
         }
 
-        let note_line = self.submit_note.as_ref().map_or(Line::default(), |n| {
-            Line::from(Span::styled(n.clone(), theme::accent_style()))
-        });
+        let note_line = self
+            .submit_flash
+            .as_ref()
+            .map(|f| match f {
+                SubmitFlash::Success(s) => {
+                    Line::from(Span::styled(s.clone(), theme::success_style()))
+                }
+                SubmitFlash::Error(s) => Line::from(Span::styled(s.clone(), theme::error_style())),
+            })
+            .unwrap_or_default();
         frame.render_widget(Paragraph::new(note_line), hint);
 
         self.render_composer(frame, area);

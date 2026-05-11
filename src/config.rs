@@ -4,7 +4,6 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use directories::ProjectDirs;
 use ratatui::style::{Color, Modifier, Style};
 use serde::{Deserialize, de::Deserializer, de::Error as _};
-use tracing::error;
 
 use crate::{action::Action, app::Mode, network::Network};
 
@@ -120,6 +119,13 @@ fn validated_path(raw: PathBuf) -> Option<PathBuf> {
 
 pub static PROJECT_NAME: &str = env!("CARGO_CRATE_NAME");
 
+/// Network preset override (`mainnet` / `testnet` / `devnet`). Merged in `Config::new()` so UI matches `resolve_network` priority.
+pub const XRPL_NETWORK_ENV: &str = "XRPL_NETWORK";
+/// HTTP JSON-RPC endpoint override. Merged in `Config::new()` (env wins over config file) so splash and `[xrpl]` stay aligned with `resolve_rpc_url`.
+pub const XRPL_RPC_SERVER_ENV: &str = "XRPL_RPC_SERVER";
+/// WebSocket JSON-RPC endpoint override. Same merge rules as [`XRPL_RPC_SERVER_ENV`].
+pub const XRPL_WS_SERVER_ENV: &str = "XRPL_WS_SERVER";
+
 fn env_data_folder() -> Option<PathBuf> {
     env::var(format!("{}_DATA", PROJECT_NAME.to_uppercase()))
         .ok()
@@ -138,7 +144,25 @@ fn xdg_config_home() -> Option<PathBuf> {
     env::var_os("XDG_CONFIG_HOME").map(PathBuf::from)
 }
 
+fn non_empty_path_or(path: &PathBuf, fallback: impl FnOnce() -> PathBuf) -> PathBuf {
+    if path.as_os_str().is_empty() {
+        fallback()
+    } else {
+        path.clone()
+    }
+}
+
 impl Config {
+    /// Effective data directory after merging embedded defaults, env keys, and config file.
+    pub fn resolved_data_dir(&self) -> PathBuf {
+        non_empty_path_or(&self.config.data_dir, data_dir)
+    }
+
+    /// Effective config directory after merging embedded defaults, env keys, and config file.
+    pub fn resolved_config_dir(&self) -> PathBuf {
+        non_empty_path_or(&self.config.config_dir, config_dir)
+    }
+
     pub fn new() -> color_eyre::Result<Self, config::ConfigError> {
         // Security (S-007): embedded config is a compile-time constant — parse failure
         // indicates a build-time bug, not a runtime condition.
@@ -168,7 +192,11 @@ impl Config {
             }
         }
         if !found_config {
-            error!("No configuration file found. Application may not behave as expected");
+            // Before `logging::init`, tracing may have no subscriber — surface this on stderr.
+            eprintln!(
+                "lazyxrp: warning: no configuration file found under {}; defaults apply",
+                config_dir.display()
+            );
         }
 
         let mut cfg: Self = builder.build()?.try_deserialize()?;
@@ -181,10 +209,29 @@ impl Config {
             }
         }
 
+        if let Ok(v) = env::var(XRPL_NETWORK_ENV) {
+            if let Ok(n) = v.parse::<Network>() {
+                cfg.xrpl.network = n;
+            }
+        }
+        if let Ok(v) = env::var(XRPL_RPC_SERVER_ENV) {
+            let t = v.trim();
+            if !t.is_empty() {
+                cfg.xrpl.rpc_server = Some(t.to_string());
+            }
+        }
+        if let Ok(v) = env::var(XRPL_WS_SERVER_ENV) {
+            let t = v.trim();
+            if !t.is_empty() {
+                cfg.xrpl.ws_server = Some(t.to_string());
+            }
+        }
+
         // Security (S-003): if a signing seed is present in config, warn about file permissions.
+        let resolved_cfg_dir = cfg.resolved_config_dir();
         if cfg.xrpl.signing.seed.is_some() {
             for (file, _) in &config_files {
-                let path = config_dir.join(file);
+                let path = resolved_cfg_dir.join(file);
                 if path.exists() {
                     warn_if_config_world_readable(&path);
                 }
@@ -373,7 +420,8 @@ fn parse_key_code_with_modifiers(
     Ok(KeyEvent::new(c, modifiers))
 }
 
-#[expect(dead_code)]
+/// Canonical string form for key chords (matches `parse_key_event` grammar).
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn key_event_to_string(key_event: &KeyEvent) -> String {
     let char;
     let key_code = match key_event.code {
@@ -830,6 +878,37 @@ network = "mainnet"
         _env.set("LAZYXRP_CONFIG", root.to_str().unwrap());
         let c = Config::new()?;
         assert_eq!(c.xrpl.poll_interval_ms, 88_888);
+        std::fs::remove_dir_all(&root).ok();
+        Ok(())
+    }
+
+    /// TC-075
+    #[test]
+    fn config_merge_rpc_server_env_overrides_file() -> color_eyre::Result<()> {
+        let _g = env_lock();
+        let _env = TestEnvGuard::new(&["LAZYXRP_CONFIG", "XDG_CONFIG_HOME", XRPL_RPC_SERVER_ENV]);
+        let root = std::env::temp_dir().join(format!("lazyxrp-tc075-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root)?;
+        let toml = r#"[xrpl]
+account = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
+issuer = "rMxCKbEDwqr76QuheSUMdEGf4B9xJ8m5De"
+currency = "RLUSD"
+currency_code = "524C555344000000000000000000000000000000"
+offer_limit = 5
+poll_interval_ms = 5000
+network = "mainnet"
+rpc_server = "https://from-file.example"
+"#;
+        std::fs::write(root.join("config.toml"), toml)?;
+        _env.remove("XDG_CONFIG_HOME");
+        _env.set("LAZYXRP_CONFIG", root.to_str().unwrap());
+        _env.set(XRPL_RPC_SERVER_ENV, "https://from-env.example");
+        let c = Config::new()?;
+        assert_eq!(
+            c.xrpl.rpc_server.as_deref(),
+            Some("https://from-env.example")
+        );
         std::fs::remove_dir_all(&root).ok();
         Ok(())
     }

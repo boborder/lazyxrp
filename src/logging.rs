@@ -8,8 +8,7 @@ lazy_static::lazy_static! {
     pub static ref LOG_FILE: String = format!("{}.log", env!("CARGO_PKG_NAME"));
 }
 
-pub fn init() -> color_eyre::Result<()> {
-    let directory = config::data_dir();
+pub fn init(directory: std::path::PathBuf) -> color_eyre::Result<()> {
     std::fs::create_dir_all(&directory)?;
     let log_path = directory.join(&*LOG_FILE);
     let log_file = std::fs::File::create(log_path)?;

@@ -1,6 +1,6 @@
 use ratatui::{
     style::{Color, Modifier, Style},
-    widgets::{Block, BorderType, Borders},
+    widgets::{Block, BorderType},
 };
 
 // Royal Blue palette 💙✨
@@ -12,7 +12,7 @@ pub const SUCCESS: Color = Color::Rgb(60, 179, 113); // Medium Sea Green
 pub const ERROR: Color = Color::Rgb(220, 20, 60); // Crimson
 pub const WARNING: Color = Color::Rgb(255, 165, 0); // Orange
 pub const HIGHLIGHT_FG: Color = Color::Rgb(255, 255, 255); // White
-pub const HIGHLIGHT_BG: Color = Color::Rgb(65, 105, 225); // Royal Blue
+pub const HIGHLIGHT_BG: Color = BORDER;
 
 pub fn panel_block(title: &str, is_focused: bool) -> Block<'_> {
     let border_color = if is_focused { ACCENT } else { MUTED };
@@ -55,4 +55,8 @@ pub fn success_style() -> Style {
 
 pub fn error_style() -> Style {
     Style::new().fg(ERROR)
+}
+
+pub fn warning_style() -> Style {
+    Style::new().fg(WARNING)
 }

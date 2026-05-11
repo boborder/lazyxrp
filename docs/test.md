@@ -2,8 +2,8 @@
 
 > Last Updated: 2026-05-11
 > Target: lazyxrp (Rust TUI for XRPL)
-> Total Test Cases: 72 (P0: 10, P1: 41, P2: 20, P3: 1)
-> Implemented: 72 / 72 (100%)
+> Total Test Cases: 73 (P0: 10, P1: 42, P2: 20, P3: 1)
+> Implemented: 73 / 73 (100%)
 > Estimated Effort (full catalog): 40h
 
 ---
@@ -13,11 +13,11 @@
 | Category          | Test Count | P0 | P1 | P2 | P3 | Est. Effort | Implemented |
 | ----------------- | ---------- | -- | -- | -- | -- | ----------- | ----------- |
 | XRPL Core         | 25         | 4  | 18 | 3  | 0  | 11h         | 25/25       |
-| Config & Keybinds | 18         | 1  | 8  | 9  | 0  | 8h          | 18/18       |
+| Config & Keybinds | 19         | 1  | 9  | 9  | 0  | 8h          | 19/19       |
 | Network & Signing | 13         | 4  | 7  | 2  | 0  | 5h          | 13/13       |
 | CLI Integration   | 10         | 1  | 6  | 3  | 0  | 10h         | 10/10       |
 | Watch & TUI       | 6          | 0  | 2  | 3  | 1  | 6h          | 6/6         |
-| **Total**         | **72**     | **10** | **41** | **20** | **1** | **40h** | **72/72** |
+| **Total**         | **73**     | **10** | **42** | **20** | **1** | **40h** | **73/73** |
 
 ---
 
@@ -611,6 +611,17 @@ cargo clippy
 - **Expected Output**: `wss://cli`
 - **Test File**: `src/main.rs` (inline)
 
+#### TC-075: Config merge — `XRPL_RPC_SERVER` overrides `rpc_server` from file
+
+- **Priority**: P1
+- **Type**: Unit
+- **Size**: S
+- **Status**: [x] Done
+- **Target**: `src/config.rs` -> `Config::new()` XRPL env merge
+- **Preconditions**: `config.toml` sets `rpc_server`; `XRPL_RPC_SERVER` env set to a different URL
+- **Expected Output**: `xrpl.rpc_server` matches env
+- **Test File**: `src/config.rs` (inline)
+
 #### TC-045: SigningConfig::load — no source returns no seed
 
 - **Priority**: P1
@@ -939,7 +950,7 @@ cargo clippy
 
 - **Total Cases**: 72
 - **Implemented**: 72
-- **Passing**: 66 (`cargo test`, 2026-05-11)
+- **Passing**: 71（`cargo test` 自動テスト 82 のうち; 2026-05-11）
 - **Failing**: 0
 - **Ignored**: 11 (8 TUI tests require interactive TTY; 3 live/seed-dependent tests are intentionally ignored)
 - **Todo**: 0
@@ -971,7 +982,7 @@ cargo clippy
 
 ## Known Issues & Constraints
 
-- **Environment variable tests** (`TC-033`–`TC-036`, `TC-042`–`TC-044`, `TC-045`–`TC-049`) use `config::env_lock()` + `TestEnvGuard` for RAII save/restore of env vars; `env_lock()` recovers from Mutex poison automatically.
+- **Environment variable tests** (`TC-033`–`TC-036`, `TC-042`–`TC-044`, `TC-045`–`TC-049`, `TC-075`) use `config::env_lock()` + `TestEnvGuard` for RAII save/restore of env vars; `env_lock()` recovers from Mutex poison automatically.
 - **`xrpl::tests::integration_live_network`** hits `https://xrplcluster.com` (90s timeout per case) and serializes calls with a test-local mutex to reduce public-node rate limiting. Offline / blocked CI: non-ignored live tests fail; prefer runners with outbound HTTPS or mark live tests ignored in CI if needed.
 - **`tokio::spawn` lifetime issue** (rust-lang/rust#100013) was previously tracked for watch startup; current `start_poll_task` / `start_ws_task` paths compile with direct `tokio::spawn` and should remain covered by `cargo check`.
 - **macOS linking warnings** from upstream deps are non-fatal; do not treat as test failures.
