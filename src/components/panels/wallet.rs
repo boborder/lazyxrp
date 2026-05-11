@@ -256,10 +256,10 @@ impl WalletPanel {
                 self.form_edit = !self.form_edit;
                 return Some(Action::SetKeymapSuppression(true));
             }
-            KeyCode::Char('s') | KeyCode::Char('S') => {
-                if key.modifiers.contains(KeyModifiers::CONTROL) || !self.form_edit {
-                    return self.queue_submit_account_set();
-                }
+            KeyCode::Char('s') | KeyCode::Char('S')
+                if key.modifiers.contains(KeyModifiers::CONTROL) || !self.form_edit =>
+            {
+                return self.queue_submit_account_set();
             }
             KeyCode::Char('[') => {
                 self.field_row = (self.field_row + ACCOUNT_SET_ROWS - 1) % ACCOUNT_SET_ROWS;
@@ -299,7 +299,7 @@ impl WalletPanel {
             return;
         };
 
-        let popup_w = area.width.min(74).max(54);
+        let popup_w = area.width.clamp(54, 74);
         let popup_h = match phase {
             ComposerPhase::PickKind { .. } => 11u16,
             ComposerPhase::AccountSet => 21u16,
@@ -485,7 +485,7 @@ impl WalletPanel {
 impl Component for WalletPanel {
     fn register_config_handler(&mut self, config: Arc<Config>) -> color_eyre::Result<()> {
         self.seed = config.xrpl.signing.seed.clone();
-        self.network = config.xrpl.network.clone();
+        self.network = config.xrpl.network;
         self.config = Some(config);
         if let Some(ref s) = self.seed {
             self.seed_address = Some(seed_to_address(s));
@@ -528,7 +528,7 @@ impl Component for WalletPanel {
                 self.set_submit_flash(SubmitFlash::Error(format!("Payment · {msg}")));
             }
             Action::NetworkChange(net) => {
-                self.network = net.clone();
+                self.network = *net;
             }
             _ => {}
         }

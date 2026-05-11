@@ -1,4 +1,8 @@
-use std::{collections::HashMap, env, fmt, path::PathBuf};
+use std::{
+    collections::HashMap,
+    env, fmt,
+    path::{Path, PathBuf},
+};
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use directories::ProjectDirs;
@@ -144,11 +148,11 @@ fn xdg_config_home() -> Option<PathBuf> {
     env::var_os("XDG_CONFIG_HOME").map(PathBuf::from)
 }
 
-fn non_empty_path_or(path: &PathBuf, fallback: impl FnOnce() -> PathBuf) -> PathBuf {
+fn non_empty_path_or(path: &Path, fallback: impl FnOnce() -> PathBuf) -> PathBuf {
     if path.as_os_str().is_empty() {
         fallback()
     } else {
-        path.clone()
+        path.to_path_buf()
     }
 }
 
@@ -209,10 +213,10 @@ impl Config {
             }
         }
 
-        if let Ok(v) = env::var(XRPL_NETWORK_ENV) {
-            if let Ok(n) = v.parse::<Network>() {
-                cfg.xrpl.network = n;
-            }
+        if let Ok(v) = env::var(XRPL_NETWORK_ENV)
+            && let Ok(n) = v.parse::<Network>()
+        {
+            cfg.xrpl.network = n;
         }
         if let Ok(v) = env::var(XRPL_RPC_SERVER_ENV) {
             let t = v.trim();

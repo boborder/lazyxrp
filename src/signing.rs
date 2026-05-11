@@ -128,7 +128,7 @@ pub fn prompt_mainnet_confirmation(operation: &str, network: &Network, skip_prom
 /// Create, sign, and encode a Payment transaction as a submit-ready blob.
 ///
 /// Phase 3: Transaction signing implementation for XRP transfers
-#[allow(dead_code)]
+#[allow(dead_code, clippy::too_many_arguments)]
 pub fn create_and_sign_payment(
     seed: &SecretString,
     account: &str,
@@ -243,6 +243,7 @@ pub fn parse_account_set_flag_choice(
 }
 
 /// Serialize, sign, and encode an AccountSet transaction.
+#[allow(clippy::too_many_arguments)]
 pub fn create_and_sign_account_set(
     seed: &SecretString,
     account: &str,

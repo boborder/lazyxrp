@@ -129,6 +129,7 @@ pub enum Mode {
 }
 
 impl App {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         tick_rate: f64,
         frame_rate: f64,
@@ -148,7 +149,7 @@ impl App {
             drop(poll_rx);
             None
         };
-        let (net_tx, _net_rx) = watch::channel(network.clone());
+        let (net_tx, _net_rx) = watch::channel(network);
         if let Some(cli_seed) = seed {
             let t = crate::signing::trim_family_seed(&cli_seed);
             config.xrpl.signing.seed = if t.is_empty() {
@@ -344,14 +345,12 @@ impl App {
         // Number keys jump to tabs 1..=TAB_TITLES.len()
         if let KeyCode::Char(c) = key.code
             && c.is_ascii_digit()
+            && let Some(d) = c.to_digit(10)
+            && d >= 1
+            && (d as usize) <= TAB_TITLES.len()
         {
-            if let Some(d) = c.to_digit(10)
-                && d >= 1
-                && (d as usize) <= TAB_TITLES.len()
-            {
-                action_tx.send(Action::TabJump(d as usize - 1))?;
-                return Ok(());
-            }
+            action_tx.send(Action::TabJump(d as usize - 1))?;
+            return Ok(());
         }
 
         let Some(keymap) = self.config.keybindings.0.get(&self.mode) else {
@@ -406,12 +405,11 @@ impl App {
                 Action::Resume => self.should_suspend = false,
                 Action::ClearScreen => tui.terminal.clear()?,
                 Action::Resize(w, h) => self.on_resize(tui, *w, *h)?,
-                Action::Render => {
-                    if self.needs_draw {
-                        self.render(tui)?;
-                        self.needs_draw = false;
-                    }
+                Action::Render if self.needs_draw => {
+                    self.render(tui)?;
+                    self.needs_draw = false;
                 }
+                Action::Render => {}
                 Action::TabNext => {
                     self.active_tab = (self.active_tab + 1) % TAB_TITLES.len();
                 }
@@ -422,13 +420,11 @@ impl App {
                         self.active_tab - 1
                     };
                 }
-                Action::TabJump(i) => {
-                    if *i < TAB_TITLES.len() {
-                        self.active_tab = *i;
-                    }
+                Action::TabJump(i) if *i < TAB_TITLES.len() => {
+                    self.active_tab = *i;
                 }
                 Action::NetworkChange(net) => {
-                    if let Err(err) = self.net_tx.send(net.clone()) {
+                    if let Err(err) = self.net_tx.send(*net) {
                         warn!(?err, "network watch channel closed");
                     }
                 }
@@ -520,12 +516,11 @@ impl App {
             let splash = &mut self.splash;
             let action_tx = &self.action_tx;
             tui.draw(|frame| {
-                if let Err(err) = splash.draw(frame, frame.area()) {
-                    if let Err(e) =
+                if let Err(err) = splash.draw(frame, frame.area())
+                    && let Err(e) =
                         action_tx.send(Action::Error(format!("Failed to draw: {err:?}")))
-                    {
-                        warn!(?e, "action channel closed while reporting draw error");
-                    }
+                {
+                    warn!(?e, "action channel closed while reporting draw error");
                 }
             })?;
             return Ok(());
@@ -577,43 +572,39 @@ impl App {
             // Active panel
             if let Some(panel) = panels.get_mut(active_tab)
                 && let Err(err) = panel.draw(frame, main_area)
-            {
-                if let Err(e) =
+                && let Err(e) =
                     action_tx.send(Action::Error(format!("Failed to draw panel: {err:?}")))
-                {
-                    warn!(?e, "action channel closed while reporting panel draw error");
-                }
+            {
+                warn!(?e, "action channel closed while reporting panel draw error");
             }
 
             // FPS counter (top-right corner of main area)
             let fps_area = Rect::new(main_area.right().saturating_sub(10), main_area.top(), 10, 1);
-            if let Err(err) = fps.draw(frame, fps_area) {
-                if let Err(e) =
+            if let Err(err) = fps.draw(frame, fps_area)
+                && let Err(e) =
                     action_tx.send(Action::Error(format!("Failed to draw fps: {err:?}")))
-                {
-                    warn!(?e, "action channel closed while reporting fps draw error");
-                }
+            {
+                warn!(?e, "action channel closed while reporting fps draw error");
             }
 
             // StatusBar
-            if let Err(err) = status_bar.draw(frame, status_area) {
-                if let Err(e) =
+            if let Err(err) = status_bar.draw(frame, status_area)
+                && let Err(e) =
                     action_tx.send(Action::Error(format!("Failed to draw status: {err:?}")))
-                {
-                    warn!(
-                        ?e,
-                        "action channel closed while reporting status draw error"
-                    );
-                }
+            {
+                warn!(
+                    ?e,
+                    "action channel closed while reporting status draw error"
+                );
             }
 
             // Help overlay
-            if show_help && let Err(err) = help.draw(frame, frame.area()) {
-                if let Err(e) =
+            if show_help
+                && let Err(err) = help.draw(frame, frame.area())
+                && let Err(e) =
                     action_tx.send(Action::Error(format!("Failed to draw help: {err:?}")))
-                {
-                    warn!(?e, "action channel closed while reporting help draw error");
-                }
+            {
+                warn!(?e, "action channel closed while reporting help draw error");
             }
         })?;
         Ok(())

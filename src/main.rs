@@ -18,13 +18,12 @@ mod xrpl;
 
 fn resolve_network(args: &Cli, config: &Config) -> Network {
     args.network
-        .clone()
         .or_else(|| {
             env::var(config::XRPL_NETWORK_ENV)
                 .ok()
                 .and_then(|s| s.parse().ok())
         })
-        .unwrap_or_else(|| config.xrpl.network.clone())
+        .unwrap_or(config.xrpl.network)
 }
 
 fn resolve_rpc_url(args: &Cli, config: &Config, network: &Network) -> String {
