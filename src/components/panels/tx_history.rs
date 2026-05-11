@@ -1,18 +1,14 @@
-use ratatui::{
-    Frame,
-    layout::{Constraint, Layout, Rect},
-    widgets::{Row, Scrollbar, ScrollbarOrientation, Table},
-};
+use ratatui::{Frame, layout::Rect};
 
 use crate::{
     action::Action,
     components::{
         Component,
         shared::{
-            fmt,
             selectable_table::SelectableTableState,
-            theme,
-            widgets::{render_empty, render_loading, titled_block_with_count},
+            widgets::{
+                render_empty, render_loading, render_tx_scroll_table, titled_block_with_count,
+            },
         },
     },
     xrpl::TxRow,
@@ -81,50 +77,12 @@ impl Component for TxHistoryPanel {
         let inner = block.inner(area);
         frame.render_widget(block, area);
 
-        let header =
-            Row::new(vec!["Hash", "Type", "Ledger", "Result"]).style(theme::header_row_style());
-        let rows = self.txs.iter().map(|t| {
-            let result_style = if t.result == "tesSUCCESS" {
-                theme::success_style()
-            } else {
-                theme::error_style()
-            };
-            let short_hash = if t.hash.chars().count() > 16 {
-                format!("{}…", t.hash.chars().take(16).collect::<String>())
-            } else {
-                t.hash.clone()
-            };
-            Row::new(vec![
-                short_hash,
-                t.tx_type.clone(),
-                fmt::group_digits(&t.ledger_index.to_string()),
-                t.result.clone(),
-            ])
-            .style(result_style)
-        });
-        let table = Table::new(
-            rows,
-            [
-                Constraint::Length(18),
-                Constraint::Length(16),
-                Constraint::Length(10),
-                Constraint::Fill(1),
-            ],
-        )
-        .header(header)
-        .row_highlight_style(theme::selected_row_style(self.is_focused))
-        .highlight_symbol("▶ ");
-
-        let [tbl_area, sb_area] =
-            Layout::horizontal([Constraint::Fill(1), Constraint::Length(1)]).areas(inner);
-
-        frame.render_stateful_widget(table, tbl_area, self.table_state.table_mut());
-        frame.render_stateful_widget(
-            Scrollbar::new(ScrollbarOrientation::VerticalRight)
-                .style(theme::dim_style())
-                .thumb_style(theme::accent_style()),
-            sb_area,
-            self.table_state.scroll_mut(),
+        render_tx_scroll_table(
+            frame,
+            inner,
+            &self.txs,
+            &mut self.table_state,
+            self.is_focused,
         );
         Ok(())
     }

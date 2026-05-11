@@ -3,10 +3,12 @@ use ratatui::{
     widgets::{Block, BorderType},
 };
 
-// Royal Blue palette 💙✨
+// Royal Blue palette + turquoise secondary
 pub const BORDER: Color = Color::Rgb(65, 105, 225); // Royal Blue
 pub const TITLE: Color = Color::Rgb(100, 149, 237); // Cornflower Blue
 pub const ACCENT: Color = Color::Rgb(30, 144, 255); // Dodger Blue
+/// Second accent for hashes / metadata (pairs with ACCENT on blue terminals).
+pub const SECONDARY: Color = Color::Rgb(64, 224, 208); // Turquoise
 pub const MUTED: Color = Color::Rgb(119, 136, 153); // Light Slate Gray
 pub const SUCCESS: Color = Color::Rgb(60, 179, 113); // Medium Sea Green
 pub const ERROR: Color = Color::Rgb(220, 20, 60); // Crimson
@@ -47,6 +49,10 @@ pub fn dim_style() -> Style {
 
 pub fn accent_style() -> Style {
     Style::new().fg(ACCENT)
+}
+
+pub fn secondary_style() -> Style {
+    Style::new().fg(SECONDARY)
 }
 
 pub fn success_style() -> Style {

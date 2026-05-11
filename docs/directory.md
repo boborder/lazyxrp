@@ -134,14 +134,14 @@ lazyxrp/
 
 ## 6. `src/components/shared/` 配下の責務
 
-- `fmt.rs`: 数値書式ユーティリティ（XRP/drops/時刻変換）。
+- `fmt.rs`: 数値書式ユーティリティ（`group_digits` / `group_digits_u64`、`fmt_xrp` / `fmt_drops`、時刻変換）。
 - `fps.rs`: フレームレート表示コンポーネント。
 - `help_overlay.rs`: `?` キーで開閉するキーバインドヘルプオーバーレイ。
 - `selectable_table.rs`: テーブル行選択・スクロールの共通補助。
 - `splash.rs`: 起動スプラッシュコンポーネント。
 - `status_bar.rs`: 画面下部 1 行のステータスバー。
-- `theme.rs`: 共通テーマ・色定義。
-- `widgets.rs`: 共通 UI ヘルパー（`titled_block`、`spinner`）。
+- `theme.rs`: 共通テーマ・色定義（`ACCENT` に加え `SECONDARY` でハッシュ列などを区別）。
+- `widgets.rs`: 共通 UI ヘルパー（`titled_block`、`tx_table_row`、`render_tx_scroll_table`、`spinner`）。
 
 ## 7. `docs/` 配下の責務
 

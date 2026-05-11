@@ -126,7 +126,7 @@ impl Component for AccountPanel {
             ]),
             Line::from(vec![
                 Span::styled("Sequence:   ", label),
-                Span::raw(fmt::group_digits(&account.sequence.to_string())),
+                Span::raw(fmt::group_digits_u64(u64::from(account.sequence))),
             ]),
             Line::from(vec![
                 Span::styled("OwnerCount: ", label),

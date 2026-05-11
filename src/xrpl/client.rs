@@ -554,7 +554,6 @@ fn book_currency(currency: &str, issuer: Option<&str>) -> Value {
     }
 }
 
-#[must_use]
 pub fn xrp_to_drops(xrp: &str) -> color_eyre::Result<u64> {
     let parts: Vec<&str> = xrp.split('.').collect();
     match parts.len() {

@@ -1,5 +1,32 @@
 //! Display formatters: thousands separators, drops/XRP conversion.
 
+/// Thousands-separated decimal for an unsigned integer (single `String` allocation).
+pub fn group_digits_u64(mut n: u64) -> String {
+    if n == 0 {
+        return String::from("0");
+    }
+    let mut buf = [0u8; 32];
+    let mut i = buf.len();
+    let mut group = 0u8;
+    loop {
+        if group == 3 {
+            i -= 1;
+            buf[i] = b',';
+            group = 0;
+        }
+        i -= 1;
+        buf[i] = b'0' + (n % 10) as u8;
+        n /= 10;
+        group += 1;
+        if n == 0 {
+            break;
+        }
+    }
+    std::str::from_utf8(&buf[i..])
+        .expect("ledger/digits ASCII")
+        .to_string()
+}
+
 /// Insert thousands separators into the integer part of a numeric string.
 /// Preserves any decimal portion and a leading minus.
 pub fn group_digits(s: &str) -> String {
@@ -36,7 +63,7 @@ pub fn fmt_xrp(xrp: f64) -> String {
 
 /// Format an integer drops value as a thousands-separated drops string.
 pub fn fmt_drops(drops: u64) -> String {
-    group_digits(&drops.to_string())
+    group_digits_u64(drops)
 }
 
 #[cfg(unix)]
@@ -99,5 +126,16 @@ mod tests {
         assert_eq!(fmt_drops(0), "0");
         assert_eq!(fmt_drops(12), "12");
         assert_eq!(fmt_drops(1_234_567), "1,234,567");
+    }
+
+    #[test]
+    fn group_u64_matches_str() {
+        assert_eq!(group_digits_u64(0), "0");
+        assert_eq!(group_digits_u64(1234), group_digits("1234"));
+        assert_eq!(group_digits_u64(1_234_567), group_digits("1234567"));
+        assert_eq!(
+            group_digits_u64(u64::MAX),
+            group_digits(&u64::MAX.to_string())
+        );
     }
 }

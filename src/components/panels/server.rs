@@ -96,7 +96,7 @@ impl Component for ServerPanel {
         let label = theme::dim_style();
         let info = self.server_info.as_ref();
         let ledger = info
-            .map(|s| fmt::group_digits(&s.ledger_index.to_string()))
+            .map(|s| fmt::group_digits_u64(u64::from(s.ledger_index)))
             .unwrap_or_else(|| "-".to_string());
         let host = info
             .map(|s| s.hostid.clone())

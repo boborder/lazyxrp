@@ -6,7 +6,7 @@ use ratatui::{
     layout::{Constraint, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Clear, Paragraph, Row, Table},
+    widgets::{Clear, Paragraph},
 };
 
 use crate::{
@@ -14,8 +14,12 @@ use crate::{
     components::{
         Component,
         shared::{
-            fmt, theme,
-            widgets::{render_empty, render_error, render_loading, titled_block},
+            fmt,
+            selectable_table::SelectableTableState,
+            theme,
+            widgets::{
+                render_empty, render_error, render_loading, render_tx_scroll_table, titled_block,
+            },
         },
     },
     config::Config,
@@ -72,6 +76,7 @@ pub struct WalletPanel {
     seed: Option<String>,
     seed_address: Option<Result<String, String>>,
     pub is_focused: bool,
+    tx_table: SelectableTableState,
     skip_mainnet_prompt: bool,
     network: Network,
     config: Option<Arc<Config>>,
@@ -97,6 +102,7 @@ impl Default for WalletPanel {
             seed: None,
             seed_address: None,
             is_focused: false,
+            tx_table: SelectableTableState::default(),
             skip_mainnet_prompt: false,
             network: Network::Mainnet,
             config: None,
@@ -346,7 +352,7 @@ impl WalletPanel {
                     Line::from(""),
                     Line::from(Span::styled(
                         "j/k · ↑/↓ · Tab · Enter open · Esc close",
-                        label,
+                        theme::secondary_style(),
                     )),
                 ])
             }
@@ -408,7 +414,7 @@ impl WalletPanel {
                     Line::from(""),
                     Line::from(Span::styled(
                         format!("[ ] Tab row · e edit · s send · ^S send · Esc ← picker{net_note}"),
-                        label,
+                        theme::secondary_style(),
                     )),
                 ])
             }
@@ -473,7 +479,7 @@ impl WalletPanel {
                         format!(
                             "[ ] Tab rows · Enter edit/next field · e toggle type · s send · Esc back{net_note}",
                         ),
-                        label,
+                        theme::secondary_style(),
                     )),
                 ])
             }
@@ -499,7 +505,18 @@ impl Component for WalletPanel {
             Action::XrplWalletOverview(acc, txs) => {
                 self.account = acc.clone();
                 self.txs = txs.to_vec();
+                self.tx_table.reset_len(self.txs.len());
                 self.received = true;
+            }
+            Action::SelectNext
+                if self.is_focused && self.composer.is_none() && !self.txs.is_empty() =>
+            {
+                self.tx_table.select_next(self.txs.len());
+            }
+            Action::SelectPrev
+                if self.is_focused && self.composer.is_none() && !self.txs.is_empty() =>
+            {
+                self.tx_table.select_prev(self.txs.len());
             }
             Action::AccountSetSubmitOk(hash) => {
                 self.set_submit_flash(SubmitFlash::Success(format!(
@@ -747,7 +764,7 @@ impl Component for WalletPanel {
             ]),
             Line::from(vec![
                 Span::styled("Sequence: ", label),
-                Span::raw(fmt::group_digits(&account.sequence.to_string())),
+                Span::raw(fmt::group_digits_u64(u64::from(account.sequence))),
             ]),
             Line::from(Span::styled("t: composer (AccountSet / Payment)", label)),
         ];
@@ -756,32 +773,25 @@ impl Component for WalletPanel {
         if self.txs.is_empty() {
             render_empty(frame, bottom, "Recent Transactions", "None", false);
         } else {
-            let header =
-                Row::new(vec!["Hash", "Type", "Ledger", "Result"]).style(theme::header_row_style());
-            let rows = self.txs.iter().map(|t| {
-                let short_hash = if t.hash.len() > 16 {
-                    format!("{}…", &t.hash[..16])
-                } else {
-                    t.hash.clone()
-                };
-                Row::new(vec![
-                    short_hash,
-                    t.tx_type.clone(),
-                    fmt::group_digits(&t.ledger_index.to_string()),
-                    t.result.clone(),
-                ])
-            });
-            let table = Table::new(
-                rows,
-                [
-                    Constraint::Length(18),
-                    Constraint::Length(16),
-                    Constraint::Length(10),
-                    Constraint::Fill(1),
-                ],
-            )
-            .header(header);
-            frame.render_widget(table, bottom);
+            let [tx_hdr, tx_body] =
+                Layout::vertical([Constraint::Length(1), Constraint::Fill(1)]).areas(bottom);
+            let tx_title = Line::from(vec![
+                Span::styled(
+                    "Recent txs ",
+                    theme::secondary_style().add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(format!("({})  ", self.txs.len()), theme::dim_style()),
+                Span::styled("j/k scroll · ▲▼", theme::dim_style()),
+            ]);
+            frame.render_widget(Paragraph::new(tx_title), tx_hdr);
+
+            render_tx_scroll_table(
+                frame,
+                tx_body,
+                &self.txs,
+                &mut self.tx_table,
+                self.is_focused,
+            );
         }
 
         let note_line = self
