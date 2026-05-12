@@ -18,7 +18,7 @@ Watch mode uses **five top-level tabs** (jump with number keys `1`–`5`):
 
 ## Requirements
 
-- Rust **1.91+** stable (`Cargo.toml` の `rust-version`; repo は [`rust-toolchain.toml`](rust-toolchain.toml) で **1.91.0** にピン)
+- Rust **1.91+**（`Cargo.toml` の `rust-version` = MSRV）。日々のビルド用チャンネルは [`rust-toolchain.toml`](rust-toolchain.toml) の **`stable`**
 - Edition 2024
 - macOS / Linux (verified on macOS arm64)
 

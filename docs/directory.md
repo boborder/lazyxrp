@@ -89,7 +89,7 @@ lazyxrp/
 ## 2. ルート直下ファイル
 
 - `Cargo.toml`: クレート定義と依存関係、features 設定。
-- `rust-toolchain.toml`: **CI とローカルで同じ** Rust チャンネル（`dtolnay/rust-toolchain` が参照）。
+- `rust-toolchain.toml`: **CI とローカルで同じ** Rust チャンネル（現状 `stable`）。`.github/workflows/ci.yml` の `dtolnay/rust-toolchain@v1` は入力 `toolchain` にこのファイルの `channel` と同じ文字列を渡す（v1 で必須；`rustfmt` / `clippy` は該当ジョブで `components` 指定）。
 - `config.json5`: キーバインド等の組み込みデフォルト（`src/config.rs` の `include_str!` 対象）。ユーザー設定 `config.toml` とは別物。
 - `Cargo.lock`: 依存の固定バージョン（**バイナリ向けにコミット**。CI は `cargo … --locked`）。
 - `build.rs`: ビルド時の補助処理。

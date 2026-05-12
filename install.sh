@@ -283,7 +283,7 @@ read_pinned_toolchain_channel() {
     if [ -n "$ch" ]; then
         printf '%s\n' "$ch"
     else
-        printf '%s\n' "1.91.0"
+        printf '%s\n' "stable"
     fi
 }
 
