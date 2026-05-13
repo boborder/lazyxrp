@@ -11,10 +11,13 @@ use crate::{
         shared::{
             selectable_table::SelectableTableState,
             theme,
+            tx_detail::{TxDetailState, render_tx_detail},
             widgets::{render_empty, render_loading, titled_block_with_count},
         },
     },
-    xrpl::{LedgerObjectRow, is_escrow_type, is_objects_tab_ledger_type, is_pay_channel_type},
+    xrpl::{
+        ArcValue, LedgerObjectRow, is_escrow_type, is_objects_tab_ledger_type, is_pay_channel_type,
+    },
 };
 
 #[derive(Clone, Copy, Default)]
@@ -45,6 +48,7 @@ pub struct LedgerObjectsPanel {
     tick: usize,
     received: bool,
     pub is_focused: bool,
+    detail: TxDetailState,
 }
 
 impl LedgerObjectsPanel {
@@ -70,6 +74,24 @@ impl LedgerObjectsPanel {
 
 impl Component for LedgerObjectsPanel {
     fn update(&mut self, action: &Action) -> color_eyre::Result<Option<Action>> {
+        if self.detail.visible {
+            match action {
+                Action::TxDetailToggle => {
+                    self.detail.close();
+                    return Ok(None);
+                }
+                Action::SelectNext | Action::FocusNext => {
+                    self.detail.scroll = self.detail.scroll.saturating_add(1);
+                    return Ok(None);
+                }
+                Action::SelectPrev | Action::FocusPrev => {
+                    self.detail.scroll = self.detail.scroll.saturating_sub(1);
+                    return Ok(None);
+                }
+                Action::Quit => return Ok(None),
+                _ => return Ok(None),
+            }
+        }
         match action {
             Action::Tick => self.tick = self.tick.wrapping_add(1),
             Action::XrplLedgerObjects(all) => {
@@ -80,6 +102,13 @@ impl Component for LedgerObjectsPanel {
             }
             Action::SelectPrev if !self.rows.is_empty() && self.is_focused => {
                 self.table_state.select_prev(self.rows.len());
+            }
+            Action::TxDetailToggle if self.is_focused && !self.rows.is_empty() => {
+                if let Some(idx) = self.table_state.selected()
+                    && let Some(row) = self.rows.get(idx)
+                {
+                    self.detail.open(row.raw_json.clone(), ArcValue::default());
+                }
             }
             _ => {}
         }
@@ -149,6 +178,8 @@ impl Component for LedgerObjectsPanel {
             sb_area,
             self.table_state.scroll_mut(),
         );
+
+        render_tx_detail(frame, area, &self.detail);
         Ok(())
     }
 }

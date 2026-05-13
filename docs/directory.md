@@ -39,7 +39,6 @@ lazyxrp/
 │   │   │   ├── amm.rs
 │   │   │   ├── book.rs
 │   │   │   ├── ledger_objects.rs
-│   │   │   ├── nft.rs
 │   │   │   ├── server.rs
 │   │   │   ├── trust_lines.rs
 │   │   │   ├── tx_history.rs
@@ -48,7 +47,6 @@ lazyxrp/
 │   │   │   ├── mod.rs
 │   │   │   ├── account_objects.rs
 │   │   │   ├── account_tx.rs
-│   │   │   ├── channels_escrow.rs（ファイルのみ残置; `tabs/mod.rs` 未登録。Objects は `account_objects.rs` に統合）
 │   │   │   ├── market.rs
 │   │   │   └── server_overview.rs
 │   │   └── shared/
@@ -121,7 +119,7 @@ lazyxrp/
 - `account.rs`: アカウント情報表示パネル。
 - `book.rs`: オーダーブック表示パネル。
 - `amm.rs`: AMM プール詳細パネル。
-- `nft.rs`: NFT 一覧パネル。
+
 - `trust_lines.rs`: TrustLine 一覧パネル（Table + Scrollbar、残高で色分け）。
 - `tx_history.rs`: TX 履歴パネル（Table + Scrollbar、tesSUCCESS で色分け）。
 - `wallet.rs`: seed 由来アカウントのウォレット概要パネル。
@@ -132,6 +130,7 @@ lazyxrp/
 - `account_tx.rs`: Account + TxHistory の統合タブ。
 - `market.rs`: Book + Amm + TrustLines の統合タブ。
 - `server_overview.rs`: Server + Wallet の統合タブ。
+- `nft.rs`: NFT 一覧タブ（単体タブとして直接配置）。
 - `account_objects.rs`: **Objects** タブ — 上段に Check / Ticket / MPT / DID 等、下段左右に Payment Channel と Escrow（同一 `account_objects` 結果をフィルタ）。
 
 ## 6. `src/components/shared/` 配下の責務
@@ -143,6 +142,10 @@ lazyxrp/
 - `splash.rs`: 起動スプラッシュコンポーネント。
 - `status_bar.rs`: 画面下部 1 行のステータスバー。
 - `theme.rs`: 共通テーマ・色定義（`ACCENT` に加え `SECONDARY` でハッシュ列などを区別）。
+- `tx_detail/`: トランザクション詳細オーバーレイ（`TxDetailState` + `render_tx_detail`）— 全 XRPL トランザクション型をパースしてポップアップ表示。
+  - `mod.rs`: 状態管理 (`TxDetailState`) とレンダリング (`render_tx_detail`, `detail_lines_for`)。
+  - `format.rs`: 共通フォーマット関数（`fmt_xrpl_amount`, `push_common_lines`, `format_value`, `hex_to_ascii`, `fmt_currency`）。
+  - `parsers.rs`: 29 種類の XRPL トランザクション型をパースする `*_detail_lines` 関数群。
 - `widgets.rs`: 共通 UI ヘルパー（`titled_block`、`tx_table_row`、`render_tx_scroll_table`、`spinner`）。
 
 ## 7. `docs/` 配下の責務

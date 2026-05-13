@@ -5,8 +5,9 @@ use xrpl::asynch::clients::{AsyncJsonRpcClient, XRPLClient};
 
 use super::json_util::{extract_json_u32, json_str};
 use super::types::{
-    AccountSummary, AmmSummary, FeeSummary, LedgerObjectRow, NFTOKEN_FLAG_MUTABLE, NftRow,
-    OfferRow, ServerInfoSummary, TrustLineRow, TxRow, TxSummary, XrplRlusdPrice,
+    AccountSummary, AccountTxPage, AmmSummary, ArcValue, FeeSummary, LedgerObjectRow,
+    NFTOKEN_FLAG_MUTABLE, NftRow, OfferRow, ServerInfoSummary, TrustLineRow, TxRow, TxSummary,
+    XrplRlusdPrice,
 };
 
 pub(crate) const RPC_TIMEOUT: Duration = Duration::from_secs(20);
@@ -143,28 +144,36 @@ impl RpcClient {
         &self,
         watch_address: &str,
         limit: u32,
-    ) -> color_eyre::Result<Vec<TxRow>> {
-        let value = match self
-            .rpc_value(
-                "account_tx",
-                json!({ "account": watch_address, "limit": limit }),
-            )
-            .await
-        {
+        marker: Option<serde_json::Value>,
+    ) -> color_eyre::Result<AccountTxPage> {
+        let mut req = json!({ "account": watch_address, "limit": limit });
+        if let Some(m) = marker {
+            req["marker"] = m;
+        }
+        let value = match self.rpc_value("account_tx", req).await {
             Ok(value) => value,
-            Err(e) if is_not_found_error(&format!("{e}")) => return Ok(vec![]),
+            Err(e) if is_not_found_error(&format!("{e}")) => {
+                return Ok(AccountTxPage {
+                    rows: vec![],
+                    marker: None,
+                });
+            }
             Err(e) => return Err(e),
         };
-        Ok(parse_account_tx_value(&value))
+        Ok(parse_account_tx_page(&value, watch_address))
     }
 
     pub async fn account_overview(
         &self,
         watch_address: &str,
-    ) -> color_eyre::Result<(Option<AccountSummary>, Vec<TxRow>)> {
+    ) -> color_eyre::Result<(
+        Option<AccountSummary>,
+        Vec<TxRow>,
+        Option<serde_json::Value>,
+    )> {
         let (info_res, tx_res) = tokio::join!(
             tokio::time::timeout(RPC_TIMEOUT, self.account_info(watch_address)),
-            tokio::time::timeout(RPC_TIMEOUT, self.account_tx(watch_address, 20)),
+            tokio::time::timeout(RPC_TIMEOUT, self.account_tx(watch_address, 20, None)),
         );
 
         let account = match info_res {
@@ -180,12 +189,12 @@ impl RpcClient {
             Err(_) => return Err(color_eyre::eyre::eyre!("account_info timeout")),
         };
 
-        let txs = match tx_res {
-            Ok(Ok(txs)) => txs,
+        let (txs, marker) = match tx_res {
+            Ok(Ok(page)) => (page.rows, page.marker),
             Ok(Err(e)) => {
                 let msg = format!("{e}");
                 if is_not_found_error(&msg) {
-                    vec![]
+                    (vec![], None)
                 } else {
                     return Err(e);
                 }
@@ -193,7 +202,7 @@ impl RpcClient {
             Err(_) => return Err(color_eyre::eyre::eyre!("account_tx timeout")),
         };
 
-        Ok((account, txs))
+        Ok((account, txs, marker))
     }
 
     pub async fn account_objects(
@@ -393,6 +402,7 @@ fn parse_account_nfts_value(value: &Value) -> Vec<NftRow> {
                 transfer_fee: extract_json_u32(&n, &["TransferFee"]) as u16,
                 uri: decode_uri(json_str(&n, &["URI"])),
                 is_mutable: (flags & NFTOKEN_FLAG_MUTABLE) != 0,
+                raw_json: ArcValue::new(n),
             }
         })
         .collect()
@@ -412,6 +422,7 @@ fn parse_account_lines_value(value: &Value) -> Vec<TrustLineRow> {
             account: json_str(&l, &["account"]).to_string(),
             balance: json_str(&l, &["balance"]).to_string(),
             limit: json_str(&l, &["limit"]).to_string(),
+            raw_json: ArcValue::new(l),
         })
         .collect()
 }
@@ -442,20 +453,35 @@ fn parse_amm_info_value(value: &Value) -> AmmSummary {
     }
 }
 
-fn parse_account_tx_value(value: &Value) -> Vec<TxRow> {
+fn parse_account_tx_page(value: &Value, watch_address: &str) -> AccountTxPage {
     let txns = value
         .get("result")
         .and_then(|v| v.get("transactions"))
         .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-    txns.into_iter()
+        .map(|a| a.as_slice())
+        .unwrap_or(&[]);
+    let rows: Vec<TxRow> = txns
+        .iter()
         .map(|t| {
             let tx = t
                 .get("tx")
                 .or_else(|| t.get("tx_json"))
-                .cloned()
-                .unwrap_or_default();
+                .unwrap_or(&Value::Null);
+            let meta = t.get("meta").unwrap_or(&Value::Null);
+            let account = tx.get("Account").and_then(Value::as_str).unwrap_or("");
+            let destination = tx.get("Destination").and_then(Value::as_str);
+            let direction = if account.eq_ignore_ascii_case(watch_address) {
+                if destination.is_some_and(|d| d.eq_ignore_ascii_case(watch_address)) {
+                    "·"
+                } else {
+                    "▼"
+                }
+            } else if destination.is_some_and(|d| d.eq_ignore_ascii_case(watch_address)) {
+                "▲"
+            } else {
+                "·"
+            }
+            .to_string();
             TxRow {
                 hash: t
                     .get("hash")
@@ -473,15 +499,24 @@ fn parse_account_tx_value(value: &Value) -> Vec<TxRow> {
                     .and_then(Value::as_u64)
                     .or_else(|| tx.get("ledger_index").and_then(Value::as_u64))
                     .unwrap_or(0) as u32,
-                result: t
-                    .get("meta")
-                    .and_then(|m| m.get("TransactionResult"))
+                result: meta
+                    .get("TransactionResult")
                     .and_then(Value::as_str)
                     .unwrap_or("-")
                     .to_string(),
+                direction,
+                tx_json: crate::xrpl::types::ArcValue(std::sync::Arc::new(tx.clone())),
+                meta_json: crate::xrpl::types::ArcValue(std::sync::Arc::new(meta.clone())),
             }
         })
-        .collect()
+        .collect();
+    let marker = value.get("result").and_then(|v| v.get("marker")).cloned();
+    AccountTxPage { rows, marker }
+}
+
+#[cfg(test)]
+fn parse_account_tx_value(value: &Value, watch_address: &str) -> Vec<TxRow> {
+    parse_account_tx_page(value, watch_address).rows
 }
 
 fn parse_book_offers_value(value: &Value) -> Vec<OfferRow> {
@@ -509,6 +544,7 @@ fn parse_book_offers_value(value: &Value) -> Vec<OfferRow> {
                 price,
                 taker_gets: format_amount(offer.get("TakerGets")),
                 taker_pays: format_amount(offer.get("TakerPays")),
+                raw_json: ArcValue::new(offer),
             }
         })
         .collect()
@@ -576,7 +612,7 @@ pub fn xrp_to_drops(xrp: &str) -> color_eyre::Result<u64> {
     }
 }
 
-fn drops_to_xrp(drops: &str) -> String {
+pub fn drops_to_xrp(drops: &str) -> String {
     let drops_num = drops.parse::<f64>().unwrap_or_default();
     format!("{:.6}", drops_num / 1_000_000.0)
 }
@@ -603,7 +639,7 @@ fn format_asset(v: Option<&Value>) -> String {
     }
 }
 
-fn format_amount(value: Option<&Value>) -> String {
+pub fn format_amount(value: Option<&Value>) -> String {
     match value {
         Some(v) if v.is_string() => drops_to_xrp(v.as_str().unwrap_or_default()),
         Some(v) => {
@@ -640,6 +676,7 @@ fn parse_one_ledger_object_row(obj: &Value) -> Option<LedgerObjectRow> {
         ledger_type,
         index,
         detail,
+        raw_json: ArcValue::new(obj.clone()),
     })
 }
 
@@ -768,6 +805,27 @@ mod tests {
     }
 
     /// TC-014
+    /// TC-075: xrpl-rust Payment<'static> deserialize from JSON
+    #[test]
+    fn payment_static_deserialize() {
+        use xrpl::models::transactions::payment::Payment;
+        let v = json!({
+            "TransactionType": "Payment",
+            "Account": "rN7n7otQDd6FczFgLdlqtyMVrn3HMfHgFj",
+            "Destination": "rf1BiGeXwwQoi8Z2ueFYTEXSwuJYfV2Jpn",
+            "Amount": "1000000",
+            "Fee": "12",
+            "Sequence": 1,
+            "Flags": 0
+        });
+        let payment: Payment<'static> = serde_json::from_value(v).unwrap();
+        assert_eq!(
+            payment.common_fields.account,
+            "rN7n7otQDd6FczFgLdlqtyMVrn3HMfHgFj"
+        );
+        assert_eq!(payment.destination, "rf1BiGeXwwQoi8Z2ueFYTEXSwuJYfV2Jpn");
+    }
+
     #[test]
     fn parse_account_lines_fixture() {
         let v = json!({
@@ -817,20 +875,51 @@ mod tests {
     fn parse_account_tx_fixture() {
         let v = json!({
             "result": {
-                "transactions": [{
-                    "hash": "ABC123",
-                    "ledger_index": 55,
-                    "tx": {"TransactionType": "Payment", "hash": "ABC123"},
-                    "meta": {"TransactionResult": "tesSUCCESS"}
-                }]
+                "transactions": [
+                    {
+                        "hash": "ABC123",
+                        "ledger_index": 55,
+                        "tx": {
+                            "TransactionType": "Payment",
+                            "hash": "ABC123",
+                            "Account": "rWatch",
+                            "Destination": "rDest"
+                        },
+                        "meta": {"TransactionResult": "tesSUCCESS"}
+                    },
+                    {
+                        "hash": "DEF456",
+                        "ledger_index": 56,
+                        "tx": {
+                            "TransactionType": "Payment",
+                            "hash": "DEF456",
+                            "Account": "rSrc",
+                            "Destination": "rWatch"
+                        },
+                        "meta": {"TransactionResult": "tesSUCCESS"}
+                    },
+                    {
+                        "hash": "GHI789",
+                        "ledger_index": 57,
+                        "tx": {
+                            "TransactionType": "OfferCreate",
+                            "hash": "GHI789",
+                            "Account": "rOther"
+                        },
+                        "meta": {"TransactionResult": "tesSUCCESS"}
+                    }
+                ]
             }
         });
-        let rows = parse_account_tx_value(&v);
-        assert_eq!(rows.len(), 1);
+        let rows = parse_account_tx_value(&v, "rWatch");
+        assert_eq!(rows.len(), 3);
         assert_eq!(rows[0].hash, "ABC123");
         assert_eq!(rows[0].tx_type, "Payment");
-        assert_eq!(rows[0].ledger_index, 55);
-        assert_eq!(rows[0].result, "tesSUCCESS");
+        assert_eq!(rows[0].direction, "▼");
+        assert_eq!(rows[1].hash, "DEF456");
+        assert_eq!(rows[1].direction, "▲");
+        assert_eq!(rows[2].hash, "GHI789");
+        assert_eq!(rows[2].direction, "·");
     }
 
     /// TC-017

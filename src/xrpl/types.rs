@@ -1,4 +1,39 @@
+use std::sync::Arc;
 use std::time::Duration;
+
+/// Newtype wrapper so `Arc<serde_json::Value>` can derive `Serialize`/`Deserialize`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ArcValue(pub Arc<serde_json::Value>);
+
+impl ArcValue {
+    pub fn new(v: serde_json::Value) -> Self {
+        Self(Arc::new(v))
+    }
+}
+
+impl Default for ArcValue {
+    fn default() -> Self {
+        Self(Arc::new(serde_json::Value::Null))
+    }
+}
+
+impl serde::Serialize for ArcValue {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        self.0.serialize(serializer)
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for ArcValue {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        serde_json::Value::deserialize(deserializer).map(|v| Self(Arc::new(v)))
+    }
+}
 
 use serde::{Deserialize, Serialize};
 use tokio::sync::watch;
@@ -31,6 +66,9 @@ pub struct OfferRow {
     pub price: String,
     pub taker_gets: String,
     pub taker_pays: String,
+    /// Raw book_offers entry for detail popup.
+    #[serde(skip)]
+    pub raw_json: ArcValue,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -51,6 +89,9 @@ pub struct NftRow {
     /// `true` when `Flags` includes [`NFTOKEN_FLAG_MUTABLE`] (tfMutable).
     #[serde(default)]
     pub is_mutable: bool,
+    /// Raw `account_nfts` entry for detail popup.
+    #[serde(skip)]
+    pub raw_json: ArcValue,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -59,6 +100,9 @@ pub struct TrustLineRow {
     pub account: String,
     pub balance: String,
     pub limit: String,
+    /// Raw `account_lines` entry for detail popup.
+    #[serde(skip)]
+    pub raw_json: ArcValue,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -84,6 +128,19 @@ pub struct TxRow {
     pub tx_type: String,
     pub ledger_index: u32,
     pub result: String,
+    /// Direction marker: "▼" outbound, "▲" inbound, "·" self-only.
+    pub direction: String,
+    /// Shared raw transaction JSON (avoid deep clones on Action routing).
+    pub tx_json: ArcValue,
+    /// Shared raw metadata JSON.
+    pub meta_json: ArcValue,
+}
+
+/// Result page from `account_tx` (includes optional marker for pagination).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AccountTxPage {
+    pub rows: Vec<TxRow>,
+    pub marker: Option<serde_json::Value>,
 }
 
 /// One row from `account_objects` (Check, Ticket, MPToken, PayChannel, Escrow, …).
@@ -92,6 +149,9 @@ pub struct LedgerObjectRow {
     pub ledger_type: String,
     pub index: String,
     pub detail: String,
+    /// Raw ledger object entry for detail popup.
+    #[serde(skip)]
+    pub raw_json: ArcValue,
 }
 
 /// True for ledger types shown in the upper «misc objects» panel (excludes PayChannel / Escrow).
@@ -188,6 +248,8 @@ pub enum PollCommand {
     Nfts,
     Lines,
     TxHistory,
+    /// Load next page using the given marker.
+    TxHistoryMore(Option<serde_json::Value>),
     /// `account_objects` (limit 200); UI filters by ledger type per tab.
     LedgerObjects,
     /// Sign and submit AccountSet (wallet form).

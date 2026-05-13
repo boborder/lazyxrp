@@ -35,8 +35,14 @@ pub enum Action {
     XrplAccountNfts(Vec<NftRow>),
     XrplTrustLines(Vec<TrustLineRow>),
     XrplAmmInfo(Box<AmmSummary>),
-    XrplTxHistory(Vec<TxRow>),
-    XrplWalletOverview(Option<AccountSummary>, Vec<TxRow>),
+    XrplTxHistory(Vec<TxRow>, Option<serde_json::Value>),
+    /// Append page to existing tx history (pagination).
+    XrplTxHistoryAppend(Vec<TxRow>, Option<serde_json::Value>),
+    XrplWalletOverview(
+        Option<AccountSummary>,
+        Vec<TxRow>,
+        Option<serde_json::Value>,
+    ),
     XrplRlusdPrice(XrplRlusdPrice),
     /// `account_objects` snapshot; each tab filters rows by `LedgerEntryType`.
     XrplLedgerObjects(Vec<LedgerObjectRow>),
@@ -46,6 +52,8 @@ pub enum Action {
     RefreshNfts,
     RefreshLines,
     RefreshTxHistory,
+    /// Load next page of tx history (uses current marker).
+    RefreshTxHistoryMore(Option<serde_json::Value>),
     /// Re-fetch `account_objects` (shared by Objects / PayChan+Escrow tabs).
     RefreshLedgerObjects,
     TabNext,
@@ -68,4 +76,6 @@ pub enum Action {
     PaymentSubmit(PaymentSubmitParams),
     PaymentSubmitOk(String),
     PaymentSubmitErr(String),
+    /// Toggle transaction detail overlay in TxHistory panel.
+    TxDetailToggle,
 }

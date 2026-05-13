@@ -16,8 +16,8 @@
 | Config & Keybinds | 19         | 1  | 9  | 9  | 0  | 8h          | 19/19       |
 | Network & Signing | 13         | 4  | 7  | 2  | 0  | 5h          | 13/13       |
 | CLI Integration   | 12         | 1  | 8  | 3  | 0  | 11h         | 12/12       |
-| Watch & TUI       | 6          | 0  | 2  | 3  | 1  | 6h          | 6/6         |
-| **Total**         | **75**     | **10** | **44** | **20** | **1** | **41h** | **75/75** |
+| Watch & TUI       | 9          | 0  | 2  | 6  | 1  | 6h          | 9/9         |
+| **Total**         | **78**     | **10** | **44** | **23** | **1** | **41h** | **78/78** |
 
 ---
 
@@ -228,6 +228,18 @@ CI（`.github/workflows/ci.yml`）は各ジョブで `cargo … --locked`（例:
 - **Expected Output**: `NftRow.is_mutable == true`; missing `Flags` → `false`
 - **Test File**: `src/xrpl/client.rs` (inline)
 
+#### TC-075: xrpl-rust `Payment<'static>` deserialize from JSON
+
+- **Priority**: P2
+- **Type**: Unit
+- **Size**: S
+- **Status**: [x] Done
+- **Target**: `src/xrpl/client.rs` -> `payment_static_deserialize()`
+- **Input**: Fixture JSON with `TransactionType: "Payment"`, `Account`, `Destination`, `Amount`, `Fee`, `Sequence`, `Flags`
+- **Expected Output**: `Payment<'static>` struct with correct `common_fields.account`, `destination`, parsed `Amount`
+- **Test File**: `src/xrpl/client.rs` (inline)
+- **Notes**: Validates `xrpl-rust` native type deserialization path for typed transaction detail rendering.
+
 #### TC-014: account_lines — parse response into TrustLineRow vec
 
 - **Priority**: P1
@@ -250,7 +262,7 @@ CI（`.github/workflows/ci.yml`）は各ジョブで `cargo … --locked`（例:
 - **Expected Output**: `AmmSummary` with asset pair and fee
 - **Test File**: `src/xrpl/client.rs` (inline)
 
-#### TC-016: account_tx — parse response into TxRow vec
+#### TC-016: account_tx — parse response into TxRow vec (with direction)
 
 - **Priority**: P2
 - **Type**: Unit
@@ -258,7 +270,7 @@ CI（`.github/workflows/ci.yml`）は各ジョブで `cargo … --locked`（例:
 - **Status**: [x] Done
 - **Target**: `src/xrpl/client.rs` -> `account_tx()`
 - **Preconditions**: Mock RPC response with `account_tx` result
-- **Expected Output**: `Vec<TxRow>` with hash, type, result
+- **Expected Output**: `Vec<TxRow>` with hash, type, result, **direction** (`▼` outbound / `▲` inbound / `·` self-only)
 - **Test File**: `src/xrpl/client.rs` (inline)
 
 #### TC-017: book_offers — parse response into OfferRow vec
@@ -956,7 +968,11 @@ CI（`.github/workflows/ci.yml`）は各ジョブで `cargo … --locked`（例:
 | 35    | TC-072 | account_objects mixed types                 | M    | [x]    | 2026-05-11 |
 | 36    | TC-073 | ledger object tab filters                   | S    | [x]    | 2026-05-11 |
 | 37    | TC-074 | account_nfts tfMutable (dNFT)             | S    | [x]    | 2026-05-11 |
-| 38    | TC-076 | `--self-uninstall` parse + `.bak` path    | S    | [x]    | 2026-05-12 |
+| 38    | TC-075 | xrpl-rust Payment<'static> deserialize    | S    | [x]    | 2026-05-13 |
+| 39    | TC-076 | `--self-uninstall` parse + `.bak` path    | S    | [x]    | 2026-05-12 |
+| 40    | TC-077 | TxHistoryPanel filter by tx_type          | S    | [x]    | 2026-05-14 |
+| 41    | TC-078 | TxHistoryPanel filter by hash partial     | S    | [x]    | 2026-05-14 |
+| 42    | TC-079 | WalletPanel (Recent txs) filter           | S    | [x]    | 2026-05-14 |
 
 ---
 
@@ -964,8 +980,8 @@ CI（`.github/workflows/ci.yml`）は各ジョブで `cargo … --locked`（例:
 
 ### Overall
 
-- **Total Cases**: 75
-- **Implemented**: 75
+- **Total Cases**: 79
+- **Implemented**: 79
 - **Passing**: 76（`cargo test`; 自動 86 のうち; 2026-05-12）
 - **Failing**: 0
 - **Ignored**: 10 (TUI / live RPC / seed-dependent; see case notes)

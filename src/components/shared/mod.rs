@@ -5,4 +5,5 @@ pub mod selectable_table;
 pub mod splash;
 pub mod status_bar;
 pub mod theme;
+pub mod tx_detail;
 pub mod widgets;

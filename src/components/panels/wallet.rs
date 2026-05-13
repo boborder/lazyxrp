@@ -17,6 +17,7 @@ use crate::{
             fmt,
             selectable_table::SelectableTableState,
             theme,
+            tx_detail::{TxDetailState, render_tx_detail},
             widgets::{
                 render_empty, render_error, render_loading, render_tx_scroll_table, titled_block,
             },
@@ -90,6 +91,13 @@ pub struct WalletPanel {
     tick_size: String,
     transfer_rate: String,
     submit_flash: Option<SubmitFlash>,
+    detail: TxDetailState,
+    marker: Option<serde_json::Value>,
+    has_more: bool,
+    loading_more: bool,
+    filtered: Option<Vec<TxRow>>,
+    filter_mode: bool,
+    filter_input: String,
 }
 
 impl Default for WalletPanel {
@@ -115,6 +123,13 @@ impl Default for WalletPanel {
             tick_size: String::new(),
             transfer_rate: String::new(),
             submit_flash: None,
+            detail: TxDetailState::default(),
+            marker: None,
+            has_more: false,
+            loading_more: false,
+            filtered: None,
+            filter_mode: false,
+            filter_input: String::new(),
         }
     }
 }
@@ -129,6 +144,40 @@ impl WalletPanel {
 
     fn label_for_flag(ix: usize) -> String {
         FLAG_OPTIONS.get(ix).unwrap_or(&"(none)").to_string()
+    }
+
+    fn reapply_filter(&mut self) {
+        if self.filter_input.is_empty() {
+            self.filtered = None;
+        } else {
+            let f = self.filter_input.to_lowercase();
+            self.filtered = Some(
+                self.txs
+                    .iter()
+                    .filter(|r| {
+                        r.tx_type.to_lowercase().contains(&f) || r.hash.to_lowercase().contains(&f)
+                    })
+                    .cloned()
+                    .collect(),
+            );
+        }
+        let count = self
+            .filtered
+            .as_ref()
+            .map(|v| v.len())
+            .unwrap_or(self.txs.len());
+        self.tx_table.reset_len(count);
+    }
+
+    fn row_count(&self) -> usize {
+        self.filtered
+            .as_ref()
+            .map(|v| v.len())
+            .unwrap_or(self.txs.len())
+    }
+
+    fn display_rows(&self) -> &[TxRow] {
+        self.filtered.as_deref().unwrap_or(&self.txs)
     }
 
     fn queue_submit_account_set(&mut self) -> Option<Action> {
@@ -500,23 +549,62 @@ impl Component for WalletPanel {
     }
 
     fn update(&mut self, action: &Action) -> color_eyre::Result<Option<Action>> {
+        // Detail overlay scroll takes precedence when visible
+        if self.detail.visible {
+            match action {
+                Action::TxDetailToggle => {
+                    self.detail.close();
+                    return Ok(None);
+                }
+                Action::SelectNext | Action::FocusNext => {
+                    self.detail.scroll = self.detail.scroll.saturating_add(1);
+                    return Ok(None);
+                }
+                Action::SelectPrev | Action::FocusPrev => {
+                    self.detail.scroll = self.detail.scroll.saturating_sub(1);
+                    return Ok(None);
+                }
+                _ => return Ok(None),
+            }
+        }
+
         match action {
             Action::Tick => self.tick = self.tick.wrapping_add(1),
-            Action::XrplWalletOverview(acc, txs) => {
+            Action::XrplWalletOverview(acc, txs, marker) => {
                 self.account = acc.clone();
                 self.txs = txs.to_vec();
-                self.tx_table.reset_len(self.txs.len());
                 self.received = true;
+                self.marker = marker.clone();
+                self.has_more = marker.is_some();
+                self.loading_more = false;
+                self.reapply_filter();
+            }
+            Action::XrplTxHistoryAppend(txs, marker) => {
+                self.txs.extend(txs.iter().cloned());
+                self.marker = marker.clone();
+                self.has_more = marker.is_some();
+                self.loading_more = false;
+                self.reapply_filter();
             }
             Action::SelectNext
-                if self.is_focused && self.composer.is_none() && !self.txs.is_empty() =>
+                if self.is_focused && self.composer.is_none() && self.row_count() > 0 =>
             {
-                self.tx_table.select_next(self.txs.len());
+                self.tx_table.select_next(self.row_count());
             }
             Action::SelectPrev
-                if self.is_focused && self.composer.is_none() && !self.txs.is_empty() =>
+                if self.is_focused && self.composer.is_none() && self.row_count() > 0 =>
             {
-                self.tx_table.select_prev(self.txs.len());
+                self.tx_table.select_prev(self.row_count());
+            }
+            Action::TxDetailToggle
+                if self.is_focused && self.composer.is_none() && self.row_count() > 0 =>
+            {
+                let rows = self.display_rows();
+                if let Some(idx) = self.tx_table.selected()
+                    && let Some(tx) = rows.get(idx)
+                {
+                    self.detail.open(tx.tx_json.clone(), tx.meta_json.clone());
+                }
             }
             Action::AccountSetSubmitOk(hash) => {
                 self.set_submit_flash(SubmitFlash::Success(format!(
@@ -554,6 +642,33 @@ impl Component for WalletPanel {
 
     fn handle_key_event(&mut self, key: KeyEvent) -> color_eyre::Result<Option<Action>> {
         if !self.is_focused {
+            return Ok(None);
+        }
+
+        if self.detail.visible {
+            return Ok(None);
+        }
+
+        if self.filter_mode {
+            match key.code {
+                KeyCode::Enter => {
+                    self.filter_mode = false;
+                }
+                KeyCode::Esc => {
+                    self.filter_mode = false;
+                    self.filter_input.clear();
+                    self.reapply_filter();
+                }
+                KeyCode::Char(c) => {
+                    self.filter_input.push(c);
+                    self.reapply_filter();
+                }
+                KeyCode::Backspace => {
+                    self.filter_input.pop();
+                    self.reapply_filter();
+                }
+                _ => {}
+            }
             return Ok(None);
         }
 
@@ -690,6 +805,22 @@ impl Component for WalletPanel {
             return Ok(Some(Action::SetKeymapSuppression(true)));
         }
 
+        if self.composer.is_none() && key.code == KeyCode::Char('f') && !self.filter_mode {
+            self.filter_mode = true;
+            self.filter_input.clear();
+            self.reapply_filter();
+            return Ok(None);
+        }
+
+        if self.composer.is_none()
+            && key.code == KeyCode::Char('m')
+            && self.has_more
+            && !self.loading_more
+        {
+            self.loading_more = true;
+            return Ok(Some(Action::RefreshTxHistoryMore(self.marker.clone())));
+        }
+
         Ok(None)
     }
 
@@ -770,28 +901,60 @@ impl Component for WalletPanel {
         ];
         frame.render_widget(Paragraph::new(lines), top);
 
-        if self.txs.is_empty() {
-            render_empty(frame, bottom, "Recent Transactions", "None", false);
+        let row_count = self.row_count();
+        if row_count == 0 {
+            let msg = if self.filter_input.is_empty() {
+                "None"
+            } else {
+                "no matches"
+            };
+            render_empty(frame, bottom, "Recent Transactions", msg, false);
         } else {
             let [tx_hdr, tx_body] =
                 Layout::vertical([Constraint::Length(1), Constraint::Fill(1)]).areas(bottom);
+            let title_text = if self.filter_input.is_empty() {
+                "Recent txs ".to_string()
+            } else {
+                format!("Recent txs [filter: {}] ", self.filter_input)
+            };
             let tx_title = Line::from(vec![
                 Span::styled(
-                    "Recent txs ",
+                    title_text,
                     theme::secondary_style().add_modifier(Modifier::BOLD),
                 ),
-                Span::styled(format!("({})  ", self.txs.len()), theme::dim_style()),
-                Span::styled("j/k scroll · ▲▼", theme::dim_style()),
+                Span::styled(format!("({})  ", row_count), theme::dim_style()),
+                Span::styled(
+                    if self.filter_mode {
+                        "Filter: typing…"
+                    } else if self.loading_more {
+                        "loading more…"
+                    } else if self.has_more {
+                        "j/k scroll · ▲▼ · f: filter · m: more"
+                    } else {
+                        "j/k scroll · ▲▼ · f: filter"
+                    },
+                    theme::dim_style(),
+                ),
             ]);
             frame.render_widget(Paragraph::new(tx_title), tx_hdr);
 
-            render_tx_scroll_table(
-                frame,
-                tx_body,
-                &self.txs,
-                &mut self.tx_table,
-                self.is_focused,
-            );
+            if let Some(ref filtered) = self.filtered {
+                render_tx_scroll_table(
+                    frame,
+                    tx_body,
+                    filtered,
+                    &mut self.tx_table,
+                    self.is_focused,
+                );
+            } else {
+                render_tx_scroll_table(
+                    frame,
+                    tx_body,
+                    &self.txs,
+                    &mut self.tx_table,
+                    self.is_focused,
+                );
+            }
         }
 
         let note_line = self
@@ -807,6 +970,52 @@ impl Component for WalletPanel {
         frame.render_widget(Paragraph::new(note_line), hint);
 
         self.render_composer(frame, area);
+        render_tx_detail(frame, area, &self.detail);
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::xrpl::ArcValue;
+
+    fn dummy_tx_row(hash: &str, tx_type: &str) -> TxRow {
+        TxRow {
+            hash: hash.to_string(),
+            tx_type: tx_type.to_string(),
+            ledger_index: 1,
+            result: "tesSUCCESS".to_string(),
+            direction: "·".to_string(),
+            tx_json: ArcValue::new(serde_json::json!({"hash": hash, "TransactionType": tx_type})),
+            meta_json: ArcValue::new(serde_json::json!({})),
+        }
+    }
+
+    #[test]
+    fn wallet_filter_by_tx_type() {
+        let mut panel = WalletPanel::new(false);
+        panel.txs = vec![
+            dummy_tx_row("aaa", "Payment"),
+            dummy_tx_row("bbb", "OfferCreate"),
+            dummy_tx_row("ccc", "Payment"),
+        ];
+        panel.filter_input = "offer".to_string();
+        panel.reapply_filter();
+        assert_eq!(panel.row_count(), 1);
+        assert_eq!(panel.filtered.as_ref().unwrap()[0].tx_type, "OfferCreate");
+    }
+
+    #[test]
+    fn wallet_filter_by_hash() {
+        let mut panel = WalletPanel::new(false);
+        panel.txs = vec![
+            dummy_tx_row("deadbeef", "Payment"),
+            dummy_tx_row("cafebabe", "AccountSet"),
+        ];
+        panel.filter_input = "dead".to_string();
+        panel.reapply_filter();
+        assert_eq!(panel.row_count(), 1);
+        assert_eq!(panel.filtered.as_ref().unwrap()[0].hash, "deadbeef");
     }
 }

@@ -34,9 +34,10 @@
 
 - 画面表示を `panels`（基底パネル）、`tabs`（統合タブ画面）、`shared`（共通部品）の3層に分離。
 - `Component` トレイトで統一し、`Action` を受けて内部状態を更新し、`draw` で描画を行う。
-- `widgets.rs` が `titled_block`（共通枠スタイル）・トランザクション表行（`tx_table_row`）・表＋縦スクロール（`render_tx_scroll_table`）・スピナフレームのユーティリティを提供する。
+- `tx_detail/` がトランザクション詳細オーバーレイ（`TxDetailState` + `render_tx_detail`）を提供し、全 XRPL トランザクション型をパースしてポップアップ表示する。
+- `widgets.rs` が `titled_block`（共通枠スタイル）・トランザクション表行（`tx_table_row`、Hash / Dir / Type / Ledger / Result の5列）・表＋縦スクロール（`render_tx_scroll_table`）・スピナフレームのユーティリティを提供する。
 - `StatusBar` は接続状態・最終更新経過時間・監視アカウント・リフレッシュ中スピナ・エラーを1行に表示する。
-- `WalletPanel` は seed から導出したアドレス概要と直近トランザクションを表示する。直近トランザクション表は **Hash / Type / Ledger / Result** を列ごとに色分けし（ハッシュ列はテーマ色 `SECONDARY`/ターコイズ系、種別はアクセント、台帳番号はミュート、結果は成功/失敗色）、ウォレット枠にフォーカスかつトランザクション作成モーダルが閉じているとき **j/k・▲▼**（`SelectNext` / `SelectPrev`）で行選択とスクロールバー連動ができる。ウォレット枠にフォーカスした状態で **`t`** でモーダルを開き **AccountSet** と **Payment（XRP）** を選んでからフォームに入る。型選択は **Tab / jk / 矢印**（一覧の j/k とは排他的—モーダル表示中は一覧側に効かない）。AccountSet は **Tab / `[` `]`** で行移動、**`e`** 編集、**`s`** 送信。Payment はモーダル内に送信プレビュー（緑＝送信可能、橙＝未入力/不正）を出し、**Tab / `[` `]`** と **Enter**（未編集で編集開始／編集中は次フィールド）で行を動かし、**`s`** は未編集時または **^S** で送信キューへ入れる。送信前に宛先・正の数として amount を検証し、成功時はモーダルを閉じてウォレット下段に緑のメッセージ、失敗は赤を表示する。AccountSet はモーダル内で **SetFlag / ClearFlag（`parse_account_set_flag_choice` と一致するラベルのみ有効）**、domain ASCII、tick size、transfer rate を編集し、送信成功時もモーダルを閉じる。Payment は送信先（classic または X-address）と XRP 数量を入力し、`PollCommand::PaymentSubmit` 経由で `create_and_sign_payment` → `submit`。メインネット書き込みは CLI `--yes` が必要。seed 未設定・無効時の表示は従来どおり。Watch 起動時は **`main` で一度だけ構築した `Config`（`XRPL_SEED` マージ済み）を `App::new` に渡す** — `SigningConfig::prime_seed_source` が env を消したあとに `Config::new()` を再実行するとシードが復元できない。
+- `WalletPanel` は seed から導出したアドレス概要と直近トランザクションを表示する。直近トランザクション表は **Hash / Dir / Type / Ledger / Result** を列ごとに色分けし（ハッシュ列はテーマ色 `SECONDARY`/ターコイズ系、方向は ▼赤／▲緑／·灰、種別はアクセント、台帳番号はミュート、結果は成功/失敗色）、ウォレット枠にフォーカスかつトランザクション作成モーダルが閉じているとき **j/k・▲▼**（`SelectNext` / `SelectPrev`）で行選択とスクロールバー連動ができる。フォーカス状態で **Enter** を押すと、選択中のトランザクションの詳細ポップアップ（`TxDetailOverlay`）が開き、生 JSON を型ごとにパースして金額・宛先・日時・メタデータ等を表示する。ポップアップ表示中は **j/k・▲▼** でスクロール、**Enter / Esc** で閉じる。ウォレット枠にフォーカスした状態で **`t`** でモーダルを開き **AccountSet** と **Payment（XRP）** を選んでからフォームに入る。型選択は **Tab / jk / 矢印**（一覧の j/k とは排他的—モーダル表示中は一覧側に効かない）。AccountSet は **Tab / `[` `]`** で行移動、**`e`** 編集、**`s`** 送信。Payment はモーダル内に送信プレビュー（緑＝送信可能、橙＝未入力/不正）を出し、**Tab / `[` `]`** と **Enter**（未編集で編集開始／編集中は次フィールド）で行を動かし、**`s`** は未編集時または **^S** で送信キューへ入れる。送信前に宛先・正の数として amount を検証し、成功時はモーダルを閉じてウォレット下段に緑のメッセージ、失敗は赤を表示する。AccountSet はモーダル内で **SetFlag / ClearFlag（`parse_account_set_flag_choice` と一致するラベルのみ有効）**、domain ASCII、tick size、transfer rate を編集し、送信成功時もモーダルを閉じる。Payment は送信先（classic または X-address）と XRP 数量を入力し、`PollCommand::PaymentSubmit` 経由で `create_and_sign_payment` → `submit`。メインネット書き込みは CLI `--yes` が必要。seed 未設定・無効時の表示は従来どおり。Watch 起動時は **`main` で一度だけ構築した `Config`（`XRPL_SEED` マージ済み）を `App::new` に渡す** — `SigningConfig::prime_seed_source` が env を消したあとに `Config::new()` を再実行するとシードが復元できない。
 
 ### `src/config.rs`
 
@@ -119,6 +120,12 @@ pub struct TxRow {
     pub tx_type: String,
     pub ledger_index: u32,
     pub result: String,
+    /// "▼" outbound, "▲" inbound, "·" self-only.
+    pub direction: String,
+    /// Raw transaction JSON (shared via Arc).
+    pub tx_json: ArcValue,
+    /// Raw metadata JSON (shared via Arc).
+    pub meta_json: ArcValue,
 }
 
 // account_objects の 1 行（タブ側で LedgerEntryType によりフィルタ）
@@ -137,8 +144,8 @@ impl RpcClient {
     pub async fn account_lines(&self, account: &str) -> color_eyre::Result<Vec<TrustLineRow>>;
     pub async fn amm_info(&self, asset1: Currency<'static>, asset2: Currency<'static>)
         -> color_eyre::Result<AmmSummary>;
-    pub async fn account_tx(&self, account: &str, limit: u32)
-        -> color_eyre::Result<Vec<TxRow>>;
+    pub async fn account_tx(&self, account: &str, limit: u32, marker: Option<Value>)
+        -> color_eyre::Result<AccountTxPage>;
     pub async fn account_objects(&self, account: &str)
         -> color_eyre::Result<Vec<LedgerObjectRow>>;
     pub async fn account_overview(&self, account: &str)
@@ -188,6 +195,10 @@ TxHistory {
 
 - Phase 1 で NFT / TrustLine / AMM / TxHistory の **TUI パネルも実装済み**。
 - `src/components/panels/nft.rs`、`trust_lines.rs`、`amm.rs`、`tx_history.rs`、`wallet.rs` が対応。
+- **Enter キーで詳細ポップアップ**: `TxHistoryPanel`、`WalletPanel`（Recent Transactions）、`NftTab`、`BookPanel`、`TrustLinesPanel`、`LedgerObjectsPanel` のすべてで、テーブル行選択中に `Enter` を押すと `tx_detail::render_tx_detail` の統一オーバーレイが開く。各 `Row` 構造体（`TxRow`、`NftRow`、`OfferRow`、`TrustLineRow`、`LedgerObjectRow`）は `raw_json: ArcValue` フィールドで元の JSON を保持し、`render_tx_detail` に渡してスクロール可能な詳細表示を行う。
+- **`TxHistoryPanel` と `WalletPanel`（Recent Transactions）の pagination（marker）対応**: 初回ロード時にレスポンスに `marker` が含まれていれば下部に「m: more」ヒントを表示し、`m` キーで次ページ（`PollCommand::TxHistoryMore` → `account_tx` with `marker`）を読み込んで既存リストに append する。`Action::XrplTxHistory` は置き換え、`Action::XrplTxHistoryAppend` は追加分を表す。
+- **型安全なトランザクション詳細表示（`tx_detail/`）**: `xrpl-rust` のネイティブ Transaction 型を使った構造パースで、29 型を型安全に表示する。対応型: `Payment`, `AccountSet`, `TrustSet`, `OfferCreate`, `OfferCancel`, `NFTokenMint`, `NFTokenBurn`, `NFTokenCreateOffer`, `NFTokenAcceptOffer`, `NFTokenCancelOffer`, `CheckCreate`, `CheckCash`, `CheckCancel`, `SignerListSet`, `SetRegularKey`, `DepositPreauth`, `EscrowCreate`, `EscrowFinish`, `EscrowCancel`, `PaymentChannelCreate`, `PaymentChannelFund`, `PaymentChannelClaim`, `AMMCreate`, `AMMDeposit`, `AMMWithdraw`, `AMMVote`, `AMMBid`, `AMMDelete`, `TicketCreate`。共通フィールド（Account, Sequence, Fee）は `push_common_lines` ヘルパーで統一表示。金額フィールドは `xrpl::models::Amount` 型を使って XRP drops / IssuedCurrencyAmount を自動変換。AMM 関連では `fmt_currency` で Currency 型を表示。未対応型は生 JSON のフォールバック表示でカバー。
+- **`TxHistoryPanel` と `WalletPanel`（Recent Transactions）のフィルタ機能**: `f` キーでフィルタ入力モードに入り、ハッシュまたはトランザクション種別の部分一致でリアルタイム絞り込みを行う。`Enter` で確定、`Esc` で解除。フィルタ適用中はタイトルに `[filter: xxx]` を表示し、ヒント行に `f: filter` を表示する。
 - **`ledger_objects.rs`**: `account_objects` 応答の一覧・詳細ウィジェット。
 - 統合タブとして `src/components/tabs/account_tx.rs`、`market.rs`、`server_overview.rs` に加え、**`account_objects.rs`** を追加（**Objects** 1 タブで上段: Check / Ticket / MPT / DID 等、下段: PayChannel と Escrow）。
 

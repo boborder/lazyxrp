@@ -25,6 +25,12 @@ const BINDINGS: &[(&str, &str)] = &[
         "t / e / s (wallet modal)",
         "Overview: `t` → AccountSet or Payment; Tab/[] rows, Enter, `e` type, `s` send; ok closes modal",
     ),
+    ("Enter", "Transaction detail (all table panels)"),
+    (
+        "f",
+        "Filter rows by tx type / hash (Tx History + Wallet Recent txs)",
+    ),
+    ("m", "Load more transactions (Tx History pagination)"),
     ("?", "Toggle this help"),
 ];
 

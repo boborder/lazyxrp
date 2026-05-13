@@ -67,7 +67,7 @@ pub fn fmt_drops(drops: u64) -> String {
 }
 
 #[cfg(unix)]
-fn local_tm_from_secs(secs: i64) -> Option<libc::tm> {
+pub fn local_tm_from_secs(secs: i64) -> Option<libc::tm> {
     let mut tm: libc::tm = unsafe { std::mem::zeroed() };
     let t_ts: libc::time_t = secs as libc::time_t;
     let result = unsafe { libc::localtime_r(&t_ts, &mut tm) };
@@ -75,7 +75,7 @@ fn local_tm_from_secs(secs: i64) -> Option<libc::tm> {
 }
 
 #[cfg(windows)]
-fn local_tm_from_secs(secs: i64) -> Option<libc::tm> {
+pub fn local_tm_from_secs(secs: i64) -> Option<libc::tm> {
     let mut tm: libc::tm = unsafe { std::mem::zeroed() };
     let t_ts: libc::time_t = secs as libc::time_t;
     let err = unsafe { libc::localtime_s(&mut tm, &t_ts) };
@@ -83,8 +83,24 @@ fn local_tm_from_secs(secs: i64) -> Option<libc::tm> {
 }
 
 #[cfg(not(any(unix, windows)))]
-fn local_tm_from_secs(_secs: i64) -> Option<libc::tm> {
+pub fn local_tm_from_secs(_secs: i64) -> Option<libc::tm> {
     None
+}
+
+/// Format a unix timestamp as local-time `YYYY-MM-DD HH:MM:SS`.
+pub fn fmt_local_datetime(secs: i64) -> String {
+    let Some(tm) = local_tm_from_secs(secs) else {
+        return "----/--/-- --:--:--".to_string();
+    };
+    format!(
+        "{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
+        tm.tm_year + 1900,
+        tm.tm_mon + 1,
+        tm.tm_mday,
+        tm.tm_hour,
+        tm.tm_min,
+        tm.tm_sec
+    )
 }
 
 /// Format a `SystemTime` as local-time `HH:MM:SS`.

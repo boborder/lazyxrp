@@ -17,11 +17,11 @@ use crate::{
     action::Action,
     components::{
         Component,
-        panels::nft::NftPanel,
         shared::{
             fps::FpsCounter, help_overlay::HelpOverlay, splash::SplashScreen,
             status_bar::StatusBar, theme,
         },
+        tabs::nft::NftTab,
         tabs::{
             account_objects::AccountObjectsTab, account_tx::AccountTxTab, market::MarketTab,
             server_overview::ServerOverviewTab,
@@ -36,7 +36,7 @@ use crate::{
 /// Tab labels (index mirrors `panels` Vec order)
 const TAB_TITLES: &[&str] = &["󰖟 Overview", "󰀉 Account", "󰠿 Market", "󰒍 NFTs", "󰧮 Objects"];
 
-fn footer_hints(active_tab: usize) -> Line<'static> {
+fn footer_line(active_tab: usize) -> Line<'static> {
     let key = |k: &'static str| Span::styled(k, Style::new().add_modifier(Modifier::BOLD));
     let sep = || Span::raw("  ");
     let label = |s: &'static str| Span::raw(s);
@@ -170,7 +170,7 @@ impl App {
                 )),
                 Box::new(AccountTxTab::new()),
                 Box::new(MarketTab::new()),
-                Box::new(NftPanel::new()),
+                Box::new(NftTab::new()),
                 Box::new(AccountObjectsTab::new()),
             ],
             status_bar: StatusBar::new(watch_account.clone(), network),
@@ -457,6 +457,14 @@ impl App {
                         warn!(?err, "poll command channel closed");
                     }
                 }
+                Action::RefreshTxHistoryMore(marker) => {
+                    if let Err(err) = self
+                        .poll_tx
+                        .send(PollCommand::TxHistoryMore(marker.clone()))
+                    {
+                        warn!(?err, "poll command channel closed");
+                    }
+                }
                 Action::RefreshLedgerObjects => {
                     Self::try_debounced(
                         &mut self.last_refresh_ledger_objects,
@@ -566,7 +574,7 @@ impl App {
             frame.render_widget(tabs, tabs_area);
 
             // Footer key hints (above status bar)
-            let hints = footer_hints(active_tab);
+            let hints = footer_line(active_tab);
             frame.render_widget(Paragraph::new(hints).style(theme::dim_style()), hints_area);
 
             // Active panel

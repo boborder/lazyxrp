@@ -91,7 +91,7 @@ pub async fn execute_cli_command(
         Cmd::TxHistory { address, limit } => {
             println!(
                 "{}",
-                serde_json::to_string_pretty(&rpc.account_tx(&address, limit).await?)?
+                serde_json::to_string_pretty(&rpc.account_tx(&address, limit, None).await?.rows)?
             );
         }
         Cmd::AccountStatus { address } => {

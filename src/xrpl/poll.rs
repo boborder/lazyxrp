@@ -57,7 +57,7 @@ async fn poll_batch(
     let (r_nfts, r_lines, r_tx) = tokio::join!(
         tokio::time::timeout(RPC_TIMEOUT, rpc.account_nfts(watch_address)),
         tokio::time::timeout(RPC_TIMEOUT, rpc.account_lines(watch_address)),
-        tokio::time::timeout(RPC_TIMEOUT, rpc.account_tx(watch_address, 20)),
+        tokio::time::timeout(RPC_TIMEOUT, rpc.account_tx(watch_address, 20, None)),
     );
     let mut any_ok = false;
     macro_rules! dispatch {
@@ -87,15 +87,15 @@ async fn poll_batch(
     dispatch!(r_nfts, Action::XrplAccountNfts, "account_nfts");
     dispatch!(r_lines, Action::XrplTrustLines, "account_lines");
     match r_tx {
-        Ok(Ok(v)) => {
+        Ok(Ok(page)) => {
             any_ok = true;
-            let _ = action_tx.send(Action::XrplTxHistory(v));
+            let _ = action_tx.send(Action::XrplTxHistory(page.rows, page.marker));
         }
         Ok(Err(e)) => {
             let msg = format!("account_tx: {e}");
             if is_not_found_error(&msg) {
                 any_ok = true;
-                let _ = action_tx.send(Action::XrplTxHistory(vec![]));
+                let _ = action_tx.send(Action::XrplTxHistory(vec![], None));
             } else {
                 let _ = action_tx.send(Action::XrplError(msg));
             }
@@ -113,8 +113,8 @@ async fn poll_wallet_overview(
     action_tx: &UnboundedSender<Action>,
 ) -> bool {
     match tokio::time::timeout(RPC_TIMEOUT, rpc.account_overview(seed_address)).await {
-        Ok(Ok((acc, txs))) => {
-            let _ = action_tx.send(Action::XrplWalletOverview(acc, txs));
+        Ok(Ok((acc, txs, marker))) => {
+            let _ = action_tx.send(Action::XrplWalletOverview(acc, txs, marker));
             true
         }
         Ok(Err(e)) => {
@@ -572,8 +572,14 @@ async fn run_poll_loop(
                     PollCommand::TxHistory => dispatch_timed(
                         &action_tx,
                         "account_tx",
-                        tokio::time::timeout(RPC_TIMEOUT, rpc.account_tx(&watch_address, 20)).await,
-                        Action::XrplTxHistory,
+                        tokio::time::timeout(RPC_TIMEOUT, rpc.account_tx(&watch_address, 20, None)).await,
+                        |page: crate::xrpl::types::AccountTxPage| Action::XrplTxHistory(page.rows, page.marker),
+                    ),
+                    PollCommand::TxHistoryMore(marker) => dispatch_timed(
+                        &action_tx,
+                        "account_tx",
+                        tokio::time::timeout(RPC_TIMEOUT, rpc.account_tx(&watch_address, 20, marker)).await,
+                        |page: crate::xrpl::types::AccountTxPage| Action::XrplTxHistoryAppend(page.rows, page.marker),
                     ),
                     PollCommand::LedgerObjects => dispatch_timed(
                         &action_tx,

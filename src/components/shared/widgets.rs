@@ -11,12 +11,17 @@ use crate::{
     xrpl::TxRow,
 };
 
-/// One table row for [`TxRow`] with per-column colors (hash / type / ledger / result).
+/// One table row for [`TxRow`] with per-column colors (hash / dir / type / ledger / result).
 pub fn tx_table_row(t: &TxRow) -> Row<'_> {
     let result_style = if t.result == "tesSUCCESS" {
         theme::success_style()
     } else {
         theme::error_style()
+    };
+    let dir_style = match t.direction.as_str() {
+        "▼" => theme::error_style(),
+        "▲" => theme::success_style(),
+        _ => theme::dim_style(),
     };
     let hash_cell = if t.hash.len() > 16 {
         Cell::from(format!("{}…", &t.hash[..16])).style(theme::secondary_style())
@@ -25,6 +30,7 @@ pub fn tx_table_row(t: &TxRow) -> Row<'_> {
     };
     Row::new(vec![
         hash_cell,
+        Cell::from(t.direction.as_str()).style(dir_style),
         Cell::from(t.tx_type.as_str()).style(theme::accent_style()),
         Cell::from(fmt::group_digits_u64(u64::from(t.ledger_index))).style(theme::dim_style()),
         Cell::from(t.result.as_str()).style(result_style),
@@ -40,13 +46,14 @@ pub fn render_tx_scroll_table(
     is_focused: bool,
 ) {
     let header =
-        Row::new(vec!["Hash", "Type", "Ledger", "Result"]).style(theme::header_row_style());
+        Row::new(vec!["Hash", "Dir", "Type", "Ledger", "Result"]).style(theme::header_row_style());
     let rows = txs.iter().map(tx_table_row);
     let table = Table::new(
         rows,
         [
             Constraint::Length(19),
-            Constraint::Length(16),
+            Constraint::Length(4),
+            Constraint::Length(14),
             Constraint::Length(10),
             Constraint::Fill(1),
         ],

@@ -11,32 +11,52 @@ use crate::{
         shared::{
             selectable_table::SelectableTableState,
             theme,
+            tx_detail::{TxDetailState, render_tx_detail},
             widgets::{render_empty, render_loading, titled_block_with_count},
         },
     },
-    xrpl::NftRow,
+    xrpl::{ArcValue, NftRow},
 };
 
 #[derive(Default)]
-pub struct NftPanel {
+pub struct NftTab {
     nfts: Vec<NftRow>,
     table_state: SelectableTableState,
     tick: usize,
     received: bool,
     pub is_focused: bool,
+    detail: TxDetailState,
 }
 
-impl NftPanel {
+impl NftTab {
     pub fn new() -> Self {
         Self {
-            is_focused: true, // NftPanel is standalone, always focused
+            is_focused: true, // NftTab is standalone, always focused
             ..Self::default()
         }
     }
 }
 
-impl Component for NftPanel {
+impl Component for NftTab {
     fn update(&mut self, action: &Action) -> color_eyre::Result<Option<Action>> {
+        if self.detail.visible {
+            match action {
+                Action::TxDetailToggle => {
+                    self.detail.close();
+                    return Ok(None);
+                }
+                Action::SelectNext | Action::FocusNext => {
+                    self.detail.scroll = self.detail.scroll.saturating_add(1);
+                    return Ok(None);
+                }
+                Action::SelectPrev | Action::FocusPrev => {
+                    self.detail.scroll = self.detail.scroll.saturating_sub(1);
+                    return Ok(None);
+                }
+                Action::Quit => return Ok(None),
+                _ => return Ok(None),
+            }
+        }
         match action {
             Action::Tick => self.tick = self.tick.wrapping_add(1),
             Action::XrplAccountNfts(nfts) => {
@@ -49,6 +69,13 @@ impl Component for NftPanel {
             }
             Action::SelectPrev if !self.nfts.is_empty() && self.is_focused => {
                 self.table_state.select_prev(self.nfts.len());
+            }
+            Action::TxDetailToggle if self.is_focused && !self.nfts.is_empty() => {
+                if let Some(idx) = self.table_state.selected()
+                    && let Some(nft) = self.nfts.get(idx)
+                {
+                    self.detail.open(nft.raw_json.clone(), ArcValue::default());
+                }
             }
             _ => {}
         }
@@ -129,6 +156,8 @@ impl Component for NftPanel {
             sb_area,
             self.table_state.scroll_mut(),
         );
+
+        render_tx_detail(frame, area, &self.detail);
         Ok(())
     }
 }

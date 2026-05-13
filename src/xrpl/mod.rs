@@ -11,7 +11,7 @@ mod ws;
 pub use cli_exec::execute_cli_command;
 #[allow(unused_imports)]
 pub use client::RpcClient;
-pub use client::xrp_to_drops;
+pub use client::{drops_to_xrp, xrp_to_drops};
 pub use poll::start_poll_task;
 pub use types::*;
 pub use ws::start_ws_task;

@@ -37,26 +37,6 @@ const ASCII_ART: &str = r#"
                                      |___/
 "#;
 
-fn splash_ascii_lines(tick: usize) -> Vec<Line<'static>> {
-    let lines: Vec<&'static str> = ASCII_ART.trim_start_matches('\n').lines().collect();
-    let n = lines.len().max(1);
-    let head = (tick / 2) % n;
-    lines
-        .into_iter()
-        .enumerate()
-        .map(|(i, text)| {
-            let ring_dist = (n + i - head) % n;
-            let style = match ring_dist {
-                0 => theme::accent_style().add_modifier(Modifier::BOLD),
-                1 => Style::new().fg(theme::TITLE).add_modifier(Modifier::BOLD),
-                2 => theme::accent_style(),
-                _ => theme::dim_style(),
-            };
-            Line::from(Span::styled(text, style))
-        })
-        .collect()
-}
-
 fn trailing_dots(tick: usize) -> &'static str {
     match tick % 4 {
         0 => "",
@@ -79,6 +59,37 @@ fn splash_art_column(art_area: Rect) -> Rect {
         width: w,
         height: art_area.height,
     }
+}
+
+/// 利用可能な高さに応じて ASCII アートの表示行を調整
+fn splash_ascii_lines_for_height(tick: usize, max_lines: usize) -> Vec<Line<'static>> {
+    let lines: Vec<&'static str> = ASCII_ART.trim_start_matches('\n').lines().collect();
+    let n = lines.len().max(1);
+
+    // 十分な高さがない場合は下の部分だけ表示（ロゴの下半分が重要）
+    let skip = if max_lines >= n {
+        0
+    } else {
+        n.saturating_sub(max_lines)
+    };
+    let visible: Vec<&'static str> = lines.into_iter().skip(skip).collect();
+    let vn = visible.len().max(1);
+    let head = (tick / 2) % vn;
+
+    visible
+        .into_iter()
+        .enumerate()
+        .map(|(i, text)| {
+            let ring_dist = (vn + i - head) % vn;
+            let style = match ring_dist {
+                0 => theme::accent_style().add_modifier(Modifier::BOLD),
+                1 => Style::new().fg(theme::TITLE).add_modifier(Modifier::BOLD),
+                2 => theme::accent_style(),
+                _ => theme::dim_style(),
+            };
+            Line::from(Span::styled(text, style))
+        })
+        .collect()
 }
 
 fn quit_hint_line(tick: usize) -> Line<'static> {
@@ -135,20 +146,39 @@ impl Component for SplashScreen {
         let inner = block.inner(area);
         frame.render_widget(block, area);
 
-        let [top_pad, content, _] =
-            Layout::vertical([Constraint::Min(0), Constraint::Min(0), Constraint::Min(0)])
-                .areas(inner);
-        let _ = top_pad;
+        // 小さいウィンドウ対応：最低限 status + hint は必ず表示
+        const STATUS_H: u16 = 1;
+        const HINT_H: u16 = 1;
+        const ART_FULL: u16 = 14;
+        let min_needed = STATUS_H + HINT_H;
+
+        // 十分な高さがあれば縦中央、なければ上から詰めて表示
+        let art_h = if inner.height >= ART_FULL + min_needed {
+            ART_FULL
+        } else {
+            inner.height.saturating_sub(min_needed)
+        };
+        let total_needed = art_h + min_needed;
+        let top_pad = inner.height.saturating_sub(total_needed) / 2;
+
+        let [pad, content, _] = Layout::vertical([
+            Constraint::Length(top_pad),
+            Constraint::Length(total_needed),
+            Constraint::Min(0),
+        ])
+        .areas(inner);
+        let _ = pad;
 
         let [art_area, status_area, hint_area] = Layout::vertical([
-            Constraint::Min(14),
-            Constraint::Length(1),
-            Constraint::Length(1),
+            Constraint::Length(art_h),
+            Constraint::Length(STATUS_H),
+            Constraint::Length(HINT_H),
         ])
         .areas(content);
 
         let art_col = splash_art_column(art_area);
-        let art = Paragraph::new(splash_ascii_lines(self.tick))
+        let art_lines = splash_ascii_lines_for_height(self.tick, art_h as usize);
+        let art = Paragraph::new(art_lines)
             .alignment(Alignment::Left)
             .wrap(Wrap { trim: false });
         frame.render_widget(art, art_col);

@@ -13,10 +13,11 @@ use crate::{
         shared::{
             selectable_table::SelectableTableState,
             theme,
+            tx_detail::{TxDetailState, render_tx_detail},
             widgets::{render_empty, render_loading, titled_block_with_count},
         },
     },
-    xrpl::OfferRow,
+    xrpl::{ArcValue, OfferRow},
 };
 
 #[derive(Default)]
@@ -26,6 +27,7 @@ pub struct BookPanel {
     tick: usize,
     received: bool,
     pub is_focused: bool,
+    detail: TxDetailState,
 }
 
 impl BookPanel {
@@ -39,6 +41,24 @@ impl BookPanel {
 
 impl Component for BookPanel {
     fn update(&mut self, action: &Action) -> color_eyre::Result<Option<Action>> {
+        if self.detail.visible {
+            match action {
+                Action::TxDetailToggle => {
+                    self.detail.close();
+                    return Ok(None);
+                }
+                Action::SelectNext | Action::FocusNext => {
+                    self.detail.scroll = self.detail.scroll.saturating_add(1);
+                    return Ok(None);
+                }
+                Action::SelectPrev | Action::FocusPrev => {
+                    self.detail.scroll = self.detail.scroll.saturating_sub(1);
+                    return Ok(None);
+                }
+                Action::Quit => return Ok(None),
+                _ => return Ok(None),
+            }
+        }
         match action {
             Action::Tick => self.tick = self.tick.wrapping_add(1),
             Action::XrplBookOffers(offers) => {
@@ -51,6 +71,14 @@ impl Component for BookPanel {
             }
             Action::SelectPrev if !self.offers.is_empty() && self.is_focused => {
                 self.table_state.select_prev(self.offers.len());
+            }
+            Action::TxDetailToggle if self.is_focused && !self.offers.is_empty() => {
+                if let Some(idx) = self.table_state.selected()
+                    && let Some(offer) = self.offers.get(idx)
+                {
+                    self.detail
+                        .open(offer.raw_json.clone(), ArcValue::default());
+                }
             }
             _ => {}
         }
@@ -124,6 +152,8 @@ impl Component for BookPanel {
         );
 
         // ── BarChart::grouped — quality distribution ──
+        render_tx_detail(frame, area, &self.detail);
+
         if chart_height > 0 {
             let gets_bars: Vec<Bar<'_>> = self
                 .offers
