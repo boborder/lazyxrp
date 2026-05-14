@@ -90,6 +90,7 @@ pub struct TxSummary {
 }
 
 /// Result of a `simulate` RPC call — dry-run of an unsigned transaction.
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SimulateResult {
     /// Auto-filled transaction JSON (Fee, Sequence, etc. populated by server).
@@ -105,6 +106,7 @@ pub struct SimulateResult {
 }
 
 /// One path alternative returned by `ripple_path_find`.
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct PathAlternative {
     /// Computed payment paths (array of path arrays).
@@ -115,6 +117,7 @@ pub struct PathAlternative {
 }
 
 /// Result of a `ripple_path_find` RPC call.
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct RipplePathFindResult {
     /// All available path alternatives.

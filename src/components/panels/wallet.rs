@@ -311,7 +311,7 @@ impl WalletPanel {
     /// Decode `AccountRoot.domain` hex → ASCII string, or None if invalid.
     fn decode_domain_hex(hex: &str) -> Option<String> {
         let hex = hex.trim();
-        if hex.len() % 2 != 0 {
+        if !hex.len().is_multiple_of(2) {
             return None;
         }
         let bytes: Vec<u8> = (0..hex.len())
@@ -383,11 +383,9 @@ impl WalletPanel {
                 if is_dest && c.is_ascii_graphic() {
                     dest.push(c);
                     true
-                } else if is_iou_text && c.is_ascii_graphic() {
-                    target_row.push(c);
-                    true
-                } else if !is_iou_text
-                    && (c.is_ascii_digit() || (c == '.' && !target_row.contains('.')))
+                } else if (is_iou_text && c.is_ascii_graphic())
+                    || (!is_iou_text
+                        && (c.is_ascii_digit() || (c == '.' && !target_row.contains('.'))))
                 {
                     target_row.push(c);
                     true
@@ -1229,44 +1227,38 @@ impl Component for WalletPanel {
                 ),
                 Span::raw(""),
             ]),
-            {
-                let seq = Line::from(vec![
-                    Span::styled("Sequence: ", label),
-                    Span::raw(fmt::group_digits_u64(u64::from(account.sequence))),
-                ]);
-                seq
-            },
+            Line::from(vec![
+                Span::styled("Sequence: ", label),
+                Span::raw(fmt::group_digits_u64(u64::from(account.sequence))),
+            ]),
             {
                 let mut spans: Vec<Span> = vec![Span::styled("Flags: ", label)];
                 spans.extend(flag_spans);
                 Line::from(spans)
             },
-            {
-                let rk_line = if let Some(ref rk) = account.regular_key {
-                    let mut spans: Vec<Span> = vec![
-                        Span::styled("RegKey: ", label),
-                        Span::styled(rk.clone(), theme::warning_style()),
-                    ];
-                    if let Some(ref dh) = account.domain_hex {
-                        let domain_str = Self::decode_domain_hex(dh).unwrap_or_else(|| dh.clone());
-                        spans.push(Span::raw("  "));
-                        spans.push(Span::styled(
-                            format!("Domain: {domain_str}"),
-                            theme::dim_style(),
-                        ));
-                    }
-                    Line::from(spans)
-                } else if let Some(ref dh) = account.domain_hex {
+            if let Some(ref rk) = account.regular_key {
+                let mut spans: Vec<Span> = vec![
+                    Span::styled("RegKey: ", label),
+                    Span::styled(rk.clone(), theme::warning_style()),
+                ];
+                if let Some(ref dh) = account.domain_hex {
                     let domain_str = Self::decode_domain_hex(dh).unwrap_or_else(|| dh.clone());
-                    Line::from(vec![
-                        Span::styled("t: composer  g: keygen", label),
-                        Span::raw("  "),
-                        Span::styled(format!("Domain: {domain_str}"), theme::dim_style()),
-                    ])
-                } else {
-                    Line::from(Span::styled("t: composer  g: keygen", label))
-                };
-                rk_line
+                    spans.push(Span::raw("  "));
+                    spans.push(Span::styled(
+                        format!("Domain: {domain_str}"),
+                        theme::dim_style(),
+                    ));
+                }
+                Line::from(spans)
+            } else if let Some(ref dh) = account.domain_hex {
+                let domain_str = Self::decode_domain_hex(dh).unwrap_or_else(|| dh.clone());
+                Line::from(vec![
+                    Span::styled("t: composer  g: keygen", label),
+                    Span::raw("  "),
+                    Span::styled(format!("Domain: {domain_str}"), theme::dim_style()),
+                ])
+            } else {
+                Line::from(Span::styled("t: composer  g: keygen", label))
             },
         ];
         frame.render_widget(Paragraph::new(lines), top);

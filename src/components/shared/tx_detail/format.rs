@@ -111,7 +111,7 @@ pub(crate) fn hex_to_ascii(hex: &str) -> Option<String> {
     if hex.is_empty() {
         return Some(String::new());
     }
-    if hex.len() % 2 != 0 {
+    if !hex.len().is_multiple_of(2) {
         return None;
     }
     let bytes: Vec<u8> = (0..hex.len())

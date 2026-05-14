@@ -238,7 +238,6 @@ pub fn create_and_sign_set_regular_key(
             .with_fee(XRPAmount::from(fee_drops.to_string()))
             .with_last_ledger_sequence(last_ledger_sequence),
         regular_key: regular_key.map(|k| k.to_string().into()),
-        ..Default::default()
     };
 
     sign(&mut tx, &wallet, false).map_err(|e| color_eyre::eyre::eyre!("sign error: {:?}", e))?;
@@ -247,6 +246,8 @@ pub fn create_and_sign_set_regular_key(
 }
 
 /// Create and sign an `EscrowCreate` transaction, returning the tx_blob hex.
+#[allow(dead_code)]
+#[allow(clippy::too_many_arguments)]
 pub fn create_and_sign_escrow_create(
     seed: &SecretString,
     account: &str,
@@ -290,6 +291,7 @@ pub fn create_and_sign_escrow_create(
 /// Build an `Amount` from a compact spec string.
 /// `"XRP:100000000"` → XRP amount in drops.
 /// `"USD:rIssuer:100.5"` → issued currency amount.
+#[allow(dead_code)]
 fn parse_offer_amount(spec: &str) -> color_eyre::Result<xrpl::models::Amount<'static>> {
     use xrpl::models::{Amount, IssuedCurrencyAmount, XRPAmount};
 
@@ -314,6 +316,7 @@ fn parse_offer_amount(spec: &str) -> color_eyre::Result<xrpl::models::Amount<'st
 
 /// Convert an OfferCreate compact amount spec to a [`serde_json::Value`] for
 /// use in simulate tx_json.
+#[allow(dead_code)]
 pub(crate) fn offer_spec_to_json_value(spec: &str) -> color_eyre::Result<serde_json::Value> {
     let parts: Vec<&str> = spec.splitn(3, ':').collect();
     if parts.len() < 2 {
@@ -334,6 +337,8 @@ pub(crate) fn offer_spec_to_json_value(spec: &str) -> color_eyre::Result<serde_j
 }
 
 /// Create and sign an `OfferCreate` transaction, returning the tx_blob hex.
+#[allow(dead_code)]
+#[allow(clippy::too_many_arguments)]
 pub fn create_and_sign_offer_create(
     seed: &SecretString,
     account: &str,

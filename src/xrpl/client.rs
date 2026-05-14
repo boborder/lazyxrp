@@ -336,6 +336,7 @@ impl RpcClient {
     ///
     /// Returns the auto-filled `tx_json` (Fee, Sequence, etc.) and metadata
     /// without committing to the ledger.
+    #[allow(dead_code)]
     pub async fn simulate_tx(&self, tx_json: Value) -> color_eyre::Result<SimulateResult> {
         let value = self
             .rpc_value("simulate", json!({ "tx_json": tx_json }))
@@ -350,6 +351,7 @@ impl RpcClient {
     /// `destination_amount` should be an object like
     /// `{"currency":"USD","issuer":"r...","value":"100"}` or
     /// a numeric-string for XRP drops (`.0` appended to canonicalise drops).
+    #[allow(dead_code)]
     pub async fn ripple_path_find(
         &self,
         source_account: &str,
@@ -370,6 +372,7 @@ impl RpcClient {
     }
 
     /// Generate a new XRPL wallet via `wallet_propose`.
+    #[allow(dead_code)]
     pub async fn wallet_propose(&self, key_type: &str) -> color_eyre::Result<WalletProposeResult> {
         let params = json!({ "key_type": key_type });
         let value = self.rpc_value("wallet_propose", params).await?;
@@ -426,6 +429,7 @@ fn parse_submit_success(value: &Value) -> color_eyre::Result<TxSummary> {
     Ok(TxSummary { hash: tx_hash })
 }
 
+#[allow(dead_code)]
 fn parse_simulate_result(value: &Value) -> color_eyre::Result<SimulateResult> {
     let result = value.get("result").unwrap_or(&Value::Null);
     let tx_json = result
@@ -457,6 +461,7 @@ fn parse_simulate_result(value: &Value) -> color_eyre::Result<SimulateResult> {
     })
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 fn parse_ripple_path_find(value: &Value) -> color_eyre::Result<RipplePathFindResult> {
     let result = value.get("result").unwrap_or(&Value::Null);
 
@@ -488,6 +493,7 @@ fn parse_ripple_path_find(value: &Value) -> color_eyre::Result<RipplePathFindRes
     })
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 fn parse_wallet_propose(value: &Value) -> color_eyre::Result<WalletProposeResult> {
     let result = value.get("result").unwrap_or(&Value::Null);
 
