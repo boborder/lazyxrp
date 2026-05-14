@@ -1,3 +1,4 @@
+use secrecy::ExposeSecret;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -152,27 +153,35 @@ impl App {
         let (net_tx, _net_rx) = watch::channel(network);
         if let Some(cli_seed) = seed {
             let t = crate::signing::trim_family_seed(&cli_seed);
-            config.xrpl.signing.seed = if t.is_empty() {
+            config.xrpl.signing.seed = None;
+            config.xrpl.signing.secret_seed = if t.is_empty() {
                 None
             } else {
-                Some(t.to_string())
+                Some(secrecy::SecretString::from(t.to_string()))
             };
         }
         let watch_account = account.unwrap_or_else(|| config.xrpl.account.clone());
+        let panels: Vec<Box<dyn Component>> = vec![
+            Box::new(ServerOverviewTab::new(
+                rpc_server.clone(),
+                skip_mainnet_prompt,
+            )),
+            Box::new(AccountTxTab::new()),
+            Box::new(MarketTab::new()),
+            Box::new(NftTab::new()),
+            Box::new(AccountObjectsTab::new()),
+        ];
+        // UA-1: guard against tab/panel index mismatch (docs/agent/INVARIANTS.md)
+        debug_assert_eq!(
+            TAB_TITLES.len(),
+            panels.len(),
+            "TAB_TITLES and panels must have same length"
+        );
         Ok(Self {
             keymap_suppress: false,
             tick_rate,
             frame_rate,
-            panels: vec![
-                Box::new(ServerOverviewTab::new(
-                    rpc_server.clone(),
-                    skip_mainnet_prompt,
-                )),
-                Box::new(AccountTxTab::new()),
-                Box::new(MarketTab::new()),
-                Box::new(NftTab::new()),
-                Box::new(AccountObjectsTab::new()),
-            ],
+            panels,
             status_bar: StatusBar::new(watch_account.clone(), network),
             fps: FpsCounter::default(),
             active_tab: 0,
@@ -249,9 +258,10 @@ impl App {
             .config
             .xrpl
             .signing
-            .seed
+            .secret_seed
             .as_ref()
-            .and_then(|s| crate::components::panels::wallet::seed_to_address(s).ok());
+            .map(|s| crate::components::panels::wallet::seed_to_address(s.expose_secret()))
+            .and_then(Result::ok);
         start_poll_task(
             PollContext {
                 rpc_url: self.rpc_server.clone(),
@@ -487,6 +497,38 @@ impl App {
                     if let Err(err) = self
                         .poll_tx
                         .send(PollCommand::PaymentSubmit(params.clone()))
+                    {
+                        warn!(?err, "poll command channel closed");
+                    }
+                }
+                Action::SetRegularKeySubmit(params) => {
+                    if let Err(err) = self
+                        .poll_tx
+                        .send(PollCommand::SetRegularKeySubmit(params.clone()))
+                    {
+                        warn!(?err, "poll command channel closed");
+                    }
+                }
+                Action::EscrowCreateSubmit(params) => {
+                    if let Err(err) = self
+                        .poll_tx
+                        .send(PollCommand::EscrowCreateSubmit(params.clone()))
+                    {
+                        warn!(?err, "poll command channel closed");
+                    }
+                }
+                Action::OfferCreateSubmit(params) => {
+                    if let Err(err) = self
+                        .poll_tx
+                        .send(PollCommand::OfferCreateSubmit(params.clone()))
+                    {
+                        warn!(?err, "poll command channel closed");
+                    }
+                }
+                Action::WalletPropose => {
+                    if let Err(err) = self
+                        .poll_tx
+                        .send(PollCommand::WalletPropose("ed25519".into()))
                     {
                         warn!(?err, "poll command channel closed");
                     }

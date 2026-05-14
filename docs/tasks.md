@@ -8,25 +8,45 @@
 
 ## 2. 現在のタスク一覧
 
-現在、アクティブな未完了タスクはありません。主要機能（Phase 1 読み取り拡張、Phase 2 ネットワーク抽象化）は実装完了済み。
+### 安定化（優先）
+
+| ID | タスク | ステータス | 備考 |
+| --- | --- | --- | --- |
+| S-01 | `unwrap`/`expect` 監査 | ✅ DONE | 非テストコードに残存なし |
+| S-02 | `docs/` 同期 | ✅ DONE | simulate フロー・新 TX 種別反映済 |
+| S-03 | `ripple_path_find` UI 接続 | TODO | API 準備済。swap レートプレビュー用 |
+| S-04 | キー生成機能 | BLOCKED | SetRegularKey UI 有効化の前提 |
+
+### バックエンド準備（UI 未着）
+
+| ID | タスク | ステータス | 備考 |
+| --- | --- | --- | --- |
+| B-01 | SetRegularKey submit | ✅ DONE | signing + poll 完備、UI はキー生成待ち |
+| B-02 | EscrowCreate submit | ✅ DONE | signing + poll 完備、UI 未実装 |
+| B-03 | OfferCreate submit | ✅ DONE | signing + poll + `offer_spec_to_json_value` 完備 |
+
+### 将来 TX 種別（バックエンドのみ計画）
+
+| ID | タスク | ステータス |
+| --- | --- | --- |
+| F-01 | AccountDelete | TODO |
+| F-02 | OfferCancel | TODO |
+| F-03 | EscrowFinish/Cancel | TODO |
+| F-04 | AMM Deposit/Withdraw | TODO |
 
 ## 3. 直近マイルストーン
 
-### M3: 公開向け整備
+### M3: 公開向け整備（完了）
 
-- 目標:
-  - README と AGENTS の初版完成
-  - 主要コマンドの利用手順が再現可能
-  - 配布物と設定ファイル運用（XDG準拠）が利用者に明確
-- 完了条件:
-  - 新規利用者が `cargo run -- watch --account <address>` まで実行できる
+- 達成：README と AGENTS の初版完成、主要コマンドの利用手順が再現可能、XDG 準拠の設定ファイル運用
 
-### Phase 3: 書き込み系 TX
+### Phase 3: 書き込み系 TX（UI 部分完了）
 
-- 目標: シードを用いた署名・送信（Payment / AccountSet）の本番実装
-- 完了条件:
-  - `cargo test` が全ケースで通る
-  - testnet で書き込み系 CLI/TUI が正常動作すること
+- 達成：
+  - `simulate` ベースの安全な送信フロー（`simulate_tx`→sign→`submit`）
+  - Wallet UI: Payment（XRP + IOU）、AccountSet
+  - バックエンド: SetRegularKey、EscrowCreate、OfferCreate
+- 残：キー生成、ripple_path_find UI 接続、EscrowCreate/OfferCreate UI
 
 ## 4. 完了タスク（履歴）
 
@@ -43,3 +63,8 @@
 | T-028〜T-029 | `SigningConfig` 導入、mainnet 書き込み確認プロンプト | Phase 3 準備 |
 | T-030 | `docs/*.md` 重複・参照導線整備 | 本整理の前身 |
 | T-031〜T-034 | コンポーネント再編、WalletPanel、5タブ統合、`account_objects` | TUI 再構成 |
+| T-035 | `AccountSummary` 拡張（Flags, RegularKey, Domain hex） | ウォレット表示強化 |
+| T-036 | Payment IOU 対応 + Wallet UI（`i` トグル） | simulate フロー |
+| T-037 | `ripple_path_find` RPC API（client + types + tests） | パスファインディング準備 |
+| T-038 | OfferCreate submit 配線（backend 完備） | signing + poll |
+| T-039 | TicketCreate 削除 + TrustSet 削除 | ユーザー判断 |

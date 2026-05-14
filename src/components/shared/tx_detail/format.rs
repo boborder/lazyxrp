@@ -65,18 +65,22 @@ pub(crate) fn format_value(key: &str, value: &Value) -> String {
         || key == "TakerPays")
         && let Ok(amount) = serde_json::from_value::<Amount<'static>>(value.clone())
     {
-        return match amount {
+        match amount {
             Amount::XRPAmount(xrp) => {
-                if let Ok(drops) = xrp.0.parse::<u64>() {
-                    format!("{:.6} XRP", drops as f64 / 1_000_000.0)
+                // xrpl-rust XRPAmount deserializes arbitrary objects into a raw string.
+                // Only trust the result when the original value was a string/number.
+                if !value.is_string() && !value.is_number() {
+                    // fall through to generic Value formatting below
+                } else if let Ok(drops) = xrp.0.parse::<u64>() {
+                    return format!("{:.6} XRP", drops as f64 / 1_000_000.0);
                 } else {
-                    xrp.0.to_string()
+                    return xrp.0.to_string();
                 }
             }
             Amount::IssuedCurrencyAmount(ica) => {
-                format!("{} {} (issuer: {})", ica.value, ica.currency, ica.issuer)
+                return format!("{} {} (issuer: {})", ica.value, ica.currency, ica.issuer);
             }
-        };
+        }
     }
 
     match value {
@@ -107,9 +111,183 @@ pub(crate) fn hex_to_ascii(hex: &str) -> Option<String> {
     if hex.is_empty() {
         return Some(String::new());
     }
+    if hex.len() % 2 != 0 {
+        return None;
+    }
     let bytes: Vec<u8> = (0..hex.len())
         .step_by(2)
-        .filter_map(|i| u8::from_str_radix(hex.get(i..i + 2)?, 16).ok())
-        .collect();
+        .map(|i| u8::from_str_radix(hex.get(i..i + 2)?, 16).ok())
+        .collect::<Option<Vec<_>>>()?;
     String::from_utf8(bytes).ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn hex_to_ascii_basic() {
+        assert_eq!(hex_to_ascii("68656c6c6f"), Some("hello".to_string()));
+    }
+
+    #[test]
+    fn hex_to_ascii_empty() {
+        assert_eq!(hex_to_ascii(""), Some(String::new()));
+    }
+
+    #[test]
+    fn hex_to_ascii_odd_length_returns_none() {
+        assert_eq!(hex_to_ascii("68656"), None);
+    }
+
+    #[test]
+    fn hex_to_ascii_invalid_hex_returns_none() {
+        assert_eq!(hex_to_ascii("zzzz"), None);
+    }
+
+    #[test]
+    fn hex_to_ascii_non_utf8_returns_none() {
+        // 0x80 is not valid UTF-8 start byte
+        assert_eq!(hex_to_ascii("80"), None);
+    }
+
+    #[test]
+    fn fmt_xrpl_amount_xrp() {
+        let amount = Amount::XRPAmount(xrpl::models::XRPAmount("1000000".into()));
+        // drops_to_xrp does not append " XRP"
+        assert_eq!(fmt_xrpl_amount(&amount), "1.000000");
+    }
+
+    #[test]
+    fn fmt_xrpl_amount_issued() {
+        let amount = Amount::IssuedCurrencyAmount(xrpl::models::IssuedCurrencyAmount {
+            value: "100".into(),
+            currency: "USD".into(),
+            issuer: "rsA2LpG".into(),
+        });
+        assert_eq!(fmt_xrpl_amount(&amount), "100 USD (issuer: rsA2LpG)");
+    }
+
+    #[test]
+    fn push_common_lines_account_only() {
+        let mut lines = Vec::new();
+        push_common_lines(&mut lines, "rTest", None, None);
+        assert_eq!(lines.len(), 1);
+        assert!(lines[0].to_string().contains("rTest"));
+    }
+
+    #[test]
+    fn push_common_lines_all_fields() {
+        let mut lines = Vec::new();
+        push_common_lines(&mut lines, "rTest", Some(42), Some("1000".to_string()));
+        assert_eq!(lines.len(), 3);
+        let text: Vec<String> = lines.iter().map(|l| l.to_string()).collect();
+        assert!(text[0].contains("rTest"));
+        assert!(text[1].contains("42"));
+        assert!(text[2].contains("0.001000"));
+    }
+
+    #[test]
+    fn fmt_currency_xrp() {
+        let c = xrpl::models::Currency::XRP(xrpl::models::XRPAmount("0".into()).into());
+        assert_eq!(fmt_currency(&c), "XRP");
+    }
+
+    #[test]
+    fn fmt_currency_issued() {
+        let c = xrpl::models::Currency::IssuedCurrency(
+            xrpl::models::IssuedCurrencyAmount {
+                value: "0".into(),
+                currency: "USD".into(),
+                issuer: "rsA2LpG".into(),
+            }
+            .into(),
+        );
+        assert_eq!(fmt_currency(&c), "USD (rsA2LpG)");
+    }
+
+    #[test]
+    fn format_value_xrp_drops_string() {
+        let v = json!("1000000");
+        assert_eq!(format_value("Amount", &v), "1.000000 XRP");
+    }
+
+    #[test]
+    fn format_value_xrp_drops_parse_failure_falls_back() {
+        let v = json!("not_a_number");
+        assert_eq!(format_value("Amount", &v), "not_a_number");
+    }
+
+    #[test]
+    fn format_value_issued_currency() {
+        let v = json!({"value":"100","currency":"USD","issuer":"rsA2LpG"});
+        assert_eq!(format_value("Amount", &v), "100 USD (issuer: rsA2LpG)");
+    }
+
+    #[test]
+    fn format_value_domain_hex() {
+        let v = json!("6578616d706c652e636f6d");
+        assert_eq!(format_value("Domain", &v), "example.com");
+    }
+
+    #[test]
+    fn format_value_domain_hex_invalid_fallback() {
+        let v = json!("zzzz");
+        // hex_to_ascii returns None for invalid hex, so unwrap_or_else falls back to raw string
+        assert_eq!(format_value("Domain", &v), "zzzz");
+    }
+
+    #[test]
+    fn format_value_plain_string() {
+        let v = json!("hello");
+        assert_eq!(format_value("Memo", &v), "hello");
+    }
+
+    #[test]
+    fn format_value_currency_object_without_issuer() {
+        let v = json!({"currency":"EUR","value":"50"});
+        // Without issuer it does not parse as IssuedCurrencyAmount; should fall back to generic object formatting
+        assert_eq!(format_value("LimitAmount", &v), "50 EUR");
+    }
+
+    #[test]
+    fn format_value_issued_currency_with_issuer() {
+        let v = json!({"currency":"EUR","value":"50","issuer":"rsA2LpG"});
+        assert_eq!(format_value("LimitAmount", &v), "50 EUR (issuer: rsA2LpG)");
+    }
+
+    #[test]
+    fn format_value_long_object_truncated() {
+        let v = json!({"a":"x".repeat(100)});
+        let result = format_value("Foo", &v);
+        assert!(result.ends_with('…'));
+        // "…" is 3 bytes in UTF-8, so total byte length is 83
+        assert_eq!(result.len(), 83);
+    }
+
+    #[test]
+    fn format_value_short_object_not_truncated() {
+        let v = json!({"a":"hi"});
+        let result = format_value("Foo", &v);
+        assert!(!result.ends_with('…'));
+    }
+
+    #[test]
+    fn format_value_array() {
+        let v = json!([1, 2, 3]);
+        assert_eq!(format_value("Memos", &v), "[3 items]");
+    }
+
+    #[test]
+    fn format_value_number() {
+        let v = json!(42);
+        assert_eq!(format_value("Count", &v), "42");
+    }
+
+    #[test]
+    fn format_value_null() {
+        let v = json!(null);
+        assert_eq!(format_value("Nothing", &v), "null");
+    }
 }

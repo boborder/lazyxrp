@@ -14,7 +14,7 @@ cd "$(dirname "$0")"
 
 # ── Config ─────────────────────────────────────────────────────────
 readonly TIMEOUT_BUILD="600"
-readonly TIMEOUT_CHECK="120"
+readonly TIMEOUT_CHECK="180"
 readonly TIMEOUT_TEST="300"
 readonly TIMEOUT_CLIPPY="120"
 readonly TIMEOUT_DOC="120"

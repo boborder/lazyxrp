@@ -4,9 +4,10 @@ use strum::Display;
 use crate::{
     network::Network,
     xrpl::{
-        AccountSetSubmitParams, AccountSummary, AmmSummary, FeeSummary, LedgerObjectRow, NftRow,
-        OfferRow, PaymentSubmitParams, ServerInfoSummary, TrustLineRow, TxRow, TxSummary,
-        XrplRlusdPrice,
+        AccountSetSubmitParams, AccountSummary, AmmSummary, EscrowCreateSubmitParams, FeeSummary,
+        LedgerObjectRow, NftRow, OfferCreateSubmitParams, OfferRow, PaymentSubmitParams,
+        ServerInfoSummary, SetRegularKeySubmitParams, TrustLineRow, TxRow, TxSummary,
+        WalletProposeResult, XrplRlusdPrice,
     },
 };
 
@@ -43,6 +44,8 @@ pub enum Action {
         Vec<TxRow>,
         Option<serde_json::Value>,
     ),
+    /// Wallet tab shown but no seed configured — show hint instead of loading spinner.
+    XrplWalletNotConfigured,
     XrplRlusdPrice(XrplRlusdPrice),
     /// `account_objects` snapshot; each tab filters rows by `LedgerEntryType`.
     XrplLedgerObjects(Vec<LedgerObjectRow>),
@@ -76,6 +79,22 @@ pub enum Action {
     PaymentSubmit(PaymentSubmitParams),
     PaymentSubmitOk(String),
     PaymentSubmitErr(String),
+    /// Queue SetRegularKey sign+submit from Wallet form (poll task).
+    SetRegularKeySubmit(SetRegularKeySubmitParams),
+    SetRegularKeySubmitOk(String),
+    SetRegularKeySubmitErr(String),
+    /// Queue EscrowCreate sign+submit from Wallet form (poll task).
+    EscrowCreateSubmit(EscrowCreateSubmitParams),
+    EscrowCreateSubmitOk(String),
+    EscrowCreateSubmitErr(String),
+    /// Queue OfferCreate sign+submit from Wallet form (poll task).
+    OfferCreateSubmit(OfferCreateSubmitParams),
+    OfferCreateSubmitOk(String),
+    OfferCreateSubmitErr(String),
+    /// Request key generation via wallet_propose.
+    WalletPropose,
+    WalletProposeOk(WalletProposeResult),
+    WalletProposeErr(String),
     /// Toggle transaction detail overlay in TxHistory panel.
     TxDetailToggle,
 }

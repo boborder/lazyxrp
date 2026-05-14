@@ -2,8 +2,8 @@
 
 > Last Updated: 2026-05-14
 > Target: lazyxrp (Rust TUI for XRPL)
-> Total Test Cases: 78 (P0: 10, P1: 44, P2: 23, P3: 1)
-> Implemented: 78 / 78 (100%)
+> Total Test Cases: 79 (P0: 10, P1: 44, P2: 23, P3: 1)
+> Implemented: 79 / 79 (100%)
 > Estimated Effort (full catalog): 41h
 
 ---
@@ -17,7 +17,7 @@
 | Network & Signing | 13         | 4  | 7  | 2  | 0  | 5h          | 13/13       |
 | CLI Integration   | 12         | 1  | 8  | 3  | 0  | 11h         | 12/12       |
 | Watch & TUI       | 9          | 0  | 2  | 6  | 1  | 6h          | 9/9         |
-| **Total**         | **78**     | **10** | **44** | **23** | **1** | **41h** | **78/78** |
+| **Total**         | **79**     | **10** | **44** | **23** | **1** | **41h** | **79/79** |
 
 ---
 

@@ -2,6 +2,7 @@ use clap::Parser;
 use cli::{Cli, Cmd};
 use config::Config;
 use network::Network;
+use secrecy::ExposeSecret;
 use std::env;
 
 mod action;
@@ -60,13 +61,21 @@ async fn main() -> color_eyre::Result<()> {
     crate::logging::init(config.resolved_data_dir())?;
     if let Some(cli_seed) = args.seed.clone() {
         let t = signing::trim_family_seed(&cli_seed);
-        config.xrpl.signing.seed = if t.is_empty() {
+        config.xrpl.signing.seed = None;
+        config.xrpl.signing.secret_seed = if t.is_empty() {
             None
         } else {
-            Some(t.to_string())
+            Some(secrecy::SecretString::from(t.to_string()))
         };
     }
-    let _ = signing::SigningConfig::prime_seed_source(config.xrpl.signing.seed.clone());
+    let _ = signing::SigningConfig::prime_seed_source(
+        config
+            .xrpl
+            .signing
+            .secret_seed
+            .as_ref()
+            .map(|s| s.expose_secret().to_string()),
+    );
 
     let network = resolve_network(&args, &config);
     let rpc_url = resolve_rpc_url(&args, &config, &network);
@@ -83,8 +92,18 @@ async fn main() -> color_eyre::Result<()> {
             app.run().await?;
         }
         other => {
-            xrpl::execute_cli_command(other, &rpc_url, &network, config.xrpl.signing.seed.clone())
-                .await?;
+            xrpl::execute_cli_command(
+                other,
+                &rpc_url,
+                &network,
+                config
+                    .xrpl
+                    .signing
+                    .secret_seed
+                    .as_ref()
+                    .map(|s| s.expose_secret().to_string()),
+            )
+            .await?;
         }
     }
     Ok(())

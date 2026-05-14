@@ -154,6 +154,8 @@ cp .config/lazyxrp/config.toml "${XDG_CONFIG_HOME:-$HOME/.config}/lazyxrp/config
 | `LAZYXRP_DATA` | Override data directory |
 | `LAZYXRP_LOG_LEVEL` | Default file log filter (`tracing` `EnvFilter`) |
 
+> **Security note**: `--seed` is visible in process listings (`ps`) and shell history. Prefer `XRPL_SEED` env var for sensitive seeds.
+
 ## Development
 
 From the repo root you can use [`mise`](https://mise.jdx.dev/) (`mise run install` runs `./install.sh -q`) or plain Cargo.
@@ -178,7 +180,7 @@ Start with [`AGENTS.md`](./AGENTS.md) — minimal bar is `cargo fmt` / `cargo ch
 - `docs/test.md` — testing notes & expectations
 - `docs/tasks.md` — task status
 - `docs/directory.md` — directory structure
-- `docs/reference.md` — supplementary reference
+- `docs/references.md` — supplementary reference
 - `docs/problems.md` — known issues
 - `docs/security.md` — threat model & hardening notes
 - `docs/architecture/` — C4 context & containers

@@ -2,6 +2,13 @@ use std::sync::Arc;
 use std::time::Duration;
 
 /// Newtype wrapper so `Arc<serde_json::Value>` can derive `Serialize`/`Deserialize`.
+///
+/// # Immutability contract
+///
+/// Instances are **shared across components** (e.g. `TxRow.tx_json` is passed to both
+/// TxHistory panel and TxDetail overlay). **NEVER mutate** shared `ArcValue` via
+/// `Arc::make_mut` — clone the inner value first if modification is needed.
+/// See I-10 in `docs/agent/INVARIANTS.md`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ArcValue(pub Arc<serde_json::Value>);
 
@@ -58,6 +65,12 @@ pub struct AccountSummary {
     pub balance_xrp: String,
     pub sequence: u32,
     pub owner_count: u32,
+    /// AccountRoot flags bitmask (lsfDepositAuth, lsfRequireDestTag, etc.).
+    pub flags: u32,
+    /// Regular key address, if set.
+    pub regular_key: Option<String>,
+    /// Domain hex string, if set (lowercase ASCII hex).
+    pub domain_hex: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -74,6 +87,61 @@ pub struct OfferRow {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TxSummary {
     pub hash: String,
+}
+
+/// Result of a `simulate` RPC call — dry-run of an unsigned transaction.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SimulateResult {
+    /// Auto-filled transaction JSON (Fee, Sequence, etc. populated by server).
+    pub tx_json: serde_json::Value,
+    /// Engine result code (e.g. `"tesSUCCESS"`, `"tecPATH_DRY"`).
+    pub engine_result: String,
+    /// Human-readable engine result message.
+    pub engine_result_message: String,
+    /// Ledger index used for the simulation.
+    pub ledger_index: u32,
+    /// Transaction metadata (present for tesSUCCESS and some tec codes).
+    pub meta: Option<serde_json::Value>,
+}
+
+/// One path alternative returned by `ripple_path_find`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PathAlternative {
+    /// Computed payment paths (array of path arrays).
+    pub paths_computed: serde_json::Value,
+    /// The amount that would need to be sent from the source account,
+    /// given the destination amount and the computed paths.
+    pub source_amount: serde_json::Value,
+}
+
+/// Result of a `ripple_path_find` RPC call.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RipplePathFindResult {
+    /// All available path alternatives.
+    pub alternatives: Vec<PathAlternative>,
+    /// The destination account (echoed from request).
+    pub destination_account: String,
+    /// The destination amount object (echoed from request).
+    pub destination_amount: serde_json::Value,
+    /// The source account that would send the payment.
+    pub source_account: String,
+}
+
+/// Result from `wallet_propose` RPC.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WalletProposeResult {
+    /// Master seed (Ed25519 family seed, starts with `s`).
+    pub master_seed: String,
+    /// Hex-encoded master seed.
+    pub master_seed_hex: String,
+    /// The derived XRPL address (starts with `r`).
+    pub account_id: String,
+    /// Public key (starts with `a` for Ed25519).
+    pub public_key: String,
+    /// Hex-encoded public key.
+    pub public_key_hex: String,
+    /// Key algorithm: `"ed25519"` or `"secp256k1"`.
+    pub key_type: String,
 }
 
 /// NFToken mint flag: URI may be updated via `NFTokenModify` (dynamic NFT / dNFT).
@@ -232,11 +300,50 @@ pub struct AccountSetSubmitParams {
     pub config_seed: Option<String>,
 }
 
-/// XRP Payment from the Wallet modal (classic or X-destination).
+/// XRP or IOU Payment from the Wallet modal.
+///
+/// **XRP mode** (iou_currency == None): `amount` = XRP value, classic payment.
+/// **IOU mode** (iou_currency set): `amount` = IOU value, uses `iou_currency` + `iou_issuer`.
+/// Auto-bridging: self-payment with `iou_currency` → swap via DEX order books.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PaymentSubmitParams {
     pub destination: String,
+    /// XRP amount (XRP mode) or IOU value (IOU mode).
+    pub amount: String,
+    /// If set, triggers IOU mode: `"USD"`, `"BTC"` etc.
+    pub iou_currency: Option<String>,
+    /// Issuer address for IOU mode.
+    pub iou_issuer: Option<String>,
+    pub skip_mainnet_prompt: bool,
+    pub config_seed: Option<String>,
+}
+
+/// SetRegularKey from the Wallet form.
+/// An empty `regular_key` means clear (remove) the existing regular key.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SetRegularKeySubmitParams {
+    pub regular_key: String,
+    pub skip_mainnet_prompt: bool,
+    pub config_seed: Option<String>,
+}
+
+/// EscrowCreate from the Wallet form.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EscrowCreateSubmitParams {
+    pub destination: String,
     pub amount_xrp: String,
+    /// Seconds since Ripple Epoch; if 0, defaults to 30 days from now.
+    pub finish_after: String,
+    pub skip_mainnet_prompt: bool,
+    pub config_seed: Option<String>,
+}
+
+/// OfferCreate from the Wallet form.
+/// taker_gets / taker_pays use compact spec: `"XRP:100"` (XRP) or `"USD:rIssuer:10"` (IOU).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OfferCreateSubmitParams {
+    pub taker_gets: String,
+    pub taker_pays: String,
     pub skip_mainnet_prompt: bool,
     pub config_seed: Option<String>,
 }
@@ -256,6 +363,13 @@ pub enum PollCommand {
     AccountSetSubmit(AccountSetSubmitParams),
     /// Sign and submit Payment (wallet modal).
     PaymentSubmit(PaymentSubmitParams),
+    /// Sign and submit SetRegularKey (wallet form).
+    SetRegularKeySubmit(SetRegularKeySubmitParams),
+    /// Sign and submit EscrowCreate (wallet form).
+    EscrowCreateSubmit(EscrowCreateSubmitParams),
+    OfferCreateSubmit(OfferCreateSubmitParams),
+    /// Generate a new key pair via wallet_propose ("ed25519" or "secp256k1").
+    WalletPropose(String),
 }
 
 #[derive(Debug)]

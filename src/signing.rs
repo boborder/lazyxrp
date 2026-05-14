@@ -129,11 +129,16 @@ pub fn prompt_mainnet_confirmation(operation: &str, network: &Network, skip_prom
 ///
 /// Phase 3: Transaction signing implementation for XRP transfers
 #[allow(dead_code, clippy::too_many_arguments)]
+/// `amount_spec`: XRP value (XRP mode) or IOU value (IOU mode).
+/// `iou_currency`: If Some, triggers IOU mode (e.g. "USD").
+/// `iou_issuer`: If Some, issuer address for IOU mode.
 pub fn create_and_sign_payment(
     seed: &SecretString,
     account: &str,
     destination: &str,
-    amount_xrp: &str,
+    amount_spec: &str,
+    iou_currency: Option<&str>,
+    iou_issuer: Option<&str>,
     sequence: u32,
     fee_drops: u32,
     last_ledger_sequence: u32,
@@ -148,8 +153,19 @@ pub fn create_and_sign_payment(
     let wallet =
         wallet_from_family_seed(seed.expose_secret(), 0).map_err(|e| color_eyre::eyre::eyre!(e))?;
 
-    let amount_drops = crate::xrpl::xrp_to_drops(amount_xrp)?;
-    let amount: Amount = amount_drops.into();
+    let amount: Amount = if let (Some(cur), Some(iss)) = (iou_currency, iou_issuer) {
+        // IOU mode: build IssuedCurrencyAmount
+        let ica = xrpl::models::IssuedCurrencyAmount {
+            currency: cur.to_string().into(),
+            issuer: iss.to_string().into(),
+            value: amount_spec.to_string().into(),
+        };
+        Amount::IssuedCurrencyAmount(ica)
+    } else {
+        // XRP mode: convert to drops
+        let amount_drops = crate::xrpl::xrp_to_drops(amount_spec)?;
+        amount_drops.into()
+    };
 
     let mut payment = Payment {
         common_fields: CommonFields::from_account(account.to_string())
@@ -191,6 +207,169 @@ pub fn create_unsigned_payment_json(
     });
 
     Ok(tx_json)
+}
+
+/// Create, sign, and encode a SetRegularKey transaction as a submit-ready blob.
+///
+/// Pass `regular_key` as `None` to clear (remove) the existing regular key.
+#[allow(dead_code)]
+pub fn create_and_sign_set_regular_key(
+    seed: &SecretString,
+    account: &str,
+    regular_key: Option<&str>,
+    sequence: u32,
+    fee_drops: u32,
+    last_ledger_sequence: u32,
+    _network: &Network,
+) -> color_eyre::Result<String> {
+    use xrpl::core::binarycodec::encode;
+    use xrpl::models::XRPAmount;
+    use xrpl::models::transactions::set_regular_key::SetRegularKey;
+    use xrpl::models::transactions::{CommonFields, TransactionType};
+    use xrpl::transaction::sign;
+
+    let wallet =
+        wallet_from_family_seed(seed.expose_secret(), 0).map_err(|e| color_eyre::eyre::eyre!(e))?;
+
+    let mut tx = SetRegularKey {
+        common_fields: CommonFields::from_account(account.to_string())
+            .with_transaction_type(TransactionType::SetRegularKey)
+            .with_sequence(sequence)
+            .with_fee(XRPAmount::from(fee_drops.to_string()))
+            .with_last_ledger_sequence(last_ledger_sequence),
+        regular_key: regular_key.map(|k| k.to_string().into()),
+        ..Default::default()
+    };
+
+    sign(&mut tx, &wallet, false).map_err(|e| color_eyre::eyre::eyre!("sign error: {:?}", e))?;
+
+    encode(&tx).map_err(|e| color_eyre::eyre::eyre!("encode error: {:?}", e))
+}
+
+/// Create and sign an `EscrowCreate` transaction, returning the tx_blob hex.
+pub fn create_and_sign_escrow_create(
+    seed: &SecretString,
+    account: &str,
+    destination: &str,
+    amount_drops: &str,
+    finish_after: u32,
+    sequence: u32,
+    fee_drops: u32,
+    last_ledger_sequence: u32,
+    _network: &Network,
+) -> color_eyre::Result<String> {
+    use xrpl::core::binarycodec::encode;
+    use xrpl::models::transactions::escrow_create::EscrowCreate;
+    use xrpl::models::transactions::{CommonFields, TransactionType};
+    use xrpl::transaction::sign;
+
+    let wallet =
+        wallet_from_family_seed(seed.expose_secret(), 0).map_err(|e| color_eyre::eyre::eyre!(e))?;
+
+    let mut tx = EscrowCreate {
+        common_fields: CommonFields::from_account(account.to_string())
+            .with_transaction_type(TransactionType::EscrowCreate)
+            .with_sequence(sequence)
+            .with_fee(xrpl::models::XRPAmount::from(fee_drops.to_string()))
+            .with_last_ledger_sequence(last_ledger_sequence),
+        amount: xrpl::models::XRPAmount::from(amount_drops.to_string()),
+        destination: destination.into(),
+        finish_after: if finish_after > 0 {
+            Some(finish_after)
+        } else {
+            None
+        },
+        ..Default::default()
+    };
+
+    sign(&mut tx, &wallet, false).map_err(|e| color_eyre::eyre::eyre!("sign error: {:?}", e))?;
+
+    encode(&tx).map_err(|e| color_eyre::eyre::eyre!("encode error: {:?}", e))
+}
+
+/// Build an `Amount` from a compact spec string.
+/// `"XRP:100000000"` → XRP amount in drops.
+/// `"USD:rIssuer:100.5"` → issued currency amount.
+fn parse_offer_amount(spec: &str) -> color_eyre::Result<xrpl::models::Amount<'static>> {
+    use xrpl::models::{Amount, IssuedCurrencyAmount, XRPAmount};
+
+    let parts: Vec<&str> = spec.splitn(3, ':').collect();
+    if parts.len() < 2 {
+        color_eyre::eyre::bail!("invalid amount spec (use XRP:drops or CUR:issuer:value): {spec}");
+    }
+    if parts[0] == "XRP" {
+        Ok(Amount::XRPAmount(XRPAmount::from(parts[1].to_string())))
+    } else {
+        if parts.len() < 3 {
+            color_eyre::eyre::bail!("IOU amount needs 3 parts (CUR:issuer:value): {spec}");
+        }
+        let ica = IssuedCurrencyAmount {
+            currency: parts[0].to_string().into(),
+            issuer: parts[1].to_string().into(),
+            value: parts[2].to_string().into(),
+        };
+        Ok(Amount::IssuedCurrencyAmount(ica))
+    }
+}
+
+/// Convert an OfferCreate compact amount spec to a [`serde_json::Value`] for
+/// use in simulate tx_json.
+pub(crate) fn offer_spec_to_json_value(spec: &str) -> color_eyre::Result<serde_json::Value> {
+    let parts: Vec<&str> = spec.splitn(3, ':').collect();
+    if parts.len() < 2 {
+        color_eyre::eyre::bail!("invalid amount spec (use XRP:drops or CUR:issuer:value): {spec}");
+    }
+    if parts[0] == "XRP" {
+        Ok(serde_json::Value::String(parts[1].to_string()))
+    } else {
+        if parts.len() < 3 {
+            color_eyre::eyre::bail!("IOU amount needs 3 parts (CUR:issuer:value): {spec}");
+        }
+        Ok(serde_json::json!({
+            "currency": parts[0],
+            "issuer": parts[1],
+            "value": parts[2]
+        }))
+    }
+}
+
+/// Create and sign an `OfferCreate` transaction, returning the tx_blob hex.
+pub fn create_and_sign_offer_create(
+    seed: &SecretString,
+    account: &str,
+    taker_gets_spec: &str,
+    taker_pays_spec: &str,
+    sequence: u32,
+    fee_drops: u32,
+    last_ledger_sequence: u32,
+    _network: &Network,
+) -> color_eyre::Result<String> {
+    use xrpl::core::binarycodec::encode;
+    use xrpl::models::XRPAmount;
+    use xrpl::models::transactions::offer_create::OfferCreate;
+    use xrpl::models::transactions::{CommonFields, TransactionType};
+    use xrpl::transaction::sign;
+
+    let wallet =
+        wallet_from_family_seed(seed.expose_secret(), 0).map_err(|e| color_eyre::eyre::eyre!(e))?;
+
+    let taker_gets = parse_offer_amount(taker_gets_spec)?;
+    let taker_pays = parse_offer_amount(taker_pays_spec)?;
+
+    let mut tx = OfferCreate {
+        common_fields: CommonFields::from_account(account.to_string())
+            .with_transaction_type(TransactionType::OfferCreate)
+            .with_sequence(sequence)
+            .with_fee(XRPAmount::from(fee_drops.to_string()))
+            .with_last_ledger_sequence(last_ledger_sequence),
+        taker_gets,
+        taker_pays,
+        ..Default::default()
+    };
+
+    sign(&mut tx, &wallet, false).map_err(|e| color_eyre::eyre::eyre!("sign error: {:?}", e))?;
+
+    encode(&tx).map_err(|e| color_eyre::eyre::eyre!("encode error: {:?}", e))
 }
 
 /// Lowercase ASCII domain → hex string for `AccountSet.domain`.

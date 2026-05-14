@@ -6,7 +6,8 @@ use xrpl::asynch::clients::{AsyncJsonRpcClient, XRPLClient};
 use super::json_util::{extract_json_u32, json_str};
 use super::types::{
     AccountSummary, AccountTxPage, AmmSummary, ArcValue, FeeSummary, LedgerObjectRow,
-    NFTOKEN_FLAG_MUTABLE, NftRow, OfferRow, ServerInfoSummary, TrustLineRow, TxRow, TxSummary,
+    NFTOKEN_FLAG_MUTABLE, NftRow, OfferRow, PathAlternative, RipplePathFindResult,
+    ServerInfoSummary, SimulateResult, TrustLineRow, TxRow, TxSummary, WalletProposeResult,
     XrplRlusdPrice,
 };
 
@@ -88,6 +89,15 @@ impl RpcClient {
             balance_xrp: drops_to_xrp(json_str(&value, &["result", "account_data", "Balance"])),
             sequence: extract_json_u32(&value, &["result", "account_data", "Sequence"]),
             owner_count: extract_json_u32(&value, &["result", "account_data", "OwnerCount"]),
+            flags: extract_json_u32(&value, &["result", "account_data", "Flags"]),
+            regular_key: value
+                .pointer("/result/account_data/RegularKey")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+            domain_hex: value
+                .pointer("/result/account_data/Domain")
+                .and_then(|v| v.as_str())
+                .map(String::from),
         })
     }
 
@@ -321,6 +331,50 @@ impl RpcClient {
             .await?;
         parse_submit_success(&value)
     }
+
+    /// Dry-run an unsigned transaction via the `simulate` RPC.
+    ///
+    /// Returns the auto-filled `tx_json` (Fee, Sequence, etc.) and metadata
+    /// without committing to the ledger.
+    pub async fn simulate_tx(&self, tx_json: Value) -> color_eyre::Result<SimulateResult> {
+        let value = self
+            .rpc_value("simulate", json!({ "tx_json": tx_json }))
+            .await?;
+        parse_simulate_result(&value)
+    }
+
+    /// `ripple_path_find` – find payment paths between two accounts for a given
+    /// destination currency amount.  Use this to preview swap rates before
+    /// submitting an IOU payment (especially self-pay → DEX swap).
+    ///
+    /// `destination_amount` should be an object like
+    /// `{"currency":"USD","issuer":"r...","value":"100"}` or
+    /// a numeric-string for XRP drops (`.0` appended to canonicalise drops).
+    pub async fn ripple_path_find(
+        &self,
+        source_account: &str,
+        destination_account: &str,
+        destination_amount: &Value,
+    ) -> color_eyre::Result<RipplePathFindResult> {
+        let value = self
+            .rpc_value(
+                "ripple_path_find",
+                json!({
+                    "source_account": source_account,
+                    "destination_account": destination_account,
+                    "destination_amount": destination_amount,
+                }),
+            )
+            .await?;
+        parse_ripple_path_find(&value)
+    }
+
+    /// Generate a new XRPL wallet via `wallet_propose`.
+    pub async fn wallet_propose(&self, key_type: &str) -> color_eyre::Result<WalletProposeResult> {
+        let params = json!({ "key_type": key_type });
+        let value = self.rpc_value("wallet_propose", params).await?;
+        parse_wallet_propose(&value)
+    }
 }
 
 fn check_xrpl_error(value: &Value) -> color_eyre::Result<()> {
@@ -370,6 +424,93 @@ fn parse_submit_success(value: &Value) -> color_eyre::Result<TxSummary> {
         .to_string();
 
     Ok(TxSummary { hash: tx_hash })
+}
+
+fn parse_simulate_result(value: &Value) -> color_eyre::Result<SimulateResult> {
+    let result = value.get("result").unwrap_or(&Value::Null);
+    let tx_json = result
+        .get("tx_json")
+        .cloned()
+        .ok_or_else(|| color_eyre::eyre::eyre!("simulate response missing tx_json"))?;
+
+    let engine_result = result
+        .get("engine_result")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+
+    let engine_result_message = result
+        .get("engine_result_message")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+
+    let ledger_index = extract_json_u32(value, &["result", "ledger_index"]);
+    let meta = result.get("meta").cloned();
+
+    Ok(SimulateResult {
+        tx_json,
+        engine_result,
+        engine_result_message,
+        ledger_index,
+        meta,
+    })
+}
+
+fn parse_ripple_path_find(value: &Value) -> color_eyre::Result<RipplePathFindResult> {
+    let result = value.get("result").unwrap_or(&Value::Null);
+
+    let alternatives = result
+        .get("alternatives")
+        .and_then(Value::as_array)
+        .map(|arr| {
+            arr.iter()
+                .map(|alt| PathAlternative {
+                    paths_computed: alt.get("paths_computed").cloned().unwrap_or(Value::Null),
+                    source_amount: alt.get("source_amount").cloned().unwrap_or(Value::Null),
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let destination_account = json_str(value, &["result", "destination_account"]).to_string();
+    let destination_amount = result
+        .get("destination_amount")
+        .cloned()
+        .unwrap_or(Value::Null);
+    let source_account = json_str(value, &["result", "source_account"]).to_string();
+
+    Ok(RipplePathFindResult {
+        alternatives,
+        destination_account,
+        destination_amount,
+        source_account,
+    })
+}
+
+fn parse_wallet_propose(value: &Value) -> color_eyre::Result<WalletProposeResult> {
+    let result = value.get("result").unwrap_or(&Value::Null);
+
+    let master_seed = result
+        .get("master_seed")
+        .and_then(Value::as_str)
+        .map(String::from)
+        .ok_or_else(|| color_eyre::eyre::eyre!("wallet_propose: missing master_seed"))?;
+
+    let account_id = result
+        .get("account_id")
+        .and_then(Value::as_str)
+        .map(String::from)
+        .ok_or_else(|| color_eyre::eyre::eyre!("wallet_propose: missing account_id"))?;
+
+    Ok(WalletProposeResult {
+        master_seed,
+        master_seed_hex: json_str(value, &["result", "master_seed_hex"]).to_string(),
+        account_id,
+        public_key: json_str(value, &["result", "public_key"]).to_string(),
+        public_key_hex: json_str(value, &["result", "public_key_hex"]).to_string(),
+        key_type: json_str(value, &["result", "key_type"]).to_string(),
+    })
 }
 
 fn parse_server_info_value(value: &Value) -> ServerInfoSummary {
@@ -995,6 +1136,54 @@ mod tests {
         assert!(parse_submit_success(&failed).is_err());
     }
 
+    #[test]
+    fn parse_simulate_result_with_meta() {
+        let value = json!({
+            "result": {
+                "tx_json": {
+                    "Account": "rf1BiGeXwwQoi8Z2ueFYTEXSwuJYfV2Jpn",
+                    "Fee": "10",
+                    "Sequence": 360,
+                    "TransactionType": "Payment"
+                },
+                "engine_result": "tesSUCCESS",
+                "engine_result_message": "The simulated transaction would have been applied.",
+                "ledger_index": 3,
+                "meta": { "TransactionResult": "tesSUCCESS" }
+            }
+        });
+        let sim = parse_simulate_result(&value).expect("simulate should parse");
+        assert_eq!(sim.engine_result, "tesSUCCESS");
+        assert_eq!(sim.ledger_index, 3);
+        assert!(sim.meta.is_some());
+        assert_eq!(sim.tx_json["Fee"], "10");
+        assert_eq!(sim.tx_json["Sequence"], 360);
+    }
+
+    #[test]
+    fn parse_simulate_result_tec_no_meta() {
+        // Non-TEC failures omit meta per XRPL spec
+        let value = json!({
+            "result": {
+                "tx_json": { "Account": "rTest" },
+                "engine_result": "terNO_LINE",
+                "engine_result_message": "No such line.",
+                "ledger_index": 5
+            }
+        });
+        let sim = parse_simulate_result(&value).expect("ter result should still parse");
+        assert_eq!(sim.engine_result, "terNO_LINE");
+        assert_eq!(sim.ledger_index, 5);
+        assert!(sim.meta.is_none());
+    }
+
+    #[test]
+    fn parse_simulate_result_missing_tx_json() {
+        let value = json!({"result": {"engine_result": "tesSUCCESS"}});
+        let err = parse_simulate_result(&value).expect_err("missing tx_json should fail");
+        assert!(format!("{err}").contains("tx_json"));
+    }
+
     /// TC-071 account_objects parse (empty)
     #[test]
     fn parse_account_objects_empty() {
@@ -1066,5 +1255,156 @@ mod tests {
         assert!(!is_objects_tab_ledger_type("PayChannel"));
         assert!(is_pay_channel_type("PayChannel"));
         assert!(is_escrow_type("Escrow"));
+    }
+
+    #[test]
+    fn xrp_to_drops_whole() {
+        assert_eq!(xrp_to_drops("1").unwrap(), 1_000_000);
+    }
+
+    #[test]
+    fn xrp_to_drops_with_fraction() {
+        assert_eq!(xrp_to_drops("1.5").unwrap(), 1_500_000);
+    }
+
+    #[test]
+    fn xrp_to_drops_six_decimals() {
+        assert_eq!(xrp_to_drops("1.123456").unwrap(), 1_123_456);
+    }
+
+    #[test]
+    fn xrp_to_drops_too_many_decimals_err() {
+        assert!(xrp_to_drops("1.1234567").is_err());
+    }
+
+    #[test]
+    fn xrp_to_drops_empty_err() {
+        assert!(xrp_to_drops("").is_err());
+    }
+
+    #[test]
+    fn xrp_to_drops_invalid_err() {
+        assert!(xrp_to_drops("abc").is_err());
+    }
+
+    #[test]
+    fn xrp_to_drops_multiple_dots_err() {
+        assert!(xrp_to_drops("1.2.3").is_err());
+    }
+
+    #[test]
+    fn xrp_to_drops_leading_dot_err() {
+        assert!(xrp_to_drops(".5").is_err());
+    }
+
+    #[test]
+    fn xrp_to_drops_tiny_amount() {
+        assert_eq!(xrp_to_drops("0.000001").unwrap(), 1);
+    }
+
+    #[test]
+    fn xrp_to_drops_zero() {
+        assert_eq!(xrp_to_drops("0").unwrap(), 0);
+    }
+
+    /// TC-079 ripple_path_find parse
+    #[test]
+    fn parse_ripple_path_find_with_alternatives() {
+        let value = json!({
+            "result": {
+                "alternatives": [
+                    {
+                        "paths_computed": [[
+                            {"currency": "USD", "issuer": "rIssuer1", "type": 48},
+                            {"currency": "USD", "issuer": "rIssuer2", "type": 48}
+                        ]],
+                        "source_amount": {
+                            "currency": "USD",
+                            "issuer": "rSourceIssuer",
+                            "value": "105.5"
+                        }
+                    }
+                ],
+                "destination_account": "rDest11111111111111111111111111111111",
+                "destination_amount": {
+                    "currency": "USD",
+                    "issuer": "rDestIssuer",
+                    "value": "100"
+                },
+                "source_account": "rSrc111111111111111111111111111111111"
+            }
+        });
+        let paths = parse_ripple_path_find(&value).expect("path find should parse");
+        assert_eq!(paths.alternatives.len(), 1);
+        assert_eq!(
+            paths.destination_account,
+            "rDest11111111111111111111111111111111"
+        );
+        assert_eq!(
+            paths.source_account,
+            "rSrc111111111111111111111111111111111"
+        );
+        let alt = &paths.alternatives[0];
+        assert_eq!(alt.source_amount["value"], "105.5");
+    }
+
+    /// TC-080 ripple_path_find empty alternatives
+    #[test]
+    fn parse_ripple_path_find_no_alternatives() {
+        let value = json!({
+            "result": {
+                "alternatives": [],
+                "destination_account": "rDest",
+                "destination_amount": { "currency": "XRP" },
+                "source_account": "rSrc"
+            }
+        });
+        let paths = parse_ripple_path_find(&value).expect("empty alternatives should parse");
+        assert!(paths.alternatives.is_empty());
+    }
+
+    /// TC-081 ripple_path_find source_amount as string (XRP drops)
+    #[test]
+    fn parse_ripple_path_find_source_amount_string() {
+        let value = json!({
+            "result": {
+                "alternatives": [
+                    {
+                        "paths_computed": [],
+                        "source_amount": "256987"
+                    }
+                ],
+                "destination_account": "rDest",
+                "destination_amount": { "currency": "USD", "issuer": "rIssuer", "value": "10" },
+                "source_account": "rSrc"
+            }
+        });
+        let paths = parse_ripple_path_find(&value).expect("string source_amount should parse");
+        assert_eq!(paths.alternatives.len(), 1);
+        // source_amount is a plain drops string, not an object
+        assert_eq!(paths.alternatives[0].source_amount, json!("256987"));
+    }
+
+    /// TC-082 wallet_propose ed25519
+    #[test]
+    fn parse_wallet_propose_ed25519() {
+        let value = json!({
+            "result": {
+                "account_id": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+                "key_type": "ed25519",
+                "master_seed": "sEdTzYqD8TKiF4MjRmq9h5RZVvqQeGF",
+                "master_seed_hex": "DEDCE9CE67B451D852FD4E846FCDE31C",
+                "master_key": "ED74D4036C6591A4BDF9C54CEFA39B996A5DCE5F86D11FDA1878C3A9E45606A5AB",
+                "public_key": "aBQG8RQAzjs1eTKFEAQXr2gSJutMrk9oXqVtYN7qFZjNn82BScnG",
+                "public_key_hex": "ED74D4036C6591A4BDF9C54CEFA39B996A5DCE5F86D11FDA1878C3A9E45606A5AB",
+                "status": "success"
+            }
+        });
+        let r = parse_wallet_propose(&value).expect("wallet_propose should parse");
+        assert!(r.master_seed.starts_with('s'));
+        assert!(r.account_id.starts_with('r'));
+        assert!(r.public_key.starts_with('a'));
+        assert_eq!(r.key_type, "ed25519");
+        assert!(!r.master_seed_hex.is_empty());
     }
 }

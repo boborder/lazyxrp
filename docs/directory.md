@@ -48,6 +48,7 @@ lazyxrp/
 │   │   │   ├── account_objects.rs
 │   │   │   ├── account_tx.rs
 │   │   │   ├── market.rs
+│   │   │   ├── nft.rs
 │   │   │   └── server_overview.rs
 │   │   └── shared/
 │   │       ├── mod.rs
@@ -62,7 +63,8 @@ lazyxrp/
 │   ├── tui.rs
 │   ├── uninstall.rs
 │   ├── logging.rs
-│   └── errors.rs
+│   ├── errors.rs
+│   └── utils.rs
 └── docs/
     ├── README.md          # ドキュメント導線と一覧
     ├── architecture/
@@ -76,7 +78,8 @@ lazyxrp/
     ├── directory.md
     ├── references.md
     ├── security.md
-    └── problems.md
+    ├── problems.md
+    └── benchmark.md
 ```
 
 ## 2. ルート直下ファイル
@@ -89,7 +92,7 @@ lazyxrp/
 - `README.md`: 利用者向けの概要と起動手順。
 - `.env.example`: `XRPL_*` 環境変数の例（任意。一覧は `docs/tech.md` と実装を参照）。
 - `install.sh`: インタラクティブインストーラ（必須は `curl` のみ）。プロンプトとメッセージは英語。`--help` で CLI 一覧（`--method cargo|binary`、`--install-rust` / `--no-install-rust`、`--install-mise` / `--no-install-mise`、`-q`）。**手動アンインストール**手順のみの表示は `--uninstall-help`（`lazyxrp --self-uninstall` の案内や、任意で OS 別の設定・データ `rm` の例、`LAZYXRP_CONFIG` / `LAZYXRP_DATA` 等の注意あり）。TTY 時はアニメ付き対話で、cargo / mise 未導入ならインストールを提案；非 TTY / `-q` は既定の自動応答。
-- `.mise.toml`: [mise](https://mise.jdx.dev/) タスク（例: `install`、`tags`（一覧）、`tag`（`Cargo.toml` から注釈付きタグ作成）、`tag-push`（作成して `origin` にその1本だけ push）、`tags-push`（ローカルタグを全部 push））。
+- `.mise.toml`: [mise](https://mise.jdx.dev/) タスク（例: `install`、`tags`（一覧）、`tag`（`Cargo.toml` から注釈付きタグ作成）、`tag-push`（作成して `origin` にその1本だけ push）、`bench` / `bench-fast`（ベンチマーク））。
 - `AGENTS.md`: プロジェクト運用ルールと実行契約（禁止事項・クイックリファレンスを含む）。graphify の構造情報も参照。
 
 ## 3. `src/` 配下の責務

@@ -4,6 +4,8 @@ use secrecy::ExposeSecret;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tokio_util::sync::CancellationToken;
 
+use tracing::warn;
+
 use crate::action::Action;
 use crate::network::Network;
 use crate::signing::{self, SigningConfig};
@@ -65,13 +67,21 @@ async fn poll_batch(
             match $result {
                 Ok(Ok(v)) => {
                     any_ok = true;
-                    let _ = action_tx.send($ok_action(v));
+                    if let Err(e) = action_tx.send($ok_action(v)) {
+                        warn!(?e, "action channel closed ({})", $label);
+                    }
                 }
                 Ok(Err(e)) => {
-                    let _ = action_tx.send(Action::XrplError(format!("{}: {e}", $label)));
+                    if let Err(e2) = action_tx.send(Action::XrplError(format!("{}: {e}", $label))) {
+                        warn!(?e2, "action channel closed ({})", $label);
+                    }
                 }
                 Err(_) => {
-                    let _ = action_tx.send(Action::XrplError(format!("{}: timeout", $label)));
+                    if let Err(e) =
+                        action_tx.send(Action::XrplError(format!("{}: timeout", $label)))
+                    {
+                        warn!(?e, "action channel closed ({})", $label);
+                    }
                 }
             }
         };
@@ -89,19 +99,27 @@ async fn poll_batch(
     match r_tx {
         Ok(Ok(page)) => {
             any_ok = true;
-            let _ = action_tx.send(Action::XrplTxHistory(page.rows, page.marker));
+            if let Err(e) = action_tx.send(Action::XrplTxHistory(page.rows, page.marker)) {
+                warn!(?e, "action channel closed");
+            }
         }
         Ok(Err(e)) => {
             let msg = format!("account_tx: {e}");
             if is_not_found_error(&msg) {
                 any_ok = true;
-                let _ = action_tx.send(Action::XrplTxHistory(vec![], None));
+                if let Err(e) = action_tx.send(Action::XrplTxHistory(vec![], None)) {
+                    warn!(?e, "action channel closed");
+                }
             } else {
-                let _ = action_tx.send(Action::XrplError(msg));
+                if let Err(e) = action_tx.send(Action::XrplError(msg)) {
+                    warn!(?e, "action channel closed");
+                }
             }
         }
         Err(_) => {
-            let _ = action_tx.send(Action::XrplError("account_tx: timeout".into()));
+            if let Err(e) = action_tx.send(Action::XrplError("account_tx: timeout".into())) {
+                warn!(?e, "action channel closed");
+            }
         }
     }
     any_ok
@@ -114,15 +132,21 @@ async fn poll_wallet_overview(
 ) -> bool {
     match tokio::time::timeout(RPC_TIMEOUT, rpc.account_overview(seed_address)).await {
         Ok(Ok((acc, txs, marker))) => {
-            let _ = action_tx.send(Action::XrplWalletOverview(acc, txs, marker));
+            if let Err(e) = action_tx.send(Action::XrplWalletOverview(acc, txs, marker)) {
+                warn!(?e, "action channel closed");
+            }
             true
         }
         Ok(Err(e)) => {
-            let _ = action_tx.send(Action::XrplError(format!("wallet_overview: {e}")));
+            if let Err(e) = action_tx.send(Action::XrplError(format!("wallet_overview: {e}"))) {
+                warn!(?e, "action channel closed");
+            }
             false
         }
         Err(_) => {
-            let _ = action_tx.send(Action::XrplError("wallet_overview: timeout".into()));
+            if let Err(e) = action_tx.send(Action::XrplError("wallet_overview: timeout".into())) {
+                warn!(?e, "action channel closed");
+            }
             false
         }
     }
@@ -146,28 +170,36 @@ async fn submit_account_set_transaction(
     action_tx: &UnboundedSender<Action>,
 ) {
     if !account_set_params_nonempty(&params) {
-        let _ = action_tx.send(Action::AccountSetSubmitErr(
+        if let Err(e) = action_tx.send(Action::AccountSetSubmitErr(
             "nothing to change — pick a flag and/or fill domain, tick size, transfer rate".into(),
-        ));
+        )) {
+            warn!(?e, "action channel closed");
+        }
         return;
     }
     if network.is_mainnet() && !params.skip_mainnet_prompt {
-        let _ = action_tx.send(Action::AccountSetSubmitErr(
+        if let Err(e) = action_tx.send(Action::AccountSetSubmitErr(
             "mainnet: restart lazyxrp with --yes to allow AccountSet writes".into(),
-        ));
+        )) {
+            warn!(?e, "action channel closed");
+        }
         return;
     }
     let signing_config = SigningConfig::prime_seed_source(params.config_seed.clone());
     let Some(seed) = signing_config.seed.as_ref() else {
-        let _ = action_tx.send(Action::AccountSetSubmitErr(
+        if let Err(e) = action_tx.send(Action::AccountSetSubmitErr(
             "no signing seed — set XRPL_SEED or config [xrpl.signing] seed".into(),
-        ));
+        )) {
+            warn!(?e, "action channel closed");
+        }
         return;
     };
     let wallet = match signing::wallet_from_family_seed(seed.expose_secret(), 0) {
         Ok(w) => w,
         Err(e) => {
-            let _ = action_tx.send(Action::AccountSetSubmitErr(format!("wallet: {e:?}")));
+            if let Err(e) = action_tx.send(Action::AccountSetSubmitErr(format!("wallet: {e:?}"))) {
+                warn!(?e, "action channel closed");
+            }
             return;
         }
     };
@@ -179,9 +211,11 @@ async fn submit_account_set_transaction(
         match params.tick_size.trim().parse::<u32>() {
             Ok(n) => Some(n),
             Err(_) => {
-                let _ = action_tx.send(Action::AccountSetSubmitErr(
+                if let Err(e) = action_tx.send(Action::AccountSetSubmitErr(
                     "tick size: invalid number (use 0 or 3–15)".into(),
-                ));
+                )) {
+                    warn!(?e, "action channel closed");
+                }
                 return;
             }
         }
@@ -193,9 +227,11 @@ async fn submit_account_set_transaction(
         match params.transfer_rate.trim().parse::<u32>() {
             Ok(n) => Some(n),
             Err(_) => {
-                let _ = action_tx.send(Action::AccountSetSubmitErr(
+                if let Err(e) = action_tx.send(Action::AccountSetSubmitErr(
                     "transfer rate: invalid number".into(),
-                ));
+                )) {
+                    warn!(?e, "action channel closed");
+                }
                 return;
             }
         }
@@ -214,11 +250,19 @@ async fn submit_account_set_transaction(
     let account_info = match tokio::time::timeout(RPC_TIMEOUT, rpc.account_info(&account)).await {
         Ok(Ok(a)) => a,
         Ok(Err(e)) => {
-            let _ = action_tx.send(Action::AccountSetSubmitErr(format!("account_info: {e}")));
+            if let Err(e) =
+                action_tx.send(Action::AccountSetSubmitErr(format!("account_info: {e}")))
+            {
+                warn!(?e, "action channel closed");
+            }
             return;
         }
         Err(_) => {
-            let _ = action_tx.send(Action::AccountSetSubmitErr("account_info: timeout".into()));
+            if let Err(e) =
+                action_tx.send(Action::AccountSetSubmitErr("account_info: timeout".into()))
+            {
+                warn!(?e, "action channel closed");
+            }
             return;
         }
     };
@@ -226,11 +270,15 @@ async fn submit_account_set_transaction(
     let fee_info = match tokio::time::timeout(RPC_TIMEOUT, rpc.fee()).await {
         Ok(Ok(f)) => f,
         Ok(Err(e)) => {
-            let _ = action_tx.send(Action::AccountSetSubmitErr(format!("fee: {e}")));
+            if let Err(e) = action_tx.send(Action::AccountSetSubmitErr(format!("fee: {e}"))) {
+                warn!(?e, "action channel closed");
+            }
             return;
         }
         Err(_) => {
-            let _ = action_tx.send(Action::AccountSetSubmitErr("fee: timeout".into()));
+            if let Err(e) = action_tx.send(Action::AccountSetSubmitErr("fee: timeout".into())) {
+                warn!(?e, "action channel closed");
+            }
             return;
         }
     };
@@ -238,11 +286,18 @@ async fn submit_account_set_transaction(
     let server_info = match tokio::time::timeout(RPC_TIMEOUT, rpc.server_info()).await {
         Ok(Ok(s)) => s,
         Ok(Err(e)) => {
-            let _ = action_tx.send(Action::AccountSetSubmitErr(format!("server_info: {e}")));
+            if let Err(e) = action_tx.send(Action::AccountSetSubmitErr(format!("server_info: {e}")))
+            {
+                warn!(?e, "action channel closed");
+            }
             return;
         }
         Err(_) => {
-            let _ = action_tx.send(Action::AccountSetSubmitErr("server_info: timeout".into()));
+            if let Err(e) =
+                action_tx.send(Action::AccountSetSubmitErr("server_info: timeout".into()))
+            {
+                warn!(?e, "action channel closed");
+            }
             return;
         }
     };
@@ -262,22 +317,34 @@ async fn submit_account_set_transaction(
     ) {
         Ok(b) => b,
         Err(e) => {
-            let _ = action_tx.send(Action::AccountSetSubmitErr(format!("sign: {e}")));
+            if let Err(e) = action_tx.send(Action::AccountSetSubmitErr(format!("sign: {e}"))) {
+                warn!(?e, "action channel closed");
+            }
             return;
         }
     };
 
     match tokio::time::timeout(RPC_TIMEOUT, rpc.submit_signed_tx(&blob)).await {
         Ok(Ok(tx)) => {
-            let _ = action_tx.send(Action::AccountSetSubmitOk(tx.hash.clone()));
-            let _ = action_tx.send(Action::RefreshAccount);
-            let _ = action_tx.send(Action::RefreshTxHistory);
+            if let Err(e) = action_tx.send(Action::AccountSetSubmitOk(tx.hash.clone())) {
+                warn!(?e, "action channel closed");
+            }
+            if let Err(e) = action_tx.send(Action::RefreshAccount) {
+                warn!(?e, "action channel closed");
+            }
+            if let Err(e) = action_tx.send(Action::RefreshTxHistory) {
+                warn!(?e, "action channel closed");
+            }
         }
         Ok(Err(e)) => {
-            let _ = action_tx.send(Action::AccountSetSubmitErr(format!("submit: {e}")));
+            if let Err(e) = action_tx.send(Action::AccountSetSubmitErr(format!("submit: {e}"))) {
+                warn!(?e, "action channel closed");
+            }
         }
         Err(_) => {
-            let _ = action_tx.send(Action::AccountSetSubmitErr("submit: timeout".into()));
+            if let Err(e) = action_tx.send(Action::AccountSetSubmitErr("submit: timeout".into())) {
+                warn!(?e, "action channel closed");
+            }
         }
     }
 }
@@ -308,69 +375,90 @@ async fn submit_payment_transaction(
     params: PaymentSubmitParams,
     action_tx: &UnboundedSender<Action>,
 ) {
-    if params.amount_xrp.trim().is_empty() {
-        let _ = action_tx.send(Action::PaymentSubmitErr(
+    if params.amount.trim().is_empty() {
+        if let Err(e) = action_tx.send(Action::PaymentSubmitErr(
             "amount is empty — enter XRP to send".into(),
-        ));
+        )) {
+            warn!(?e, "action channel closed");
+        }
         return;
     }
     let destination_resolved = match resolve_wallet_payment_destination(params.destination.trim()) {
         Ok(d) => d,
         Err(e) => {
-            let _ = action_tx.send(Action::PaymentSubmitErr(format!("{e}")));
+            if let Err(e) = action_tx.send(Action::PaymentSubmitErr(format!("{e}"))) {
+                warn!(?e, "action channel closed");
+            }
             return;
         }
     };
     if network.is_mainnet() && !params.skip_mainnet_prompt {
-        let _ = action_tx.send(Action::PaymentSubmitErr(
+        if let Err(e) = action_tx.send(Action::PaymentSubmitErr(
             "mainnet: restart lazyxrp with --yes to allow Payment writes".into(),
-        ));
+        )) {
+            warn!(?e, "action channel closed");
+        }
         return;
     }
     let signing_config = SigningConfig::prime_seed_source(params.config_seed.clone());
     let Some(seed) = signing_config.seed.as_ref() else {
-        let _ = action_tx.send(Action::PaymentSubmitErr(
+        if let Err(e) = action_tx.send(Action::PaymentSubmitErr(
             "no signing seed — set XRPL_SEED or config [xrpl.signing] seed".into(),
-        ));
+        )) {
+            warn!(?e, "action channel closed");
+        }
         return;
     };
     let wallet = match signing::wallet_from_family_seed(seed.expose_secret(), 0) {
         Ok(w) => w,
         Err(e) => {
-            let _ = action_tx.send(Action::PaymentSubmitErr(format!("wallet: {e:?}")));
+            if let Err(e) = action_tx.send(Action::PaymentSubmitErr(format!("wallet: {e:?}"))) {
+                warn!(?e, "action channel closed");
+            }
             return;
         }
     };
     let account = wallet.classic_address.clone();
     if account == destination_resolved {
-        let _ = action_tx.send(Action::PaymentSubmitErr(
+        if let Err(e) = action_tx.send(Action::PaymentSubmitErr(
             "destination matches source account".into(),
-        ));
+        )) {
+            warn!(?e, "action channel closed");
+        }
         return;
     }
 
-    let amount_drops = match xrp_to_drops(params.amount_xrp.trim()) {
+    let amount_drops = match xrp_to_drops(params.amount.trim()) {
         Ok(d) => d,
         Err(e) => {
-            let _ = action_tx.send(Action::PaymentSubmitErr(format!("amount: {e}")));
+            if let Err(e) = action_tx.send(Action::PaymentSubmitErr(format!("amount: {e}"))) {
+                warn!(?e, "action channel closed");
+            }
             return;
         }
     };
     if amount_drops == 0 {
-        let _ = action_tx.send(Action::PaymentSubmitErr(
+        if let Err(e) = action_tx.send(Action::PaymentSubmitErr(
             "amount must be greater than zero".into(),
-        ));
+        )) {
+            warn!(?e, "action channel closed");
+        }
         return;
     }
 
     let account_info = match tokio::time::timeout(RPC_TIMEOUT, rpc.account_info(&account)).await {
         Ok(Ok(a)) => a,
         Ok(Err(e)) => {
-            let _ = action_tx.send(Action::PaymentSubmitErr(format!("account_info: {e}")));
+            if let Err(e) = action_tx.send(Action::PaymentSubmitErr(format!("account_info: {e}"))) {
+                warn!(?e, "action channel closed");
+            }
             return;
         }
         Err(_) => {
-            let _ = action_tx.send(Action::PaymentSubmitErr("account_info: timeout".into()));
+            if let Err(e) = action_tx.send(Action::PaymentSubmitErr("account_info: timeout".into()))
+            {
+                warn!(?e, "action channel closed");
+            }
             return;
         }
     };
@@ -379,31 +467,39 @@ async fn submit_payment_transaction(
     let fee_info = match tokio::time::timeout(RPC_TIMEOUT, rpc.fee()).await {
         Ok(Ok(f)) => f,
         Ok(Err(e)) => {
-            let _ = action_tx.send(Action::PaymentSubmitErr(format!("fee: {e}")));
+            if let Err(e) = action_tx.send(Action::PaymentSubmitErr(format!("fee: {e}"))) {
+                warn!(?e, "action channel closed");
+            }
             return;
         }
         Err(_) => {
-            let _ = action_tx.send(Action::PaymentSubmitErr("fee: timeout".into()));
+            if let Err(e) = action_tx.send(Action::PaymentSubmitErr("fee: timeout".into())) {
+                warn!(?e, "action channel closed");
+            }
             return;
         }
     };
     let fee_drops = fee_info.open_ledger_fee_drops;
     if balance_drops < amount_drops + u64::from(fee_drops) {
         let total_need = amount_drops.saturating_add(u64::from(fee_drops));
-        let _ = action_tx.send(Action::PaymentSubmitErr(format!(
-            "insufficient balance: have {balance_drops} drops, need {total_need} (amount {amount_drops} + fee {fee_drops})"
-        )));
+        if let Err(e) = action_tx.send(Action::PaymentSubmitErr(format!(            "insufficient balance: have {balance_drops} drops, need {total_need} (amount {amount_drops} + fee {fee_drops})"        ))
+        ) { warn!(?e, "action channel closed"); }
         return;
     }
 
     let server_info = match tokio::time::timeout(RPC_TIMEOUT, rpc.server_info()).await {
         Ok(Ok(s)) => s,
         Ok(Err(e)) => {
-            let _ = action_tx.send(Action::PaymentSubmitErr(format!("server_info: {e}")));
+            if let Err(e) = action_tx.send(Action::PaymentSubmitErr(format!("server_info: {e}"))) {
+                warn!(?e, "action channel closed");
+            }
             return;
         }
         Err(_) => {
-            let _ = action_tx.send(Action::PaymentSubmitErr("server_info: timeout".into()));
+            if let Err(e) = action_tx.send(Action::PaymentSubmitErr("server_info: timeout".into()))
+            {
+                warn!(?e, "action channel closed");
+            }
             return;
         }
     };
@@ -413,7 +509,9 @@ async fn submit_payment_transaction(
         seed,
         &account,
         &destination_resolved,
-        params.amount_xrp.trim(),
+        params.amount.trim(),
+        params.iou_currency.as_deref(),
+        params.iou_issuer.as_deref(),
         account_info.sequence,
         fee_drops,
         last_ledger_sequence,
@@ -421,22 +519,34 @@ async fn submit_payment_transaction(
     ) {
         Ok(b) => b,
         Err(e) => {
-            let _ = action_tx.send(Action::PaymentSubmitErr(format!("sign: {e}")));
+            if let Err(e) = action_tx.send(Action::PaymentSubmitErr(format!("sign: {e}"))) {
+                warn!(?e, "action channel closed");
+            }
             return;
         }
     };
 
     match tokio::time::timeout(RPC_TIMEOUT, rpc.submit_signed_tx(&blob)).await {
         Ok(Ok(tx)) => {
-            let _ = action_tx.send(Action::PaymentSubmitOk(tx.hash.clone()));
-            let _ = action_tx.send(Action::RefreshAccount);
-            let _ = action_tx.send(Action::RefreshTxHistory);
+            if let Err(e) = action_tx.send(Action::PaymentSubmitOk(tx.hash.clone())) {
+                warn!(?e, "action channel closed");
+            }
+            if let Err(e) = action_tx.send(Action::RefreshAccount) {
+                warn!(?e, "action channel closed");
+            }
+            if let Err(e) = action_tx.send(Action::RefreshTxHistory) {
+                warn!(?e, "action channel closed");
+            }
         }
         Ok(Err(e)) => {
-            let _ = action_tx.send(Action::PaymentSubmitErr(format!("submit: {e}")));
+            if let Err(e) = action_tx.send(Action::PaymentSubmitErr(format!("submit: {e}"))) {
+                warn!(?e, "action channel closed");
+            }
         }
         Err(_) => {
-            let _ = action_tx.send(Action::PaymentSubmitErr("submit: timeout".into()));
+            if let Err(e) = action_tx.send(Action::PaymentSubmitErr("submit: timeout".into())) {
+                warn!(?e, "action channel closed");
+            }
         }
     }
 }
@@ -451,13 +561,19 @@ fn dispatch_timed<T, F>(
 {
     match result {
         Ok(Ok(value)) => {
-            let _ = action_tx.send(ok_action(value));
+            if let Err(e) = action_tx.send(ok_action(value)) {
+                warn!(?e, "action channel closed");
+            }
         }
         Ok(Err(e)) => {
-            let _ = action_tx.send(Action::XrplError(format!("{label}: {e}")));
+            if let Err(e) = action_tx.send(Action::XrplError(format!("{label}: {e}"))) {
+                warn!(?e, "action channel closed");
+            }
         }
         Err(_) => {
-            let _ = action_tx.send(Action::XrplError(format!("{label}: timeout")));
+            if let Err(e) = action_tx.send(Action::XrplError(format!("{label}: timeout"))) {
+                warn!(?e, "action channel closed");
+            }
         }
     }
 }
@@ -480,7 +596,9 @@ async fn run_poll_loop(
     let rpc = match RpcClient::connect(&rpc_url) {
         Ok(rpc) => rpc,
         Err(err) => {
-            let _ = action_tx.send(Action::XrplError(format!("rpc init failed: {err}")));
+            if let Err(e) = action_tx.send(Action::XrplError(format!("rpc init failed: {err}"))) {
+                warn!(?e, "action channel closed");
+            }
             return;
         }
     };
@@ -528,9 +646,9 @@ async fn run_poll_loop(
             }
             _ = price_tick.tick() => {
                 match tokio::time::timeout(RPC_TIMEOUT, rpc.xrp_rlusd_price(book_pair.pays_currency(), &book_pair.issuer)).await {
-                    Ok(Ok(p)) => { let _ = action_tx.send(Action::XrplRlusdPrice(p)); }
-                    Ok(Err(e)) => { let _ = action_tx.send(Action::XrplError(format!("price: {e}"))); }
-                    Err(_) => { let _ = action_tx.send(Action::XrplError("price: timeout".into())); }
+                    Ok(Ok(p)) => { if let Err(e) = action_tx.send(Action::XrplRlusdPrice(p)) { warn!(?e, "action channel closed"); } }
+                    Ok(Err(e)) => { if let Err(e) = action_tx.send(Action::XrplError(format!("price: {e}"))) { warn!(?e, "action channel closed"); } }
+                    Err(_) => { if let Err(e) = action_tx.send(Action::XrplError("price: timeout".into())) { warn!(?e, "action channel closed"); } }
                 }
             }
             Some(cmd) = refresh_rx.recv() => {
@@ -595,6 +713,7 @@ async fn run_poll_loop(
                         let network = *network_watch.borrow();
                         submit_payment_transaction(&rpc, &network, params, &action_tx).await;
                     }
+                    _ => {}
                 }
             }
         }

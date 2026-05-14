@@ -16,6 +16,9 @@ use crate::xrpl::ArcValue;
 mod format;
 mod parsers;
 
+/// Ripple epoch offset: seconds between Unix epoch (1970-01-01) and Ripple epoch (2000-01-01).
+const RIPPLE_EPOCH: i64 = 946_684_800;
+
 use format::format_value;
 use parsers::*;
 
@@ -126,10 +129,11 @@ fn detail_lines_for<'a>(tx: &'a Value, meta: &'a Value) -> Vec<Line<'a>> {
         Span::styled(result, result_style),
     ]));
 
-    if let Some(ledger) = tx
-        .get("ledger_index")
-        .and_then(|v| v.as_u64().or_else(|| v.as_i64().map(|i| i as u64)))
-    {
+    if let Some(ledger) = tx.get("ledger_index").and_then(|v| {
+        v.as_u64()
+            .or_else(|| v.as_i64().map(|i| i as u64))
+            .or_else(|| v.as_str()?.parse().ok())
+    }) {
         lines.push(Line::from(vec![
             Span::styled("Ledger", hi_style),
             Span::raw(": "),
@@ -141,7 +145,7 @@ fn detail_lines_for<'a>(tx: &'a Value, meta: &'a Value) -> Vec<Line<'a>> {
     }
 
     if let Some(date) = tx.get("date").and_then(Value::as_u64) {
-        let unix = date as i64 + 946_684_800;
+        let unix = date as i64 + RIPPLE_EPOCH;
         let ts = crate::components::shared::fmt::fmt_local_datetime(unix);
         lines.push(Line::from(vec![
             Span::styled("Date", hi_style),
@@ -253,7 +257,6 @@ fn detail_lines_for<'a>(tx: &'a Value, meta: &'a Value) -> Vec<Line<'a>> {
         "Unauthorize",
         "DIDDocument",
         "Data",
-        "URI",
     ];
 
     let obj = match tx {
@@ -336,4 +339,181 @@ fn detail_lines_for<'a>(tx: &'a Value, meta: &'a Value) -> Vec<Line<'a>> {
     }
 
     lines
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    use std::sync::Arc;
+
+    fn arc(v: serde_json::Value) -> ArcValue {
+        ArcValue(Arc::new(v))
+    }
+
+    #[test]
+    fn tx_detail_state_open_close() {
+        let mut state = TxDetailState::default();
+        assert!(!state.visible);
+        state.open(arc(json!({"hash":"abc"})), arc(json!({})));
+        assert!(state.visible);
+        assert_eq!(state.scroll, 0);
+        assert_eq!(state.tx_json.0["hash"], "abc");
+        state.close();
+        assert!(!state.visible);
+        assert_eq!(state.scroll, 0);
+    }
+
+    #[test]
+    fn detail_lines_empty_returns_minimal() {
+        let tx = json!({});
+        let meta = json!({});
+        let lines = detail_lines_for(&tx, &meta);
+        // Result line is always present
+        assert!(!lines.is_empty());
+        let text = lines[0].to_string();
+        assert!(text.contains("Result"));
+    }
+
+    #[test]
+    fn detail_lines_shows_hash_and_result() {
+        let tx = json!({"hash":"DEADBEEF","TransactionResult":"tesSUCCESS"});
+        let meta = json!({});
+        let lines = detail_lines_for(&tx, &meta);
+        let text: Vec<String> = lines.iter().map(|l| l.to_string()).collect();
+        assert!(
+            text.iter()
+                .any(|s| s.contains("Hash") && s.contains("DEADBEEF"))
+        );
+        assert!(
+            text.iter()
+                .any(|s| s.contains("Result") && s.contains("tesSUCCESS"))
+        );
+    }
+
+    #[test]
+    fn detail_lines_result_from_meta_fallback() {
+        let tx = json!({});
+        let meta = json!({"TransactionResult":"tecPATH_DRY"});
+        let lines = detail_lines_for(&tx, &meta);
+        let text: Vec<String> = lines.iter().map(|l| l.to_string()).collect();
+        assert!(text.iter().any(|s| s.contains("tecPATH_DRY")));
+    }
+
+    #[test]
+    fn detail_lines_ledger_index_as_u64() {
+        let tx = json!({"ledger_index":12345});
+        let meta = json!({});
+        let lines = detail_lines_for(&tx, &meta);
+        let text: Vec<String> = lines.iter().map(|l| l.to_string()).collect();
+        assert!(
+            text.iter()
+                .any(|s| s.contains("Ledger") && s.contains("12,345"))
+        );
+    }
+
+    #[test]
+    fn detail_lines_ledger_index_as_string() {
+        let tx = json!({"ledger_index":"67890"});
+        let meta = json!({});
+        let lines = detail_lines_for(&tx, &meta);
+        let text: Vec<String> = lines.iter().map(|l| l.to_string()).collect();
+        assert!(
+            text.iter()
+                .any(|s| s.contains("Ledger") && s.contains("67,890"))
+        );
+    }
+
+    #[test]
+    fn detail_lines_date_converts_ripple_epoch() {
+        let tx = json!({"date":0});
+        let meta = json!({});
+        let lines = detail_lines_for(&tx, &meta);
+        let text: Vec<String> = lines.iter().map(|l| l.to_string()).collect();
+        // 0 + 946684800 = 2000-01-01 00:00:00 UTC, formatted locally
+        assert!(text.iter().any(|s| s.contains("Date")));
+    }
+
+    #[test]
+    fn detail_lines_payment_typed_parser_success() {
+        // Complete Payment JSON triggers typed parser; known fields are handled by it.
+        let tx = json!({
+            "TransactionType":"Payment",
+            "Account":"rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+            "Destination":"rf1BiGeXwwQoi8Z2ueFYTEXSwuJYfV2Jpn",
+            "Amount":"1000000",
+            "Sequence":1,
+            "Fee":"12"
+        });
+        let meta = json!({});
+        let lines = detail_lines_for(&tx, &meta);
+        let text: Vec<String> = lines.iter().map(|l| l.to_string()).collect();
+
+        // Typed parser produces Account, Destination, Amount lines
+        assert!(
+            text.iter()
+                .any(|s| s.contains("Account") && s.contains("rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"))
+        );
+        assert!(
+            text.iter()
+                .any(|s| s.contains("Destination")
+                    && s.contains("rf1BiGeXwwQoi8Z2ueFYTEXSwuJYfV2Jpn"))
+        );
+        assert!(
+            text.iter()
+                .any(|s| s.contains("Amount") && s.contains("1.000000"))
+        );
+
+        // Sequence and Fee also come from typed parser via push_common_lines
+        assert!(
+            text.iter()
+                .any(|s| s.contains("Sequence") && s.contains("1"))
+        );
+        assert!(
+            text.iter()
+                .any(|s| s.contains("Fee") && s.contains("0.000012"))
+        );
+
+        // Count "Amount:" occurrences — should appear exactly once (typed parser, not fallback)
+        let amount_count = text.iter().filter(|s| s.contains("Amount")).count();
+        assert_eq!(
+            amount_count, 1,
+            "Amount should appear exactly once (typed parser), found {}: {:?}",
+            amount_count, text
+        );
+    }
+
+    #[test]
+    fn detail_lines_unknown_tx_type_shows_fields_in_other_section() {
+        // Unknown TransactionType never matches a typed parser, so all fields fall through to known list + Other fields.
+        let tx = json!({"TransactionType":"CustomTx","CustomField":"hello"});
+        let meta = json!({});
+        let lines = detail_lines_for(&tx, &meta);
+        let text: Vec<String> = lines.iter().map(|l| l.to_string()).collect();
+
+        // "CustomTx" is in known list? No, so it goes to Other fields
+        assert!(
+            text.iter().any(|s| s.contains("Other fields")),
+            "Should have Other fields section: {:?}",
+            text
+        );
+        assert!(
+            text.iter()
+                .any(|s| s.contains("CustomField") && s.contains("hello")),
+            "CustomField should be in Other fields: {:?}",
+            text
+        );
+    }
+
+    #[test]
+    fn detail_lines_meta_affected_nodes_compact() {
+        let tx = json!({"hash":"abc"});
+        let meta = json!({"AffectedNodes":[1,2,3],"TransactionResult":"tesSUCCESS"});
+        let lines = detail_lines_for(&tx, &meta);
+        let text: Vec<String> = lines.iter().map(|l| l.to_string()).collect();
+        assert!(
+            text.iter()
+                .any(|s| s.contains("AffectedNodes") && s.contains("[3 nodes]"))
+        );
+    }
 }

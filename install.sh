@@ -57,6 +57,7 @@ Options:
 
 Environment:
   INSTALL_DIR, BINARY_INSTALL, VERSION, NO_VERIFY (see script header)
+  NO_VERIFY=1            Skip checksum verification (binary install only). ⚠️  Increases MITM risk.
   Optional: GITHUB_TOKEN or GITHUB_API_TOKEN — authenticated GitHub REST (release / commit lookups)
 
 Examples:

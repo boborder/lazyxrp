@@ -40,8 +40,12 @@ pub struct Config {
 pub struct RawSigningConfig {
     /// Signing seed (family seed format, e.g. `sXXX...`).
     /// ⚠️  Plain text on disk — prefer the `XRPL_SEED` env var instead.
+    /// After `Config::new()` this is cleared to `None`; use [`secret_seed`] instead.
     #[serde(default)]
     pub seed: Option<String>,
+    /// Memory-masked seed (set by `Config::new()` from env/file/CLI).
+    #[serde(skip)]
+    pub secret_seed: Option<secrecy::SecretString>,
 }
 
 /// Security: never print the seed value in debug output.
@@ -49,6 +53,10 @@ impl fmt::Debug for RawSigningConfig {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("RawSigningConfig")
             .field("seed", &self.seed.as_ref().map(|_| "[REDACTED]"))
+            .field(
+                "secret_seed",
+                &self.secret_seed.as_ref().map(|_| "[REDACTED]"),
+            )
             .finish()
     }
 }
@@ -205,11 +213,30 @@ impl Config {
 
         let mut cfg: Self = builder.build()?.try_deserialize()?;
 
-        // Merge XRPL_SEED env var into signing config (env var takes priority)
+        // Security (S-003): if a signing seed is present in config, warn about file permissions
+        // BEFORE we move it out of the plain-text field.
+        let resolved_cfg_dir = cfg.resolved_config_dir();
+        if cfg.xrpl.signing.seed.is_some() {
+            for (file, _) in &config_files {
+                let path = resolved_cfg_dir.join(file);
+                if path.exists() {
+                    warn_if_config_world_readable(&path);
+                }
+            }
+        }
+
+        // Security: promote any plain-text seed (from config file) into secret_seed
+        // and wipe the field so Arc<Config> never carries an unmasked credential.
+        // Must happen BEFORE the env-var merge so env (XRPL_SEED) can override file.
+        if let Some(plain) = cfg.xrpl.signing.seed.take() {
+            cfg.xrpl.signing.secret_seed = Some(secrecy::SecretString::from(plain));
+        }
+
+        // Merge XRPL_SEED env var into signing config (env var takes priority over file)
         if let Ok(env_seed) = env::var(crate::signing::SEED_ENV) {
             let t = crate::signing::trim_family_seed(&env_seed);
             if !t.is_empty() {
-                cfg.xrpl.signing.seed = Some(t.to_string());
+                cfg.xrpl.signing.secret_seed = Some(secrecy::SecretString::from(t.to_string()));
             }
         }
 
@@ -228,17 +255,6 @@ impl Config {
             let t = v.trim();
             if !t.is_empty() {
                 cfg.xrpl.ws_server = Some(t.to_string());
-            }
-        }
-
-        // Security (S-003): if a signing seed is present in config, warn about file permissions.
-        let resolved_cfg_dir = cfg.resolved_config_dir();
-        if cfg.xrpl.signing.seed.is_some() {
-            for (file, _) in &config_files {
-                let path = resolved_cfg_dir.join(file);
-                if path.exists() {
-                    warn_if_config_world_readable(&path);
-                }
             }
         }
 

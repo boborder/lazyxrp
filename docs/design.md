@@ -24,9 +24,9 @@
 
 ### `src/xrpl/`（サブモジュール）
 
-- `client.rs`: `RpcClient` が RPC リクエスト（`server_info`, `fee`, `account_info`, `book_offers`, `account_objects`、`submit` 向け `submit_signed_tx` 等）と JSON 応答パース、`xrp_to_drops` を提供する。
+- `client.rs`: `RpcClient` が RPC リクエスト（`server_info`, `fee`, `account_info`, `book_offers`, `account_objects`、`simulate_tx`（署名前シミュレーション）、`ripple_path_find`、`submit` 向け `submit_signed_tx` 等）と JSON 応答パース、`xrp_to_drops` を提供する。
 - `ws.rs`: `start_ws_task(...)` が WS 購読ループを実行し、受信イベントを `Action` へ変換する。
-- `poll.rs`: `start_poll_task(...)` がポーリングループを実行し、定期/手動更新コマンドを処理する（AccountSet/Payment の署名送信経路を含む）。
+- `poll.rs`: `start_poll_task(...)` がポーリングループを実行し、定期/手動更新コマンドを処理する（**AccountSet / Payment（XRP + IOU） / SetRegularKey / EscrowCreate / OfferCreate** の `simulate_tx`→sign→`submit` 経路を含む）。
 - `cli_exec.rs`: `execute_cli_command(...)` が非 TUI の CLI 出力を担当する（`Send` などは `crate::signing` と連携）。
 - `types.rs`: パネル用行型・`BookPair`・`PollContext` / `PollCommand` 等。
 
@@ -37,7 +37,7 @@
 - `tx_detail/` がトランザクション詳細オーバーレイ（`TxDetailState` + `render_tx_detail`）を提供し、全 XRPL トランザクション型をパースしてポップアップ表示する。
 - `widgets.rs` が `titled_block`（共通枠スタイル）・トランザクション表行（`tx_table_row`、Hash / Dir / Type / Ledger / Result の5列）・表＋縦スクロール（`render_tx_scroll_table`）・スピナフレームのユーティリティを提供する。
 - `StatusBar` は接続状態・最終更新経過時間・監視アカウント・リフレッシュ中スピナ・エラーを1行に表示する。
-- `WalletPanel` は seed から導出したアドレス概要と直近トランザクションを表示する。直近トランザクション表は **Hash / Dir / Type / Ledger / Result** を列ごとに色分けし（ハッシュ列はテーマ色 `SECONDARY`/ターコイズ系、方向は ▼赤／▲緑／·灰、種別はアクセント、台帳番号はミュート、結果は成功/失敗色）、ウォレット枠にフォーカスかつトランザクション作成モーダルが閉じているとき **j/k・▲▼**（`SelectNext` / `SelectPrev`）で行選択とスクロールバー連動ができる。フォーカス状態で **Enter** を押すと、選択中のトランザクションの詳細ポップアップ（`TxDetailOverlay`）が開き、生 JSON を型ごとにパースして金額・宛先・日時・メタデータ等を表示する。ポップアップ表示中は **j/k・▲▼** でスクロール、**Enter / Esc** で閉じる。ウォレット枠にフォーカスした状態で **`t`** でモーダルを開き **AccountSet** と **Payment（XRP）** を選んでからフォームに入る。型選択は **Tab / jk / 矢印**（一覧の j/k とは排他的—モーダル表示中は一覧側に効かない）。AccountSet は **Tab / `[` `]`** で行移動、**`e`** 編集、**`s`** 送信。Payment はモーダル内に送信プレビュー（緑＝送信可能、橙＝未入力/不正）を出し、**Tab / `[` `]`** と **Enter**（未編集で編集開始／編集中は次フィールド）で行を動かし、**`s`** は未編集時または **^S** で送信キューへ入れる。送信前に宛先・正の数として amount を検証し、成功時はモーダルを閉じてウォレット下段に緑のメッセージ、失敗は赤を表示する。AccountSet はモーダル内で **SetFlag / ClearFlag（`parse_account_set_flag_choice` と一致するラベルのみ有効）**、domain ASCII、tick size、transfer rate を編集し、送信成功時もモーダルを閉じる。Payment は送信先（classic または X-address）と XRP 数量を入力し、`PollCommand::PaymentSubmit` 経由で `create_and_sign_payment` → `submit`。メインネット書き込みは CLI `--yes` が必要。seed 未設定・無効時の表示は従来どおり。Watch 起動時は **`main` で一度だけ構築した `Config`（`XRPL_SEED` マージ済み）を `App::new` に渡す** — `SigningConfig::prime_seed_source` が env を消したあとに `Config::new()` を再実行するとシードが復元できない。
+- `WalletPanel` は seed から導出したアドレス概要（Account, Balance, Sequence, Flags チップ, RegularKey, Domain デコード表示）と直近トランザクションを表示する。直近トランザクション表は **Hash / Dir / Type / Ledger / Result** を列ごとに色分けし（ハッシュ列はテーマ色 `SECONDARY`/ターコイズ系、方向は ▼赤／▲緑／·灰、種別はアクセント、台帳番号はミュート、結果は成功/失敗色）、ウォレット枠にフォーカスかつトランザクション作成モーダルが閉じているとき **j/k・▲▼**（`SelectNext` / `SelectPrev`）で行選択とスクロールバー連動ができる。フォーカス状態で **Enter** を押すと、選択中のトランザクションの詳細ポップアップ（`TxDetailOverlay`）が開き、生 JSON を型ごとにパースして金額・宛先・日時・メタデータ等を表示する。ポップアップ表示中は **j/k・▲▼** でスクロール、**Enter / Esc** で閉じる。ウォレット枠にフォーカスした状態で **`t`** でコンポーザーモーダルを開き **AccountSet** または **Payment（XRP / IOU）** を選んでからフォームに入る。型選択は **Tab / jk / 矢印**（一覧の j/k とは排他的—モーダル表示中は一覧側に効かない）。AccountSet は **Tab / `[` `]`** で行移動、**`e`** 編集、**`s`** 送信。Payment はモーダル内に送信プレビュー（緑＝送信可能、橙＝未入力/不正）を出し、**`i`** で XRP⇔IOU モード切替、IOU 時は 4 行（Destination, Currency, Issuer, Amount）、**Tab / `[` `]`** と **Enter**（未編集で編集開始／編集中は次フィールド）で行を動かし、**`s`** は未編集時または **^S** で送信キューへ入れる。送信前に宛先・正の数として amount を検証（IOU 時は currency 空でない・issuer が `r` で始まること）、成功時はモーダルを閉じてウォレット下段に緑のメッセージ、失敗は赤を表示する。AccountSet はモーダル内で **SetFlag / ClearFlag（`parse_account_set_flag_choice` と一致するラベルのみ有効）**、domain ASCII、tick size、transfer rate を編集し、送信成功時もモーダルを閉じる。全 TX 送信は **simulate フロー**（`simulate_tx`→`engine_result` チェック→`Sequence`/`Fee` 抽出→`sign`→`submit`）で実行する。メインネット書き込みは CLI `--yes` が必要。seed 未設定・無効時の表示は従来どおり。Watch 起動時は **`main` で一度だけ構築した `Config`（`XRPL_SEED` マージ済み）を `App::new` に渡す** — `SigningConfig::prime_seed_source` が env を消したあとに `Config::new()` を再実行するとシードが復元できない。
 
 ### `src/config.rs`
 
@@ -303,7 +303,9 @@ mainnet 時は警告色（赤系）で強調する。
 - `SigningConfig` 構造体を導入し、`App` や `run_cli` に渡す。
 - mainnet 書き込み系操作実行前に `prompt_mainnet_confirmation(operation: &str, network: &Network, skip_prompt: bool) -> bool` で確認プロンプト（`skip_prompt` は `--yes` 相当）。
 - `--yes` フラグで確認スキップ可能にする（CI/スクリプト用途）。
-- Payment 署名は xrpl-rust 1.1 の `wallet::Wallet` と `transaction::sign`（`models::transactions::payment::Payment`）を利用し、`binarycodec::encode` で `submit` 用の `tx_blob` に変換する。`sEd...`（Ed25519 family seed）は xrpl-rust の `decode_seed` が secp 経路に落ちるケースがあるため、lazyxrp では `signing::wallet_from_family_seed` で Ed25519 プレフィックス専用デコードを先に行う。
+- Payment 署名は xrpl-rust 1.1 の `wallet::Wallet` と `transaction::sign`（`models::transactions::payment::Payment`）を利用し、`binarycodec::encode` で `submit` 用の `tx_blob` に変換する。IOU Payment は `Amount` フィールドに `{currency, issuer, value}` オブジェクトを使用し、`create_and_sign_payment` が `iou_currency`/`iou_issuer` Option パラメータにより分岐する。`sEd...`（Ed25519 family seed）は xrpl-rust の `decode_seed` が secp 経路に落ちるケースがあるため、lazyxrp では `signing::wallet_from_family_seed` で Ed25519 プレフィックス専用デコードを先に行う。
+- **全 TX 送信は simulate フロー**：最小限の unsigned `tx_json` を構築→`simulate_tx` 実行→`engine_result == "tesSUCCESS"` 確認→サーバーが自動入力した `Sequence`/`Fee`/`ledger_index` を抽出→署名・エンコード→`submit`。これにより、手動での Sequence 管理や Fee 見積もりが不要になる。
+- **対応 TX 種別**：`Payment`（XRP + IOU）、`AccountSet`（SetFlag/ClearFlag/Domain/TickSize/TransferRate）、`SetRegularKey`（バックエンド準備済、UI はキー生成待ち）、`EscrowCreate`（バックエンド準備済）、`OfferCreate`（バックエンド準備済、compact spec `XRP:drops` / `CUR:issuer:value`）。`signing.rs` に各 `create_and_sign_*` 関数完備。`poll.rs` に `submit_*_transaction` 完備。
 
 ---
 

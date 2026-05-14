@@ -66,3 +66,9 @@ pub fn error_style() -> Style {
 pub fn warning_style() -> Style {
     Style::new().fg(WARNING)
 }
+
+pub fn flag_style() -> Style {
+    Style::new()
+        .fg(Color::Rgb(100, 200, 255))
+        .add_modifier(Modifier::BOLD)
+}

@@ -4,11 +4,6 @@ Generated: 2026-05-01 | Scope: Full codebase (`src/`, `install.sh`, `docs/`)
 
 ## 未対応・確認事項
 
-### S-005: `install.sh` で `NO_VERIFY=1` による検証スキップ
-
-- ユーザーが意図せず checksum 検証を無効化したままバイナリをインストールできる。
-- 現状の設計はドキュメント化されており許容範囲だが、デフォルトの警告をより明確にすることを推奨。
-
 ### S-009: `--self-uninstall`（ユーザー主導でバイナリと設定データを削除）
 
 - `std::env::current_exe()` のファイルと `.bak` を削除し、`Config` で解決した config/data ディレクトリを `remove_dir_all` する。
@@ -26,3 +21,6 @@ Generated: 2026-05-01 | Scope: Full codebase (`src/`, `install.sh`, `docs/`)
 | S-006 | `tui.rs` の `Drop` 実装で `unwrap()` を使用 | `if let Err(e) = self.exit() { eprintln!(...) }` |
 | S-007 | 組み込み設定のパース | ビルド時 `expect` で開発時検知 |
 | S-008 | tracing ログのデフォルトレベルが INFO | S-001 対処後に問題なし |
+| S-005 | `install.sh` で `NO_VERIFY=1` の警告が不十分 | `usage()` / ヘッダに MITM リスク警告を追加 |
+| S-010 | `Config` が平文 `seed` を `Arc<Config>` として継続保持 | `RawSigningConfig` に `secret_seed: Option<SecretString>` を追加し、`Config::new()` / `main.rs` / `app.rs` で平文を即座にクリア |
+| S-011 | CLI `--seed` がプロセス引数に残り `ps` から閲覧可能 | `README.md` Environment Variables セクションに警告を追加 |

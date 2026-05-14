@@ -168,7 +168,7 @@ pub(crate) fn offer_create_detail_lines<'a>(_tx: &'a Value) -> Option<Vec<Line<'
     ]));
 
     if let Some(exp) = tx.expiration {
-        let unix = exp as i64 + 946_684_800;
+        let unix = exp as i64 + super::RIPPLE_EPOCH;
         let ts = crate::components::shared::fmt::fmt_local_datetime(unix);
         lines.push(Line::from(vec![
             Span::styled("Expiration", theme::accent_style()),
@@ -288,7 +288,7 @@ pub(crate) fn check_create_detail_lines<'a>(_tx: &'a Value) -> Option<Vec<Line<'
         ]));
     }
     if let Some(exp) = tx.expiration {
-        let unix = exp as i64 + 946_684_800;
+        let unix = exp as i64 + super::RIPPLE_EPOCH;
         let ts = crate::components::shared::fmt::fmt_local_datetime(unix);
         lines.push(Line::from(vec![
             Span::styled("Expiration", theme::accent_style()),
@@ -369,7 +369,7 @@ pub(crate) fn escrow_create_detail_lines<'a>(_tx: &'a Value) -> Option<Vec<Line<
         ]));
     }
     if let Some(finish) = tx.finish_after {
-        let unix = finish as i64 + 946_684_800;
+        let unix = finish as i64 + super::RIPPLE_EPOCH;
         let ts = crate::components::shared::fmt::fmt_local_datetime(unix);
         lines.push(Line::from(vec![
             Span::styled("FinishAfter", theme::accent_style()),
@@ -378,7 +378,7 @@ pub(crate) fn escrow_create_detail_lines<'a>(_tx: &'a Value) -> Option<Vec<Line<
         ]));
     }
     if let Some(cancel) = tx.cancel_after {
-        let unix = cancel as i64 + 946_684_800;
+        let unix = cancel as i64 + super::RIPPLE_EPOCH;
         let ts = crate::components::shared::fmt::fmt_local_datetime(unix);
         lines.push(Line::from(vec![
             Span::styled("CancelAfter", theme::accent_style()),
@@ -511,7 +511,7 @@ pub(crate) fn payment_channel_create_detail_lines<'a>(_tx: &'a Value) -> Option<
         ]));
     }
     if let Some(cancel) = tx.cancel_after {
-        let unix = cancel as i64 + 946_684_800;
+        let unix = cancel as i64 + super::RIPPLE_EPOCH;
         let ts = crate::components::shared::fmt::fmt_local_datetime(unix);
         lines.push(Line::from(vec![
             Span::styled("CancelAfter", theme::accent_style()),
@@ -549,7 +549,7 @@ pub(crate) fn payment_channel_fund_detail_lines<'a>(_tx: &'a Value) -> Option<Ve
     ]));
 
     if let Some(exp) = tx.expiration {
-        let unix = exp as i64 + 946_684_800;
+        let unix = exp as i64 + super::RIPPLE_EPOCH;
         let ts = crate::components::shared::fmt::fmt_local_datetime(unix);
         lines.push(Line::from(vec![
             Span::styled("Expiration", theme::accent_style()),
@@ -801,7 +801,7 @@ pub(crate) fn nftoken_create_offer_detail_lines<'a>(_tx: &'a Value) -> Option<Ve
         ]));
     }
     if let Some(exp) = tx.expiration {
-        let unix = exp as i64 + 946_684_800;
+        let unix = exp as i64 + super::RIPPLE_EPOCH;
         let ts = crate::components::shared::fmt::fmt_local_datetime(unix);
         lines.push(Line::from(vec![
             Span::styled("Expiration", theme::accent_style()),
