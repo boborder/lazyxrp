@@ -168,7 +168,7 @@ cargo run --bin lazyxrp -- --network testnet info
 
 ## Contributing
 
-Start with [`AGENTS.md`](./AGENTS.md) — minimal bar is `cargo fmt` / `cargo check`, and keep `docs/` aligned when you change behavior or documented workflows. Policy detail: [`docs/agents/README.md`](./docs/agents/README.md).
+Start with [`AGENTS.md`](./AGENTS.md) — minimal bar is `cargo fmt` / `cargo check`, and keep `docs/` aligned when you change behavior or documented workflows.
 
 ## Documentation
 

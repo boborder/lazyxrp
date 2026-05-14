@@ -64,12 +64,7 @@ lazyxrp/
 │   ├── logging.rs
 │   └── errors.rs
 └── docs/
-    ├── agents/
-    │   ├── README.md
-    │   ├── execution-contract.md
-    │   ├── development-policy.md
-    │   ├── testing.md
-    │   └── project-reference.md
+    ├── README.md          # ドキュメント導線と一覧
     ├── architecture/
     │   ├── c4-context.md
     │   └── c4-containers.md
@@ -79,7 +74,7 @@ lazyxrp/
     ├── test.md
     ├── tasks.md
     ├── directory.md
-    ├── reference.md
+    ├── references.md
     ├── security.md
     └── problems.md
 ```
@@ -95,7 +90,7 @@ lazyxrp/
 - `.env.example`: `XRPL_*` 環境変数の例（任意。一覧は `docs/tech.md` と実装を参照）。
 - `install.sh`: インタラクティブインストーラ（必須は `curl` のみ）。プロンプトとメッセージは英語。`--help` で CLI 一覧（`--method cargo|binary`、`--install-rust` / `--no-install-rust`、`--install-mise` / `--no-install-mise`、`-q`）。**手動アンインストール**手順のみの表示は `--uninstall-help`（`lazyxrp --self-uninstall` の案内や、任意で OS 別の設定・データ `rm` の例、`LAZYXRP_CONFIG` / `LAZYXRP_DATA` 等の注意あり）。TTY 時はアニメ付き対話で、cargo / mise 未導入ならインストールを提案；非 TTY / `-q` は既定の自動応答。
 - `.mise.toml`: [mise](https://mise.jdx.dev/) タスク（例: `install`、`tags`（一覧）、`tag`（`Cargo.toml` から注釈付きタグ作成）、`tag-push`（作成して `origin` にその1本だけ push）、`tags-push`（ローカルタグを全部 push））。
-- `AGENTS.md`: プロジェクト運用ルールと実行契約の要約（禁止事項・クイックリファレンスを含む）。詳細は `docs/agents/`（入口は `docs/agents/README.md`）。
+- `AGENTS.md`: プロジェクト運用ルールと実行契約（禁止事項・クイックリファレンスを含む）。graphify の構造情報も参照。
 
 ## 3. `src/` 配下の責務
 
@@ -150,7 +145,7 @@ lazyxrp/
 
 ## 7. `docs/` 配下の責務
 
-- `agents/`: ルート `AGENTS.md` からリンクされるエージェント向け詳細。入口は `README.md`（各サブドキュメントへの索引）。実行契約全文、開発ポリシー、TDD 要約、プロジェクト参照。禁止事項の要約はルート `AGENTS.md` の「Prohibitions」。
+- `README.md`: 各ドキュメントへの導線と一覧。エージェント向けルールはルート `AGENTS.md` に集約済み。
 - `architecture/`: C4 モデル（`c4-context.md`, `c4-containers.md`）。高レベル境界とコンテナ分解。
 - `requirements.md`: 要件定義（機能/非機能）。
 - `design.md`: アーキテクチャ設計とデータフロー。
@@ -158,6 +153,7 @@ lazyxrp/
 - `test.md`: テスト方針、TC-ID 付きケースリスト、TDD ロードマップ、実行コマンド。
 - `tasks.md`: 現在のタスク状態と優先度。
 - `directory.md`: このファイル。構成と責務の索引。
-- `reference.md`: 参照先リンクや補助情報の一覧。
+- `references.md`: 参照先リンクや補助情報の一覧。
 - `security.md`: セキュリティ設計と脅威モデル、対策の一覧。
 - `problems.md`: 既知の問題と対処方針。
+- `benchmark.md`: ベンチマークスuiteの使い方、計測項目、CI統合方法。

@@ -1,9 +1,9 @@
 # Test Strategy & Case List
 
-> Last Updated: 2026-05-12
+> Last Updated: 2026-05-14
 > Target: lazyxrp (Rust TUI for XRPL)
-> Total Test Cases: 75 (P0: 10, P1: 44, P2: 20, P3: 1)
-> Implemented: 75 / 75 (100%)
+> Total Test Cases: 78 (P0: 10, P1: 44, P2: 23, P3: 1)
+> Implemented: 78 / 78 (100%)
 > Estimated Effort (full catalog): 41h
 
 ---

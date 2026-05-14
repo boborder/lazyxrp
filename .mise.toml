@@ -1,6 +1,6 @@
 [tools]
 rust = "stable"
-# cargo-binstall = "latest"
+hyperfine = "latest"
 
 # https://mise.jdx.dev/tasks/ — run from repo root: mise run install
 [tasks.install]
@@ -10,6 +10,14 @@ run = ". ./install.sh -q"
 [tasks.tags]
 description = "List local git tags"
 run = "git tag -l"
+
+[tasks.bench]
+description = "Run full benchmark suite (cold + warm build; ~10 min)"
+run = "./benchmark.sh"
+
+[tasks.bench-fast]
+description = "Run fast benchmark suite (skips clean build; ~3 min)"
+run = "./benchmark.sh --fast"
 
 # Cargo.toml を必ず更新する
 [tasks.tag-push]

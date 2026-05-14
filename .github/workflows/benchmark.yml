@@ -1,0 +1,82 @@
+name: Benchmark
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      strict:
+        description: 'Fail on any benchmark timeout/error (--ci)'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
+
+jobs:
+  benchmark:
+    name: Build & Startup Benchmark
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install bc (for benchmark arithmetic)
+        run: sudo apt-get update && sudo apt-get install -y bc
+
+      - name: Install hyperfine & cargo-bloat
+        run: cargo install hyperfine cargo-bloat
+
+      - name: Run benchmark suite
+        id: benchmark
+        run: |
+          if [[ "${{ github.event.inputs.strict }}" == "true" ]]; then
+            ./benchmark.sh --json --ci | tee benchmark.json
+          else
+            ./benchmark.sh --json | tee benchmark.json
+          fi
+          # Emit last line (JSON) as step output
+          echo "json=$(tail -n1 benchmark.json)" >> "$GITHUB_OUTPUT"
+        shell: bash
+
+      - name: Upload benchmark results
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-results
+          path: |
+            benchmark.json
+            target/bloat-report.txt
+            target/timings-report.html
+
+      - name: Render benchmark summary
+        uses: actions/github-script@v7
+        with:
+          script: >-
+            const fs = require('fs');
+            const raw = fs.readFileSync('benchmark.json', 'utf8').trim().split('\n').pop();
+            const data = JSON.parse(raw);
+
+            const rows = data.benchmarks.map(b => {
+              const icon = b.result === 'PASS' ? '✅' : b.result === 'FAIL' ? '❌' : b.result === 'TIMEOUT' ? '⏱️' : '⏭️';
+              const value = b.name === 'release_binary_size' ? b.message : `${b.value}${b.unit}`;
+              return `| ${b.name} | ${icon} ${b.result} | ${value} | ${b.message} |`;
+            }).join('\n');
+
+            let cacheSection = '';
+            if (data.cache_comparison) {
+              const c = data.cache_comparison;
+              cacheSection = `\n### 📦 Cache Comparison (Cold vs Warm)\n\n| Metric | Value |\n|--------|-------|\n| Cold build (clean) | ${c.cold}s |\n| Warm build (cached) | ${c.warm}s |\n| Time saved | ${c.saved_seconds}s (${c.saved_percent}%) |\n`;
+            }
+
+            const summary = `## 📊 Benchmark Results\n\n| Check | Result | Value | Note |\n|-------|--------|-------|------|\n${rows}\n\n**Summary:** ${data.summary.pass} passed, ${data.summary.fail} failed, ${data.summary.skip} skipped\n${cacheSection}\n`;
+            await core.summary.addRaw(summary).write();

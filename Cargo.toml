@@ -1,6 +1,6 @@
 [package]
 name = "lazyxrp"
-version = "0.1.12"
+version = "0.1.13"
 edition = "2024"
 rust-version = "1.91"
 description = "Terminal UI for the XRP Ledger — monitor accounts, order books, NFTs, trust lines, and AMM pools"
@@ -16,7 +16,6 @@ build = "build.rs"
 [[bin]]
 name = "lazyxrp"
 path = "src/main.rs"
-
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
