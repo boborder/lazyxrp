@@ -13,7 +13,7 @@ use crate::signing::{self, SigningConfig};
 use super::backoff::next_backoff_secs;
 use super::client::{RPC_TIMEOUT, RpcClient, is_not_found_error, xrp_to_drops};
 use super::types::{
-    AccountSetSubmitParams, BookPair, PaymentSubmitParams, PollCommand, PollContext,
+    AccountSetSubmitParams, BookPair, OracleId, PaymentSubmitParams, PollCommand, PollContext,
 };
 
 pub fn start_poll_task(
@@ -38,9 +38,11 @@ async fn poll_batch(
     rpc: &RpcClient,
     watch_address: &str,
     book_pair: &BookPair,
+    oracles: &[OracleId],
+    oracle_pairs: &[crate::xrpl::OraclePricePair],
     action_tx: &UnboundedSender<Action>,
 ) -> bool {
-    let (r_srv, r_fee, r_acc, r_book) = tokio::join!(
+    let (r_srv, r_fee, r_acc, r_book, r_nfts, r_lines, r_tx) = tokio::join!(
         tokio::time::timeout(RPC_TIMEOUT, rpc.server_info()),
         tokio::time::timeout(RPC_TIMEOUT, rpc.fee()),
         tokio::time::timeout(RPC_TIMEOUT, rpc.account_info(watch_address)),
@@ -54,9 +56,6 @@ async fn poll_batch(
                 book_pair.limit
             )
         ),
-    );
-    tokio::time::sleep(Duration::from_millis(500)).await;
-    let (r_nfts, r_lines, r_tx) = tokio::join!(
         tokio::time::timeout(RPC_TIMEOUT, rpc.account_nfts(watch_address)),
         tokio::time::timeout(RPC_TIMEOUT, rpc.account_lines(watch_address)),
         tokio::time::timeout(RPC_TIMEOUT, rpc.account_tx(watch_address, 20, None)),
@@ -119,6 +118,51 @@ async fn poll_batch(
         Err(_) => {
             if let Err(e) = action_tx.send(Action::XrplError("account_tx: timeout".into())) {
                 warn!(?e, "action channel closed");
+            }
+        }
+    }
+    // Oracle aggregate prices (opt-in)
+    if !oracles.is_empty() && !oracle_pairs.is_empty() {
+        let futs: Vec<_> = oracle_pairs
+            .iter()
+            .map(|pair| async move {
+                let result = tokio::time::timeout(
+                    RPC_TIMEOUT,
+                    rpc.get_aggregate_price(oracles, &pair.base_asset, &pair.quote_asset),
+                )
+                .await;
+                (pair, result)
+            })
+            .collect();
+        let results = futures::future::join_all(futs).await;
+        let mut prices = Vec::new();
+        for (pair, result) in results {
+            let label =
+                format!("get_aggregate_price({}/{})", pair.base_asset, pair.quote_asset);
+            match result {
+                Ok(Ok(price)) => {
+                    any_ok = true;
+                    prices.push(price);
+                }
+                Ok(Err(e)) => {
+                    if let Err(e2) =
+                        action_tx.send(Action::XrplError(format!("{label}: {e}")))
+                    {
+                        warn!(?e2, "action channel closed");
+                    }
+                }
+                Err(_) => {
+                    if let Err(e2) =
+                        action_tx.send(Action::XrplError(format!("{label}: timeout")))
+                    {
+                        warn!(?e2, "action channel closed");
+                    }
+                }
+            }
+        }
+        if !prices.is_empty() {
+            if let Err(e) = action_tx.send(Action::XrplOraclePrices(prices)) {
+                warn!(?e, "action channel closed (get_aggregate_price)");
             }
         }
     }
@@ -592,6 +636,8 @@ async fn run_poll_loop(
         poll_interval,
         seed_address,
         network_watch,
+        oracles,
+        oracle_pairs,
     } = ctx;
     let rpc = match RpcClient::connect(&rpc_url) {
         Ok(rpc) => rpc,
@@ -613,7 +659,15 @@ async fn run_poll_loop(
                 if backoff_secs > 0 {
                     tokio::time::sleep(Duration::from_secs(backoff_secs)).await;
                 }
-                let batch_ok = poll_batch(&rpc, &watch_address, &book_pair, &action_tx).await;
+                let batch_ok = poll_batch(
+                    &rpc,
+                    &watch_address,
+                    &book_pair,
+                    &oracles,
+                    &oracle_pairs,
+                    &action_tx,
+                )
+                .await;
                 if let Some(ref addr) = seed_address {
                     poll_wallet_overview(&rpc, addr, &action_tx).await;
                 }
@@ -625,6 +679,8 @@ async fn run_poll_loop(
                 last_poll = Some(std::time::Instant::now());
             }
             Some(()) = poll_trigger_rx.recv() => {
+                // Coalesce rapid trigger bursts
+                while poll_trigger_rx.try_recv().is_ok() {}
                 if let Some(last) = last_poll
                     && last.elapsed() < MIN_POLL_INTERVAL
                 {
@@ -633,7 +689,15 @@ async fn run_poll_loop(
                 if backoff_secs > 0 {
                     tokio::time::sleep(Duration::from_secs(backoff_secs)).await;
                 }
-                let batch_ok = poll_batch(&rpc, &watch_address, &book_pair, &action_tx).await;
+                let batch_ok = poll_batch(
+                    &rpc,
+                    &watch_address,
+                    &book_pair,
+                    &oracles,
+                    &oracle_pairs,
+                    &action_tx,
+                )
+                .await;
                 if let Some(ref addr) = seed_address {
                     poll_wallet_overview(&rpc, addr, &action_tx).await;
                 }

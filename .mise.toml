@@ -1,6 +1,7 @@
 [tools]
 rust = "stable"
 hyperfine = "latest"
+solidity = "latest"
 
 # https://mise.jdx.dev/tasks/ — run from repo root: mise run install
 [tasks.install]

@@ -36,9 +36,12 @@
 
 - **Severity**: Low
 - **Confidence**: Low
+- **Status**: Partially mitigated (Stage 3, 2026-05-15)
 - **Evidence**: `action_tx`, `poll_tx`, `poll_trigger_tx` are all `UnboundedSender`. On fast networks with rapid ledger closes, `poll_trigger_tx` could accumulate events if poll task is slow.
 - **Failure scenario**: Busy network → 50 ledger closes in 1 second → 50 triggers queued → poll task processes all serially → each fires a poll → UI lag.
 - **Affected files**: `src/app.rs`, `src/xrpl/ws.rs`, `src/xrpl/poll.rs`
+- **Mitigation applied**: `poll_trigger_rx.try_recv()` loop in `run_poll_loop()` coalesces accumulated triggers before each poll execution.
+- **Remaining risk**: `action_tx` and `poll_tx` are still unbounded; backpressure not yet addressed.
 - **Suggested test**: Benchmark with simulated rapid trigger events.
 - **Suggested fix**: Use `try_send()` with drop-oldest semantics for trigger channel, or coalesce triggers.
 

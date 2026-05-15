@@ -78,6 +78,7 @@
 - 設定ファイル（`Config::xrpl`）:
   - 探索順序: `$XDG_CONFIG_HOME/lazyxrp/config.toml` → `~/.config/lazyxrp/config.toml`
   - `account`, `issuer`, `currency`, `currency_code`, `offer_limit`, `poll_interval_ms`
+  - `oracles`, `oracle_base_asset`, `oracle_quote_asset`（`get_aggregate_price` 用）
   - `currency` は表示名、`currency_code` は `book_offers` / price RPC に渡す 160-bit 通貨コード（未設定時は `"USD"`）
   - `issuer` は未設定時に mainnet Bitstamp USD issuer `rvYAfWj5gh67oV6fW32ZzP3Aw4Eubs59B` にフォールバックする
 

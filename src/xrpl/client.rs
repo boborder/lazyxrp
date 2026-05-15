@@ -5,10 +5,10 @@ use xrpl::asynch::clients::{AsyncJsonRpcClient, XRPLClient};
 
 use super::json_util::{extract_json_u32, json_str};
 use super::types::{
-    AccountSummary, AccountTxPage, AmmSummary, ArcValue, FeeSummary, LedgerObjectRow,
-    NFTOKEN_FLAG_MUTABLE, NftRow, OfferRow, PathAlternative, RipplePathFindResult,
-    ServerInfoSummary, SimulateResult, TrustLineRow, TxRow, TxSummary, WalletProposeResult,
-    XrplRlusdPrice,
+    AccountSummary, AccountTxPage, AggregatePrice, AmmSummary, ArcValue, FeeSummary,
+    LedgerObjectRow, NFTOKEN_FLAG_MUTABLE, NftRow, OfferRow, OracleId, PathAlternative, PriceStats,
+    RipplePathFindResult, ServerInfoSummary, SimulateResult, TrustLineRow, TxRow, TxSummary,
+    WalletProposeResult, XrplRlusdPrice,
 };
 
 pub(crate) const RPC_TIMEOUT: Duration = Duration::from_secs(20);
@@ -378,6 +378,34 @@ impl RpcClient {
         let value = self.rpc_value("wallet_propose", params).await?;
         parse_wallet_propose(&value)
     }
+
+    pub async fn get_aggregate_price(
+        &self,
+        oracles: &[OracleId],
+        base_asset: &str,
+        quote_asset: &str,
+    ) -> color_eyre::Result<AggregatePrice> {
+        let oracle_array: Vec<Value> = oracles
+            .iter()
+            .map(|o| {
+                json!({
+                    "account": o.account,
+                    "oracle_document_id": o.oracle_document_id,
+                })
+            })
+            .collect();
+        let params = json!({
+            "ledger_index": "current",
+            "base_asset": base_asset,
+            "quote_asset": quote_asset,
+            "oracles": oracle_array,
+        });
+        let value = self.rpc_value("get_aggregate_price", params).await?;
+        let mut price = parse_aggregate_price_value(&value)?;
+        price.base_asset = base_asset.to_string();
+        price.quote_asset = quote_asset.to_string();
+        Ok(price)
+    }
 }
 
 fn check_xrpl_error(value: &Value) -> color_eyre::Result<()> {
@@ -494,6 +522,51 @@ fn parse_ripple_path_find(value: &Value) -> color_eyre::Result<RipplePathFindRes
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
+fn parse_aggregate_price_value(value: &Value) -> color_eyre::Result<AggregatePrice> {
+    let result = value.get("result").unwrap_or(&Value::Null);
+
+    let entire_set = result
+        .get("entire_set")
+        .ok_or_else(|| color_eyre::eyre::eyre!("get_aggregate_price: missing entire_set"))?;
+    let entire = PriceStats {
+        mean: entire_set
+            .get("mean")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        size: entire_set.get("size").and_then(Value::as_u64).unwrap_or(0) as u32,
+        standard_deviation: entire_set
+            .get("standard_deviation")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+    };
+
+    let trimmed_set = result.get("trimmed_set").map(|t| PriceStats {
+        mean: t
+            .get("mean")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        size: t.get("size").and_then(Value::as_u64).unwrap_or(0) as u32,
+        standard_deviation: t
+            .get("standard_deviation")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+    });
+
+    let time = result.get("time").and_then(Value::as_u64).unwrap_or(0);
+
+    Ok(AggregatePrice {
+        entire_set: entire,
+        trimmed_set,
+        time,
+        base_asset: String::new(),
+        quote_asset: String::new(),
+    })
+}
+
 fn parse_wallet_propose(value: &Value) -> color_eyre::Result<WalletProposeResult> {
     let result = value.get("result").unwrap_or(&Value::Null);
 
@@ -828,15 +901,15 @@ fn parse_one_ledger_object_row(obj: &Value) -> Option<LedgerObjectRow> {
 }
 
 fn summarize_ledger_object(obj: &Value) -> String {
-    let t = json_str(obj, &["LedgerEntryType"]);
-    let dest = json_str(obj, &["Destination"]);
-    match t {
+    let ledger_entry_type = json_str(obj, &["LedgerEntryType"]);
+    let destination = json_str(obj, &["Destination"]);
+    match ledger_entry_type {
         "Check" => {
             let amt = format_amount(obj.get("SendMax"));
-            if dest.is_empty() {
+            if destination.is_empty() {
                 format!("Check · {amt}")
             } else {
-                format!("→ {dest} · {amt}")
+                format!("→ {destination} · {amt}")
             }
         }
         "Ticket" => format!("seq {}", extract_json_u32(obj, &["TicketSequence"])),
@@ -847,29 +920,33 @@ fn summarize_ledger_object(obj: &Value) -> String {
         }
         "PayChannel" => {
             let amt = format_amount(obj.get("Amount"));
-            if dest.is_empty() {
+            if destination.is_empty() {
                 format!("PayChan · {amt}")
             } else {
-                format!("→ {dest} · {amt}")
+                format!("→ {destination} · {amt}")
             }
         }
         "Escrow" => {
             let amt = format_amount(obj.get("Amount"));
-            if dest.is_empty() {
+            if destination.is_empty() {
                 format!("Escrow · {amt}")
             } else {
-                format!("→ {dest} · {amt}")
+                format!("→ {destination} · {amt}")
             }
         }
         "DepositPreauth" => {
-            let a = json_str(obj, &["Authorize"]);
-            format!("auth {a}")
+            let authorized_account = json_str(obj, &["Authorize"]);
+            format!("auth {authorized_account}")
         }
         "SignerList" => format!("quorum {}", extract_json_u32(obj, &["SignerQuorum"])),
         _ => {
-            let s = obj.to_string();
-            let t = s.chars().take(88).collect::<String>();
-            if s.len() > 88 { format!("{t}…") } else { t }
+            let raw_json = obj.to_string();
+            let truncated_json = raw_json.chars().take(88).collect::<String>();
+            if raw_json.len() > 88 {
+                format!("{truncated_json}…")
+            } else {
+                truncated_json
+            }
         }
     }
 }
@@ -1412,5 +1489,51 @@ mod tests {
         assert!(r.public_key.starts_with('a'));
         assert_eq!(r.key_type, "ed25519");
         assert!(!r.master_seed_hex.is_empty());
+    }
+
+    /// TC-083: get_aggregate_price parser — full response
+    #[test]
+    fn parse_aggregate_price_full() {
+        let value = json!({
+            "result": {
+                "entire_set": {
+                    "mean": "0.5234",
+                    "size": 3,
+                    "standard_deviation": "0.0012"
+                },
+                "trimmed_set": {
+                    "mean": "0.5233",
+                    "size": 2,
+                    "standard_deviation": "0.0008"
+                },
+                "time": 1715779200
+            }
+        });
+        let price = parse_aggregate_price_value(&value).expect("should parse");
+        assert_eq!(price.entire_set.mean, "0.5234");
+        assert_eq!(price.entire_set.size, 3);
+        assert_eq!(price.entire_set.standard_deviation, "0.0012");
+        assert_eq!(price.trimmed_set.as_ref().unwrap().mean, "0.5233");
+        assert_eq!(price.trimmed_set.as_ref().unwrap().size, 2);
+        assert_eq!(price.time, 1715779200);
+    }
+
+    /// TC-084: get_aggregate_price parser — trimmed_set omitted
+    #[test]
+    fn parse_aggregate_price_no_trim() {
+        let value = json!({
+            "result": {
+                "entire_set": {
+                    "mean": "1.0",
+                    "size": 1,
+                    "standard_deviation": "0"
+                },
+                "time": 0
+            }
+        });
+        let price = parse_aggregate_price_value(&value).expect("should parse without trim");
+        assert_eq!(price.entire_set.mean, "1.0");
+        assert!(price.trimmed_set.is_none());
+        assert_eq!(price.time, 0);
     }
 }

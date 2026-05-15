@@ -21,7 +21,7 @@ use crate::{
 pub struct AmmPanel {
     amm: Option<AmmSummary>,
     tick: usize,
-    received: bool,
+    has_received_amm_info: bool,
     error: Option<String>,
     pub is_focused: bool,
 }
@@ -41,11 +41,11 @@ impl Component for AmmPanel {
             Action::Tick => self.tick = self.tick.wrapping_add(1),
             Action::XrplAmmInfo(amm) => {
                 self.amm = Some((**amm).clone());
-                self.received = true;
+                self.has_received_amm_info = true;
                 self.error = None;
             }
             Action::XrplError(e) if e.contains("amm_info") => {
-                self.received = true;
+                self.has_received_amm_info = true;
                 self.error = Some(e.to_string());
             }
             _ => {}
@@ -54,7 +54,7 @@ impl Component for AmmPanel {
     }
 
     fn draw(&mut self, frame: &mut Frame, area: Rect) -> color_eyre::Result<()> {
-        if !self.received {
+        if !self.has_received_amm_info {
             render_loading(
                 frame,
                 area,

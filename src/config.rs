@@ -72,6 +72,35 @@ fn fallback_issuer() -> String {
     FALLBACK_ISSUER.to_string()
 }
 
+fn default_oracle_pairs() -> Vec<crate::xrpl::OraclePricePair> {
+    vec![
+        crate::xrpl::OraclePricePair {
+            base_asset: "XRP".into(),
+            quote_asset: "USD".into(),
+        },
+        crate::xrpl::OraclePricePair {
+            base_asset: "BTC".into(),
+            quote_asset: "USD".into(),
+        },
+        crate::xrpl::OraclePricePair {
+            base_asset: "ETH".into(),
+            quote_asset: "USD".into(),
+        },
+        crate::xrpl::OraclePricePair {
+            base_asset: "524C555344000000000000000000000000000000".into(),
+            quote_asset: "USD".into(),
+        },
+        crate::xrpl::OraclePricePair {
+            base_asset: "5553444300000000000000000000000000000000".into(),
+            quote_asset: "USD".into(),
+        },
+        crate::xrpl::OraclePricePair {
+            base_asset: "5553445400000000000000000000000000000000".into(),
+            quote_asset: "USD".into(),
+        },
+    ]
+}
+
 #[derive(Clone, Debug, Deserialize)]
 pub struct LedgerConfig {
     pub account: String,
@@ -94,6 +123,12 @@ pub struct LedgerConfig {
     /// Raw signing config (seed). Use `SigningConfig::resolve()` to access.
     #[serde(default)]
     pub signing: RawSigningConfig,
+    /// Oracle identifiers for `get_aggregate_price`.
+    #[serde(default)]
+    pub oracles: Vec<crate::xrpl::OracleId>,
+    /// Price pairs to query via `get_aggregate_price`.
+    #[serde(default = "default_oracle_pairs")]
+    pub oracle_pairs: Vec<crate::xrpl::OraclePricePair>,
 }
 
 impl Default for LedgerConfig {
@@ -109,6 +144,8 @@ impl Default for LedgerConfig {
             rpc_server: None,
             ws_server: None,
             signing: RawSigningConfig::default(),
+            oracles: Vec::new(),
+            oracle_pairs: default_oracle_pairs(),
         }
     }
 }
@@ -692,9 +729,9 @@ impl TestEnvGuard {
         Self { saved }
     }
 
-    pub fn set(&self, key: &str, val: &str) {
+    pub fn set(&self, key: &str, value: &str) {
         unsafe {
-            std::env::set_var(key, val);
+            std::env::set_var(key, value);
         }
     }
 

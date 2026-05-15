@@ -130,12 +130,13 @@ impl Component for ServerPanel {
         frame.render_widget(Paragraph::new(lines), info_area);
 
         if sparkline_height > 0 {
-            let data: Vec<(&str, u64)> = self.fee_history.iter().map(|&v| ("", v)).collect();
+            let fee_chart_data: Vec<(&str, u64)> =
+                self.fee_history.iter().map(|&v| ("", v)).collect();
             let spark_block = Block::default()
                 .title_style(theme::dim_style())
                 .title(" open-ledger fee history (drops) ");
             let barchart = BarChart::default()
-                .data(&data)
+                .data(&fee_chart_data)
                 .bar_width(2)
                 .bar_gap(1)
                 .bar_style(theme::accent_style())

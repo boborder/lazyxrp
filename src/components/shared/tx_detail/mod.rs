@@ -29,6 +29,7 @@ pub struct TxDetailState {
     pub tx_json: ArcValue,
     pub meta_json: ArcValue,
     pub scroll: u16,
+    cached_lines: Option<Vec<Line<'static>>>,
 }
 
 impl TxDetailState {
@@ -37,6 +38,7 @@ impl TxDetailState {
         self.tx_json = tx_json;
         self.meta_json = meta_json;
         self.scroll = 0;
+        self.cached_lines = None;
     }
 
     pub fn close(&mut self) {
@@ -46,7 +48,24 @@ impl TxDetailState {
 }
 
 /// Render a centered popup with parsed transaction details.
-pub fn render_tx_detail(frame: &mut Frame, area: Rect, state: &TxDetailState) {
+fn to_static_lines(lines: Vec<Line<'_>>) -> Vec<Line<'static>> {
+    lines
+        .into_iter()
+        .map(|line| {
+            let spans: Vec<Span<'static>> = line
+                .spans
+                .into_iter()
+                .map(|span| Span::styled(span.content.into_owned(), span.style))
+                .collect();
+            let mut new_line = Line::from(spans);
+            new_line.style = line.style;
+            new_line.alignment = line.alignment;
+            new_line
+        })
+        .collect()
+}
+
+pub fn render_tx_detail(frame: &mut Frame, area: Rect, state: &mut TxDetailState) {
     if !state.visible {
         return;
     }
@@ -74,7 +93,11 @@ pub fn render_tx_detail(frame: &mut Frame, area: Rect, state: &TxDetailState) {
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
 
-    let lines = detail_lines_for(&state.tx_json.0, &state.meta_json.0);
+    if state.cached_lines.is_none() {
+        let lines = detail_lines_for(&state.tx_json.0, &state.meta_json.0);
+        state.cached_lines = Some(to_static_lines(lines));
+    }
+    let lines = state.cached_lines.as_ref().unwrap().clone();
     let line_count = lines.len();
     let paragraph = Paragraph::new(lines)
         .wrap(Wrap { trim: true })
@@ -308,34 +331,40 @@ fn detail_lines_for<'a>(tx: &'a Value, meta: &'a Value) -> Vec<Line<'a>> {
     }
 
     // Metadata (compact)
-    if !meta.is_null() && meta.is_object() {
-        let meta_obj = meta.as_object().unwrap();
-        let mut meta_lines = Vec::new();
-        for (key, value) in meta_obj.iter() {
-            if key == "TransactionResult" || value.is_null() {
-                continue;
-            }
-            if key == "AffectedNodes" {
-                let count = value.as_array().map(|a| a.len()).unwrap_or(0);
-                meta_lines.push(Line::from(vec![
-                    Span::styled(key.as_str(), label_style),
-                    Span::raw(": "),
-                    Span::styled(format!("[{count} nodes]"), theme::dim_style()),
-                ]));
-                continue;
-            }
-            let formatted = format_value(key, value);
+    let meta_obj = if !meta.is_null() {
+        if let Some(obj) = meta.as_object() {
+            obj
+        } else {
+            return lines;
+        }
+    } else {
+        return lines;
+    };
+    let mut meta_lines = Vec::new();
+    for (key, value) in meta_obj.iter() {
+        if key == "TransactionResult" || value.is_null() {
+            continue;
+        }
+        if key == "AffectedNodes" {
+            let count = value.as_array().map(|a| a.len()).unwrap_or(0);
             meta_lines.push(Line::from(vec![
                 Span::styled(key.as_str(), label_style),
                 Span::raw(": "),
-                Span::styled(formatted, theme::dim_style()),
+                Span::styled(format!("[{count} nodes]"), theme::dim_style()),
             ]));
+            continue;
         }
-        if !meta_lines.is_empty() {
-            lines.push(Line::from(""));
-            lines.push(Line::styled("Metadata", hi_style));
-            lines.extend(meta_lines);
-        }
+        let formatted = format_value(key, value);
+        meta_lines.push(Line::from(vec![
+            Span::styled(key.as_str(), label_style),
+            Span::raw(": "),
+            Span::styled(formatted, theme::dim_style()),
+        ]));
+    }
+    if !meta_lines.is_empty() {
+        lines.push(Line::from(""));
+        lines.push(Line::styled("Metadata", hi_style));
+        lines.extend(meta_lines);
     }
 
     lines
@@ -515,5 +544,64 @@ mod tests {
             text.iter()
                 .any(|s| s.contains("AffectedNodes") && s.contains("[3 nodes]"))
         );
+    }
+
+    #[test]
+    fn tx_detail_cache_invalidated_on_open() {
+        let mut state = TxDetailState::default();
+        let tx1 = json!({"TransactionType":"Payment","Account":"rA","Amount":"1000000"});
+        let meta1 = json!({});
+        state.open(arc(tx1), arc(meta1));
+
+        // Cache should be None after open (invalidated)
+        assert!(state.cached_lines.is_none());
+
+        // Simulate render: populate cache
+        let lines = detail_lines_for(&state.tx_json.0, &state.meta_json.0);
+        state.cached_lines = Some(to_static_lines(lines));
+        assert!(state.cached_lines.is_some());
+
+        // Re-opening with different tx should invalidate
+        let tx2 = json!({"TransactionType":"AccountSet","Account":"rB","SetFlag":8});
+        let meta2 = json!({});
+        state.open(arc(tx2), arc(meta2));
+        assert!(state.cached_lines.is_none());
+    }
+
+    #[test]
+    #[ignore = "benchmark only"]
+    fn bench_detail_lines_payment_current() {
+        use std::time::Instant;
+        let tx = json!({
+            "TransactionType":"Payment",
+            "Account":"rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+            "Destination":"rf1BiGeXwwQoi8Z2ueFYTEXSwuJYfV2Jpn",
+            "Amount":"1000000",
+            "Sequence":1,
+            "Fee":"12"
+        });
+        let meta = json!({});
+        let start = Instant::now();
+        for _ in 0..1000 {
+            let _ = detail_lines_for(&tx, &meta);
+        }
+        println!(
+            "1000 iterations (current with clone): {:?}",
+            start.elapsed()
+        );
+    }
+
+    #[test]
+    fn to_static_lines_preserves_content() {
+        let tx = json!({"hash":"DEADBEEF","TransactionResult":"tesSUCCESS"});
+        let meta = json!({});
+        let lines = detail_lines_for(&tx, &meta);
+        let static_lines = to_static_lines(lines.clone());
+        // Verify same number of lines
+        assert_eq!(lines.len(), static_lines.len());
+        // Verify content by converting to strings
+        let orig: Vec<String> = lines.iter().map(|l| l.to_string()).collect();
+        let stat: Vec<String> = static_lines.iter().map(|l| l.to_string()).collect();
+        assert_eq!(orig, stat);
     }
 }

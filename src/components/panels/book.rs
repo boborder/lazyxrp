@@ -25,7 +25,7 @@ pub struct BookPanel {
     offers: Vec<OfferRow>,
     table_state: SelectableTableState,
     tick: usize,
-    received: bool,
+    has_received_offers: bool,
     pub is_focused: bool,
     detail: TxDetailState,
 }
@@ -64,7 +64,7 @@ impl Component for BookPanel {
             Action::XrplBookOffers(offers) => {
                 self.offers = offers.to_vec();
                 self.table_state.reset_len(self.offers.len());
-                self.received = true;
+                self.has_received_offers = true;
             }
             Action::SelectNext if !self.offers.is_empty() && self.is_focused => {
                 self.table_state.select_next(self.offers.len());
@@ -86,7 +86,7 @@ impl Component for BookPanel {
     }
 
     fn draw(&mut self, frame: &mut Frame, area: Rect) -> color_eyre::Result<()> {
-        if !self.received {
+        if !self.has_received_offers {
             render_loading(
                 frame,
                 area,
@@ -152,7 +152,7 @@ impl Component for BookPanel {
         );
 
         // ── BarChart::grouped — quality distribution ──
-        render_tx_detail(frame, area, &self.detail);
+        render_tx_detail(frame, area, &mut self.detail);
 
         if chart_height > 0 {
             let gets_bars: Vec<Bar<'_>> = self
@@ -161,9 +161,9 @@ impl Component for BookPanel {
                 .take(8)
                 .enumerate()
                 .map(|(i, o)| {
-                    let q = o.quality.parse::<f64>().unwrap_or(0.0);
+                    let quality_value = o.quality.parse::<f64>().unwrap_or(0.0);
                     Bar::default()
-                        .value((q * 1_000.0) as u64)
+                        .value((quality_value * 1_000.0) as u64)
                         .label(Line::from(format!("#{}", i + 1)))
                 })
                 .collect();
@@ -173,9 +173,9 @@ impl Component for BookPanel {
                 .take(8)
                 .enumerate()
                 .map(|(i, o)| {
-                    let q = o.quality.parse::<f64>().unwrap_or(0.0);
+                    let quality_value = o.quality.parse::<f64>().unwrap_or(0.0);
                     Bar::default()
-                        .value((q * 800.0) as u64)
+                        .value((quality_value * 800.0) as u64)
                         .label(Line::from(format!("#{}", i + 1)))
                 })
                 .collect();

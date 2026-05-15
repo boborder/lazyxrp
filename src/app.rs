@@ -23,6 +23,7 @@ use crate::{
             status_bar::StatusBar, theme,
         },
         tabs::nft::NftTab,
+        tabs::oracle::OracleTab,
         tabs::{
             account_objects::AccountObjectsTab, account_tx::AccountTxTab, market::MarketTab,
             server_overview::ServerOverviewTab,
@@ -35,7 +36,14 @@ use crate::{
 };
 
 /// Tab labels (index mirrors `panels` Vec order)
-const TAB_TITLES: &[&str] = &["󰖟 Overview", "󰀉 Account", "󰠿 Market", "󰒍 NFTs", "󰧮 Objects"];
+const TAB_TITLES: &[&str] = &[
+    "󰖟 Overview",
+    "󰀉 Account",
+    "󰠿 Market",
+    "󰒍 NFTs",
+    "󰧮 Objects",
+    "󰠨 Oracle",
+];
 
 fn footer_line(active_tab: usize) -> Line<'static> {
     let key = |k: &'static str| Span::styled(k, Style::new().add_modifier(Modifier::BOLD));
@@ -48,7 +56,7 @@ fn footer_line(active_tab: usize) -> Line<'static> {
         key("Tab"),
         label(":next"),
         sep(),
-        key("1-5"),
+        key("1-6"),
         label(":jump"),
         sep(),
         key("↑↓/jk"),
@@ -61,7 +69,7 @@ fn footer_line(active_tab: usize) -> Line<'static> {
         label(":suspend"),
         sep(),
     ];
-    // Tab indices: 0 Overview, 1 Account+Tx, 2 Market, 3 NFTs, 4 Objects (misc + pay + escrow)
+    // Tab indices: 0 Overview, 1 Account+Tx, 2 Market, 3 NFTs, 4 Objects, 5 Oracle
     match active_tab {
         0 => {
             spans.extend([
@@ -152,12 +160,12 @@ impl App {
         };
         let (net_tx, _net_rx) = watch::channel(network);
         if let Some(cli_seed) = seed {
-            let t = crate::signing::trim_family_seed(&cli_seed);
+            let trimmed_seed = crate::signing::trim_family_seed(&cli_seed);
             config.xrpl.signing.seed = None;
-            config.xrpl.signing.secret_seed = if t.is_empty() {
+            config.xrpl.signing.secret_seed = if trimmed_seed.is_empty() {
                 None
             } else {
-                Some(secrecy::SecretString::from(t.to_string()))
+                Some(secrecy::SecretString::from(trimmed_seed.to_string()))
             };
         }
         let watch_account = account.unwrap_or_else(|| config.xrpl.account.clone());
@@ -170,6 +178,7 @@ impl App {
             Box::new(MarketTab::new()),
             Box::new(NftTab::new()),
             Box::new(AccountObjectsTab::new()),
+            Box::new(OracleTab::new()),
         ];
         // UA-1: guard against tab/panel index mismatch (docs/agent/INVARIANTS.md)
         debug_assert_eq!(
@@ -270,12 +279,17 @@ impl App {
                 poll_interval: Duration::from_millis(self.config.xrpl.poll_interval_ms),
                 seed_address,
                 network_watch: self.net_tx.subscribe(),
+                oracles: self.config.xrpl.oracles.clone(),
+                oracle_pairs: self.config.xrpl.oracle_pairs.clone(),
             },
             poll_rx,
             poll_trigger_rx,
             action_tx.clone(),
             cancel.clone(),
         );
+        if self.config.xrpl.oracles.is_empty() {
+            let _ = action_tx.send(Action::XrplOracleNotConfigured);
+        }
 
         loop {
             self.handle_events(&mut tui).await?;

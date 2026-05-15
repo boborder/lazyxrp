@@ -908,6 +908,52 @@ CI（`.github/workflows/ci.yml`）は各ジョブで `cargo … --locked`（例:
 - **Expected Output**: Success returns `TxSummary`; failed engine result returns an error
 - **Test File**: `src/xrpl/client.rs` (inline)
 
+#### TC-070: TxDetail render cache — invalidated on open
+
+- **Priority**: P1
+- **Type**: Unit
+- **Size**: S
+- **Status**: [x] Done
+- **Target**: `src/components/shared/tx_detail/mod.rs` -> `TxDetailState::open()`
+- **Input**: `TxDetailState::open()` with two different JSON payloads
+- **Expected Output**: `cached_lines` is `None` after each `open()` call
+- **Test File**: `src/components/shared/tx_detail/mod.rs` (inline)
+
+#### TC-071: TxDetail static lines — preserves content
+
+- **Priority**: P1
+- **Type**: Unit
+- **Size**: S
+- **Status**: [x] Done
+- **Target**: `src/components/shared/tx_detail/mod.rs` -> `to_static_lines()`
+- **Input**: `Vec<Line>` from `detail_lines_for()` with mixed borrowed/owned spans
+- **Expected Output**: `Vec<Line<'static>>` renders identical text after conversion
+- **Test File**: `src/components/shared/tx_detail/mod.rs` (inline)
+
+#### TC-073: TxDetail parser clone elimination — Payment benchmark
+
+- **Priority**: P1
+- **Type**: Unit (benchmark)
+- **Size**: S
+- **Status**: [x] Done
+- **Target**: `src/xrpl/poll.rs` -> `payment_detail_lines()` (and all 29 typed parsers)
+- **Input**: `bench_detail_lines_payment_current` — 1000 iterations of `detail_lines_for()` on Payment JSON
+- **Expected Output**: Execution time < 10ms (measured: ~5.8ms after Stage 4, down from ~22ms)
+- **Test File**: `src/components/shared/tx_detail/mod.rs` (inline)
+- **Notes**: All 29 typed parsers in `parsers.rs` converted from `serde_json::from_value(_tx.clone())` to direct `Value` field access. ~75% latency reduction on detail panel open.
+
+#### TC-072: Poll trigger — coalesces rapid bursts
+
+- **Priority**: P2
+- **Type**: Functional
+- **Size**: M
+- **Status**: [ ] Planned
+- **Target**: `src/xrpl/poll.rs` -> `run_poll_loop()` trigger handler
+- **Input**: Multiple `()` sent to `poll_trigger_tx` within one poll interval
+- **Expected Output**: Only one `poll_batch()` executes after MIN_POLL_INTERVAL
+- **Test File**: `src/xrpl/poll.rs` (inline) — requires async mock
+- **Notes**: `try_recv()` drain loop added in Stage 3 (2026-05-15). Full coalescing test blocked on async mock infrastructure.
+
 ---
 
 ## Implementation Roadmap

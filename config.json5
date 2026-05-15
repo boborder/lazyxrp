@@ -27,6 +27,18 @@
     "currency": "RLUSD",
     "currency_code": "524C555344000000000000000000000000000000",
     "offer_limit": 5,
-    "poll_interval_ms": 5000
+    "poll_interval_ms": 5000,
+    "oracles": [
+      // DIA testnet oracle — uncomment and switch network to "testnet" to use
+      // { "account": "r3U1mL5u2SCPr4mApqYyF96nvwvKoGf7aH", "oracle_document_id": 1 }
+    ],
+    "oracle_pairs": [
+      { "base_asset": "XRP", "quote_asset": "USD" },
+      { "base_asset": "BTC", "quote_asset": "USD" },
+      { "base_asset": "ETH", "quote_asset": "USD" },
+      { "base_asset": "524C555344000000000000000000000000000000", "quote_asset": "USD" },
+      { "base_asset": "5553444300000000000000000000000000000000", "quote_asset": "USD" },
+      { "base_asset": "5553445400000000000000000000000000000000", "quote_asset": "USD" }
+    ]
   }
 }

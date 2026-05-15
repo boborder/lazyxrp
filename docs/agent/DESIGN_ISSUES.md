@@ -63,4 +63,5 @@
 **Severity**: Low
 **Evidence**: `src/components/shared/tx_detail/parsers.rs` defines ~29 `try_*_detail_lines` functions, dispatched manually in `detail_lines_for()` in `mod.rs`.
 **Impact**: Adding a new TX type requires changes in 2 places. Error-prone.
+**Note**: The per-frame execution cost of `detail_lines_for()` was addressed by caching in `TxDetailState` (Stage 1, 2026-05-15). Parser count growth remains a maintenance concern, but runtime performance is mitigated.
 **Recommendation**: Consider a macro or registration-based dispatch if TX types exceed ~40.

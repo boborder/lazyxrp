@@ -193,6 +193,67 @@ pub struct XrplRlusdPrice {
     pub mid: String,
 }
 
+/// One oracle identifier for `get_aggregate_price`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct OracleId {
+    pub account: String,
+    pub oracle_document_id: u32,
+}
+
+/// Base/quote pair for oracle price aggregation.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct OraclePricePair {
+    pub base_asset: String,
+    pub quote_asset: String,
+}
+
+/// Known XRPL hex currency codes → human-readable display names.
+pub static CURRENCY_HEX_MAP: &[(&str, &str)] = &[
+    ("524C555344000000000000000000000000000000", "RLUSD"),
+    ("5553444300000000000000000000000000000000", "USDC"),
+    ("5553445400000000000000000000000000000000", "USDT"),
+    ("4254430000000000000000000000000000000000", "BTC"),
+    ("4554480000000000000000000000000000000000", "ETH"),
+    ("5852500000000000000000000000000000000000", "XRP"),
+    ("4555520000000000000000000000000000000000", "EUR"),
+    ("584C4D0000000000000000000000000000000000", "XLM"),
+    ("534F4C0000000000000000000000000000000000", "SOL"),
+    ("4144410000000000000000000000000000000000", "ADA"),
+    ("444F474500000000000000000000000000000000", "DOGE"),
+    ("4C54430000000000000000000000000000000000", "LTC"),
+    ("504F4C0000000000000000000000000000000000", "DOT"),
+];
+
+/// Convert an XRPL currency code (hex or 3-letter string) to a display name.
+#[must_use]
+pub fn asset_display_name(asset: &str) -> String {
+    let upper = asset.to_ascii_uppercase();
+    for (hex, display) in CURRENCY_HEX_MAP {
+        if upper == *hex {
+            return (*display).to_string();
+        }
+    }
+    asset.to_string()
+}
+
+/// Price statistics subset (entire_set or trimmed_set).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PriceStats {
+    pub mean: String,
+    pub size: u32,
+    pub standard_deviation: String,
+}
+
+/// Result of `get_aggregate_price`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AggregatePrice {
+    pub entire_set: PriceStats,
+    pub trimmed_set: Option<PriceStats>,
+    pub time: u64,
+    pub base_asset: String,
+    pub quote_asset: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TxRow {
     pub hash: String,
@@ -383,6 +444,10 @@ pub struct PollContext {
     pub poll_interval: Duration,
     pub seed_address: Option<String>,
     pub network_watch: watch::Receiver<Network>,
+    /// Oracle identifiers for `get_aggregate_price`.
+    pub oracles: Vec<OracleId>,
+    /// Price pairs to query via `get_aggregate_price`.
+    pub oracle_pairs: Vec<OraclePricePair>,
 }
 
 #[cfg(test)]
@@ -403,5 +468,25 @@ mod tests {
             "524C555344000000000000000000000000000000"
         );
         assert_eq!(pair.pays_issuer(), Some("rIssuer"));
+    }
+
+    /// TC-085: asset_display_name maps known hex codes to readable names
+    #[test]
+    fn asset_display_name_maps_hex() {
+        assert_eq!(
+            asset_display_name("524C555344000000000000000000000000000000"),
+            "RLUSD"
+        );
+        assert_eq!(
+            asset_display_name("5553444300000000000000000000000000000000"),
+            "USDC"
+        );
+        assert_eq!(asset_display_name("BTC"), "BTC");
+    }
+
+    /// TC-086: asset_display_name passes through unknown values
+    #[test]
+    fn asset_display_name_unknown_passthrough() {
+        assert_eq!(asset_display_name("UNKNOWN"), "UNKNOWN");
     }
 }

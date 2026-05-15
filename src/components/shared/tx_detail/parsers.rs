@@ -1,6 +1,6 @@
 use crate::components::shared::theme;
 use crate::components::shared::tx_detail::format::{
-    fmt_currency, fmt_xrpl_amount, push_common_lines,
+    fmt_xrpl_amount_from_value, push_common_lines_from_value,
 };
 use ratatui::{
     style::Style,
@@ -8,33 +8,33 @@ use ratatui::{
 };
 use serde_json::Value;
 
-/// Try to parse a Payment transaction into typed detail lines.
+/// Payment detail lines parsed directly from Value (no clone).
 pub(crate) fn payment_detail_lines<'a>(_tx: &'a Value) -> Option<Vec<Line<'a>>> {
-    use xrpl::models::transactions::payment::Payment;
-    let payment: Payment<'static> = serde_json::from_value(_tx.clone()).ok()?;
+    if _tx.get("TransactionType")?.as_str() != Some("Payment") {
+        return None;
+    }
     let mut lines = Vec::new();
     let val = Style::new().fg(theme::ACCENT);
 
-    push_common_lines(
-        &mut lines,
-        &payment.common_fields.account,
-        payment.common_fields.sequence,
-        payment.common_fields.fee.as_ref().map(|f| f.to_string()),
-    );
+    push_common_lines_from_value(&mut lines, _tx);
 
-    lines.push(Line::from(vec![
-        Span::styled("Destination", theme::accent_style()),
-        Span::raw(": "),
-        Span::styled(payment.destination.to_string(), val),
-    ]));
+    if let Some(dest) = _tx.get("Destination").and_then(Value::as_str) {
+        lines.push(Line::from(vec![
+            Span::styled("Destination", theme::accent_style()),
+            Span::raw(": "),
+            Span::styled(dest.to_string(), val),
+        ]));
+    }
 
-    lines.push(Line::from(vec![
-        Span::styled("Amount", theme::accent_style()),
-        Span::raw(": "),
-        Span::styled(fmt_xrpl_amount(&payment.amount), val),
-    ]));
+    if let Some(amount) = _tx.get("Amount") {
+        lines.push(Line::from(vec![
+            Span::styled("Amount", theme::accent_style()),
+            Span::raw(": "),
+            Span::styled(fmt_xrpl_amount_from_value(amount), val),
+        ]));
+    }
 
-    if let Some(tag) = payment.destination_tag {
+    if let Some(tag) = _tx.get("DestinationTag").and_then(Value::as_u64) {
         lines.push(Line::from(vec![
             Span::styled("DestinationTag", theme::accent_style()),
             Span::raw(": "),
@@ -45,49 +45,45 @@ pub(crate) fn payment_detail_lines<'a>(_tx: &'a Value) -> Option<Vec<Line<'a>>> 
     Some(lines)
 }
 
-/// Try to parse an AccountSet transaction into typed detail lines.
+/// AccountSet detail lines parsed directly from Value.
 pub(crate) fn account_set_detail_lines<'a>(_tx: &'a Value) -> Option<Vec<Line<'a>>> {
-    use xrpl::models::transactions::account_set::AccountSet;
-    let tx: AccountSet<'static> = serde_json::from_value(_tx.clone()).ok()?;
+    if _tx.get("TransactionType")?.as_str() != Some("AccountSet") {
+        return None;
+    }
     let mut lines = Vec::new();
     let val = Style::new().fg(theme::ACCENT);
 
-    push_common_lines(
-        &mut lines,
-        &tx.common_fields.account,
-        tx.common_fields.sequence,
-        tx.common_fields.fee.as_ref().map(|f| f.to_string()),
-    );
+    push_common_lines_from_value(&mut lines, _tx);
 
-    if let Some(set) = tx.set_flag {
+    if let Some(set) = _tx.get("SetFlag").and_then(Value::as_u64) {
         lines.push(Line::from(vec![
             Span::styled("SetFlag", theme::accent_style()),
             Span::raw(": "),
             Span::styled(set.to_string(), val),
         ]));
     }
-    if let Some(clear) = tx.clear_flag {
+    if let Some(clear) = _tx.get("ClearFlag").and_then(Value::as_u64) {
         lines.push(Line::from(vec![
             Span::styled("ClearFlag", theme::accent_style()),
             Span::raw(": "),
             Span::styled(clear.to_string(), val),
         ]));
     }
-    if let Some(domain) = tx.domain {
+    if let Some(domain) = _tx.get("Domain").and_then(Value::as_str) {
         lines.push(Line::from(vec![
             Span::styled("Domain", theme::accent_style()),
             Span::raw(": "),
             Span::styled(domain.to_string(), val),
         ]));
     }
-    if let Some(tick) = tx.tick_size {
+    if let Some(tick) = _tx.get("TickSize").and_then(Value::as_u64) {
         lines.push(Line::from(vec![
             Span::styled("TickSize", theme::accent_style()),
             Span::raw(": "),
             Span::styled(tick.to_string(), val),
         ]));
     }
-    if let Some(rate) = tx.transfer_rate {
+    if let Some(rate) = _tx.get("TransferRate").and_then(Value::as_u64) {
         lines.push(Line::from(vec![
             Span::styled("TransferRate", theme::accent_style()),
             Span::raw(": "),
@@ -98,40 +94,32 @@ pub(crate) fn account_set_detail_lines<'a>(_tx: &'a Value) -> Option<Vec<Line<'a
     Some(lines)
 }
 
-/// Try to parse a TrustSet transaction into typed detail lines.
+/// TrustSet detail lines parsed directly from Value.
 pub(crate) fn trust_set_detail_lines<'a>(_tx: &'a Value) -> Option<Vec<Line<'a>>> {
-    use xrpl::models::transactions::trust_set::TrustSet;
-    let tx: TrustSet<'static> = serde_json::from_value(_tx.clone()).ok()?;
+    if _tx.get("TransactionType")?.as_str() != Some("TrustSet") {
+        return None;
+    }
     let mut lines = Vec::new();
     let val = Style::new().fg(theme::ACCENT);
 
-    push_common_lines(
-        &mut lines,
-        &tx.common_fields.account,
-        tx.common_fields.sequence,
-        tx.common_fields.fee.as_ref().map(|f| f.to_string()),
-    );
+    push_common_lines_from_value(&mut lines, _tx);
 
-    lines.push(Line::from(vec![
-        Span::styled("LimitAmount", theme::accent_style()),
-        Span::raw(": "),
-        Span::styled(
-            format!(
-                "{} {} (issuer: {})",
-                tx.limit_amount.value, tx.limit_amount.currency, tx.limit_amount.issuer
-            ),
-            val,
-        ),
-    ]));
+    if let Some(limit) = _tx.get("LimitAmount") {
+        lines.push(Line::from(vec![
+            Span::styled("LimitAmount", theme::accent_style()),
+            Span::raw(": "),
+            Span::styled(fmt_xrpl_amount_from_value(limit), val),
+        ]));
+    }
 
-    if let Some(q_in) = tx.quality_in {
+    if let Some(q_in) = _tx.get("QualityIn").and_then(Value::as_u64) {
         lines.push(Line::from(vec![
             Span::styled("QualityIn", theme::accent_style()),
             Span::raw(": "),
             Span::styled(q_in.to_string(), val),
         ]));
     }
-    if let Some(q_out) = tx.quality_out {
+    if let Some(q_out) = _tx.get("QualityOut").and_then(Value::as_u64) {
         lines.push(Line::from(vec![
             Span::styled("QualityOut", theme::accent_style()),
             Span::raw(": "),
@@ -142,32 +130,32 @@ pub(crate) fn trust_set_detail_lines<'a>(_tx: &'a Value) -> Option<Vec<Line<'a>>
     Some(lines)
 }
 
-/// Try to parse an OfferCreate transaction into typed detail lines.
+/// OfferCreate detail lines parsed directly from Value.
 pub(crate) fn offer_create_detail_lines<'a>(_tx: &'a Value) -> Option<Vec<Line<'a>>> {
-    use xrpl::models::transactions::offer_create::OfferCreate;
-    let tx: OfferCreate<'static> = serde_json::from_value(_tx.clone()).ok()?;
+    if _tx.get("TransactionType")?.as_str() != Some("OfferCreate") {
+        return None;
+    }
     let mut lines = Vec::new();
     let val = Style::new().fg(theme::ACCENT);
 
-    push_common_lines(
-        &mut lines,
-        &tx.common_fields.account,
-        tx.common_fields.sequence,
-        tx.common_fields.fee.as_ref().map(|f| f.to_string()),
-    );
+    push_common_lines_from_value(&mut lines, _tx);
 
-    lines.push(Line::from(vec![
-        Span::styled("TakerGets", theme::accent_style()),
-        Span::raw(": "),
-        Span::styled(fmt_xrpl_amount(&tx.taker_gets), val),
-    ]));
-    lines.push(Line::from(vec![
-        Span::styled("TakerPays", theme::accent_style()),
-        Span::raw(": "),
-        Span::styled(fmt_xrpl_amount(&tx.taker_pays), val),
-    ]));
+    if let Some(gets) = _tx.get("TakerGets") {
+        lines.push(Line::from(vec![
+            Span::styled("TakerGets", theme::accent_style()),
+            Span::raw(": "),
+            Span::styled(fmt_xrpl_amount_from_value(gets), val),
+        ]));
+    }
+    if let Some(pays) = _tx.get("TakerPays") {
+        lines.push(Line::from(vec![
+            Span::styled("TakerPays", theme::accent_style()),
+            Span::raw(": "),
+            Span::styled(fmt_xrpl_amount_from_value(pays), val),
+        ]));
+    }
 
-    if let Some(exp) = tx.expiration {
+    if let Some(exp) = _tx.get("Expiration").and_then(Value::as_u64) {
         let unix = exp as i64 + super::RIPPLE_EPOCH;
         let ts = crate::components::shared::fmt::fmt_local_datetime(unix);
         lines.push(Line::from(vec![
@@ -176,7 +164,7 @@ pub(crate) fn offer_create_detail_lines<'a>(_tx: &'a Value) -> Option<Vec<Line<'
             Span::styled(ts, val),
         ]));
     }
-    if let Some(seq) = tx.offer_sequence {
+    if let Some(seq) = _tx.get("OfferSequence").and_then(Value::as_u64) {
         lines.push(Line::from(vec![
             Span::styled("OfferSequence", theme::accent_style()),
             Span::raw(": "),
@@ -187,41 +175,39 @@ pub(crate) fn offer_create_detail_lines<'a>(_tx: &'a Value) -> Option<Vec<Line<'
     Some(lines)
 }
 
-/// Try to parse an NFTokenMint transaction into typed detail lines.
+/// NFTokenMint detail lines parsed directly from Value.
 pub(crate) fn nftoken_mint_detail_lines<'a>(_tx: &'a Value) -> Option<Vec<Line<'a>>> {
-    use xrpl::models::transactions::nftoken_mint::NFTokenMint;
-    let tx: NFTokenMint<'static> = serde_json::from_value(_tx.clone()).ok()?;
+    if _tx.get("TransactionType")?.as_str() != Some("NFTokenMint") {
+        return None;
+    }
     let mut lines = Vec::new();
     let val = Style::new().fg(theme::ACCENT);
 
-    push_common_lines(
-        &mut lines,
-        &tx.common_fields.account,
-        tx.common_fields.sequence,
-        tx.common_fields.fee.as_ref().map(|f| f.to_string()),
-    );
+    push_common_lines_from_value(&mut lines, _tx);
 
-    lines.push(Line::from(vec![
-        Span::styled("NFTokenTaxon", theme::accent_style()),
-        Span::raw(": "),
-        Span::styled(tx.nftoken_taxon.to_string(), val),
-    ]));
+    if let Some(taxon) = _tx.get("NFTokenTaxon").and_then(Value::as_u64) {
+        lines.push(Line::from(vec![
+            Span::styled("NFTokenTaxon", theme::accent_style()),
+            Span::raw(": "),
+            Span::styled(taxon.to_string(), val),
+        ]));
+    }
 
-    if let Some(issuer) = tx.issuer {
+    if let Some(issuer) = _tx.get("Issuer").and_then(Value::as_str) {
         lines.push(Line::from(vec![
             Span::styled("Issuer", theme::accent_style()),
             Span::raw(": "),
             Span::styled(issuer.to_string(), val),
         ]));
     }
-    if let Some(fee) = tx.transfer_fee {
+    if let Some(fee) = _tx.get("TransferFee").and_then(Value::as_u64) {
         lines.push(Line::from(vec![
             Span::styled("TransferFee", theme::accent_style()),
             Span::raw(": "),
             Span::styled(format!("{:.3}%", fee as f64 / 1000.0), val),
         ]));
     }
-    if let Some(uri) = tx.uri {
+    if let Some(uri) = _tx.get("URI").and_then(Value::as_str) {
         lines.push(Line::from(vec![
             Span::styled("URI", theme::accent_style()),
             Span::raw(": "),
@@ -232,62 +218,60 @@ pub(crate) fn nftoken_mint_detail_lines<'a>(_tx: &'a Value) -> Option<Vec<Line<'
     Some(lines)
 }
 
-/// Try to parse an OfferCancel transaction into typed detail lines.
+/// OfferCancel detail lines parsed directly from Value.
 pub(crate) fn offer_cancel_detail_lines<'a>(_tx: &'a Value) -> Option<Vec<Line<'a>>> {
-    use xrpl::models::transactions::offer_cancel::OfferCancel;
-    let tx: OfferCancel<'static> = serde_json::from_value(_tx.clone()).ok()?;
+    if _tx.get("TransactionType")?.as_str() != Some("OfferCancel") {
+        return None;
+    }
     let mut lines = Vec::new();
     let val = Style::new().fg(theme::ACCENT);
 
-    push_common_lines(
-        &mut lines,
-        &tx.common_fields.account,
-        tx.common_fields.sequence,
-        tx.common_fields.fee.as_ref().map(|f| f.to_string()),
-    );
+    push_common_lines_from_value(&mut lines, _tx);
 
-    lines.push(Line::from(vec![
-        Span::styled("OfferSequence", theme::accent_style()),
-        Span::raw(": "),
-        Span::styled(tx.offer_sequence.to_string(), val),
-    ]));
+    if let Some(seq) = _tx.get("OfferSequence").and_then(Value::as_u64) {
+        lines.push(Line::from(vec![
+            Span::styled("OfferSequence", theme::accent_style()),
+            Span::raw(": "),
+            Span::styled(seq.to_string(), val),
+        ]));
+    }
 
     Some(lines)
 }
 
-/// Try to parse a CheckCreate transaction into typed detail lines.
+/// CheckCreate detail lines parsed directly from Value.
 pub(crate) fn check_create_detail_lines<'a>(_tx: &'a Value) -> Option<Vec<Line<'a>>> {
-    use xrpl::models::transactions::check_create::CheckCreate;
-    let tx: CheckCreate<'static> = serde_json::from_value(_tx.clone()).ok()?;
+    if _tx.get("TransactionType")?.as_str() != Some("CheckCreate") {
+        return None;
+    }
     let mut lines = Vec::new();
     let val = Style::new().fg(theme::ACCENT);
 
-    push_common_lines(
-        &mut lines,
-        &tx.common_fields.account,
-        tx.common_fields.sequence,
-        tx.common_fields.fee.as_ref().map(|f| f.to_string()),
-    );
+    push_common_lines_from_value(&mut lines, _tx);
 
-    lines.push(Line::from(vec![
-        Span::styled("Destination", theme::accent_style()),
-        Span::raw(": "),
-        Span::styled(tx.destination.to_string(), val),
-    ]));
-    lines.push(Line::from(vec![
-        Span::styled("SendMax", theme::accent_style()),
-        Span::raw(": "),
-        Span::styled(fmt_xrpl_amount(&tx.send_max), val),
-    ]));
+    if let Some(dest) = _tx.get("Destination").and_then(Value::as_str) {
+        lines.push(Line::from(vec![
+            Span::styled("Destination", theme::accent_style()),
+            Span::raw(": "),
+            Span::styled(dest.to_string(), val),
+        ]));
+    }
+    if let Some(send_max) = _tx.get("SendMax") {
+        lines.push(Line::from(vec![
+            Span::styled("SendMax", theme::accent_style()),
+            Span::raw(": "),
+            Span::styled(fmt_xrpl_amount_from_value(send_max), val),
+        ]));
+    }
 
-    if let Some(tag) = tx.destination_tag {
+    if let Some(tag) = _tx.get("DestinationTag").and_then(Value::as_u64) {
         lines.push(Line::from(vec![
             Span::styled("DestinationTag", theme::accent_style()),
             Span::raw(": "),
             Span::styled(tag.to_string(), val),
         ]));
     }
-    if let Some(exp) = tx.expiration {
+    if let Some(exp) = _tx.get("Expiration").and_then(Value::as_u64) {
         let unix = exp as i64 + super::RIPPLE_EPOCH;
         let ts = crate::components::shared::fmt::fmt_local_datetime(unix);
         lines.push(Line::from(vec![
@@ -300,35 +284,40 @@ pub(crate) fn check_create_detail_lines<'a>(_tx: &'a Value) -> Option<Vec<Line<'
     Some(lines)
 }
 
-/// Try to parse a SignerListSet transaction into typed detail lines.
+/// SignerListSet detail lines parsed directly from Value.
 pub(crate) fn signer_list_set_detail_lines<'a>(_tx: &'a Value) -> Option<Vec<Line<'a>>> {
-    use xrpl::models::transactions::signer_list_set::SignerListSet;
-    let tx: SignerListSet<'static> = serde_json::from_value(_tx.clone()).ok()?;
+    if _tx.get("TransactionType")?.as_str() != Some("SignerListSet") {
+        return None;
+    }
     let mut lines = Vec::new();
     let val = Style::new().fg(theme::ACCENT);
 
-    push_common_lines(
-        &mut lines,
-        &tx.common_fields.account,
-        tx.common_fields.sequence,
-        tx.common_fields.fee.as_ref().map(|f| f.to_string()),
-    );
+    push_common_lines_from_value(&mut lines, _tx);
 
-    lines.push(Line::from(vec![
-        Span::styled("SignerQuorum", theme::accent_style()),
-        Span::raw(": "),
-        Span::styled(tx.signer_quorum.to_string(), val),
-    ]));
+    if let Some(quorum) = _tx.get("SignerQuorum").and_then(Value::as_u64) {
+        lines.push(Line::from(vec![
+            Span::styled("SignerQuorum", theme::accent_style()),
+            Span::raw(": "),
+            Span::styled(quorum.to_string(), val),
+        ]));
+    }
 
-    if let Some(entries) = tx.signer_entries {
+    if let Some(entries) = _tx.get("SignerEntries").and_then(Value::as_array) {
         for (i, entry) in entries.iter().enumerate() {
+            let account = entry
+                .get("SignerEntry")
+                .and_then(|v| v.get("Account"))
+                .and_then(Value::as_str)
+                .unwrap_or("?");
+            let weight = entry
+                .get("SignerEntry")
+                .and_then(|v| v.get("SignerWeight"))
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
             lines.push(Line::from(vec![
                 Span::styled(format!("Signer {}", i + 1), theme::accent_style()),
                 Span::raw(": "),
-                Span::styled(
-                    format!("{} (weight: {})", entry.account, entry.signer_weight),
-                    val,
-                ),
+                Span::styled(format!("{} (weight: {})", account, weight), val),
             ]));
         }
     }
@@ -336,39 +325,39 @@ pub(crate) fn signer_list_set_detail_lines<'a>(_tx: &'a Value) -> Option<Vec<Lin
     Some(lines)
 }
 
-/// Try to parse an EscrowCreate transaction into typed detail lines.
+/// EscrowCreate detail lines parsed directly from Value.
 pub(crate) fn escrow_create_detail_lines<'a>(_tx: &'a Value) -> Option<Vec<Line<'a>>> {
-    use xrpl::models::transactions::escrow_create::EscrowCreate;
-    let tx: EscrowCreate<'static> = serde_json::from_value(_tx.clone()).ok()?;
+    if _tx.get("TransactionType")?.as_str() != Some("EscrowCreate") {
+        return None;
+    }
     let mut lines = Vec::new();
     let val = Style::new().fg(theme::ACCENT);
 
-    push_common_lines(
-        &mut lines,
-        &tx.common_fields.account,
-        tx.common_fields.sequence,
-        tx.common_fields.fee.as_ref().map(|f| f.to_string()),
-    );
+    push_common_lines_from_value(&mut lines, _tx);
 
-    lines.push(Line::from(vec![
-        Span::styled("Destination", theme::accent_style()),
-        Span::raw(": "),
-        Span::styled(tx.destination.to_string(), val),
-    ]));
-    lines.push(Line::from(vec![
-        Span::styled("Amount", theme::accent_style()),
-        Span::raw(": "),
-        Span::styled(crate::xrpl::drops_to_xrp(&tx.amount.to_string()), val),
-    ]));
+    if let Some(dest) = _tx.get("Destination").and_then(Value::as_str) {
+        lines.push(Line::from(vec![
+            Span::styled("Destination", theme::accent_style()),
+            Span::raw(": "),
+            Span::styled(dest.to_string(), val),
+        ]));
+    }
+    if let Some(amount) = _tx.get("Amount") {
+        lines.push(Line::from(vec![
+            Span::styled("Amount", theme::accent_style()),
+            Span::raw(": "),
+            Span::styled(fmt_xrpl_amount_from_value(amount), val),
+        ]));
+    }
 
-    if let Some(tag) = tx.destination_tag {
+    if let Some(tag) = _tx.get("DestinationTag").and_then(Value::as_u64) {
         lines.push(Line::from(vec![
             Span::styled("DestinationTag", theme::accent_style()),
             Span::raw(": "),
             Span::styled(tag.to_string(), val),
         ]));
     }
-    if let Some(finish) = tx.finish_after {
+    if let Some(finish) = _tx.get("FinishAfter").and_then(Value::as_u64) {
         let unix = finish as i64 + super::RIPPLE_EPOCH;
         let ts = crate::components::shared::fmt::fmt_local_datetime(unix);
         lines.push(Line::from(vec![
@@ -377,7 +366,7 @@ pub(crate) fn escrow_create_detail_lines<'a>(_tx: &'a Value) -> Option<Vec<Line<
             Span::styled(ts, val),
         ]));
     }
-    if let Some(cancel) = tx.cancel_after {
+    if let Some(cancel) = _tx.get("CancelAfter").and_then(Value::as_u64) {
         let unix = cancel as i64 + super::RIPPLE_EPOCH;
         let ts = crate::components::shared::fmt::fmt_local_datetime(unix);
         lines.push(Line::from(vec![
@@ -386,7 +375,7 @@ pub(crate) fn escrow_create_detail_lines<'a>(_tx: &'a Value) -> Option<Vec<Line<
             Span::styled(ts, val),
         ]));
     }
-    if let Some(cond) = tx.condition {
+    if let Some(cond) = _tx.get("Condition").and_then(Value::as_str) {
         lines.push(Line::from(vec![
             Span::styled("Condition", theme::accent_style()),
             Span::raw(": "),
@@ -397,39 +386,39 @@ pub(crate) fn escrow_create_detail_lines<'a>(_tx: &'a Value) -> Option<Vec<Line<
     Some(lines)
 }
 
-/// Try to parse an EscrowFinish transaction into typed detail lines.
+/// EscrowFinish detail lines parsed directly from Value.
 pub(crate) fn escrow_finish_detail_lines<'a>(_tx: &'a Value) -> Option<Vec<Line<'a>>> {
-    use xrpl::models::transactions::escrow_finish::EscrowFinish;
-    let tx: EscrowFinish<'static> = serde_json::from_value(_tx.clone()).ok()?;
+    if _tx.get("TransactionType")?.as_str() != Some("EscrowFinish") {
+        return None;
+    }
     let mut lines = Vec::new();
     let val = Style::new().fg(theme::ACCENT);
 
-    push_common_lines(
-        &mut lines,
-        &tx.common_fields.account,
-        tx.common_fields.sequence,
-        tx.common_fields.fee.as_ref().map(|f| f.to_string()),
-    );
+    push_common_lines_from_value(&mut lines, _tx);
 
-    lines.push(Line::from(vec![
-        Span::styled("Owner", theme::accent_style()),
-        Span::raw(": "),
-        Span::styled(tx.owner.to_string(), val),
-    ]));
-    lines.push(Line::from(vec![
-        Span::styled("OfferSequence", theme::accent_style()),
-        Span::raw(": "),
-        Span::styled(tx.offer_sequence.to_string(), val),
-    ]));
+    if let Some(owner) = _tx.get("Owner").and_then(Value::as_str) {
+        lines.push(Line::from(vec![
+            Span::styled("Owner", theme::accent_style()),
+            Span::raw(": "),
+            Span::styled(owner.to_string(), val),
+        ]));
+    }
+    if let Some(seq) = _tx.get("OfferSequence").and_then(Value::as_u64) {
+        lines.push(Line::from(vec![
+            Span::styled("OfferSequence", theme::accent_style()),
+            Span::raw(": "),
+            Span::styled(seq.to_string(), val),
+        ]));
+    }
 
-    if let Some(cond) = tx.condition {
+    if let Some(cond) = _tx.get("Condition").and_then(Value::as_str) {
         lines.push(Line::from(vec![
             Span::styled("Condition", theme::accent_style()),
             Span::raw(": "),
             Span::styled(cond.to_string(), val),
         ]));
     }
-    if let Some(ful) = tx.fulfillment {
+    if let Some(ful) = _tx.get("Fulfillment").and_then(Value::as_str) {
         lines.push(Line::from(vec![
             Span::styled("Fulfillment", theme::accent_style()),
             Span::raw(": "),
@@ -440,77 +429,81 @@ pub(crate) fn escrow_finish_detail_lines<'a>(_tx: &'a Value) -> Option<Vec<Line<
     Some(lines)
 }
 
-/// Try to parse an EscrowCancel transaction into typed detail lines.
+/// EscrowCancel detail lines parsed directly from Value.
 pub(crate) fn escrow_cancel_detail_lines<'a>(_tx: &'a Value) -> Option<Vec<Line<'a>>> {
-    use xrpl::models::transactions::escrow_cancel::EscrowCancel;
-    let tx: EscrowCancel<'static> = serde_json::from_value(_tx.clone()).ok()?;
+    if _tx.get("TransactionType")?.as_str() != Some("EscrowCancel") {
+        return None;
+    }
     let mut lines = Vec::new();
     let val = Style::new().fg(theme::ACCENT);
 
-    push_common_lines(
-        &mut lines,
-        &tx.common_fields.account,
-        tx.common_fields.sequence,
-        tx.common_fields.fee.as_ref().map(|f| f.to_string()),
-    );
+    push_common_lines_from_value(&mut lines, _tx);
 
-    lines.push(Line::from(vec![
-        Span::styled("Owner", theme::accent_style()),
-        Span::raw(": "),
-        Span::styled(tx.owner.to_string(), val),
-    ]));
-    lines.push(Line::from(vec![
-        Span::styled("OfferSequence", theme::accent_style()),
-        Span::raw(": "),
-        Span::styled(tx.offer_sequence.to_string(), val),
-    ]));
+    if let Some(owner) = _tx.get("Owner").and_then(Value::as_str) {
+        lines.push(Line::from(vec![
+            Span::styled("Owner", theme::accent_style()),
+            Span::raw(": "),
+            Span::styled(owner.to_string(), val),
+        ]));
+    }
+    if let Some(seq) = _tx.get("OfferSequence").and_then(Value::as_u64) {
+        lines.push(Line::from(vec![
+            Span::styled("OfferSequence", theme::accent_style()),
+            Span::raw(": "),
+            Span::styled(seq.to_string(), val),
+        ]));
+    }
 
     Some(lines)
 }
 
-/// Try to parse a PaymentChannelCreate transaction into typed detail lines.
+/// PaymentChannelCreate detail lines parsed directly from Value.
 pub(crate) fn payment_channel_create_detail_lines<'a>(_tx: &'a Value) -> Option<Vec<Line<'a>>> {
-    use xrpl::models::transactions::payment_channel_create::PaymentChannelCreate;
-    let tx: PaymentChannelCreate<'static> = serde_json::from_value(_tx.clone()).ok()?;
+    if _tx.get("TransactionType")?.as_str() != Some("PaymentChannelCreate") {
+        return None;
+    }
     let mut lines = Vec::new();
     let val = Style::new().fg(theme::ACCENT);
 
-    push_common_lines(
-        &mut lines,
-        &tx.common_fields.account,
-        tx.common_fields.sequence,
-        tx.common_fields.fee.as_ref().map(|f| f.to_string()),
-    );
+    push_common_lines_from_value(&mut lines, _tx);
 
-    lines.push(Line::from(vec![
-        Span::styled("Destination", theme::accent_style()),
-        Span::raw(": "),
-        Span::styled(tx.destination.to_string(), val),
-    ]));
-    lines.push(Line::from(vec![
-        Span::styled("Amount", theme::accent_style()),
-        Span::raw(": "),
-        Span::styled(crate::xrpl::drops_to_xrp(&tx.amount.to_string()), val),
-    ]));
-    lines.push(Line::from(vec![
-        Span::styled("SettleDelay", theme::accent_style()),
-        Span::raw(": "),
-        Span::styled(format!("{}s", tx.settle_delay), val),
-    ]));
-    lines.push(Line::from(vec![
-        Span::styled("PublicKey", theme::accent_style()),
-        Span::raw(": "),
-        Span::styled(tx.public_key.to_string(), val),
-    ]));
+    if let Some(dest) = _tx.get("Destination").and_then(Value::as_str) {
+        lines.push(Line::from(vec![
+            Span::styled("Destination", theme::accent_style()),
+            Span::raw(": "),
+            Span::styled(dest.to_string(), val),
+        ]));
+    }
+    if let Some(amount) = _tx.get("Amount") {
+        lines.push(Line::from(vec![
+            Span::styled("Amount", theme::accent_style()),
+            Span::raw(": "),
+            Span::styled(fmt_xrpl_amount_from_value(amount), val),
+        ]));
+    }
+    if let Some(delay) = _tx.get("SettleDelay").and_then(Value::as_u64) {
+        lines.push(Line::from(vec![
+            Span::styled("SettleDelay", theme::accent_style()),
+            Span::raw(": "),
+            Span::styled(format!("{}s", delay), val),
+        ]));
+    }
+    if let Some(pk) = _tx.get("PublicKey").and_then(Value::as_str) {
+        lines.push(Line::from(vec![
+            Span::styled("PublicKey", theme::accent_style()),
+            Span::raw(": "),
+            Span::styled(pk.to_string(), val),
+        ]));
+    }
 
-    if let Some(tag) = tx.destination_tag {
+    if let Some(tag) = _tx.get("DestinationTag").and_then(Value::as_u64) {
         lines.push(Line::from(vec![
             Span::styled("DestinationTag", theme::accent_style()),
             Span::raw(": "),
             Span::styled(tag.to_string(), val),
         ]));
     }
-    if let Some(cancel) = tx.cancel_after {
+    if let Some(cancel) = _tx.get("CancelAfter").and_then(Value::as_u64) {
         let unix = cancel as i64 + super::RIPPLE_EPOCH;
         let ts = crate::components::shared::fmt::fmt_local_datetime(unix);
         lines.push(Line::from(vec![
@@ -523,32 +516,32 @@ pub(crate) fn payment_channel_create_detail_lines<'a>(_tx: &'a Value) -> Option<
     Some(lines)
 }
 
-/// Try to parse a PaymentChannelFund transaction into typed detail lines.
+/// PaymentChannelFund detail lines parsed directly from Value.
 pub(crate) fn payment_channel_fund_detail_lines<'a>(_tx: &'a Value) -> Option<Vec<Line<'a>>> {
-    use xrpl::models::transactions::payment_channel_fund::PaymentChannelFund;
-    let tx: PaymentChannelFund<'static> = serde_json::from_value(_tx.clone()).ok()?;
+    if _tx.get("TransactionType")?.as_str() != Some("PaymentChannelFund") {
+        return None;
+    }
     let mut lines = Vec::new();
     let val = Style::new().fg(theme::ACCENT);
 
-    push_common_lines(
-        &mut lines,
-        &tx.common_fields.account,
-        tx.common_fields.sequence,
-        tx.common_fields.fee.as_ref().map(|f| f.to_string()),
-    );
+    push_common_lines_from_value(&mut lines, _tx);
 
-    lines.push(Line::from(vec![
-        Span::styled("Channel", theme::accent_style()),
-        Span::raw(": "),
-        Span::styled(tx.channel.to_string(), val),
-    ]));
-    lines.push(Line::from(vec![
-        Span::styled("Amount", theme::accent_style()),
-        Span::raw(": "),
-        Span::styled(crate::xrpl::drops_to_xrp(&tx.amount.to_string()), val),
-    ]));
+    if let Some(channel) = _tx.get("Channel").and_then(Value::as_str) {
+        lines.push(Line::from(vec![
+            Span::styled("Channel", theme::accent_style()),
+            Span::raw(": "),
+            Span::styled(channel.to_string(), val),
+        ]));
+    }
+    if let Some(amount) = _tx.get("Amount") {
+        lines.push(Line::from(vec![
+            Span::styled("Amount", theme::accent_style()),
+            Span::raw(": "),
+            Span::styled(fmt_xrpl_amount_from_value(amount), val),
+        ]));
+    }
 
-    if let Some(exp) = tx.expiration {
+    if let Some(exp) = _tx.get("Expiration").and_then(Value::as_u64) {
         let unix = exp as i64 + super::RIPPLE_EPOCH;
         let ts = crate::components::shared::fmt::fmt_local_datetime(unix);
         lines.push(Line::from(vec![
@@ -561,48 +554,46 @@ pub(crate) fn payment_channel_fund_detail_lines<'a>(_tx: &'a Value) -> Option<Ve
     Some(lines)
 }
 
-/// Try to parse a PaymentChannelClaim transaction into typed detail lines.
+/// PaymentChannelClaim detail lines parsed directly from Value.
 pub(crate) fn payment_channel_claim_detail_lines<'a>(_tx: &'a Value) -> Option<Vec<Line<'a>>> {
-    use xrpl::models::transactions::payment_channel_claim::PaymentChannelClaim;
-    let tx: PaymentChannelClaim<'static> = serde_json::from_value(_tx.clone()).ok()?;
+    if _tx.get("TransactionType")?.as_str() != Some("PaymentChannelClaim") {
+        return None;
+    }
     let mut lines = Vec::new();
     let val = Style::new().fg(theme::ACCENT);
 
-    push_common_lines(
-        &mut lines,
-        &tx.common_fields.account,
-        tx.common_fields.sequence,
-        tx.common_fields.fee.as_ref().map(|f| f.to_string()),
-    );
+    push_common_lines_from_value(&mut lines, _tx);
 
-    lines.push(Line::from(vec![
-        Span::styled("Channel", theme::accent_style()),
-        Span::raw(": "),
-        Span::styled(tx.channel.to_string(), val),
-    ]));
+    if let Some(channel) = _tx.get("Channel").and_then(Value::as_str) {
+        lines.push(Line::from(vec![
+            Span::styled("Channel", theme::accent_style()),
+            Span::raw(": "),
+            Span::styled(channel.to_string(), val),
+        ]));
+    }
 
-    if let Some(balance) = tx.balance {
+    if let Some(balance) = _tx.get("Balance") {
         lines.push(Line::from(vec![
             Span::styled("Balance", theme::accent_style()),
             Span::raw(": "),
-            Span::styled(crate::xrpl::drops_to_xrp(&balance), val),
+            Span::styled(fmt_xrpl_amount_from_value(balance), val),
         ]));
     }
-    if let Some(amount) = tx.amount {
+    if let Some(amount) = _tx.get("Amount") {
         lines.push(Line::from(vec![
             Span::styled("Amount", theme::accent_style()),
             Span::raw(": "),
-            Span::styled(crate::xrpl::drops_to_xrp(&amount), val),
+            Span::styled(fmt_xrpl_amount_from_value(amount), val),
         ]));
     }
-    if let Some(sig) = tx.signature {
+    if let Some(sig) = _tx.get("Signature").and_then(Value::as_str) {
         lines.push(Line::from(vec![
             Span::styled("Signature", theme::accent_style()),
             Span::raw(": "),
             Span::styled(sig.to_string(), val),
         ]));
     }
-    if let Some(pk) = tx.public_key {
+    if let Some(pk) = _tx.get("PublicKey").and_then(Value::as_str) {
         lines.push(Line::from(vec![
             Span::styled("PublicKey", theme::accent_style()),
             Span::raw(": "),
@@ -613,89 +604,81 @@ pub(crate) fn payment_channel_claim_detail_lines<'a>(_tx: &'a Value) -> Option<V
     Some(lines)
 }
 
-/// Try to parse a CheckCash transaction into typed detail lines.
+/// CheckCash detail lines parsed directly from Value.
 pub(crate) fn check_cash_detail_lines<'a>(_tx: &'a Value) -> Option<Vec<Line<'a>>> {
-    use xrpl::models::transactions::check_cash::CheckCash;
-    let tx: CheckCash<'static> = serde_json::from_value(_tx.clone()).ok()?;
+    if _tx.get("TransactionType")?.as_str() != Some("CheckCash") {
+        return None;
+    }
     let mut lines = Vec::new();
     let val = Style::new().fg(theme::ACCENT);
 
-    push_common_lines(
-        &mut lines,
-        &tx.common_fields.account,
-        tx.common_fields.sequence,
-        tx.common_fields.fee.as_ref().map(|f| f.to_string()),
-    );
+    push_common_lines_from_value(&mut lines, _tx);
 
-    lines.push(Line::from(vec![
-        Span::styled("CheckID", theme::accent_style()),
-        Span::raw(": "),
-        Span::styled(tx.check_id.to_string(), val),
-    ]));
+    if let Some(check_id) = _tx.get("CheckID").and_then(Value::as_str) {
+        lines.push(Line::from(vec![
+            Span::styled("CheckID", theme::accent_style()),
+            Span::raw(": "),
+            Span::styled(check_id.to_string(), val),
+        ]));
+    }
 
-    if let Some(amount) = tx.amount {
+    if let Some(amount) = _tx.get("Amount") {
         lines.push(Line::from(vec![
             Span::styled("Amount", theme::accent_style()),
             Span::raw(": "),
-            Span::styled(fmt_xrpl_amount(&amount), val),
+            Span::styled(fmt_xrpl_amount_from_value(amount), val),
         ]));
     }
-    if let Some(min) = tx.deliver_min {
+    if let Some(min) = _tx.get("DeliverMin") {
         lines.push(Line::from(vec![
             Span::styled("DeliverMin", theme::accent_style()),
             Span::raw(": "),
-            Span::styled(fmt_xrpl_amount(&min), val),
+            Span::styled(fmt_xrpl_amount_from_value(min), val),
         ]));
     }
 
     Some(lines)
 }
 
-/// Try to parse a CheckCancel transaction into typed detail lines.
+/// CheckCancel detail lines parsed directly from Value.
 pub(crate) fn check_cancel_detail_lines<'a>(_tx: &'a Value) -> Option<Vec<Line<'a>>> {
-    use xrpl::models::transactions::check_cancel::CheckCancel;
-    let tx: CheckCancel<'static> = serde_json::from_value(_tx.clone()).ok()?;
+    if _tx.get("TransactionType")?.as_str() != Some("CheckCancel") {
+        return None;
+    }
     let mut lines = Vec::new();
     let val = Style::new().fg(theme::ACCENT);
 
-    push_common_lines(
-        &mut lines,
-        &tx.common_fields.account,
-        tx.common_fields.sequence,
-        tx.common_fields.fee.as_ref().map(|f| f.to_string()),
-    );
+    push_common_lines_from_value(&mut lines, _tx);
 
-    lines.push(Line::from(vec![
-        Span::styled("CheckID", theme::accent_style()),
-        Span::raw(": "),
-        Span::styled(tx.check_id.to_string(), val),
-    ]));
+    if let Some(check_id) = _tx.get("CheckID").and_then(Value::as_str) {
+        lines.push(Line::from(vec![
+            Span::styled("CheckID", theme::accent_style()),
+            Span::raw(": "),
+            Span::styled(check_id.to_string(), val),
+        ]));
+    }
 
     Some(lines)
 }
 
-/// Try to parse a DepositPreauth transaction into typed detail lines.
+/// DepositPreauth detail lines parsed directly from Value.
 pub(crate) fn deposit_preauth_detail_lines<'a>(_tx: &'a Value) -> Option<Vec<Line<'a>>> {
-    use xrpl::models::transactions::deposit_preauth::DepositPreauth;
-    let tx: DepositPreauth<'static> = serde_json::from_value(_tx.clone()).ok()?;
+    if _tx.get("TransactionType")?.as_str() != Some("DepositPreauth") {
+        return None;
+    }
     let mut lines = Vec::new();
     let val = Style::new().fg(theme::ACCENT);
 
-    push_common_lines(
-        &mut lines,
-        &tx.common_fields.account,
-        tx.common_fields.sequence,
-        tx.common_fields.fee.as_ref().map(|f| f.to_string()),
-    );
+    push_common_lines_from_value(&mut lines, _tx);
 
-    if let Some(auth) = tx.authorize {
+    if let Some(auth) = _tx.get("Authorize").and_then(Value::as_str) {
         lines.push(Line::from(vec![
             Span::styled("Authorize", theme::accent_style()),
             Span::raw(": "),
             Span::styled(auth.to_string(), val),
         ]));
     }
-    if let Some(unauth) = tx.unauthorize {
+    if let Some(unauth) = _tx.get("Unauthorize").and_then(Value::as_str) {
         lines.push(Line::from(vec![
             Span::styled("Unauthorize", theme::accent_style()),
             Span::raw(": "),
@@ -706,21 +689,17 @@ pub(crate) fn deposit_preauth_detail_lines<'a>(_tx: &'a Value) -> Option<Vec<Lin
     Some(lines)
 }
 
-/// Try to parse a SetRegularKey transaction into typed detail lines.
+/// SetRegularKey detail lines parsed directly from Value.
 pub(crate) fn set_regular_key_detail_lines<'a>(_tx: &'a Value) -> Option<Vec<Line<'a>>> {
-    use xrpl::models::transactions::set_regular_key::SetRegularKey;
-    let tx: SetRegularKey<'static> = serde_json::from_value(_tx.clone()).ok()?;
+    if _tx.get("TransactionType")?.as_str() != Some("SetRegularKey") {
+        return None;
+    }
     let mut lines = Vec::new();
     let val = Style::new().fg(theme::ACCENT);
 
-    push_common_lines(
-        &mut lines,
-        &tx.common_fields.account,
-        tx.common_fields.sequence,
-        tx.common_fields.fee.as_ref().map(|f| f.to_string()),
-    );
+    push_common_lines_from_value(&mut lines, _tx);
 
-    if let Some(key) = tx.regular_key {
+    if let Some(key) = _tx.get("RegularKey").and_then(Value::as_str) {
         lines.push(Line::from(vec![
             Span::styled("RegularKey", theme::accent_style()),
             Span::raw(": "),
@@ -737,27 +716,25 @@ pub(crate) fn set_regular_key_detail_lines<'a>(_tx: &'a Value) -> Option<Vec<Lin
     Some(lines)
 }
 
-/// Try to parse an NFTokenBurn transaction into typed detail lines.
+/// NFTokenBurn detail lines parsed directly from Value.
 pub(crate) fn nftoken_burn_detail_lines<'a>(_tx: &'a Value) -> Option<Vec<Line<'a>>> {
-    use xrpl::models::transactions::nftoken_burn::NFTokenBurn;
-    let tx: NFTokenBurn<'static> = serde_json::from_value(_tx.clone()).ok()?;
+    if _tx.get("TransactionType")?.as_str() != Some("NFTokenBurn") {
+        return None;
+    }
     let mut lines = Vec::new();
     let val = Style::new().fg(theme::ACCENT);
 
-    push_common_lines(
-        &mut lines,
-        &tx.common_fields.account,
-        tx.common_fields.sequence,
-        tx.common_fields.fee.as_ref().map(|f| f.to_string()),
-    );
+    push_common_lines_from_value(&mut lines, _tx);
 
-    lines.push(Line::from(vec![
-        Span::styled("NFTokenID", theme::accent_style()),
-        Span::raw(": "),
-        Span::styled(tx.nftoken_id.to_string(), val),
-    ]));
+    if let Some(id) = _tx.get("NFTokenID").and_then(Value::as_str) {
+        lines.push(Line::from(vec![
+            Span::styled("NFTokenID", theme::accent_style()),
+            Span::raw(": "),
+            Span::styled(id.to_string(), val),
+        ]));
+    }
 
-    if let Some(owner) = tx.owner {
+    if let Some(owner) = _tx.get("Owner").and_then(Value::as_str) {
         lines.push(Line::from(vec![
             Span::styled("Owner", theme::accent_style()),
             Span::raw(": "),
@@ -768,39 +745,39 @@ pub(crate) fn nftoken_burn_detail_lines<'a>(_tx: &'a Value) -> Option<Vec<Line<'
     Some(lines)
 }
 
-/// Try to parse an NFTokenCreateOffer transaction into typed detail lines.
+/// NFTokenCreateOffer detail lines parsed directly from Value.
 pub(crate) fn nftoken_create_offer_detail_lines<'a>(_tx: &'a Value) -> Option<Vec<Line<'a>>> {
-    use xrpl::models::transactions::nftoken_create_offer::NFTokenCreateOffer;
-    let tx: NFTokenCreateOffer<'static> = serde_json::from_value(_tx.clone()).ok()?;
+    if _tx.get("TransactionType")?.as_str() != Some("NFTokenCreateOffer") {
+        return None;
+    }
     let mut lines = Vec::new();
     let val = Style::new().fg(theme::ACCENT);
 
-    push_common_lines(
-        &mut lines,
-        &tx.common_fields.account,
-        tx.common_fields.sequence,
-        tx.common_fields.fee.as_ref().map(|f| f.to_string()),
-    );
+    push_common_lines_from_value(&mut lines, _tx);
 
-    lines.push(Line::from(vec![
-        Span::styled("NFTokenID", theme::accent_style()),
-        Span::raw(": "),
-        Span::styled(tx.nftoken_id.to_string(), val),
-    ]));
-    lines.push(Line::from(vec![
-        Span::styled("Amount", theme::accent_style()),
-        Span::raw(": "),
-        Span::styled(fmt_xrpl_amount(&tx.amount), val),
-    ]));
+    if let Some(id) = _tx.get("NFTokenID").and_then(Value::as_str) {
+        lines.push(Line::from(vec![
+            Span::styled("NFTokenID", theme::accent_style()),
+            Span::raw(": "),
+            Span::styled(id.to_string(), val),
+        ]));
+    }
+    if let Some(amount) = _tx.get("Amount") {
+        lines.push(Line::from(vec![
+            Span::styled("Amount", theme::accent_style()),
+            Span::raw(": "),
+            Span::styled(fmt_xrpl_amount_from_value(amount), val),
+        ]));
+    }
 
-    if let Some(owner) = tx.owner {
+    if let Some(owner) = _tx.get("Owner").and_then(Value::as_str) {
         lines.push(Line::from(vec![
             Span::styled("Owner", theme::accent_style()),
             Span::raw(": "),
             Span::styled(owner.to_string(), val),
         ]));
     }
-    if let Some(exp) = tx.expiration {
+    if let Some(exp) = _tx.get("Expiration").and_then(Value::as_u64) {
         let unix = exp as i64 + super::RIPPLE_EPOCH;
         let ts = crate::components::shared::fmt::fmt_local_datetime(unix);
         lines.push(Line::from(vec![
@@ -809,7 +786,7 @@ pub(crate) fn nftoken_create_offer_detail_lines<'a>(_tx: &'a Value) -> Option<Ve
             Span::styled(ts, val),
         ]));
     }
-    if let Some(dest) = tx.destination {
+    if let Some(dest) = _tx.get("Destination").and_then(Value::as_str) {
         lines.push(Line::from(vec![
             Span::styled("Destination", theme::accent_style()),
             Span::raw(": "),
@@ -820,272 +797,111 @@ pub(crate) fn nftoken_create_offer_detail_lines<'a>(_tx: &'a Value) -> Option<Ve
     Some(lines)
 }
 
-/// Try to parse an NFTokenAcceptOffer transaction into typed detail lines.
+/// NFTokenAcceptOffer detail lines parsed directly from Value.
 pub(crate) fn nftoken_accept_offer_detail_lines<'a>(_tx: &'a Value) -> Option<Vec<Line<'a>>> {
-    use xrpl::models::transactions::nftoken_accept_offer::NFTokenAcceptOffer;
-    let tx: NFTokenAcceptOffer<'static> = serde_json::from_value(_tx.clone()).ok()?;
+    if _tx.get("TransactionType")?.as_str() != Some("NFTokenAcceptOffer") {
+        return None;
+    }
     let mut lines = Vec::new();
     let val = Style::new().fg(theme::ACCENT);
 
-    push_common_lines(
-        &mut lines,
-        &tx.common_fields.account,
-        tx.common_fields.sequence,
-        tx.common_fields.fee.as_ref().map(|f| f.to_string()),
-    );
+    push_common_lines_from_value(&mut lines, _tx);
 
-    if let Some(sell) = tx.nftoken_sell_offer {
+    if let Some(sell) = _tx.get("NFTokenSellOffer").and_then(Value::as_str) {
         lines.push(Line::from(vec![
             Span::styled("NFTokenSellOffer", theme::accent_style()),
             Span::raw(": "),
             Span::styled(sell.to_string(), val),
         ]));
     }
-    if let Some(buy) = tx.nftoken_buy_offer {
+    if let Some(buy) = _tx.get("NFTokenBuyOffer").and_then(Value::as_str) {
         lines.push(Line::from(vec![
             Span::styled("NFTokenBuyOffer", theme::accent_style()),
             Span::raw(": "),
             Span::styled(buy.to_string(), val),
         ]));
     }
-    if let Some(fee) = tx.nftoken_broker_fee {
+    if let Some(fee) = _tx.get("NFTokenBrokerFee") {
         lines.push(Line::from(vec![
             Span::styled("NFTokenBrokerFee", theme::accent_style()),
             Span::raw(": "),
-            Span::styled(fmt_xrpl_amount(&fee), val),
+            Span::styled(fmt_xrpl_amount_from_value(fee), val),
         ]));
     }
 
     Some(lines)
 }
 
-/// Try to parse an NFTokenCancelOffer transaction into typed detail lines.
+/// NFTokenCancelOffer detail lines parsed directly from Value.
 pub(crate) fn nftoken_cancel_offer_detail_lines<'a>(_tx: &'a Value) -> Option<Vec<Line<'a>>> {
-    use xrpl::models::transactions::nftoken_cancel_offer::NFTokenCancelOffer;
-    let tx: NFTokenCancelOffer<'static> = serde_json::from_value(_tx.clone()).ok()?;
+    if _tx.get("TransactionType")?.as_str() != Some("NFTokenCancelOffer") {
+        return None;
+    }
     let mut lines = Vec::new();
     let val = Style::new().fg(theme::ACCENT);
 
-    push_common_lines(
-        &mut lines,
-        &tx.common_fields.account,
-        tx.common_fields.sequence,
-        tx.common_fields.fee.as_ref().map(|f| f.to_string()),
-    );
+    push_common_lines_from_value(&mut lines, _tx);
 
-    for (i, offer) in tx.nftoken_offers.iter().enumerate() {
-        lines.push(Line::from(vec![
-            Span::styled(format!("Offer {}", i + 1), theme::accent_style()),
-            Span::raw(": "),
-            Span::styled(offer.to_string(), val),
-        ]));
+    if let Some(offers) = _tx.get("NFTokenOffers").and_then(Value::as_array) {
+        for (i, offer) in offers.iter().enumerate() {
+            let val_str = offer.as_str().unwrap_or("?");
+            lines.push(Line::from(vec![
+                Span::styled(format!("Offer {}", i + 1), theme::accent_style()),
+                Span::raw(": "),
+                Span::styled(val_str.to_string(), val),
+            ]));
+        }
     }
 
     Some(lines)
 }
 
-/// Try to parse a TicketCreate transaction into typed detail lines.
+/// TicketCreate detail lines parsed directly from Value.
 pub(crate) fn ticket_create_detail_lines<'a>(_tx: &'a Value) -> Option<Vec<Line<'a>>> {
-    use xrpl::models::transactions::ticket_create::TicketCreate;
-    let tx: TicketCreate<'static> = serde_json::from_value(_tx.clone()).ok()?;
+    if _tx.get("TransactionType")?.as_str() != Some("TicketCreate") {
+        return None;
+    }
     let mut lines = Vec::new();
     let val = Style::new().fg(theme::ACCENT);
 
-    push_common_lines(
-        &mut lines,
-        &tx.common_fields.account,
-        tx.common_fields.sequence,
-        tx.common_fields.fee.as_ref().map(|f| f.to_string()),
-    );
+    push_common_lines_from_value(&mut lines, _tx);
 
-    lines.push(Line::from(vec![
-        Span::styled("TicketCount", theme::accent_style()),
-        Span::raw(": "),
-        Span::styled(tx.ticket_count.to_string(), val),
-    ]));
+    if let Some(count) = _tx.get("TicketCount").and_then(Value::as_u64) {
+        lines.push(Line::from(vec![
+            Span::styled("TicketCount", theme::accent_style()),
+            Span::raw(": "),
+            Span::styled(count.to_string(), val),
+        ]));
+    }
 
     Some(lines)
 }
 
-/// Try to parse an AMMCreate transaction into typed detail lines.
+/// AMMCreate detail lines parsed directly from Value.
 pub(crate) fn amm_create_detail_lines<'a>(_tx: &'a Value) -> Option<Vec<Line<'a>>> {
-    use xrpl::models::transactions::amm_create::AMMCreate;
-    let tx: AMMCreate<'static> = serde_json::from_value(_tx.clone()).ok()?;
+    if _tx.get("TransactionType")?.as_str() != Some("AMMCreate") {
+        return None;
+    }
     let mut lines = Vec::new();
     let val = Style::new().fg(theme::ACCENT);
 
-    push_common_lines(
-        &mut lines,
-        &tx.common_fields.account,
-        tx.common_fields.sequence,
-        tx.common_fields.fee.as_ref().map(|f| f.to_string()),
-    );
+    push_common_lines_from_value(&mut lines, _tx);
 
-    lines.push(Line::from(vec![
-        Span::styled("Amount", theme::accent_style()),
-        Span::raw(": "),
-        Span::styled(fmt_xrpl_amount(&tx.amount), val),
-    ]));
-    lines.push(Line::from(vec![
-        Span::styled("Amount2", theme::accent_style()),
-        Span::raw(": "),
-        Span::styled(fmt_xrpl_amount(&tx.amount2), val),
-    ]));
-    lines.push(Line::from(vec![
-        Span::styled("TradingFee", theme::accent_style()),
-        Span::raw(": "),
-        Span::styled(format!("{:.3}%", tx.trading_fee as f64 / 1000.0), val),
-    ]));
-
-    Some(lines)
-}
-
-/// Try to parse an AMMDeposit transaction into typed detail lines.
-pub(crate) fn amm_deposit_detail_lines<'a>(_tx: &'a Value) -> Option<Vec<Line<'a>>> {
-    use xrpl::models::transactions::amm_deposit::AMMDeposit;
-    let tx: AMMDeposit<'static> = serde_json::from_value(_tx.clone()).ok()?;
-    let mut lines = Vec::new();
-    let val = Style::new().fg(theme::ACCENT);
-
-    push_common_lines(
-        &mut lines,
-        &tx.common_fields.account,
-        tx.common_fields.sequence,
-        tx.common_fields.fee.as_ref().map(|f| f.to_string()),
-    );
-
-    lines.push(Line::from(vec![
-        Span::styled("Asset", theme::accent_style()),
-        Span::raw(": "),
-        Span::styled(fmt_currency(&tx.asset), val),
-    ]));
-    lines.push(Line::from(vec![
-        Span::styled("Asset2", theme::accent_style()),
-        Span::raw(": "),
-        Span::styled(fmt_currency(&tx.asset2), val),
-    ]));
-
-    if let Some(amount) = tx.amount {
+    if let Some(amount) = _tx.get("Amount") {
         lines.push(Line::from(vec![
             Span::styled("Amount", theme::accent_style()),
             Span::raw(": "),
-            Span::styled(fmt_xrpl_amount(&amount), val),
+            Span::styled(fmt_xrpl_amount_from_value(amount), val),
         ]));
     }
-    if let Some(amount2) = tx.amount2 {
+    if let Some(amount2) = _tx.get("Amount2") {
         lines.push(Line::from(vec![
             Span::styled("Amount2", theme::accent_style()),
             Span::raw(": "),
-            Span::styled(fmt_xrpl_amount(&amount2), val),
+            Span::styled(fmt_xrpl_amount_from_value(amount2), val),
         ]));
     }
-    if let Some(price) = tx.e_price {
-        lines.push(Line::from(vec![
-            Span::styled("EPrice", theme::accent_style()),
-            Span::raw(": "),
-            Span::styled(fmt_xrpl_amount(&price), val),
-        ]));
-    }
-    if let Some(lp) = tx.lp_token_out {
-        lines.push(Line::from(vec![
-            Span::styled("LPTokenOut", theme::accent_style()),
-            Span::raw(": "),
-            Span::styled(
-                format!("{} {} (issuer: {})", lp.value, lp.currency, lp.issuer),
-                val,
-            ),
-        ]));
-    }
-
-    Some(lines)
-}
-
-/// Try to parse an AMMWithdraw transaction into typed detail lines.
-pub(crate) fn amm_withdraw_detail_lines<'a>(_tx: &'a Value) -> Option<Vec<Line<'a>>> {
-    use xrpl::models::transactions::amm_withdraw::AMMWithdraw;
-    let tx: AMMWithdraw<'static> = serde_json::from_value(_tx.clone()).ok()?;
-    let mut lines = Vec::new();
-    let val = Style::new().fg(theme::ACCENT);
-
-    push_common_lines(
-        &mut lines,
-        &tx.common_fields.account,
-        tx.common_fields.sequence,
-        tx.common_fields.fee.as_ref().map(|f| f.to_string()),
-    );
-
-    lines.push(Line::from(vec![
-        Span::styled("Asset", theme::accent_style()),
-        Span::raw(": "),
-        Span::styled(fmt_currency(&tx.asset), val),
-    ]));
-    lines.push(Line::from(vec![
-        Span::styled("Asset2", theme::accent_style()),
-        Span::raw(": "),
-        Span::styled(fmt_currency(&tx.asset2), val),
-    ]));
-
-    if let Some(amount) = tx.amount {
-        lines.push(Line::from(vec![
-            Span::styled("Amount", theme::accent_style()),
-            Span::raw(": "),
-            Span::styled(fmt_xrpl_amount(&amount), val),
-        ]));
-    }
-    if let Some(amount2) = tx.amount2 {
-        lines.push(Line::from(vec![
-            Span::styled("Amount2", theme::accent_style()),
-            Span::raw(": "),
-            Span::styled(fmt_xrpl_amount(&amount2), val),
-        ]));
-    }
-    if let Some(price) = tx.e_price {
-        lines.push(Line::from(vec![
-            Span::styled("EPrice", theme::accent_style()),
-            Span::raw(": "),
-            Span::styled(fmt_xrpl_amount(&price), val),
-        ]));
-    }
-    if let Some(lp) = tx.lp_token_in {
-        lines.push(Line::from(vec![
-            Span::styled("LPTokenIn", theme::accent_style()),
-            Span::raw(": "),
-            Span::styled(
-                format!("{} {} (issuer: {})", lp.value, lp.currency, lp.issuer),
-                val,
-            ),
-        ]));
-    }
-
-    Some(lines)
-}
-
-/// Try to parse an AMMVote transaction into typed detail lines.
-pub(crate) fn amm_vote_detail_lines<'a>(_tx: &'a Value) -> Option<Vec<Line<'a>>> {
-    use xrpl::models::transactions::amm_vote::AMMVote;
-    let tx: AMMVote<'static> = serde_json::from_value(_tx.clone()).ok()?;
-    let mut lines = Vec::new();
-    let val = Style::new().fg(theme::ACCENT);
-
-    push_common_lines(
-        &mut lines,
-        &tx.common_fields.account,
-        tx.common_fields.sequence,
-        tx.common_fields.fee.as_ref().map(|f| f.to_string()),
-    );
-
-    lines.push(Line::from(vec![
-        Span::styled("Asset", theme::accent_style()),
-        Span::raw(": "),
-        Span::styled(fmt_currency(&tx.asset), val),
-    ]));
-    lines.push(Line::from(vec![
-        Span::styled("Asset2", theme::accent_style()),
-        Span::raw(": "),
-        Span::styled(fmt_currency(&tx.asset2), val),
-    ]));
-
-    if let Some(fee) = tx.trading_fee {
+    if let Some(fee) = _tx.get("TradingFee").and_then(Value::as_u64) {
         lines.push(Line::from(vec![
             Span::styled("TradingFee", theme::accent_style()),
             Span::raw(": "),
@@ -1096,79 +912,223 @@ pub(crate) fn amm_vote_detail_lines<'a>(_tx: &'a Value) -> Option<Vec<Line<'a>>>
     Some(lines)
 }
 
-/// Try to parse an AMMBid transaction into typed detail lines.
-pub(crate) fn amm_bid_detail_lines<'a>(_tx: &'a Value) -> Option<Vec<Line<'a>>> {
-    use xrpl::models::transactions::amm_bid::AMMBid;
-    let tx: AMMBid<'static> = serde_json::from_value(_tx.clone()).ok()?;
+/// AMMDeposit detail lines parsed directly from Value.
+pub(crate) fn amm_deposit_detail_lines<'a>(_tx: &'a Value) -> Option<Vec<Line<'a>>> {
+    if _tx.get("TransactionType")?.as_str() != Some("AMMDeposit") {
+        return None;
+    }
     let mut lines = Vec::new();
     let val = Style::new().fg(theme::ACCENT);
 
-    push_common_lines(
-        &mut lines,
-        &tx.common_fields.account,
-        tx.common_fields.sequence,
-        tx.common_fields.fee.as_ref().map(|f| f.to_string()),
-    );
+    push_common_lines_from_value(&mut lines, _tx);
 
-    lines.push(Line::from(vec![
-        Span::styled("Asset", theme::accent_style()),
-        Span::raw(": "),
-        Span::styled(fmt_currency(&tx.asset), val),
-    ]));
-    lines.push(Line::from(vec![
-        Span::styled("Asset2", theme::accent_style()),
-        Span::raw(": "),
-        Span::styled(fmt_currency(&tx.asset2), val),
-    ]));
-
-    if let Some(min) = tx.bid_min {
+    if let Some(asset) = _tx.get("Asset") {
         lines.push(Line::from(vec![
-            Span::styled("BidMin", theme::accent_style()),
+            Span::styled("Asset", theme::accent_style()),
             Span::raw(": "),
-            Span::styled(
-                format!("{} {} (issuer: {})", min.value, min.currency, min.issuer),
-                val,
-            ),
+            Span::styled(fmt_xrpl_amount_from_value(asset), val),
         ]));
     }
-    if let Some(max) = tx.bid_max {
+    if let Some(asset2) = _tx.get("Asset2") {
         lines.push(Line::from(vec![
-            Span::styled("BidMax", theme::accent_style()),
+            Span::styled("Asset2", theme::accent_style()),
             Span::raw(": "),
-            Span::styled(
-                format!("{} {} (issuer: {})", max.value, max.currency, max.issuer),
-                val,
-            ),
+            Span::styled(fmt_xrpl_amount_from_value(asset2), val),
+        ]));
+    }
+
+    if let Some(amount) = _tx.get("Amount") {
+        lines.push(Line::from(vec![
+            Span::styled("Amount", theme::accent_style()),
+            Span::raw(": "),
+            Span::styled(fmt_xrpl_amount_from_value(amount), val),
+        ]));
+    }
+    if let Some(amount2) = _tx.get("Amount2") {
+        lines.push(Line::from(vec![
+            Span::styled("Amount2", theme::accent_style()),
+            Span::raw(": "),
+            Span::styled(fmt_xrpl_amount_from_value(amount2), val),
+        ]));
+    }
+    if let Some(price) = _tx.get("EPrice") {
+        lines.push(Line::from(vec![
+            Span::styled("EPrice", theme::accent_style()),
+            Span::raw(": "),
+            Span::styled(fmt_xrpl_amount_from_value(price), val),
+        ]));
+    }
+    if let Some(lp) = _tx.get("LPTokenOut") {
+        lines.push(Line::from(vec![
+            Span::styled("LPTokenOut", theme::accent_style()),
+            Span::raw(": "),
+            Span::styled(fmt_xrpl_amount_from_value(lp), val),
         ]));
     }
 
     Some(lines)
 }
 
-/// Try to parse an AMMDelete transaction into typed detail lines.
-pub(crate) fn amm_delete_detail_lines<'a>(_tx: &'a Value) -> Option<Vec<Line<'a>>> {
-    use xrpl::models::transactions::amm_delete::AMMDelete;
-    let tx: AMMDelete<'static> = serde_json::from_value(_tx.clone()).ok()?;
+/// AMMWithdraw detail lines parsed directly from Value.
+pub(crate) fn amm_withdraw_detail_lines<'a>(_tx: &'a Value) -> Option<Vec<Line<'a>>> {
+    if _tx.get("TransactionType")?.as_str() != Some("AMMWithdraw") {
+        return None;
+    }
     let mut lines = Vec::new();
     let val = Style::new().fg(theme::ACCENT);
 
-    push_common_lines(
-        &mut lines,
-        &tx.common_fields.account,
-        tx.common_fields.sequence,
-        tx.common_fields.fee.as_ref().map(|f| f.to_string()),
-    );
+    push_common_lines_from_value(&mut lines, _tx);
 
-    lines.push(Line::from(vec![
-        Span::styled("Asset", theme::accent_style()),
-        Span::raw(": "),
-        Span::styled(fmt_currency(&tx.asset), val),
-    ]));
-    lines.push(Line::from(vec![
-        Span::styled("Asset2", theme::accent_style()),
-        Span::raw(": "),
-        Span::styled(fmt_currency(&tx.asset2), val),
-    ]));
+    if let Some(asset) = _tx.get("Asset") {
+        lines.push(Line::from(vec![
+            Span::styled("Asset", theme::accent_style()),
+            Span::raw(": "),
+            Span::styled(fmt_xrpl_amount_from_value(asset), val),
+        ]));
+    }
+    if let Some(asset2) = _tx.get("Asset2") {
+        lines.push(Line::from(vec![
+            Span::styled("Asset2", theme::accent_style()),
+            Span::raw(": "),
+            Span::styled(fmt_xrpl_amount_from_value(asset2), val),
+        ]));
+    }
+
+    if let Some(amount) = _tx.get("Amount") {
+        lines.push(Line::from(vec![
+            Span::styled("Amount", theme::accent_style()),
+            Span::raw(": "),
+            Span::styled(fmt_xrpl_amount_from_value(amount), val),
+        ]));
+    }
+    if let Some(amount2) = _tx.get("Amount2") {
+        lines.push(Line::from(vec![
+            Span::styled("Amount2", theme::accent_style()),
+            Span::raw(": "),
+            Span::styled(fmt_xrpl_amount_from_value(amount2), val),
+        ]));
+    }
+    if let Some(price) = _tx.get("EPrice") {
+        lines.push(Line::from(vec![
+            Span::styled("EPrice", theme::accent_style()),
+            Span::raw(": "),
+            Span::styled(fmt_xrpl_amount_from_value(price), val),
+        ]));
+    }
+    if let Some(lp) = _tx.get("LPTokenIn") {
+        lines.push(Line::from(vec![
+            Span::styled("LPTokenIn", theme::accent_style()),
+            Span::raw(": "),
+            Span::styled(fmt_xrpl_amount_from_value(lp), val),
+        ]));
+    }
+
+    Some(lines)
+}
+
+/// AMMVote detail lines parsed directly from Value.
+pub(crate) fn amm_vote_detail_lines<'a>(_tx: &'a Value) -> Option<Vec<Line<'a>>> {
+    if _tx.get("TransactionType")?.as_str() != Some("AMMVote") {
+        return None;
+    }
+    let mut lines = Vec::new();
+    let val = Style::new().fg(theme::ACCENT);
+
+    push_common_lines_from_value(&mut lines, _tx);
+
+    if let Some(asset) = _tx.get("Asset") {
+        lines.push(Line::from(vec![
+            Span::styled("Asset", theme::accent_style()),
+            Span::raw(": "),
+            Span::styled(fmt_xrpl_amount_from_value(asset), val),
+        ]));
+    }
+    if let Some(asset2) = _tx.get("Asset2") {
+        lines.push(Line::from(vec![
+            Span::styled("Asset2", theme::accent_style()),
+            Span::raw(": "),
+            Span::styled(fmt_xrpl_amount_from_value(asset2), val),
+        ]));
+    }
+
+    if let Some(fee) = _tx.get("TradingFee").and_then(Value::as_u64) {
+        lines.push(Line::from(vec![
+            Span::styled("TradingFee", theme::accent_style()),
+            Span::raw(": "),
+            Span::styled(format!("{:.3}%", fee as f64 / 1000.0), val),
+        ]));
+    }
+
+    Some(lines)
+}
+
+/// AMMBid detail lines parsed directly from Value.
+pub(crate) fn amm_bid_detail_lines<'a>(_tx: &'a Value) -> Option<Vec<Line<'a>>> {
+    if _tx.get("TransactionType")?.as_str() != Some("AMMBid") {
+        return None;
+    }
+    let mut lines = Vec::new();
+    let val = Style::new().fg(theme::ACCENT);
+
+    push_common_lines_from_value(&mut lines, _tx);
+
+    if let Some(asset) = _tx.get("Asset") {
+        lines.push(Line::from(vec![
+            Span::styled("Asset", theme::accent_style()),
+            Span::raw(": "),
+            Span::styled(fmt_xrpl_amount_from_value(asset), val),
+        ]));
+    }
+    if let Some(asset2) = _tx.get("Asset2") {
+        lines.push(Line::from(vec![
+            Span::styled("Asset2", theme::accent_style()),
+            Span::raw(": "),
+            Span::styled(fmt_xrpl_amount_from_value(asset2), val),
+        ]));
+    }
+
+    if let Some(min) = _tx.get("BidMin") {
+        lines.push(Line::from(vec![
+            Span::styled("BidMin", theme::accent_style()),
+            Span::raw(": "),
+            Span::styled(fmt_xrpl_amount_from_value(min), val),
+        ]));
+    }
+    if let Some(max) = _tx.get("BidMax") {
+        lines.push(Line::from(vec![
+            Span::styled("BidMax", theme::accent_style()),
+            Span::raw(": "),
+            Span::styled(fmt_xrpl_amount_from_value(max), val),
+        ]));
+    }
+
+    Some(lines)
+}
+
+/// AMMDelete detail lines parsed directly from Value.
+pub(crate) fn amm_delete_detail_lines<'a>(_tx: &'a Value) -> Option<Vec<Line<'a>>> {
+    if _tx.get("TransactionType")?.as_str() != Some("AMMDelete") {
+        return None;
+    }
+    let mut lines = Vec::new();
+    let val = Style::new().fg(theme::ACCENT);
+
+    push_common_lines_from_value(&mut lines, _tx);
+
+    if let Some(asset) = _tx.get("Asset") {
+        lines.push(Line::from(vec![
+            Span::styled("Asset", theme::accent_style()),
+            Span::raw(": "),
+            Span::styled(fmt_xrpl_amount_from_value(asset), val),
+        ]));
+    }
+    if let Some(asset2) = _tx.get("Asset2") {
+        lines.push(Line::from(vec![
+            Span::styled("Asset2", theme::accent_style()),
+            Span::raw(": "),
+            Span::styled(fmt_xrpl_amount_from_value(asset2), val),
+        ]));
+    }
 
     Some(lines)
 }

@@ -4,10 +4,10 @@ use strum::Display;
 use crate::{
     network::Network,
     xrpl::{
-        AccountSetSubmitParams, AccountSummary, AmmSummary, EscrowCreateSubmitParams, FeeSummary,
-        LedgerObjectRow, NftRow, OfferCreateSubmitParams, OfferRow, PaymentSubmitParams,
-        ServerInfoSummary, SetRegularKeySubmitParams, TrustLineRow, TxRow, TxSummary,
-        WalletProposeResult, XrplRlusdPrice,
+        AccountSetSubmitParams, AccountSummary, AggregatePrice, AmmSummary,
+        EscrowCreateSubmitParams, FeeSummary, LedgerObjectRow, NftRow, OfferCreateSubmitParams,
+        OfferRow, PaymentSubmitParams, ServerInfoSummary, SetRegularKeySubmitParams, TrustLineRow,
+        TxRow, TxSummary, WalletProposeResult, XrplRlusdPrice,
     },
 };
 
@@ -47,6 +47,10 @@ pub enum Action {
     /// Wallet tab shown but no seed configured — show hint instead of loading spinner.
     XrplWalletNotConfigured,
     XrplRlusdPrice(XrplRlusdPrice),
+    /// Aggregate price from `get_aggregate_price`.
+    XrplOraclePrices(Vec<AggregatePrice>),
+    /// Oracle tab shown but no oracles configured.
+    XrplOracleNotConfigured,
     /// `account_objects` snapshot; each tab filters rows by `LedgerEntryType`.
     XrplLedgerObjects(Vec<LedgerObjectRow>),
     XrplError(String),

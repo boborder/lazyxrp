@@ -4,82 +4,79 @@ use ratatui::{
     text::{Line, Span},
 };
 use serde_json::Value;
-use xrpl::models::Amount;
 
-pub(crate) fn fmt_xrpl_amount(amount: &Amount) -> String {
-    match amount {
-        Amount::XRPAmount(xrp) => crate::xrpl::drops_to_xrp(&xrp.to_string()),
-        Amount::IssuedCurrencyAmount(ic) => {
-            format!("{} {} (issuer: {})", ic.value, ic.currency, ic.issuer)
-        }
-    }
-}
-
-pub(crate) fn push_common_lines(
-    lines: &mut Vec<Line>,
-    account: &str,
-    sequence: Option<u32>,
-    fee: Option<String>,
-) {
+/// Format an xrpl Currency for display.
+/// Push Account, Sequence, Fee directly from a serde_json::Value without cloning.
+pub(crate) fn push_common_lines_from_value(lines: &mut Vec<Line>, tx: &Value) {
     let hi = theme::accent_style();
     let val = Style::new().fg(theme::ACCENT);
-    lines.push(Line::from(vec![
-        Span::styled("Account", hi),
-        Span::raw(": "),
-        Span::styled(account.to_string(), val),
-    ]));
-    if let Some(seq) = sequence {
+    if let Some(account) = tx.get("Account").and_then(Value::as_str) {
+        lines.push(Line::from(vec![
+            Span::styled("Account", hi),
+            Span::raw(": "),
+            Span::styled(account.to_string(), val),
+        ]));
+    }
+    if let Some(seq) = tx.get("Sequence").and_then(Value::as_u64) {
         lines.push(Line::from(vec![
             Span::styled("Sequence", hi),
             Span::raw(": "),
             Span::styled(seq.to_string(), val),
         ]));
     }
-    if let Some(f) = fee {
+    if let Some(fee) = tx.get("Fee").and_then(Value::as_str) {
         lines.push(Line::from(vec![
             Span::styled("Fee", hi),
             Span::raw(": "),
-            Span::styled(crate::xrpl::drops_to_xrp(&f), theme::dim_style()),
+            Span::styled(crate::xrpl::drops_to_xrp(fee), theme::dim_style()),
         ]));
     }
 }
 
-/// Format an xrpl Currency for display.
-pub(crate) fn fmt_currency(c: &xrpl::models::Currency) -> String {
-    match c {
-        xrpl::models::Currency::IssuedCurrency(ic) => {
-            format!("{} ({})", ic.currency, ic.issuer)
+/// Format a transaction Amount field directly from serde_json::Value (no clone).
+pub(crate) fn fmt_xrpl_amount_from_value(value: &Value) -> String {
+    if let Some(s) = value.as_str() {
+        crate::xrpl::drops_to_xrp(s)
+    } else if let Some(obj) = value.as_object() {
+        let currency = obj.get("currency").and_then(Value::as_str).unwrap_or("?");
+        let val = obj.get("value").and_then(Value::as_str).unwrap_or("0");
+        if let Some(issuer) = obj.get("issuer").and_then(Value::as_str) {
+            format!("{val} {currency} (issuer: {issuer})")
+        } else {
+            format!("{val} {currency}")
         }
-        xrpl::models::Currency::XRP(_) => "XRP".to_string(),
+    } else {
+        value.to_string()
     }
 }
 
 pub(crate) fn format_value(key: &str, value: &Value) -> String {
-    // Try xrpl-rust Amount for any value-bearing field (XRP drops string or IssuedCurrency object)
-    if (key.ends_with("Amount")
+    // Fast-path for amount-bearing fields without cloning the Value
+    if key.ends_with("Amount")
         || key == "Fee"
         || key == "SendMax"
         || key == "DeliverMin"
         || key == "Balance"
         || key == "TakerGets"
-        || key == "TakerPays")
-        && let Ok(amount) = serde_json::from_value::<Amount<'static>>(value.clone())
+        || key == "TakerPays"
     {
-        match amount {
-            Amount::XRPAmount(xrp) => {
-                // xrpl-rust XRPAmount deserializes arbitrary objects into a raw string.
-                // Only trust the result when the original value was a string/number.
-                if !value.is_string() && !value.is_number() {
-                    // fall through to generic Value formatting below
-                } else if let Ok(drops) = xrp.0.parse::<u64>() {
-                    return format!("{:.6} XRP", drops as f64 / 1_000_000.0);
-                } else {
-                    return xrp.0.to_string();
-                }
+        if let Some(s) = value.as_str() {
+            if let Ok(drops) = s.parse::<u64>() {
+                return format!("{:.6} XRP", drops as f64 / 1_000_000.0);
             }
-            Amount::IssuedCurrencyAmount(ica) => {
-                return format!("{} {} (issuer: {})", ica.value, ica.currency, ica.issuer);
+            return s.to_string();
+        } else if let Some(n) = value.as_u64() {
+            return format!("{:.6} XRP", n as f64 / 1_000_000.0);
+        } else if let Some(obj) = value.as_object()
+            && obj.contains_key("currency")
+            && obj.contains_key("value")
+        {
+            let currency = obj.get("currency").and_then(Value::as_str).unwrap_or("?");
+            let val = obj.get("value").and_then(Value::as_str).unwrap_or("0");
+            if let Some(issuer) = obj.get("issuer").and_then(Value::as_str) {
+                return format!("{val} {currency} (issuer: {issuer})");
             }
+            return format!("{val} {currency}");
         }
     }
 
@@ -153,58 +150,36 @@ mod tests {
     }
 
     #[test]
-    fn fmt_xrpl_amount_xrp() {
-        let amount = Amount::XRPAmount(xrpl::models::XRPAmount("1000000".into()));
-        // drops_to_xrp does not append " XRP"
-        assert_eq!(fmt_xrpl_amount(&amount), "1.000000");
+    fn fmt_xrpl_amount_from_value_xrp() {
+        assert_eq!(fmt_xrpl_amount_from_value(&json!("1000000")), "1.000000");
     }
 
     #[test]
-    fn fmt_xrpl_amount_issued() {
-        let amount = Amount::IssuedCurrencyAmount(xrpl::models::IssuedCurrencyAmount {
-            value: "100".into(),
-            currency: "USD".into(),
-            issuer: "rsA2LpG".into(),
-        });
-        assert_eq!(fmt_xrpl_amount(&amount), "100 USD (issuer: rsA2LpG)");
+    fn fmt_xrpl_amount_from_value_issued() {
+        let v = json!({"value":"100","currency":"USD","issuer":"rsA2LpG"});
+        assert_eq!(fmt_xrpl_amount_from_value(&v), "100 USD (issuer: rsA2LpG)");
     }
 
     #[test]
-    fn push_common_lines_account_only() {
+    fn push_common_lines_from_value_account_only() {
         let mut lines = Vec::new();
-        push_common_lines(&mut lines, "rTest", None, None);
+        push_common_lines_from_value(&mut lines, &json!({"Account":"rTest"}));
         assert_eq!(lines.len(), 1);
         assert!(lines[0].to_string().contains("rTest"));
     }
 
     #[test]
-    fn push_common_lines_all_fields() {
+    fn push_common_lines_from_value_all_fields() {
         let mut lines = Vec::new();
-        push_common_lines(&mut lines, "rTest", Some(42), Some("1000".to_string()));
+        push_common_lines_from_value(
+            &mut lines,
+            &json!({"Account":"rTest","Sequence":42,"Fee":"1000"}),
+        );
         assert_eq!(lines.len(), 3);
         let text: Vec<String> = lines.iter().map(|l| l.to_string()).collect();
         assert!(text[0].contains("rTest"));
         assert!(text[1].contains("42"));
         assert!(text[2].contains("0.001000"));
-    }
-
-    #[test]
-    fn fmt_currency_xrp() {
-        let c = xrpl::models::Currency::XRP(xrpl::models::XRPAmount("0".into()).into());
-        assert_eq!(fmt_currency(&c), "XRP");
-    }
-
-    #[test]
-    fn fmt_currency_issued() {
-        let c = xrpl::models::Currency::IssuedCurrency(
-            xrpl::models::IssuedCurrencyAmount {
-                value: "0".into(),
-                currency: "USD".into(),
-                issuer: "rsA2LpG".into(),
-            }
-            .into(),
-        );
-        assert_eq!(fmt_currency(&c), "USD (rsA2LpG)");
     }
 
     #[test]

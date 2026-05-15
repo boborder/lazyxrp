@@ -154,7 +154,7 @@ impl Component for TrustLinesPanel {
             self.table_state.scroll_mut(),
         );
 
-        render_tx_detail(frame, area, &self.detail);
+        render_tx_detail(frame, area, &mut self.detail);
         Ok(())
     }
 }

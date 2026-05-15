@@ -20,7 +20,7 @@ No formal hexagonal/clean architecture boundaries. Domain logic is interwoven wi
 main.rs
   ├─► app::App::run()                       [orchestration]
   │     ├─► Tui (event loop)                [terminal I/O]
-  │     ├─► Component panels (×5 tabs)      [UI rendering]
+  │     ├─► Component panels (×6 tabs)      [UI rendering]
   │     │     ├─ ServerOverviewTab
   │     │     │     ├─ ServerPanel
   │     │     │     └─ WalletPanel
@@ -33,8 +33,10 @@ main.rs
   │     │     │     └─ TrustLinesPanel
   │     │     ├─ NftTab
   │     │     │     └─ NftPanel (standalone)
-  │     │     └─ AccountObjectsTab
-  │     │           └─ LedgerObjectsPanel (×3 filtered views)
+  │     │     ├─ AccountObjectsTab
+  │     │     │     └─ LedgerObjectsPanel (×3 filtered views)
+  │     │     └─ OracleTab
+  │     │           └─ OraclePanel (standalone)
   │     ├─ start_ws_task()                  [WebSocket]
   │     └─ start_poll_task()                [RPC polling]
   │
@@ -77,7 +79,7 @@ main ──► app ──► components ──► (none, leaf nodes)
 
 ### Flow 1: TUI Startup → First Render
 1. `main()` parses CLI args, resolves network/URLs/seed
-2. `App::new()` creates 5 tab components, splash, status bar
+2. `App::new()` creates 6 tab components, splash, status bar
 3. `App::run()` enters raw mode, registers all components
 4. Spawns `start_ws_task()` and `start_poll_task()`
 5. Event loop starts; `Action::XrplServerInfo` triggers `startup_done = true` → splash dismissed

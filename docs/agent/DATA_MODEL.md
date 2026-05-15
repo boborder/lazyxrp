@@ -21,7 +21,11 @@ Config
     ├── network: Network
     ├── rpc_server: Option<String>    // override from config
     ├── ws_server: Option<String>     // override from config
-    └── signing: RawSigningConfig
+    ├── signing: RawSigningConfig
+    ├── oracles: Vec<OracleId>       // oracle identifiers for get_aggregate_price
+    ├── oracle_base_asset: String    // base asset (default: "XRP")
+    └── oracle_quote_asset: String   // quote asset (default: "USD")
+    //   Note: DIA Oracles register QuoteAsset as plain "USD", not hex.
         ├── seed: Option<String>      // cleared after Config::new()
         └── secret_seed: Option<SecretString>  // memory-masked
 ```

@@ -79,7 +79,7 @@ pub struct WalletPanel {
     account: Option<AccountSummary>,
     txs: Vec<TxRow>,
     tick: usize,
-    received: bool,
+    has_received_wallet_data: bool,
     /// False when no signing key is configured; the wallet tab shows a hint.
     wallet_configured: bool,
     seed: Option<String>,
@@ -91,7 +91,7 @@ pub struct WalletPanel {
     config: Option<Arc<Config>>,
     composer: Option<ComposerPhase>,
     /// Suppresses global `h`/`l` while the tx composer modal is open or a field is being edited.
-    form_edit: bool,
+    is_form_editing: bool,
     field_row: usize,
     set_flag_ix: usize,
     clear_flag_ix: usize,
@@ -106,7 +106,7 @@ pub struct WalletPanel {
     has_more: bool,
     loading_more: bool,
     filtered: Option<Vec<TxRow>>,
-    filter_mode: bool,
+    is_filter_mode: bool,
     filter_input: String,
 }
 
@@ -116,7 +116,7 @@ impl Default for WalletPanel {
             account: None,
             txs: Vec::new(),
             tick: 0,
-            received: false,
+            has_received_wallet_data: false,
             wallet_configured: true,
             seed: None,
             seed_address: None,
@@ -126,7 +126,7 @@ impl Default for WalletPanel {
             network: Network::Mainnet,
             config: None,
             composer: None,
-            form_edit: false,
+            is_form_editing: false,
             field_row: 0,
             set_flag_ix: 0,
             clear_flag_ix: 0,
@@ -140,7 +140,7 @@ impl Default for WalletPanel {
             has_more: false,
             loading_more: false,
             filtered: None,
-            filter_mode: false,
+            is_filter_mode: false,
             filter_input: String::new(),
         }
     }
@@ -325,7 +325,7 @@ impl WalletPanel {
     }
 
     fn account_set_edit_keys(&mut self, key: &KeyEvent) -> bool {
-        if !self.form_edit || self.field_row < 2 {
+        if !self.is_form_editing || self.field_row < 2 {
             return false;
         }
         match key.code {
@@ -413,11 +413,11 @@ impl WalletPanel {
             KeyCode::Char('e') | KeyCode::Char('E')
                 if !key.modifiers.contains(KeyModifiers::CONTROL) =>
             {
-                self.form_edit = !self.form_edit;
+                self.is_form_editing = !self.is_form_editing;
                 return Some(Action::SetKeymapSuppression(true));
             }
             KeyCode::Char('s') | KeyCode::Char('S')
-                if key.modifiers.contains(KeyModifiers::CONTROL) || !self.form_edit =>
+                if key.modifiers.contains(KeyModifiers::CONTROL) || !self.is_form_editing =>
             {
                 return self.queue_submit_account_set();
             }
@@ -597,33 +597,35 @@ impl WalletPanel {
                 } else {
                     ""
                 };
-                let d = destination.trim();
-                let a = amount.trim();
-                let c = iou_currency.trim();
-                let iss = iou_issuer.trim();
-                let (preview_text, preview_st) = if d.is_empty() {
+                let destination_trimmed = destination.trim();
+                let amount_trimmed = amount.trim();
+                let currency_trimmed = iou_currency.trim();
+                let issuer_trimmed = iou_issuer.trim();
+                let (preview_text, preview_st) = if destination_trimmed.is_empty() {
                     (
                         "Need destination (classic r… or X-address)".to_string(),
                         theme::warning_style(),
                     )
-                } else if a.is_empty() {
+                } else if amount_trimmed.is_empty() {
                     ("Need amount".to_string(), theme::warning_style())
-                } else if a.parse::<f64>().is_err() || a.parse::<f64>().unwrap_or(0.0) <= 0.0 {
+                } else if amount_trimmed.parse::<f64>().is_err()
+                    || amount_trimmed.parse::<f64>().unwrap_or(0.0) <= 0.0
+                {
                     (
                         "Amount must be a number > 0".to_string(),
                         theme::warning_style(),
                     )
-                } else if *is_iou && c.is_empty() {
+                } else if *is_iou && currency_trimmed.is_empty() {
                     (
                         "IOU mode: need 3-char currency code".to_string(),
                         theme::warning_style(),
                     )
-                } else if *is_iou && iss.is_empty() {
+                } else if *is_iou && issuer_trimmed.is_empty() {
                     (
                         "IOU mode: need issuer address (r…)".to_string(),
                         theme::warning_style(),
                     )
-                } else if *is_iou && !iss.starts_with('r') {
+                } else if *is_iou && !issuer_trimmed.starts_with('r') {
                     (
                         "Issuer must start with 'r'".to_string(),
                         theme::warning_style(),
@@ -631,16 +633,20 @@ impl WalletPanel {
                 } else if *is_iou {
                     (
                         format!(
-                            "▸ Pay {} {c} (issued by {}) → {}",
-                            a,
-                            Self::shorten_display(iss, 20),
-                            Self::shorten_display(d, 20)
+                            "▸ Pay {} {currency_trimmed} (issued by {}) → {}",
+                            amount_trimmed,
+                            Self::shorten_display(issuer_trimmed, 20),
+                            Self::shorten_display(destination_trimmed, 20)
                         ),
                         theme::success_style(),
                     )
                 } else {
                     (
-                        format!("▸ Send {} XRP → {}", a, Self::shorten_display(d, 30)),
+                        format!(
+                            "▸ Send {} XRP → {}",
+                            amount_trimmed,
+                            Self::shorten_display(destination_trimmed, 30)
+                        ),
                         theme::success_style(),
                     )
                 };
@@ -797,7 +803,7 @@ impl Component for WalletPanel {
             Action::XrplWalletOverview(acc, txs, marker) => {
                 self.account = acc.clone();
                 self.txs = txs.to_vec();
-                self.received = true;
+                self.has_received_wallet_data = true;
                 self.wallet_configured = true;
                 self.marker = marker.clone();
                 self.has_more = marker.is_some();
@@ -805,7 +811,7 @@ impl Component for WalletPanel {
                 self.reapply_filter();
             }
             Action::XrplWalletNotConfigured => {
-                self.received = true;
+                self.has_received_wallet_data = true;
                 self.wallet_configured = false;
             }
             Action::XrplTxHistoryAppend(txs, marker) => {
@@ -841,7 +847,7 @@ impl Component for WalletPanel {
                 )));
                 if matches!(&self.composer, Some(ComposerPhase::AccountSet)) {
                     self.composer = None;
-                    self.form_edit = false;
+                    self.is_form_editing = false;
                     return Ok(Some(Action::SetKeymapSuppression(false)));
                 }
             }
@@ -854,7 +860,7 @@ impl Component for WalletPanel {
                 )));
                 if matches!(&self.composer, Some(ComposerPhase::Payment { .. })) {
                     self.composer = None;
-                    self.form_edit = false;
+                    self.is_form_editing = false;
                     return Ok(Some(Action::SetKeymapSuppression(false)));
                 }
             }
@@ -884,13 +890,13 @@ impl Component for WalletPanel {
             return Ok(None);
         }
 
-        if self.filter_mode {
+        if self.is_filter_mode {
             match key.code {
                 KeyCode::Enter => {
-                    self.filter_mode = false;
+                    self.is_filter_mode = false;
                 }
                 KeyCode::Esc => {
-                    self.filter_mode = false;
+                    self.is_filter_mode = false;
                     self.filter_input.clear();
                     self.reapply_filter();
                 }
@@ -908,8 +914,8 @@ impl Component for WalletPanel {
         }
 
         if key.code == KeyCode::Esc {
-            if self.form_edit {
-                self.form_edit = false;
+            if self.is_form_editing {
+                self.is_form_editing = false;
                 return Ok(None);
             }
             if self.keygen_result.is_some() {
@@ -960,7 +966,7 @@ impl Component for WalletPanel {
             ref mut iou_issuer,
             is_iou,
         }) = self.composer
-            && self.form_edit
+            && self.is_form_editing
             && Self::payment_edit_keys(
                 destination,
                 amount,
@@ -983,7 +989,7 @@ impl Component for WalletPanel {
                 is_iou,
                 ..
             }) if matches!(key.code, KeyCode::Char('s') | KeyCode::Char('S'))
-                && (key.modifiers.contains(KeyModifiers::CONTROL) || !self.form_edit) =>
+                && (key.modifiers.contains(KeyModifiers::CONTROL) || !self.is_form_editing) =>
             {
                 Some((
                     destination.clone(),
@@ -1034,7 +1040,7 @@ impl Component for WalletPanel {
                     KeyCode::Enter => match *selected {
                         0 => {
                             self.composer = Some(ComposerPhase::AccountSet);
-                            self.form_edit = false;
+                            self.is_form_editing = false;
                         }
                         1 => {
                             self.composer = Some(ComposerPhase::Payment {
@@ -1045,7 +1051,7 @@ impl Component for WalletPanel {
                                 iou_issuer: String::new(),
                                 is_iou: false,
                             });
-                            self.form_edit = false;
+                            self.is_form_editing = false;
                         }
                         _ => {}
                     },
@@ -1062,16 +1068,16 @@ impl Component for WalletPanel {
                     KeyCode::Char('e') | KeyCode::Char('E')
                         if !key.modifiers.contains(KeyModifiers::CONTROL) =>
                     {
-                        self.form_edit = !self.form_edit;
-                        if self.form_edit {
+                        self.is_form_editing = !self.is_form_editing;
+                        if self.is_form_editing {
                             return Ok(Some(Action::SetKeymapSuppression(true)));
                         }
                     }
                     KeyCode::Enter => {
-                        if self.form_edit {
+                        if self.is_form_editing {
                             *row = (*row + 1) % row_count;
                         } else {
-                            self.form_edit = true;
+                            self.is_form_editing = true;
                             return Ok(Some(Action::SetKeymapSuppression(true)));
                         }
                     }
@@ -1092,7 +1098,7 @@ impl Component for WalletPanel {
             && matches!(key.code, KeyCode::Char('t') | KeyCode::Char('T'))
             && !key.modifiers.contains(KeyModifiers::CONTROL)
         {
-            self.form_edit = false;
+            self.is_form_editing = false;
             self.composer = Some(ComposerPhase::PickKind { selected: 0 });
             return Ok(Some(Action::SetKeymapSuppression(true)));
         }
@@ -1106,8 +1112,8 @@ impl Component for WalletPanel {
             return Ok(Some(Action::WalletPropose));
         }
 
-        if self.composer.is_none() && key.code == KeyCode::Char('f') && !self.filter_mode {
-            self.filter_mode = true;
+        if self.composer.is_none() && key.code == KeyCode::Char('f') && !self.is_filter_mode {
+            self.is_filter_mode = true;
             self.filter_input.clear();
             self.reapply_filter();
             return Ok(None);
@@ -1159,7 +1165,7 @@ impl Component for WalletPanel {
             return Ok(());
         }
 
-        if !self.received {
+        if !self.has_received_wallet_data {
             render_loading(
                 frame,
                 area,
@@ -1286,7 +1292,7 @@ impl Component for WalletPanel {
                 ),
                 Span::styled(format!("({})  ", row_count), theme::dim_style()),
                 Span::styled(
-                    if self.filter_mode {
+                    if self.is_filter_mode {
                         "Filter: typing…"
                     } else if self.loading_more {
                         "loading more…"
@@ -1333,7 +1339,7 @@ impl Component for WalletPanel {
 
         self.render_composer(frame, area);
         self.render_keygen_popup(frame, area);
-        render_tx_detail(frame, area, &self.detail);
+        render_tx_detail(frame, area, &mut self.detail);
         Ok(())
     }
 }

@@ -25,13 +25,13 @@ pub struct TxHistoryPanel {
     filtered: Option<Vec<TxRow>>,
     table_state: SelectableTableState,
     tick: usize,
-    received: bool,
+    has_received_history: bool,
     pub is_focused: bool,
     detail: TxDetailState,
     marker: Option<serde_json::Value>,
     has_more: bool,
     loading_more: bool,
-    filter_mode: bool,
+    is_filter_mode: bool,
     filter_input: String,
 }
 
@@ -100,7 +100,7 @@ impl Component for TxHistoryPanel {
             Action::Tick => self.tick = self.tick.wrapping_add(1),
             Action::XrplTxHistory(txs, marker) => {
                 self.txs = txs.to_vec();
-                self.received = true;
+                self.has_received_history = true;
                 self.marker = marker.clone();
                 self.has_more = marker.is_some();
                 self.loading_more = false;
@@ -136,13 +136,13 @@ impl Component for TxHistoryPanel {
         if !self.is_focused || self.detail.visible {
             return Ok(None);
         }
-        if self.filter_mode {
+        if self.is_filter_mode {
             match key.code {
                 KeyCode::Enter => {
-                    self.filter_mode = false;
+                    self.is_filter_mode = false;
                 }
                 KeyCode::Esc => {
-                    self.filter_mode = false;
+                    self.is_filter_mode = false;
                     self.filter_input.clear();
                     self.reapply_filter();
                 }
@@ -163,7 +163,7 @@ impl Component for TxHistoryPanel {
             return Ok(Some(Action::RefreshTxHistoryMore(self.marker.clone())));
         }
         if key.code == KeyCode::Char('f') {
-            self.filter_mode = true;
+            self.is_filter_mode = true;
             self.filter_input.clear();
             self.reapply_filter();
             return Ok(None);
@@ -172,7 +172,7 @@ impl Component for TxHistoryPanel {
     }
 
     fn draw(&mut self, frame: &mut Frame, area: Rect) -> color_eyre::Result<()> {
-        if !self.received {
+        if !self.has_received_history {
             render_loading(
                 frame,
                 area,
@@ -207,7 +207,7 @@ impl Component for TxHistoryPanel {
         let inner = block.inner(area);
         frame.render_widget(block, area);
 
-        let hint = if self.filter_mode {
+        let hint = if self.is_filter_mode {
             format!("Filter: {}_", self.filter_input)
         } else if self.loading_more {
             "loading more…".to_string()
@@ -248,7 +248,7 @@ impl Component for TxHistoryPanel {
             hint_area,
         );
 
-        render_tx_detail(frame, area, &self.detail);
+        render_tx_detail(frame, area, &mut self.detail);
         Ok(())
     }
 }

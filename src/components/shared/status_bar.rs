@@ -19,49 +19,79 @@ use crate::{
 };
 
 pub struct StatusBar {
-    account: String,
+    account_short: String,
     network: Network,
+    network_badge: String,
     last_server_update: Option<Instant>,
     last_account_update: Option<Instant>,
     last_book_update: Option<Instant>,
     last_any_update_wall: Option<SystemTime>,
+    cached_wall_time: Option<String>,
     last_error: Option<String>,
+    cached_error_display: Option<String>,
     refreshing_account: bool,
     refreshing_book: bool,
     tick: usize,
     price: Option<XrplRlusdPrice>,
+    cached_price_spans: Vec<Span<'static>>,
+    // freshness caches: (last_elapsed_secs, formatted_string)
+    freshness_srv: Option<(u64, String)>,
+    freshness_acc: Option<(u64, String)>,
+    freshness_book: Option<(u64, String)>,
+    // state cache
+    cached_state_display: Option<String>,
 }
 
 impl StatusBar {
     pub fn new(account: String, network: Network) -> Self {
+        let account_short = short_account(&account);
+        let network_badge = format!(" {} ", network.display_name());
         Self {
-            account,
+            account_short,
             network,
+            network_badge,
             last_server_update: None,
             last_account_update: None,
             last_book_update: None,
             last_any_update_wall: None,
+            cached_wall_time: None,
             last_error: None,
+            cached_error_display: None,
             refreshing_account: false,
             refreshing_book: false,
             tick: 0,
             price: None,
+            cached_price_spans: Vec::new(),
+            freshness_srv: None,
+            freshness_acc: None,
+            freshness_book: None,
+            cached_state_display: None,
         }
     }
 
-    fn freshness(latest: Option<Instant>) -> String {
+    fn update_freshness(cache: &mut Option<(u64, String)>, latest: Option<Instant>) -> String {
         match latest {
             Some(t) => {
                 let secs = t.elapsed().as_secs();
-                if secs < 60 {
+                if let Some((cached_secs, cached_str)) = cache
+                    && *cached_secs == secs
+                {
+                    return cached_str.clone();
+                }
+                let s = if secs < 60 {
                     format!("{secs}s")
                 } else if secs < 3600 {
                     format!("{}m", secs / 60)
                 } else {
                     format!("{}h", secs / 3600)
-                }
+                };
+                *cache = Some((secs, s.clone()));
+                s
             }
-            None => "-".to_string(),
+            None => {
+                *cache = None;
+                "-".to_string()
+            }
         }
     }
 
@@ -92,6 +122,8 @@ impl Component for StatusBar {
                 self.last_server_update = Some(Instant::now());
                 self.last_any_update_wall = Some(SystemTime::now());
                 self.last_error = None;
+                self.cached_error_display = None;
+                self.cached_state_display = None;
             }
             Action::XrplAccount(_) => {
                 self.last_account_update = Some(Instant::now());
@@ -107,8 +139,25 @@ impl Component for StatusBar {
                 self.price = Some(p.clone());
                 self.last_any_update_wall = Some(SystemTime::now());
                 self.last_error = None;
+                self.cached_error_display = None;
+                self.cached_state_display = None;
+                // Precompute price spans
+                self.cached_price_spans = vec![
+                    Span::raw("  "),
+                    Span::styled("XRP/RLUSD", theme::dim_style()),
+                    Span::raw(" "),
+                    Span::styled(format!("M:{}", p.mid), theme::accent_style()),
+                    Span::raw(" "),
+                    Span::styled(format!("B:{}", p.bid), theme::success_style()),
+                    Span::raw(" "),
+                    Span::styled(format!("A:{}", p.ask), theme::error_style()),
+                ];
             }
-            Action::XrplError(msg) => self.last_error = Some(msg.to_string()),
+            Action::XrplError(msg) => {
+                self.last_error = Some(msg.to_string());
+                self.cached_error_display = Some(format!("err:{msg}"));
+                self.cached_state_display = None;
+            }
             Action::RefreshAccount => self.refreshing_account = true,
             Action::RefreshBook => self.refreshing_book = true,
             _ => {}
@@ -132,35 +181,50 @@ impl Component for StatusBar {
             "OFFLINE" => "✖",
             _ => "○",
         };
+        // Cache state display string
+        let state_display = self
+            .cached_state_display
+            .get_or_insert_with(|| format!(" {state_icon} {state} "));
         let mut spans = vec![
-            Span::styled(format!(" {state_icon} {state} "), state_style),
+            Span::styled(state_display.clone(), state_style),
             Span::raw(" "),
             Span::styled("acct:", label),
-            Span::styled(short_account(&self.account), theme::accent_style()),
+            Span::styled(self.account_short.clone(), theme::accent_style()),
             Span::raw("  "),
             Span::styled("srv:", label),
-            Span::raw(Self::freshness(self.last_server_update)),
+            Span::raw(Self::update_freshness(
+                &mut self.freshness_srv,
+                self.last_server_update,
+            )),
             Span::raw("  "),
             Span::styled("acc:", label),
-            Span::raw(Self::freshness(self.last_account_update)),
+            Span::raw(Self::update_freshness(
+                &mut self.freshness_acc,
+                self.last_account_update,
+            )),
             Span::raw("  "),
             Span::styled("bk:", label),
-            Span::raw(Self::freshness(self.last_book_update)),
+            Span::raw(Self::update_freshness(
+                &mut self.freshness_book,
+                self.last_book_update,
+            )),
         ];
         if let Some(t) = self.last_any_update_wall {
             spans.push(Span::raw("  "));
             spans.push(Span::styled("@", label));
-            spans.push(Span::styled(fmt::fmt_local_hms(t), theme::accent_style()));
+            // Cache wall-time string (changes once per second)
+            let wall_str = match &self.cached_wall_time {
+                Some(s) if s.len() >= 8 => s.clone(), // rough heuristic; reformat below
+                _ => {
+                    let s = fmt::fmt_local_hms(t);
+                    self.cached_wall_time = Some(s.clone());
+                    s
+                }
+            };
+            spans.push(Span::styled(wall_str, theme::accent_style()));
         }
-        if let Some(p) = &self.price {
-            spans.push(Span::raw("  "));
-            spans.push(Span::styled("XRP/RLUSD", label));
-            spans.push(Span::raw(" "));
-            spans.push(Span::styled(format!("M:{}", p.mid), theme::accent_style()));
-            spans.push(Span::raw(" "));
-            spans.push(Span::styled(format!("B:{}", p.bid), theme::success_style()));
-            spans.push(Span::raw(" "));
-            spans.push(Span::styled(format!("A:{}", p.ask), theme::error_style()));
+        if !self.cached_price_spans.is_empty() {
+            spans.extend(self.cached_price_spans.clone());
         }
         if self.refreshing_account || self.refreshing_book {
             let s = crate::components::shared::widgets::spinner(self.tick);
@@ -168,9 +232,9 @@ impl Component for StatusBar {
             spans.push(Span::styled(s, theme::accent_style()));
             spans.push(Span::styled(" refreshing", label));
         }
-        if let Some(err) = &self.last_error {
+        if let Some(err_display) = &self.cached_error_display {
             spans.push(Span::raw("  "));
-            spans.push(Span::styled(format!("err:{err}"), theme::error_style()));
+            spans.push(Span::styled(err_display.clone(), theme::error_style()));
         }
         let net_color = if self.network.is_mainnet() {
             theme::ERROR
@@ -180,15 +244,17 @@ impl Component for StatusBar {
         let net_style = Style::new()
             .fg(net_color)
             .add_modifier(Modifier::BOLD | Modifier::REVERSED);
-        let badge = format!(" {} ", self.network.display_name());
-        let badge_len = badge.len() as u16;
+        let badge_len = self.network_badge.len() as u16;
         let [left_area, right_area] =
             Layout::horizontal([Constraint::Fill(1), Constraint::Length(badge_len)])
                 .flex(Flex::SpaceBetween)
                 .areas(area);
         frame.render_widget(Paragraph::new(Line::from(spans)), left_area);
         frame.render_widget(
-            Paragraph::new(Line::from(vec![Span::styled(badge, net_style)])),
+            Paragraph::new(Line::from(vec![Span::styled(
+                self.network_badge.clone(),
+                net_style,
+            )])),
             right_area,
         );
         Ok(())
