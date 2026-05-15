@@ -137,33 +137,32 @@ async fn poll_batch(
         let results = futures::future::join_all(futs).await;
         let mut prices = Vec::new();
         for (pair, result) in results {
-            let label =
-                format!("get_aggregate_price({}/{})", pair.base_asset, pair.quote_asset);
+            let label = format!(
+                "get_aggregate_price({}/{})",
+                pair.base_asset, pair.quote_asset
+            );
             match result {
                 Ok(Ok(price)) => {
                     any_ok = true;
                     prices.push(price);
                 }
                 Ok(Err(e)) => {
-                    if let Err(e2) =
-                        action_tx.send(Action::XrplError(format!("{label}: {e}")))
-                    {
+                    if let Err(e2) = action_tx.send(Action::XrplError(format!("{label}: {e}"))) {
                         warn!(?e2, "action channel closed");
                     }
                 }
                 Err(_) => {
-                    if let Err(e2) =
-                        action_tx.send(Action::XrplError(format!("{label}: timeout")))
+                    if let Err(e2) = action_tx.send(Action::XrplError(format!("{label}: timeout")))
                     {
                         warn!(?e2, "action channel closed");
                     }
                 }
             }
         }
-        if !prices.is_empty() {
-            if let Err(e) = action_tx.send(Action::XrplOraclePrices(prices)) {
-                warn!(?e, "action channel closed (get_aggregate_price)");
-            }
+        if !prices.is_empty()
+            && let Err(e) = action_tx.send(Action::XrplOraclePrices(prices))
+        {
+            warn!(?e, "action channel closed (get_aggregate_price)");
         }
     }
     any_ok

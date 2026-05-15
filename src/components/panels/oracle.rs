@@ -66,9 +66,8 @@ impl Component for OraclePanel {
         frame.render_widget(block, area);
 
         if self.not_configured {
-            let para = Paragraph::new(
-                "No oracles configured — add [[xrpl.oracles]] to your config.toml",
-            );
+            let para =
+                Paragraph::new("No oracles configured — add [[xrpl.oracles]] to your config.toml");
             frame.render_widget(para, inner);
             return Ok(());
         }
