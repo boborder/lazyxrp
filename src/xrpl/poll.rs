@@ -11,7 +11,7 @@ use crate::network::Network;
 use crate::signing::{self, SigningConfig};
 
 use super::backoff::next_backoff_secs;
-use super::client::{RPC_TIMEOUT, RpcClient, is_not_found_error, xrp_to_drops};
+use super::client::{RPC_TIMEOUT, RpcClient, is_not_found_error, path_find_snapshot, xrp_to_drops};
 use super::types::{
     AccountSetSubmitParams, BookPair, OracleId, PaymentSubmitParams, PollCommand, PollContext,
 };
@@ -34,16 +34,30 @@ pub fn start_poll_task(
 
 const MIN_POLL_INTERVAL: Duration = Duration::from_secs(10);
 
-async fn poll_batch(
-    rpc: &RpcClient,
-    watch_address: &str,
-    book_pair: &BookPair,
-    oracles: &[OracleId],
-    oracle_pairs: &[crate::xrpl::OraclePricePair],
-    action_tx: &UnboundedSender<Action>,
-) -> bool {
-    let (r_srv, r_fee, r_acc, r_book, r_nfts, r_lines, r_tx) = tokio::join!(
+struct PollBatchInputs<'a> {
+    rpc: &'a RpcClient,
+    watch_address: &'a str,
+    book_pair: &'a BookPair,
+    oracles: &'a [OracleId],
+    oracle_pairs: &'a [crate::xrpl::OraclePricePair],
+    flare_rpc_url: Option<&'a str>,
+    flare_feeds: &'a [String],
+}
+
+async fn poll_batch(inputs: PollBatchInputs<'_>, action_tx: &UnboundedSender<Action>) -> bool {
+    let PollBatchInputs {
+        rpc,
+        watch_address,
+        book_pair,
+        oracles,
+        oracle_pairs,
+        flare_rpc_url,
+        flare_feeds,
+    } = inputs;
+    let dest_amount = book_pair.path_find_destination_amount_preview();
+    let (r_srv, r_dunl, r_fee, r_acc, r_book, r_path, r_nfts, r_lines, r_tx) = tokio::join!(
         tokio::time::timeout(RPC_TIMEOUT, rpc.server_info()),
+        tokio::time::timeout(RPC_TIMEOUT, rpc.fetch_xrplf_dunl()),
         tokio::time::timeout(RPC_TIMEOUT, rpc.fee()),
         tokio::time::timeout(RPC_TIMEOUT, rpc.account_info(watch_address)),
         tokio::time::timeout(
@@ -55,6 +69,10 @@ async fn poll_batch(
                 book_pair.pays_issuer(),
                 book_pair.limit
             )
+        ),
+        tokio::time::timeout(
+            RPC_TIMEOUT,
+            rpc.ripple_path_find(watch_address, watch_address, &dest_amount),
         ),
         tokio::time::timeout(RPC_TIMEOUT, rpc.account_nfts(watch_address)),
         tokio::time::timeout(RPC_TIMEOUT, rpc.account_lines(watch_address)),
@@ -90,9 +108,29 @@ async fn poll_batch(
         |v| Action::XrplServerInfo(Box::new(v)),
         "server_info"
     );
+    dispatch!(r_dunl, Action::XrplDunl, "dUNL");
     dispatch!(r_fee, Action::XrplFee, "fee");
     dispatch!(r_acc, |v| Action::XrplAccount(Box::new(v)), "account_info");
     dispatch!(r_book, Action::XrplBookOffers, "book_offers");
+    match r_path {
+        Ok(Ok(v)) => {
+            any_ok = true;
+            let snap = path_find_snapshot(&v, &book_pair.quote);
+            if let Err(e) = action_tx.send(Action::XrplPathFind(snap)) {
+                warn!(?e, "action channel closed (ripple_path_find)");
+            }
+        }
+        Ok(Err(e)) => {
+            if let Err(e2) = action_tx.send(Action::XrplError(format!("ripple_path_find: {e}"))) {
+                warn!(?e2, "action channel closed (ripple_path_find)");
+            }
+        }
+        Err(_) => {
+            if let Err(e) = action_tx.send(Action::XrplError("ripple_path_find: timeout".into())) {
+                warn!(?e, "action channel closed (ripple_path_find)");
+            }
+        }
+    }
     dispatch!(r_nfts, Action::XrplAccountNfts, "account_nfts");
     dispatch!(r_lines, Action::XrplTrustLines, "account_lines");
     match r_tx {
@@ -165,6 +203,26 @@ async fn poll_batch(
             warn!(?e, "action channel closed (get_aggregate_price)");
         }
     }
+
+    if let Some(flare_rpc) = flare_rpc_url {
+        match tokio::time::timeout(
+            RPC_TIMEOUT,
+            crate::flare::fetch_ftso_prices(flare_rpc, flare_feeds),
+        )
+        .await
+        {
+            Ok(Ok(prices)) if !prices.is_empty() => {
+                any_ok = true;
+                if let Err(e) = action_tx.send(Action::FlareOraclePrices(prices)) {
+                    warn!(?e, "action channel closed (flare ftso)");
+                }
+            }
+            Ok(Ok(_)) | Ok(Err(_)) | Err(_) => {
+                // Keep Oracle tab non-blocking when Flare endpoint/feed is unavailable.
+            }
+        }
+    }
+
     any_ok
 }
 
@@ -637,6 +695,8 @@ async fn run_poll_loop(
         network_watch,
         oracles,
         oracle_pairs,
+        flare_rpc_url,
+        flare_feeds,
     } = ctx;
     let rpc = match RpcClient::connect(&rpc_url) {
         Ok(rpc) => rpc,
@@ -659,11 +719,15 @@ async fn run_poll_loop(
                     tokio::time::sleep(Duration::from_secs(backoff_secs)).await;
                 }
                 let batch_ok = poll_batch(
-                    &rpc,
-                    &watch_address,
-                    &book_pair,
-                    &oracles,
-                    &oracle_pairs,
+                    PollBatchInputs {
+                        rpc: &rpc,
+                        watch_address: &watch_address,
+                        book_pair: &book_pair,
+                        oracles: &oracles,
+                        oracle_pairs: &oracle_pairs,
+                        flare_rpc_url: flare_rpc_url.as_deref(),
+                        flare_feeds: &flare_feeds,
+                    },
                     &action_tx,
                 )
                 .await;
@@ -689,11 +753,15 @@ async fn run_poll_loop(
                     tokio::time::sleep(Duration::from_secs(backoff_secs)).await;
                 }
                 let batch_ok = poll_batch(
-                    &rpc,
-                    &watch_address,
-                    &book_pair,
-                    &oracles,
-                    &oracle_pairs,
+                    PollBatchInputs {
+                        rpc: &rpc,
+                        watch_address: &watch_address,
+                        book_pair: &book_pair,
+                        oracles: &oracles,
+                        oracle_pairs: &oracle_pairs,
+                        flare_rpc_url: flare_rpc_url.as_deref(),
+                        flare_feeds: &flare_feeds,
+                    },
                     &action_tx,
                 )
                 .await;

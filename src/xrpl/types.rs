@@ -48,10 +48,104 @@ use tokio::sync::watch;
 use crate::config::FALLBACK_CURRENCY_CODE;
 use crate::network::Network;
 
+/// Validator list reported by the connected `rippled` (`server_info.info.validator_list`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct NodeValidatorListSummary {
+    pub count: u32,
+    pub status: String,
+    pub expiration: String,
+}
+
+/// One validator entry from the XRPLF dUNL blob.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DunlValidatorRow {
+    /// `validation_public_key` from the UNL blob (hex, typically `ED…`).
+    pub validation_public_key: String,
+    /// Base64 manifest blob was present in the UNL entry.
+    pub has_manifest: bool,
+    /// Claimed domain from the embedded manifest (`sfDomain`), if present.
+    pub domain: Option<String>,
+    /// Manifest sequence (`sfSequence`) when parseable.
+    pub sequence: Option<u32>,
+    /// Master key from manifest (`sfPublicKey` blob), hex-encoded.
+    pub master_public_key: Option<String>,
+}
+
+impl DunlValidatorRow {
+    /// Master key differs from the signing (validation) key.
+    pub fn master_differs_from_signing(&self) -> bool {
+        match self.master_public_key.as_deref() {
+            Some(m) => !m.eq_ignore_ascii_case(&self.validation_public_key),
+            None => false,
+        }
+    }
+}
+
+/// Aggregated dUNL table stats for the Server panel header/footer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DunlStats {
+    pub total: usize,
+    pub with_manifest: usize,
+    pub with_domain: usize,
+    pub master_distinct: usize,
+}
+
+/// XRPL Foundation decentralized UNL (`https://unl.xrplf.org`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DunlSummary {
+    pub validator_count: u32,
+    pub sequence: u64,
+    /// Ripple-epoch seconds from the blob (`expiration` field).
+    pub expiration_ripple: u64,
+    /// Human-readable UTC expiry (from blob `expiration` ripple time).
+    pub expiration_utc: String,
+    pub validators: Vec<DunlValidatorRow>,
+}
+
+impl DunlSummary {
+    pub fn stats(&self) -> DunlStats {
+        let total = self.validators.len();
+        let mut with_manifest = 0usize;
+        let mut with_domain = 0usize;
+        let mut master_distinct = 0usize;
+        for v in &self.validators {
+            if v.has_manifest {
+                with_manifest += 1;
+            }
+            if v.domain.is_some() {
+                with_domain += 1;
+            }
+            if v.master_differs_from_signing() {
+                master_distinct += 1;
+            }
+        }
+        DunlStats {
+            total,
+            with_manifest,
+            with_domain,
+            master_distinct,
+        }
+    }
+
+    /// Whole days until blob expiry (negative if already expired).
+    pub fn days_until_expiry(&self) -> Option<i64> {
+        const RIPPLE_EPOCH_UNIX: i64 = 946_684_800;
+        let expiry_unix =
+            RIPPLE_EPOCH_UNIX.saturating_add(self.expiration_ripple.min(i64::MAX as u64) as i64);
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok()?
+            .as_secs() as i64;
+        Some((expiry_unix - now) / 86_400)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ServerInfoSummary {
     pub ledger_index: u32,
     pub hostid: String,
+    pub validation_quorum: Option<u32>,
+    pub validator_list: Option<NodeValidatorListSummary>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -105,8 +199,23 @@ pub struct SimulateResult {
     pub meta: Option<serde_json::Value>,
 }
 
+/// Display row for Path-Find panel (built from `ripple_path_find` alternatives).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PathFindRow {
+    pub send: String,
+    pub hops: String,
+    pub path: String,
+    pub raw_json: ArcValue,
+}
+
+/// Eq-friendly snapshot for `Action::XrplPathFind` (panel + poll).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PathFindSnapshot {
+    pub dest_summary: String,
+    pub rows: Vec<PathFindRow>,
+}
+
 /// One path alternative returned by `ripple_path_find`.
-#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct PathAlternative {
     /// Computed payment paths (array of path arrays).
@@ -117,7 +226,6 @@ pub struct PathAlternative {
 }
 
 /// Result of a `ripple_path_find` RPC call.
-#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct RipplePathFindResult {
     /// All available path alternatives.
@@ -254,6 +362,15 @@ pub struct AggregatePrice {
     pub quote_asset: String,
 }
 
+/// One FTSOv2 feed value fetched from Flare.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FlareFeedPrice {
+    pub pair: String,
+    pub price: String,
+    pub timestamp: u64,
+    pub source: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TxRow {
     pub hash: String,
@@ -347,6 +464,19 @@ impl BookPair {
             None
         } else {
             Some(&self.issuer)
+        }
+    }
+
+    /// Preview amount for `ripple_path_find` (self-payment swap: receive 1 unit of quote).
+    pub fn path_find_destination_amount_preview(&self) -> serde_json::Value {
+        if self.quote.eq_ignore_ascii_case("XRP") {
+            serde_json::json!("1000000")
+        } else {
+            serde_json::json!({
+                "currency": self.pays_currency(),
+                "issuer": self.pays_issuer().unwrap_or(self.issuer.as_str()),
+                "value": "1",
+            })
         }
     }
 }
@@ -448,6 +578,19 @@ pub struct PollContext {
     pub oracles: Vec<OracleId>,
     /// Price pairs to query via `get_aggregate_price`.
     pub oracle_pairs: Vec<OraclePricePair>,
+    /// Optional Flare FTSOv2 RPC endpoint for Oracle tab integration.
+    pub flare_rpc_url: Option<String>,
+    /// FTSOv2 feed names (e.g. `FXRP/USD`).
+    pub flare_feeds: Vec<String>,
+}
+
+/// Parsed subset of xrp-ledger.toml relevant to domain verification.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct XrplTomlData {
+    pub domain: String,
+    pub validator_found: bool,
+    pub attestation: Option<String>,
+    pub validator_count: usize,
 }
 
 #[cfg(test)]

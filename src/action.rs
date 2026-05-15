@@ -4,10 +4,11 @@ use strum::Display;
 use crate::{
     network::Network,
     xrpl::{
-        AccountSetSubmitParams, AccountSummary, AggregatePrice, AmmSummary,
-        EscrowCreateSubmitParams, FeeSummary, LedgerObjectRow, NftRow, OfferCreateSubmitParams,
-        OfferRow, PaymentSubmitParams, ServerInfoSummary, SetRegularKeySubmitParams, TrustLineRow,
-        TxRow, TxSummary, WalletProposeResult, XrplRlusdPrice,
+        AccountSetSubmitParams, AccountSummary, AggregatePrice, AmmSummary, DunlSummary,
+        EscrowCreateSubmitParams, FeeSummary, FlareFeedPrice, LedgerObjectRow, NftRow,
+        OfferCreateSubmitParams, OfferRow, PathFindSnapshot, PaymentSubmitParams,
+        ServerInfoSummary, SetRegularKeySubmitParams, TrustLineRow, TxRow, TxSummary,
+        WalletProposeResult, XrplRlusdPrice, XrplTomlData,
     },
 };
 
@@ -23,9 +24,13 @@ pub enum Action {
     Error(String),
     Help,
     XrplServerInfo(Box<ServerInfoSummary>),
+    /// XRPL Foundation dUNL manifest (`https://unl.xrplf.org`).
+    XrplDunl(DunlSummary),
     XrplFee(FeeSummary),
     XrplAccount(Box<AccountSummary>),
     XrplBookOffers(Vec<OfferRow>),
+    /// `ripple_path_find` swap-route preview (self-payment, configured quote amount).
+    XrplPathFind(PathFindSnapshot),
     XrplLedgerClose {
         ledger_index: u32,
         base_fee: u32,
@@ -49,11 +54,29 @@ pub enum Action {
     XrplRlusdPrice(XrplRlusdPrice),
     /// Aggregate price from `get_aggregate_price`.
     XrplOraclePrices(Vec<AggregatePrice>),
+    /// FTSOv2 prices from Flare (alloy).
+    FlareOraclePrices(Vec<FlareFeedPrice>),
     /// Oracle tab shown but no oracles configured.
     XrplOracleNotConfigured,
     /// `account_objects` snapshot; each tab filters rows by `LedgerEntryType`.
     XrplLedgerObjects(Vec<LedgerObjectRow>),
     XrplError(String),
+    /// Request xrp-ledger.toml fetch for domain verification.
+    RequestXrplToml {
+        domain: String,
+        expected_pubkey: String,
+    },
+    /// Result of xrp-ledger.toml fetch.
+    XrplTomlFetched {
+        domain: String,
+        /// HTTP status code.
+        status: u16,
+        /// Content-Type header value, if present.
+        content_type: Option<String>,
+        /// Raw HTTP body (may be HTML on 404, TOML on 200).
+        raw: Option<String>,
+        result: Result<XrplTomlData, String>,
+    },
     RefreshAccount,
     RefreshBook,
     RefreshNfts,

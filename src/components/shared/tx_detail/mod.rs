@@ -10,7 +10,7 @@ use ratatui::{
 
 use serde_json::Value;
 
-use crate::components::shared::theme;
+use crate::components::shared::{theme, widgets::centered_popup_rect};
 use crate::xrpl::ArcValue;
 
 mod format;
@@ -70,12 +70,7 @@ pub fn render_tx_detail(frame: &mut Frame, area: Rect, state: &mut TxDetailState
         return;
     }
 
-    let popup_w = (area.width * 4 / 5).clamp(40, area.width.saturating_sub(4));
-    let popup_h = (area.height * 4 / 5).clamp(12, area.height.saturating_sub(2));
-
-    let x = area.x + (area.width.saturating_sub(popup_w)) / 2;
-    let y = area.y + (area.height.saturating_sub(popup_h)) / 2;
-    let popup = Rect::new(x, y, popup_w, popup_h);
+    let popup = centered_popup_rect(area, 40, 12);
 
     frame.render_widget(Clear, popup);
 

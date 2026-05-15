@@ -19,9 +19,7 @@ use crate::{
             selectable_table::SelectableTableState,
             theme,
             tx_detail::{TxDetailState, render_tx_detail},
-            widgets::{
-                render_empty, render_error, render_loading, render_tx_scroll_table, titled_block,
-            },
+            widgets::{render_empty, render_error, render_loading, titled_block},
         },
     },
     config::Config,
@@ -1190,7 +1188,7 @@ impl Component for WalletPanel {
         let value = theme::accent_style();
 
         let [top, bottom, hint] = Layout::vertical([
-            Constraint::Length(5),
+            Constraint::Length(6),
             Constraint::Fill(1),
             Constraint::Length(1),
         ])
@@ -1269,61 +1267,13 @@ impl Component for WalletPanel {
         ];
         frame.render_widget(Paragraph::new(lines), top);
 
-        let row_count = self.row_count();
-        if row_count == 0 {
-            let msg = if self.filter_input.is_empty() {
-                "None"
-            } else {
-                "no matches"
-            };
-            render_empty(frame, bottom, "Recent Transactions", msg, false);
-        } else {
-            let [tx_hdr, tx_body] =
-                Layout::vertical([Constraint::Length(1), Constraint::Fill(1)]).areas(bottom);
-            let title_text = if self.filter_input.is_empty() {
-                "Recent txs ".to_string()
-            } else {
-                format!("Recent txs [filter: {}] ", self.filter_input)
-            };
-            let tx_title = Line::from(vec![
-                Span::styled(
-                    title_text,
-                    theme::secondary_style().add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(format!("({})  ", row_count), theme::dim_style()),
-                Span::styled(
-                    if self.is_filter_mode {
-                        "Filter: typing…"
-                    } else if self.loading_more {
-                        "loading more…"
-                    } else if self.has_more {
-                        "j/k scroll · ▲▼ · f: filter · m: more"
-                    } else {
-                        "j/k scroll · ▲▼ · f: filter"
-                    },
-                    theme::dim_style(),
-                ),
-            ]);
-            frame.render_widget(Paragraph::new(tx_title), tx_hdr);
-
-            if let Some(ref filtered) = self.filtered {
-                render_tx_scroll_table(
-                    frame,
-                    tx_body,
-                    filtered,
-                    &mut self.tx_table,
-                    self.is_focused,
-                );
-            } else {
-                render_tx_scroll_table(
-                    frame,
-                    tx_body,
-                    &self.txs,
-                    &mut self.tx_table,
-                    self.is_focused,
-                );
-            }
-        }
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                "wallet ready · t: composer · g: keygen",
+                theme::dim_style(),
+            ))),
+            bottom,
+        );
 
         let note_line = self
             .submit_flash

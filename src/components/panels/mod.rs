@@ -1,8 +1,11 @@
 pub mod account;
 pub mod amm;
 pub mod book;
+pub mod combined_oracle;
+pub mod flare_ftso;
 pub mod ledger_objects;
 pub mod oracle;
+pub mod path_find;
 pub mod server;
 pub mod trust_lines;
 pub mod tx_history;

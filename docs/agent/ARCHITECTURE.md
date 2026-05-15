@@ -20,23 +20,24 @@ No formal hexagonal/clean architecture boundaries. Domain logic is interwoven wi
 main.rs
   ├─► app::App::run()                       [orchestration]
   │     ├─► Tui (event loop)                [terminal I/O]
-  │     ├─► Component panels (×6 tabs)      [UI rendering]
-  │     │     ├─ ServerOverviewTab
+  │     ├─► Component panels (×4 tabs)      [UI rendering]
+  │     │     ├─ OverviewTab (ServerPanel | OraclePanel + FlareFtsoPanel, left | right stack)
   │     │     │     ├─ ServerPanel
-  │     │     │     └─ WalletPanel
-  │     │     ├─ AccountTxTab
+  │     │     │     └─ OraclePanel
+  │     │     ├─ AccountWalletTab
+  │     │     │     ├─ WalletPanel
   │     │     │     ├─ AccountPanel
   │     │     │     └─ TxHistoryPanel
-  │     │     ├─ MarketTab
+  │     │     ├─ MarketOracleTab
   │     │     │     ├─ BookPanel
+  │     │     │     ├─ PathFindPanel
   │     │     │     ├─ AmmPanel
-  │     │     │     └─ TrustLinesPanel
-  │     │     ├─ NftTab
-  │     │     │     └─ NftPanel (standalone)
-  │     │     ├─ AccountObjectsTab
-  │     │     │     └─ LedgerObjectsPanel (×3 filtered views)
-  │     │     └─ OracleTab
-  │     │           └─ OraclePanel (standalone)
+  │     │     │     ├─ TrustLinesPanel
+  │     │     │     ├─ FlareFtsoPanel
+  │     │     │     └─ OraclePanel
+  │     │     └─ AssetsTab
+  │     │           ├─ NftTab
+  │     │           └─ LedgerObjectsPanel (×3 filtered views)
   │     ├─ start_ws_task()                  [WebSocket]
   │     └─ start_poll_task()                [RPC polling]
   │
@@ -79,7 +80,7 @@ main ──► app ──► components ──► (none, leaf nodes)
 
 ### Flow 1: TUI Startup → First Render
 1. `main()` parses CLI args, resolves network/URLs/seed
-2. `App::new()` creates 6 tab components, splash, status bar
+2. `App::new()` creates 4 tab components, splash, status bar
 3. `App::run()` enters raw mode, registers all components
 4. Spawns `start_ws_task()` and `start_poll_task()`
 5. Event loop starts; `Action::XrplServerInfo` triggers `startup_done = true` → splash dismissed
@@ -87,8 +88,9 @@ main ──► app ──► components ──► (none, leaf nodes)
 ### Flow 2: Periodic Data Refresh
 1. `poll_batch()` runs every `poll_interval_ms` (min 10s guarded)
 2. Fires `tokio::join!` on: `server_info`, `fee`, `account_info`, `book_offers` (parallel), then `account_nfts`, `account_lines`, `account_tx` (sequential after 500ms sleep)
-3. Results dispatched as `Action::XrplServerInfo`, `Action::XrplFee`, etc.
-4. `App::process_actions()` routes to active components via `update()`
+3. Oracle refresh path: XRPL `get_aggregate_price` + Flare FTSOv2 (`crate::flare::fetch_ftso_prices`) are polled and normalized
+4. Results dispatched as `Action::XrplServerInfo`, `Action::XrplDunl` (XRPL Foundation UNL from `https://unl.xrplf.org`), `Action::XrplFee`, `Action::XrplBookOffers`, `Action::XrplPathFind`, `Action::XrplOraclePrices`, `Action::FlareOraclePrices`, etc.
+5. `App::process_actions()` routes to active components via `update()`
 
 ### Flow 3: WebSocket Ledger Close → Poll Trigger
 1. WS receives `ledgerClosed` event
@@ -101,7 +103,12 @@ main ──► app ──► components ──► (none, leaf nodes)
 3. Poll task: validate params → `simulate_tx` → check `engine_result` → extract `Sequence`/`Fee` → `sign` → `submit`
 4. Result dispatched as `Action::PaymentSubmitOk` or `Action::PaymentSubmitErr`
 
-### Flow 5: CLI Command
+### Flow 5: Domain Verification (xrp-ledger.toml)
+1. User selects a validator in `ServerPanel` → `Action::RequestXrplToml { domain, expected_pubkey }`
+2. `App::process_actions()` spawns an async `fetch_xrpl_toml` call (10s timeout)
+3. Result dispatched as `Action::XrplTomlFetched { domain, result }` back to `ServerPanel`
+
+### Flow 6: CLI Command
 1. `main()` matches `Cmd::*` → calls `execute_cli_command()`
 2. Synchronous-style async: creates `RpcClient`, calls relevant RPC, formats stdout
 3. No TUI, no channels — direct function calls
@@ -112,11 +119,12 @@ main ──► app ──► components ──► (none, leaf nodes)
 |----------|----------|-----------|
 | **Terminal I/O** | `tui.rs` | `crossterm` raw mode, alternate screen, `EventStream` |
 | **Network (RPC)** | `xrpl/client.rs` | `reqwest` HTTP POST to JSON-RPC endpoints |
+| **Network (Flare FTSOv2)** | `flare.rs` | `alloy` provider + ContractRegistry/FtsoV2 read calls |
 | **Network (WS)** | `xrpl/ws.rs` | `xrpl-rust` WebSocket client |
 | **File system (config)** | `config.rs` | `config` crate reading `config.toml` |
 | **File system (logging)** | `logging.rs` | `tracing` file appender to data dir |
 | **File system (uninstall)** | `uninstall.rs` | `std::fs::remove_dir_all` |
-| **Environment** | `config.rs`, `main.rs` | `std::env::var` for `XRPL_*`, `LAZYXRP_*` |
+| **Environment** | `config.rs`, `main.rs`, `app.rs` | `std::env::var` for `XRPL_*`, `FLARE_*`, `LAZYXRP_*` |
 | **Process signal** | `tui.rs` | `signal_hook` SIGTSTP for suspend |
 | **Panic handler** | `errors.rs` | `human-panic`, `better-panic` |
 

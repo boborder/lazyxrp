@@ -26,6 +26,12 @@
 - `url = 2`
 - Phase 3 の Payment 署名はクレート公開 API の `wallet::Wallet` + `transaction::sign`（`models::transactions::payment::Payment`）を利用し、送信時は `binarycodec::encode` した `tx_blob` を `submit` に渡す（旧 `xrpl::crypto::Keypair` 系は 1.1 ではない）。
 
+### Flare / EVM
+
+- `alloy`（`Cargo.toml` `1`; `features = ["full"]`）
+  - `ContractRegistry` 経由で `FtsoV2` アドレスを解決し、`getFeedById(bytes21)` で FTSOv2 フィードを取得。
+  - Oracle タブ統合では Flare mainnet RPC を既定に使用する（フォールバックなし）。
+
 ### 設定・シリアライズ
 
 - `config`（`Cargo.toml` `0.15`、`Cargo.lock` `0.15.22`）
@@ -75,11 +81,14 @@
 | `XRPL_RPC_SERVER` | カスタム RPC エンドポイント（ネットワークプリセットを上書き） |
 | `XRPL_WS_SERVER` | カスタム WS エンドポイント（ネットワークプリセットを上書き） |
 | `XRPL_SEED` | 署名用シード（Phase 3 書き込み系 TX 準備） |
+| `FLARE_RPC_URL` | Flare FTSOv2 RPC URL（既定: mainnet） |
+| `FLARE_FEEDS` | Oracle タブ用 Flare フィード一覧（カンマ区切り） |
+| `FLARE_FEED` | 旧互換の単一フィード指定（`FLARE_FEEDS` 優先） |
 | `LAZYXRP_CONFIG` | 設定ディレクトリの明示オーバーライド（`..` は拒否） |
 | `LAZYXRP_DATA` | データディレクトリの明示オーバーライド |
 | `LAZYXRP_LOG_LEVEL` | ファイルログの既定フィルタ（`tracing-subscriber` の `EnvFilter`） |
 
-起動順は `Config::new()` → `logging::init(config.resolved_data_dir())`。`Config::new()` は `XRPL_SEED` に続けて `XRPL_NETWORK` / `XRPL_RPC_SERVER` / `XRPL_WS_SERVER` を読み、設定ファイルの同項目より優先して `xrpl` に反映する（スプラッシュの接続先表示もこのマージ後の値を使う）。ログファイルはマージ後の `data_dir`（設定ファイルトップレベルキー、または空なら環境変数・XDG・フォールバック）配下に作成される。設定ファイル自体の探索パスはブートストラップの `config_dir()`（`LAZYXRP_CONFIG` / XDG 等）で決まる。
+起動順は `Config::new()` → `logging::init(config.resolved_data_dir())`。`Config::new()` は `XRPL_SEED` に続けて `XRPL_NETWORK` / `XRPL_RPC_SERVER` / `XRPL_WS_SERVER` を読み、設定ファイルの同項目より優先して `xrpl` に反映する（スプラッシュの接続先表示もこのマージ後の値を使う）。Flare の `FLARE_RPC_URL` / `FLARE_FEEDS` は `App::run()` で読み取られ、Oracle タブの FTSOv2 ポーリングに適用される。ログファイルはマージ後の `data_dir`（設定ファイルトップレベルキー、または空なら環境変数・XDG・フォールバック）配下に作成される。設定ファイル自体の探索パスはブートストラップの `config_dir()`（`LAZYXRP_CONFIG` / XDG 等）で決まる。
 
 ```
 --network CLI > XRPL_NETWORK > config.toml [xrpl] network > デフォルト (mainnet)

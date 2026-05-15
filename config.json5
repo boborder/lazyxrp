@@ -29,8 +29,8 @@
     "offer_limit": 5,
     "poll_interval_ms": 5000,
     "oracles": [
-      // DIA testnet oracle — uncomment and switch network to "testnet" to use
-      // { "account": "r3U1mL5u2SCPr4mApqYyF96nvwvKoGf7aH", "oracle_document_id": 1 }
+      // DIA mainnet oracle
+      { "account": "rP24Lp7bcUHvEW7T7c8xkxtQKKd9fZyra7", "oracle_document_id": 42 }
     ],
     "oracle_pairs": [
       { "base_asset": "XRP", "quote_asset": "USD" },

@@ -61,7 +61,7 @@ Adapt to the request type. Skip items that don't apply:
 ## Architecture rules
 
 - **Message flow**: `Action` flows top-down only (WS/poll tasks → `action_rx` → `App` → components). Components never call `xrpl/` directly.
-- **Tab-panel consistency**: `TAB_TITLES.len()` MUST equal `panels.len()` (currently 5). Add assertion when changing.
+- **Tab-panel consistency**: `TAB_TITLES.len()` MUST equal `panels.len()` (currently 4). Add assertion when changing.
 - **Config merge priority**: CLI flags > env vars > user `config.toml` > built-in defaults (`config.json5`). Never invert this order.
 - **Module boundaries**: `components/` imports only from `action`, `config`, `xrpl/types`. Never from `xrpl/client`, `xrpl/poll`, or `app`.
 - **Coupling / drift**: [`docs/agent/DEPENDENCY_RULES.md`](docs/agent/DEPENDENCY_RULES.md), [`docs/agent/DESIGN_ISSUES.md`](docs/agent/DESIGN_ISSUES.md).

@@ -34,5 +34,5 @@ poll_interval_ms = 5000
 # seed = "sXXX..."
 
 [[xrpl.oracles]]
-account = "r3U1mL5u2SCPr4mApqYyF96nvwvKoGf7aH"
-oracle_document_id = 1
+account = "rP24Lp7bcUHvEW7T7c8xkxtQKKd9fZyra7"
+oracle_document_id = 42

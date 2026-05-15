@@ -153,3 +153,30 @@ pub fn render_error(frame: &mut Frame, area: Rect, title: &str, msg: &str, is_fo
         area,
     );
 }
+
+/// Centered popup rect (~80% of `area`) that never panics when `area` is smaller than `min_w`/`min_h`.
+pub fn centered_popup_rect(area: Rect, min_w: u16, min_h: u16) -> Rect {
+    let max_w = area.width.saturating_sub(4).max(1);
+    let max_h = area.height.saturating_sub(2).max(1);
+    let min_w = min_w.min(max_w);
+    let min_h = min_h.min(max_h);
+    let popup_w = ((area.width * 4 / 5).max(1)).clamp(min_w, max_w);
+    let popup_h = ((area.height * 4 / 5).max(1)).clamp(min_h, max_h);
+    let x = area.x + (area.width.saturating_sub(popup_w)) / 2;
+    let y = area.y + (area.height.saturating_sub(popup_h)) / 2;
+    Rect::new(x, y, popup_w, popup_h)
+}
+
+#[cfg(test)]
+mod popup_tests {
+    use super::*;
+
+    #[test]
+    fn centered_popup_small_area_no_panic() {
+        let area = Rect::new(0, 0, 10, 5);
+        let popup = centered_popup_rect(area, 40, 12);
+        assert!(popup.width > 0 && popup.height > 0);
+        assert!(popup.x + popup.width <= area.right());
+        assert!(popup.y + popup.height <= area.bottom());
+    }
+}

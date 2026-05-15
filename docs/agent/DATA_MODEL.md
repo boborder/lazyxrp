@@ -72,7 +72,9 @@ PollCommand ::=
 
 | Type | Fields | Source RPC |
 |------|--------|------------|
-| `ServerInfoSummary` | `ledger_index`, `hostid` | `server_info` |
+| `ServerInfoSummary` | `ledger_index`, `hostid`, `validation_quorum?`, `validator_list?` | `server_info` |
+| `DunlValidatorRow` | `validation_public_key`, `has_manifest`, optional `domain` / `sequence` / `master_public_key` | dUNL blob per validator |
+| `DunlSummary` | `validator_count`, `sequence`, `expiration_ripple`, `expiration_utc`, `validators[]`; `stats()`, `days_until_expiry()` | HTTPS `https://unl.xrplf.org` |
 | `FeeSummary` | `open_ledger_fee_drops` | `fee` |
 | `AccountSummary` | `account`, `balance_xrp`, `sequence`, `owner_count`, `flags`, `regular_key?`, `domain_hex?` | `account_info` |
 | `TxSummary` | `hash` | WebSocket `tx` event |

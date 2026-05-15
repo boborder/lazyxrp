@@ -203,13 +203,12 @@ TxHistory {
 - **`ledger_objects.rs`**: `account_objects` 応答の一覧・詳細ウィジェット。
 - 統合タブとして `src/components/tabs/account_tx.rs`、`market.rs`、`server_overview.rs` に加え、**`account_objects.rs`** を追加（**Objects** 1 タブで上段: Check / Ticket / MPT / DID 等、下段: PayChannel と Escrow）。
 
-### 6.6 タブ構成（5 タブ）と ledger objects
+### 6.6 タブ構成（4 タブ）と ledger objects
 
-- **Overview**: Server + Wallet  
-- **Account**: Account + TxHistory  
-- **Market**: Book + AMM + TrustLines  
-- **NFTs**: NFT 一覧  
-- **Objects**: 上段 — Check / Ticket / MPToken / DepositPreauth / SignerList / **DID**（分散識別子・credential 用 ledger object）など。下段左右 — PayChannel / Escrow（同一 `account_objects` 結果を種別フィルタ）
+- **Overview**: `OverviewTab` → `ServerPanel`（左）+ `OraclePanel`（右上・XRPL aggregate）+ `FlareFtsoPanel`（右下・FTSOv2）
+- **Account**: `AccountWalletTab` — `WalletPanel` + `AccountPanel` + `TxHistoryPanel`
+- **Market**: `MarketOracleTab` — Book / PathFind / AMM / TrustLines / Flare FTSO / Oracle
+- **Assets**: `AssetsTab` — `NftTab` + `LedgerObjectsPanel`（Objects / Pay channels / Escrows）
 
 ポーリングは `PollCommand::LedgerObjects` で `RpcClient::account_objects` を実行し、`Action::XrplLedgerObjects` で UI に渡す。手動更新キーは設定で `RefreshLedgerObjects`（既定 `o`）。
 

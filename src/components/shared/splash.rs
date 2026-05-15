@@ -5,7 +5,7 @@ use ratatui::{
     layout::{Alignment, Constraint, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Paragraph, Wrap},
+    widgets::Paragraph,
 };
 use tokio::sync::mpsc::UnboundedSender;
 
@@ -18,7 +18,7 @@ use crate::{
 
 /// Splash の tick 駆動アニメ
 /// 1. ASCII ロゴの行ごとウェーブ（強調が縦に伝わる）
-/// 2. ロゴ領域はパネル横幅の 80% に収め、長い行は折り返し
+/// 2. ロゴは「中央上部」に固定配置（横中央 + 上寄せ）
 /// 3. ステータス末尾のドット呼吸（`. .. ...`）
 /// 4. quit ヒントの括弧スタイル周期 `[ ]` / `< >` / `( )`
 const ASCII_ART: &str = r#"
@@ -28,7 +28,6 @@ const ASCII_ART: &str = r#"
         | |__| (_| |/ /| |_| |/  \|  _ <|  __/
         |_____\__,_/___|\__, /_/\_\_| \_\_|
                         |___/
-
  __  ______  ____    _             _
  \ \/ /  _ \|  _ \  | |    ___  __| | __ _  ___ _ ___
   \  /| |_) | |_) | | |   / _ \/ _` |/ _` |/ _ \ '__|
@@ -46,12 +45,18 @@ fn trailing_dots(tick: usize) -> &'static str {
     }
 }
 
-fn splash_wrap_width(inner_w: u16) -> u16 {
-    ((inner_w as u32 * 8 / 10).max(1)) as u16
+fn ascii_art_max_width() -> u16 {
+    ASCII_ART
+        .trim_start_matches('\n')
+        .lines()
+        .map(|l| l.chars().count() as u16)
+        .max()
+        .unwrap_or(1)
 }
 
 fn splash_art_column(art_area: Rect) -> Rect {
-    let w = splash_wrap_width(art_area.width);
+    // ASCII の崩れを避けるため、折り返し前提ではなく「必要幅を中央配置」。
+    let w = ascii_art_max_width().min(art_area.width.max(1));
     let side = art_area.width.saturating_sub(w) / 2;
     Rect {
         x: art_area.x + side,
@@ -152,22 +157,16 @@ impl Component for SplashScreen {
         const ART_FULL: u16 = 14;
         let min_needed = STATUS_H + HINT_H;
 
-        // 十分な高さがあれば縦中央、なければ上から詰めて表示
+        // 「中央上部」に固定：上寄せで表示し、残りは下へ流す
         let art_h = if inner.height >= ART_FULL + min_needed {
             ART_FULL
         } else {
             inner.height.saturating_sub(min_needed)
         };
         let total_needed = art_h + min_needed;
-        let top_pad = inner.height.saturating_sub(total_needed) / 2;
 
-        let [pad, content, _] = Layout::vertical([
-            Constraint::Length(top_pad),
-            Constraint::Length(total_needed),
-            Constraint::Min(0),
-        ])
-        .areas(inner);
-        let _ = pad;
+        let [content, _] =
+            Layout::vertical([Constraint::Length(total_needed), Constraint::Min(0)]).areas(inner);
 
         let [art_area, status_area, hint_area] = Layout::vertical([
             Constraint::Length(art_h),
@@ -178,9 +177,7 @@ impl Component for SplashScreen {
 
         let art_col = splash_art_column(art_area);
         let art_lines = splash_ascii_lines_for_height(self.tick, art_h as usize);
-        let art = Paragraph::new(art_lines)
-            .alignment(Alignment::Left)
-            .wrap(Wrap { trim: false });
+        let art = Paragraph::new(art_lines).alignment(Alignment::Left);
         frame.render_widget(art, art_col);
 
         let spin = spinner(self.tick);

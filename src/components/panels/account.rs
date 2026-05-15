@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
@@ -7,6 +5,7 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Gauge, Paragraph},
 };
+use std::sync::Arc;
 
 use crate::{
     action::Action,
@@ -145,6 +144,7 @@ impl Component for AccountPanel {
                 Span::raw(est_value),
             ]),
         ];
+
         frame.render_widget(Paragraph::new(id_lines), left);
 
         // ── Right: balance + reserve gauge ────────────────────────────────

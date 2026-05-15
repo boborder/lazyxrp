@@ -6,15 +6,14 @@ Repository: https://github.com/boborder/lazyxrp
 
 ## Features
 
-Watch mode uses **five top-level tabs** (jump with number keys `1`–`5`):
+Watch mode uses **four top-level tabs** (jump with number keys `1`–`4`):
 
 | Tab | Content |
 |-----|---------|
-| **Overview** | Server panel + wallet / seed-derived account summary |
-| **Account** | Account summary + recent transaction history |
-| **Market** | Order book, AMM pool, trust lines |
-| **NFTs** | NFT list with taxon / serial / URI |
-| **Objects** | `account_objects` for the watched account: upper — Checks, Tickets, MPT, DID, DepositPreauth, SignerList, …; lower — Payment channels + Escrow |
+| **Overview** | Server summary (left) + XRPL oracle aggregate prices (right) |
+| **Account** | Wallet composer + account summary + recent transaction history |
+| **Market** | DEX book + AMM + Path-Find placeholder + Oracle( XRPL + Flare FTSOv2 ) |
+| **Assets** | NFT + account_objects (Objects / Pay channels / Escrows) |
 
 ## Requirements
 
@@ -107,7 +106,7 @@ Default bindings ship in the embedded repo-root `config.json5` and merge with yo
 | Key | Action |
 |-----|--------|
 | `Tab` / `Shift+Tab` | Next / previous tab |
-| `1`–`5` | Jump to tab by index |
+| `1`–`4` | Jump to tab by index |
 | `h` / `l` or `←` / `→` | Move focus between panels in the current tab |
 | `j` / `k` or `↑` / `↓` | Move selection in the focused panel |
 | `r` | Refresh account |
@@ -150,6 +149,9 @@ cp .config/lazyxrp/config.toml "${XDG_CONFIG_HOME:-$HOME/.config}/lazyxrp/config
 | `XRPL_RPC_SERVER` | Custom RPC endpoint (overrides network preset) |
 | `XRPL_WS_SERVER` | Custom WS endpoint (overrides network preset) |
 | `XRPL_SEED` | Signing seed (write TX — prefer over config file) |
+| `FLARE_RPC_URL` | Flare FTSOv2 RPC (default: Flare mainnet) |
+| `FLARE_FEEDS` | Oracle tab Flare feed list (comma-separated, e.g. `FXRP/USD,FLR/USD`) |
+| `FLARE_FEED` | Backward-compatible single feed override (legacy) |
 | `LAZYXRP_CONFIG` | Override config directory (`..` rejected) |
 | `LAZYXRP_DATA` | Override data directory |
 | `LAZYXRP_LOG_LEVEL` | Default file log filter (`tracing` `EnvFilter`) |
@@ -166,6 +168,11 @@ cargo check
 cargo test
 cargo run --bin lazyxrp -- watch --account <r-address>
 cargo run --bin lazyxrp -- --network testnet info
+
+# Optional Flare Oracle overrides (Oracle tab only)
+# Default feeds: FXRP/USD,FLR/USD,BTC/USD,ETH/USD
+# FLARE_FEEDS=FXRP/USD,FLR/USD,BTC/USD,ETH/USD
+# FLARE_RPC_URL=https://flare-api.flare.network/ext/C/rpc
 ```
 
 ## Contributing

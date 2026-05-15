@@ -22,28 +22,23 @@ use crate::{
             fps::FpsCounter, help_overlay::HelpOverlay, splash::SplashScreen,
             status_bar::StatusBar, theme,
         },
-        tabs::nft::NftTab,
-        tabs::oracle::OracleTab,
         tabs::{
-            account_objects::AccountObjectsTab, account_tx::AccountTxTab, market::MarketTab,
-            server_overview::ServerOverviewTab,
+            account_wallet::AccountWalletTab, assets::AssetsTab, market_oracle::MarketOracleTab,
+            overview::OverviewTab,
         },
     },
     config::Config,
+    flare::{DEFAULT_FLARE_FEEDS, DEFAULT_FLARE_RPC},
     network::Network,
     tui::{Event, Tui},
-    xrpl::{BookPair, PollCommand, PollContext, start_poll_task, start_ws_task},
+    xrpl::{
+        BookPair, PollCommand, PollContext, fetch_xrpl_toml_with_meta, start_poll_task,
+        start_ws_task,
+    },
 };
 
 /// Tab labels (index mirrors `panels` Vec order)
-const TAB_TITLES: &[&str] = &[
-    "󰖟 Overview",
-    "󰀉 Account",
-    "󰠿 Market",
-    "󰒍 NFTs",
-    "󰧮 Objects",
-    "󰠨 Oracle",
-];
+const TAB_TITLES: &[&str] = &["󰖟 Overview", "󰀉 Account", "󰠿 Market", "󰒍 Assets"];
 
 fn footer_line(active_tab: usize) -> Line<'static> {
     let key = |k: &'static str| Span::styled(k, Style::new().add_modifier(Modifier::BOLD));
@@ -56,7 +51,7 @@ fn footer_line(active_tab: usize) -> Line<'static> {
         key("Tab"),
         label(":next"),
         sep(),
-        key("1-6"),
+        key("1-4"),
         label(":jump"),
         sep(),
         key("↑↓/jk"),
@@ -69,9 +64,9 @@ fn footer_line(active_tab: usize) -> Line<'static> {
         label(":suspend"),
         sep(),
     ];
-    // Tab indices: 0 Overview, 1 Account+Tx, 2 Market, 3 NFTs, 4 Objects, 5 Oracle
+    // Tab indices: 0 Overview, 1 Account, 2 Market, 3 Assets
     match active_tab {
-        0 => {
+        1 => {
             spans.extend([
                 key("t"),
                 label(":tx composer"),
@@ -79,15 +74,15 @@ fn footer_line(active_tab: usize) -> Line<'static> {
                 key("e/s"),
                 label(":in modal"),
                 sep(),
+                key("r"),
+                label(":refresh"),
+                sep(),
             ]);
-        }
-        1 => {
-            spans.extend([key("r"), label(":refresh"), sep()]);
         }
         2 => {
             spans.extend([key("b"), label(":refresh book"), sep()]);
         }
-        4 => {
+        3 => {
             spans.extend([key("o"), label(":obj refresh"), sep()]);
         }
         _ => {}
@@ -131,6 +126,38 @@ pub struct App {
     needs_draw: bool,
 }
 
+fn resolve_flare_rpc_url() -> Option<String> {
+    std::env::var("FLARE_RPC_URL")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .or_else(|| Some(DEFAULT_FLARE_RPC.to_string()))
+}
+
+fn resolve_flare_feeds() -> Vec<String> {
+    if let Ok(raw) = std::env::var("FLARE_FEEDS") {
+        let feeds: Vec<String> = raw
+            .split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(ToString::to_string)
+            .collect();
+        if !feeds.is_empty() {
+            return feeds;
+        }
+    }
+    if let Ok(one) = std::env::var("FLARE_FEED") {
+        let t = one.trim().to_string();
+        if !t.is_empty() {
+            return vec![t];
+        }
+    }
+    DEFAULT_FLARE_FEEDS
+        .iter()
+        .map(|s| (*s).to_string())
+        .collect()
+}
+
 #[derive(Default, Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Mode {
     #[default]
@@ -170,15 +197,10 @@ impl App {
         }
         let watch_account = account.unwrap_or_else(|| config.xrpl.account.clone());
         let panels: Vec<Box<dyn Component>> = vec![
-            Box::new(ServerOverviewTab::new(
-                rpc_server.clone(),
-                skip_mainnet_prompt,
-            )),
-            Box::new(AccountTxTab::new()),
-            Box::new(MarketTab::new()),
-            Box::new(NftTab::new()),
-            Box::new(AccountObjectsTab::new()),
-            Box::new(OracleTab::new()),
+            Box::new(OverviewTab::new(rpc_server.clone())),
+            Box::new(AccountWalletTab::new(skip_mainnet_prompt)),
+            Box::new(MarketOracleTab::new()),
+            Box::new(AssetsTab::new()),
         ];
         // UA-1: guard against tab/panel index mismatch (docs/agent/INVARIANTS.md)
         debug_assert_eq!(
@@ -271,6 +293,8 @@ impl App {
             .as_ref()
             .map(|s| crate::components::panels::wallet::seed_to_address(s.expose_secret()))
             .and_then(Result::ok);
+        let flare_rpc_url = resolve_flare_rpc_url();
+        let flare_feeds = resolve_flare_feeds();
         start_poll_task(
             PollContext {
                 rpc_url: self.rpc_server.clone(),
@@ -281,14 +305,19 @@ impl App {
                 network_watch: self.net_tx.subscribe(),
                 oracles: self.config.xrpl.oracles.clone(),
                 oracle_pairs: self.config.xrpl.oracle_pairs.clone(),
+                flare_rpc_url: flare_rpc_url.clone(),
+                flare_feeds: flare_feeds.clone(),
             },
             poll_rx,
             poll_trigger_rx,
             action_tx.clone(),
             cancel.clone(),
         );
-        if self.config.xrpl.oracles.is_empty() {
-            let _ = action_tx.send(Action::XrplOracleNotConfigured);
+        if self.config.xrpl.oracles.is_empty()
+            && flare_rpc_url.is_none()
+            && action_tx.send(Action::XrplOracleNotConfigured).is_err()
+        {
+            warn!("action channel closed (oracle not configured)");
         }
 
         loop {
@@ -451,6 +480,34 @@ impl App {
                     if let Err(err) = self.net_tx.send(*net) {
                         warn!(?err, "network watch channel closed");
                     }
+                }
+                Action::RequestXrplToml {
+                    domain,
+                    expected_pubkey,
+                } => {
+                    let domain = domain.clone();
+                    let expected_pubkey = expected_pubkey.clone();
+                    let tx = self.action_tx.clone();
+                    tokio::spawn(async move {
+                        let fetched = fetch_xrpl_toml_with_meta(
+                            &domain,
+                            &expected_pubkey,
+                            Duration::from_secs(10),
+                        )
+                        .await;
+                        if tx
+                            .send(Action::XrplTomlFetched {
+                                domain,
+                                status: fetched.status,
+                                content_type: fetched.content_type,
+                                raw: fetched.raw,
+                                result: fetched.result,
+                            })
+                            .is_err()
+                        {
+                            warn!("action channel closed (xrpl toml fetch)");
+                        }
+                    });
                 }
                 Action::RefreshAccount => {
                     Self::try_debounced(

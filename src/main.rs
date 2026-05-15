@@ -11,6 +11,7 @@ mod cli;
 mod components;
 mod config;
 mod errors;
+mod flare;
 mod logging;
 mod network;
 mod signing;
