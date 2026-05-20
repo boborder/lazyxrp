@@ -828,7 +828,7 @@ CI（`.github/workflows/ci.yml`）は各ジョブで `cargo … --locked`（例:
 - **Size**: L
 - **Status**: [x] Done
 - **Target**: `src/app.rs` -> `App::new()`
-- **Preconditions**: Valid config (`Config::new` via `ENV_TEST_LOCK`); TTY for later `Tui` tests
+- **Preconditions**: Valid config (`Config::new` via `ENV_TEST_LOCK`)
 - **Expected Output**: `App` builds; panel count matches tab count
 - **Test File**: `src/app.rs` (inline)
 - **Notes**: Full `App::run()` loop not exercised here. `test_app` passes `Config::new()` into `App::new`; production Watch passes the same `Config` as `main` after `prime_seed_source` so merged `XRPL_SEED` is not lost.
@@ -840,7 +840,7 @@ CI（`.github/workflows/ci.yml`）は各ジョブで `cargo … --locked`（例:
 - **Size**: L
 - **Status**: [x] Done
 - **Target**: `src/app.rs` -> `Action::Quit` → `process_actions`
-- **Preconditions**: `Tui::new` succeeds
+- **Preconditions**: None (calls `process_actions(None)` — no TTY required on CI)
 - **Input**: `Action::Quit` on action channel
 - **Expected Output**: `should_quit == true` (mirrors `run()` cancel path)
 - **Test File**: `src/app.rs` (inline)
@@ -1177,5 +1177,5 @@ CI（`.github/workflows/ci.yml`）は各ジョブで `cargo … --locked`（例:
 - **`xrpl::tests::integration_live_network`** hits `https://xrplcluster.com` (90s timeout per case) and serializes calls with a test-local mutex to reduce public-node rate limiting. Offline / blocked CI: non-ignored live tests fail; prefer runners with outbound HTTPS or mark live tests ignored in CI if needed.
 - **`tokio::spawn` lifetime issue** (rust-lang/rust#100013) was previously tracked for watch startup; current `start_poll_task` / `start_ws_task` paths compile with direct `tokio::spawn` and should remain covered by `cargo check`.
 - **macOS linking warnings** from upstream deps are non-fatal; do not treat as test failures.
-- **TUI tests** (`TC-060`–`TC-065`) run under `#[tokio::test]`; they need a tokio runtime but not `#[ignore]`. Live RPC CLI tests remain `#[ignore]` when network/seed-dependent.
+- **TUI tests** (`TC-060`–`TC-065`) run under `#[tokio::test]`; `TC-061`–`TC-065` exercise `process_actions(None)` so they pass on headless CI without `Tui::new()`. Live RPC CLI tests remain `#[ignore]` when network/seed-dependent.
 - **TC-ID note**: `client.rs` uses TC-079–TC-084 for ripple_path_find / oracle parsers; catalog TC-079 is reserved for WalletPanel filters (see case body above).
