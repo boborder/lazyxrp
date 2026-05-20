@@ -1,18 +1,19 @@
 use serde_json::Value;
 
-pub(crate) fn json_str<'a>(value: &'a Value, path: &[&str]) -> &'a str {
+fn json_node_at<'a>(value: &'a Value, path: &[&str]) -> &'a Value {
     let mut node = value;
     for key in path {
         node = node.get(*key).unwrap_or(&Value::Null);
     }
-    node.as_str().unwrap_or_default()
+    node
+}
+
+pub(crate) fn json_str<'a>(value: &'a Value, path: &[&str]) -> &'a str {
+    json_node_at(value, path).as_str().unwrap_or_default()
 }
 
 pub(crate) fn extract_json_u32(value: &Value, path: &[&str]) -> u32 {
-    let mut node = value;
-    for key in path {
-        node = node.get(*key).unwrap_or(&Value::Null);
-    }
+    let node = json_node_at(value, path);
     node.as_u64()
         .or_else(|| node.as_str().and_then(|s| s.parse().ok()))
         .unwrap_or_default() as u32

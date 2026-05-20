@@ -271,6 +271,7 @@ mod tests {
     }
 
     #[test]
+    /// TC-077
     fn filter_by_tx_type() {
         let mut panel = TxHistoryPanel::new();
         panel.txs = vec![
@@ -285,6 +286,7 @@ mod tests {
     }
 
     #[test]
+    /// TC-078
     fn filter_by_hash_partial() {
         let mut panel = TxHistoryPanel::new();
         panel.txs = vec![

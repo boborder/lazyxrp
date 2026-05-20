@@ -1,4 +1,20 @@
 /target
 .data/*.log
 
+# Secrets — never commit real seeds or keys
+.env
+.env.*
+!.env.example
+
 /graphify-out
+
+# Local Pi harness state (not part of the product)
+.pi/
+
+# FAssets skill scripts — install with `npm install` under scripts/
+.agents/skills/flare-fassets/scripts/node_modules/
+# Local Pi runtime state
+.atl/
+
+!skills-lock.json
+./agents/

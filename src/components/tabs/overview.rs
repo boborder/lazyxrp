@@ -68,7 +68,7 @@ impl Component for OverviewTab {
 
     fn draw(&mut self, frame: &mut Frame, area: Rect) -> color_eyre::Result<()> {
         let [left, right] =
-            Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)])
+            Layout::horizontal([Constraint::Percentage(44), Constraint::Percentage(56)])
                 .areas(area);
 
         self.server.draw(frame, left)?;

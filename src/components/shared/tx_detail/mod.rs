@@ -20,7 +20,7 @@ mod parsers;
 const RIPPLE_EPOCH: i64 = 946_684_800;
 
 use format::format_value;
-use parsers::*;
+use parsers::typed_detail_lines;
 
 /// Scrollable transaction-detail overlay state.
 #[derive(Default)]
@@ -174,46 +174,13 @@ fn detail_lines_for<'a>(tx: &'a Value, meta: &'a Value) -> Vec<Line<'a>> {
 
     lines.push(Line::from(""));
 
-    // Try typed parse for specific transaction types
-    let mut typed_shown = false;
-    if let Some(tx_type) = tx.get("TransactionType").and_then(Value::as_str) {
-        let maybe_lines = match tx_type {
-            "Payment" => payment_detail_lines(tx),
-            "AccountSet" => account_set_detail_lines(tx),
-            "TrustSet" => trust_set_detail_lines(tx),
-            "OfferCreate" => offer_create_detail_lines(tx),
-            "NFTokenMint" => nftoken_mint_detail_lines(tx),
-            "OfferCancel" => offer_cancel_detail_lines(tx),
-            "CheckCreate" => check_create_detail_lines(tx),
-            "SignerListSet" => signer_list_set_detail_lines(tx),
-            "EscrowCreate" => escrow_create_detail_lines(tx),
-            "EscrowFinish" => escrow_finish_detail_lines(tx),
-            "EscrowCancel" => escrow_cancel_detail_lines(tx),
-            "PaymentChannelCreate" => payment_channel_create_detail_lines(tx),
-            "PaymentChannelFund" => payment_channel_fund_detail_lines(tx),
-            "PaymentChannelClaim" => payment_channel_claim_detail_lines(tx),
-            "CheckCash" => check_cash_detail_lines(tx),
-            "CheckCancel" => check_cancel_detail_lines(tx),
-            "DepositPreauth" => deposit_preauth_detail_lines(tx),
-            "SetRegularKey" => set_regular_key_detail_lines(tx),
-            "NFTokenBurn" => nftoken_burn_detail_lines(tx),
-            "NFTokenCreateOffer" => nftoken_create_offer_detail_lines(tx),
-            "NFTokenAcceptOffer" => nftoken_accept_offer_detail_lines(tx),
-            "NFTokenCancelOffer" => nftoken_cancel_offer_detail_lines(tx),
-            "AMMCreate" => amm_create_detail_lines(tx),
-            "AMMDeposit" => amm_deposit_detail_lines(tx),
-            "AMMWithdraw" => amm_withdraw_detail_lines(tx),
-            "AMMVote" => amm_vote_detail_lines(tx),
-            "AMMBid" => amm_bid_detail_lines(tx),
-            "AMMDelete" => amm_delete_detail_lines(tx),
-            "TicketCreate" => ticket_create_detail_lines(tx),
-            _ => None,
-        };
-        if let Some(typed_lines) = maybe_lines {
-            lines.extend(typed_lines);
-            typed_shown = true;
-        }
-    }
+    // Typed parsers (registration table in parsers.rs)
+    let typed_shown = if let Some(typed_lines) = typed_detail_lines(tx) {
+        lines.extend(typed_lines);
+        true
+    } else {
+        false
+    };
 
     let known: &[&str] = &[
         "TransactionType",

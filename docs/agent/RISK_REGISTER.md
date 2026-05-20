@@ -2,6 +2,21 @@
 
 > **Read**: `ARCHITECTURE.md`, `DATA_MODEL.md`, `INVARIANTS.md`, `DEPENDENCY_RULES.md`. **Scope**: full repository. **Confidence**: medium. **Generated**: 2026-05-14 (Pass 5).
 
+**SSOT:** Implementation risks **R-001〜R-010** live here. Security audit history **S-001〜S-011** is in [`../security.md`](../security.md) with an S↔R table. Enforced rules **I-1〜I-11** are in [`INVARIANTS.md`](INVARIANTS.md).
+
+| R-ID | S-ID (if any) | One-line |
+|------|---------------|----------|
+| R-001 | S-001, S-002, S-010, S-011 | Seed resolution / `secret_seed` vs cleared `seed` |
+| R-002 | — | Submit errors dropped on closed `action_tx` |
+| R-003 | — | `ArcValue` shared JSON mutation |
+| R-004 | — | Unbounded channel growth |
+| R-005 | S-006 | TUI Drop / terminal raw mode |
+| R-006 | — | Mainnet `--yes` guard bypass |
+| R-007 | — | Config merge precedence per-key |
+| R-008 | — | RPC 429 / backoff |
+| R-009 | — | Submit hash not verified |
+| R-010 | — | Duplicate poll on ledger close |
+
 ## R-001: Seed priority chain inconsistency
 
 - **Severity**: High

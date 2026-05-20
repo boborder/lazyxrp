@@ -184,7 +184,6 @@ pub struct TxSummary {
 }
 
 /// Result of a `simulate` RPC call — dry-run of an unsigned transaction.
-#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SimulateResult {
     /// Auto-filled transaction JSON (Fee, Sequence, etc. populated by server).

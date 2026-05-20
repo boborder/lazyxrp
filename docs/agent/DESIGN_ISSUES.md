@@ -4,10 +4,10 @@
 
 ## Issue 1: poll.rs submit logic duplication
 
-**Severity**: Medium
-**Evidence**: `src/xrpl/poll.rs` contains 5 submit functions (`submit_account_set_transaction`, `submit_payment_transaction`, `submit_set_regular_key_transaction`, `submit_escrow_create_transaction`, `submit_offer_create_transaction`), each ~150-200 lines with near-identical structure: validate → simulate → extract → sign → submit.
-**Impact**: Bug in the common pipeline (e.g., timeout handling) must be fixed in 5 places. New submit types require copy-paste.
-**Recommendation**: Extract generic `submit_transaction(tx_json, sign_fn)` helper.
+**Severity**: Medium (reduced 2026-05-20)
+**Evidence**: `submit_account_set_transaction` and `submit_payment_transaction` share helpers (`send_action`, `fetch_account_summary_for_submit`, `finalize_simulate_sign_submit`). `SetRegularKey` / `EscrowCreate` / `OfferCreate` signing helpers exist in `signing.rs` but are not yet wired through `poll.rs` (actions exist in `action.rs`).
+**Impact**: Common simulate → sign → submit path is centralized for the two live submit types; additional TX types still need poll wiring + tests.
+**Recommendation**: When wiring more submit types, reuse `finalize_simulate_sign_submit` and keep per-type validation in the caller.
 
 ## Issue 2: Config depends on app::Mode
 
@@ -58,10 +58,10 @@
 **Impact**: During WS outage, poll continues normally — no degradation in UX.
 **Recommendation**: Acceptable current behavior. Document that WS and poll are intentionally decoupled.
 
-## Issue 9: tx_detail parsers are 29 functions with manual dispatch
+## Issue 9: tx_detail parsers are 29 functions with registration dispatch
 
 **Severity**: Low
-**Evidence**: `src/components/shared/tx_detail/parsers.rs` defines ~29 `try_*_detail_lines` functions, dispatched manually in `detail_lines_for()` in `mod.rs`.
-**Impact**: Adding a new TX type requires changes in 2 places. Error-prone.
+**Evidence**: `src/components/shared/tx_detail/parsers.rs` defines 29 `*_detail_lines` functions and dispatches via `TX_DETAIL_PARSERS` / `typed_detail_lines()`. Human doc: [`../tx-detail.md`](../tx-detail.md).
+**Impact**: Adding a new TX type requires a new parser function plus one `TX_DETAIL_PARSERS` row (and doc list). Error-prone if the registry test is ignored.
 **Note**: The per-frame execution cost of `detail_lines_for()` was addressed by caching in `TxDetailState` (Stage 1, 2026-05-15). Parser count growth remains a maintenance concern, but runtime performance is mitigated.
-**Recommendation**: Consider a macro or registration-based dispatch if TX types exceed ~40.
+**Recommendation**: Keep `registry_tests::tx_detail_parser_registry_has_29_types` green when adding types. Consider a macro if TX types exceed ~40.

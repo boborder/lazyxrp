@@ -50,7 +50,6 @@ src/
 ├── errors.rs            Error handling init (color-eyre, human-panic, better-panic)
 ├── logging.rs           Tracing/logging initialization
 ├── uninstall.rs         --self-uninstall logic
-├── utils.rs             Misc utilities
 ├── xrpl/                XRPL integration
 │   ├── mod.rs           Re-exports
 │   ├── client.rs        RpcClient (JSON-RPC calls, response parsing, xrp_to_drops)
@@ -63,7 +62,7 @@ src/
 └── components/          UI components
     ├── mod.rs           Component trait definition
     ├── panels/          Standalone panels (account, book, amm, server, wallet, etc.)
-    ├── tabs/            Composite tab views (account_tx, market, nft, server_overview, account_objects)
+    ├── tabs/            Composite tab views (overview, account_wallet, market_oracle, assets, nft)
     └── shared/          Shared widgets (theme, fps, splash, status_bar, help_overlay, tx_detail, etc.)
 
 docs/

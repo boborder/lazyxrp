@@ -1,0 +1,24 @@
+{
+  "name": "flare-fassets-skill-scripts",
+  "private": true,
+  "type": "module",
+  "description": "Optional viem/ethers helpers for FAssets skill docs (Coston2 default).",
+  "scripts": {
+    "execute-direct-mint": "tsx execute-direct-mint.ts",
+    "execute-direct-mint:watch": "EXECUTOR_MODE=watch tsx execute-direct-mint.ts",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "viem": "^2.30.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.8.0",
+    "vitest": "^3.2.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

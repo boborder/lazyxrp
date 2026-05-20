@@ -2,7 +2,7 @@ use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
     text::{Line, Span},
-    widgets::{Paragraph, Row, Scrollbar, ScrollbarOrientation, Table},
+    widgets::{Cell, Paragraph, Row, Scrollbar, ScrollbarOrientation, Table},
 };
 
 use crate::{
@@ -40,21 +40,41 @@ impl PathFindPanel {
         }
     }
 
-    fn subtitle(&self) -> String {
+    fn summary_lines(&self) -> Vec<Line<'static>> {
         if self.dest_summary.is_empty() {
-            return String::new();
+            return Vec::new();
         }
-        if self.route_count == 0 {
-            format!("→ {} · no route", self.dest_summary)
+        let route_part = if self.route_count == 0 {
+            "no routes".to_string()
         } else {
-            format!(
-                "→ {} · {} route{}",
-                self.dest_summary,
-                self.route_count,
-                if self.route_count == 1 { "" } else { "s" }
-            )
-        }
+            let word = if self.route_count == 1 {
+                "route"
+            } else {
+                "routes"
+            };
+            format!("{} {word} (cheapest send first)", self.route_count)
+        };
+        vec![
+            Line::from(vec![
+                Span::styled("Receive ", theme::dim_style()),
+                Span::styled(self.dest_summary.clone(), theme::accent_style()),
+                Span::styled(format!(" · {route_part}"), theme::dim_style()),
+            ]),
+            Line::from(Span::styled(
+                "Self-payment preview for the configured book pair · Enter: raw JSON",
+                theme::dim_style(),
+            )),
+        ]
     }
+}
+
+fn path_find_table_row(rank: usize, row: &PathFindRow) -> Row<'_> {
+    Row::new(vec![
+        Cell::from(format!("{rank}")).style(theme::dim_style()),
+        Cell::from(row.send.as_str()).style(theme::accent_style()),
+        Cell::from(row.hops.as_str()).style(theme::secondary_style()),
+        Cell::from(row.path.as_str()),
+    ])
 }
 
 impl Component for PathFindPanel {
@@ -124,7 +144,7 @@ impl Component for PathFindPanel {
                 area,
                 "Path-Find",
                 self.tick,
-                "finding routes...",
+                "finding payment routes...",
                 self.is_focused,
             );
             return Ok(());
@@ -137,9 +157,12 @@ impl Component for PathFindPanel {
 
         if self.rows.is_empty() {
             let msg = if self.dest_summary.is_empty() {
-                "(no routes)".to_string()
+                "No payment routes found for this pair.".to_string()
             } else {
-                format!("{} — (no routes)", self.subtitle())
+                format!(
+                    "Receive {} — no routes (try another issuer or currency on Overview)",
+                    self.dest_summary
+                )
             };
             render_empty(frame, area, "Path-Find", &msg, self.is_focused);
             return Ok(());
@@ -154,29 +177,29 @@ impl Component for PathFindPanel {
         let inner = block.inner(area);
         frame.render_widget(block, area);
 
-        let subtitle = self.subtitle();
-        let table_area = if subtitle.is_empty() {
+        let summary_lines = self.summary_lines();
+        let table_area = if summary_lines.is_empty() {
             inner
         } else {
             let [summary_area, rest] =
-                Layout::vertical([Constraint::Length(1), Constraint::Fill(1)]).areas(inner);
-            frame.render_widget(
-                Paragraph::new(Line::from(Span::styled(subtitle, theme::dim_style()))),
-                summary_area,
-            );
+                Layout::vertical([Constraint::Length(2), Constraint::Fill(1)]).areas(inner);
+            frame.render_widget(Paragraph::new(summary_lines), summary_area);
             rest
         };
 
-        let header = Row::new(vec!["Send", "Hops", "Path"]).style(theme::header_row_style());
+        let header =
+            Row::new(vec!["#", "You send", "Hops", "Route"]).style(theme::header_row_style());
         let rows = self
             .rows
             .iter()
-            .map(|r| Row::new(vec![r.send.clone(), r.hops.clone(), r.path.clone()]));
+            .enumerate()
+            .map(|(i, r)| path_find_table_row(i + 1, r));
         let table = Table::new(
             rows,
             [
-                Constraint::Length(12),
-                Constraint::Length(4),
+                Constraint::Length(3),
+                Constraint::Length(16),
+                Constraint::Length(8),
                 Constraint::Fill(1),
             ],
         )

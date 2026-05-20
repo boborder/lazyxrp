@@ -12,7 +12,7 @@ Watch mode uses **four top-level tabs** (jump with number keys `1`–`4`):
 |-----|---------|
 | **Overview** | Server summary (left) + XRPL oracle aggregate prices (right) |
 | **Account** | Wallet composer + account summary + recent transaction history |
-| **Market** | DEX book + AMM + Path-Find placeholder + Oracle( XRPL + Flare FTSOv2 ) |
+| **Market** | DEX book + Path-Find routes + AMM + trust lines + XRPL oracle + Flare FTSOv2 |
 | **Assets** | NFT + account_objects (Objects / Pay channels / Escrows) |
 
 ## Requirements
@@ -156,7 +156,7 @@ cp .config/lazyxrp/config.toml "${XDG_CONFIG_HOME:-$HOME/.config}/lazyxrp/config
 | `LAZYXRP_DATA` | Override data directory |
 | `LAZYXRP_LOG_LEVEL` | Default file log filter (`tracing` `EnvFilter`) |
 
-> **Security note**: `--seed` is visible in process listings (`ps`) and shell history. Prefer `XRPL_SEED` env var for sensitive seeds.
+> **Security note**: `--seed` is visible in process listings (`ps`) and shell history. Prefer `XRPL_SEED` env var for sensitive seeds. Copy `.env.example` to `.env` locally only — **never commit** `.env` (it is gitignored).
 
 ## Development
 
@@ -191,6 +191,7 @@ Start with [`AGENTS.md`](./AGENTS.md) — minimal bar is `cargo fmt` / `cargo ch
 - `docs/problems.md` — known issues
 - `docs/security.md` — threat model & hardening notes
 - `docs/architecture/` — C4 context & containers
+- `docs/RELEASE.md` — pre-publish checklist
 
 ## References
 

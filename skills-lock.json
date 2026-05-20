@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "skills": {
+    "flare-fassets": {
+      "source": "flare-foundation/flare-ai-skills",
+      "sourceType": "github",
+      "skillPath": "skills/flare-fassets-skill/SKILL.md",
+      "computedHash": "796db85a9a72066c4cbd9fba5695c62a8fc5df2e58d4d485b812852f18448d24"
+    },
+    "flare-ftso": {
+      "source": "flare-foundation/flare-ai-skills",
+      "sourceType": "github",
+      "skillPath": "skills/flare-ftso-skill/SKILL.md",
+      "computedHash": "37fa42fd633c019ae4cb86b864317ff5ebc9bc918a46dc86751edd75366bcda7"
+    },
+    "flare-general": {
+      "source": "flare-foundation/flare-ai-skills",
+      "sourceType": "github",
+      "skillPath": "skills/flare-general-skill/SKILL.md",
+      "computedHash": "161c1db64851651420c499e4fe65a3d1c29f14a7c1d40da30fdf707a31c534ae"
+    }
+  }
+}

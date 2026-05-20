@@ -1132,3 +1132,67 @@ pub(crate) fn amm_delete_detail_lines<'a>(_tx: &'a Value) -> Option<Vec<Line<'a>
 
     Some(lines)
 }
+
+/// Parser for one `TransactionType` (see [`TX_DETAIL_PARSERS`]).
+pub(crate) type TxDetailParserFn = for<'a> fn(&'a Value) -> Option<Vec<Line<'a>>>;
+
+/// Single registration table for typed TX detail parsers (29 types).
+/// Add new types here and in `docs/tx-detail.md` only.
+pub(crate) const TX_DETAIL_PARSERS: &[(&str, TxDetailParserFn)] = &[
+    ("Payment", payment_detail_lines),
+    ("AccountSet", account_set_detail_lines),
+    ("TrustSet", trust_set_detail_lines),
+    ("OfferCreate", offer_create_detail_lines),
+    ("NFTokenMint", nftoken_mint_detail_lines),
+    ("OfferCancel", offer_cancel_detail_lines),
+    ("CheckCreate", check_create_detail_lines),
+    ("SignerListSet", signer_list_set_detail_lines),
+    ("EscrowCreate", escrow_create_detail_lines),
+    ("EscrowFinish", escrow_finish_detail_lines),
+    ("EscrowCancel", escrow_cancel_detail_lines),
+    ("PaymentChannelCreate", payment_channel_create_detail_lines),
+    ("PaymentChannelFund", payment_channel_fund_detail_lines),
+    ("PaymentChannelClaim", payment_channel_claim_detail_lines),
+    ("CheckCash", check_cash_detail_lines),
+    ("CheckCancel", check_cancel_detail_lines),
+    ("DepositPreauth", deposit_preauth_detail_lines),
+    ("SetRegularKey", set_regular_key_detail_lines),
+    ("NFTokenBurn", nftoken_burn_detail_lines),
+    ("NFTokenCreateOffer", nftoken_create_offer_detail_lines),
+    ("NFTokenAcceptOffer", nftoken_accept_offer_detail_lines),
+    ("NFTokenCancelOffer", nftoken_cancel_offer_detail_lines),
+    ("AMMCreate", amm_create_detail_lines),
+    ("AMMDeposit", amm_deposit_detail_lines),
+    ("AMMWithdraw", amm_withdraw_detail_lines),
+    ("AMMVote", amm_vote_detail_lines),
+    ("AMMBid", amm_bid_detail_lines),
+    ("AMMDelete", amm_delete_detail_lines),
+    ("TicketCreate", ticket_create_detail_lines),
+];
+
+/// Dispatch `TransactionType` to the registered parser, if any.
+pub(crate) fn typed_detail_lines<'a>(tx: &'a Value) -> Option<Vec<Line<'a>>> {
+    let tx_type = tx.get("TransactionType")?.as_str()?;
+    TX_DETAIL_PARSERS
+        .iter()
+        .find(|(name, _)| *name == tx_type)
+        .and_then(|(_, parse)| parse(tx))
+}
+
+#[cfg(test)]
+mod registry_tests {
+    use super::TX_DETAIL_PARSERS;
+
+    #[test]
+    fn tx_detail_parser_registry_has_29_types() {
+        assert_eq!(TX_DETAIL_PARSERS.len(), 29);
+        let mut names: Vec<_> = TX_DETAIL_PARSERS.iter().map(|(n, _)| *n).collect();
+        names.sort_unstable();
+        names.dedup();
+        assert_eq!(
+            names.len(),
+            29,
+            "duplicate TransactionType in TX_DETAIL_PARSERS"
+        );
+    }
+}

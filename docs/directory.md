@@ -38,18 +38,23 @@ lazyxrp/
 │   │   │   ├── account.rs
 │   │   │   ├── amm.rs
 │   │   │   ├── book.rs
+│   │   │   ├── combined_oracle.rs
+│   │   │   ├── flare_ftso.rs
 │   │   │   ├── ledger_objects.rs
+│   │   │   ├── oracle.rs
+│   │   │   ├── path_find.rs
 │   │   │   ├── server.rs
 │   │   │   ├── trust_lines.rs
 │   │   │   ├── tx_history.rs
 │   │   │   └── wallet.rs
+│   ├── flare.rs
 │   │   ├── tabs/
 │   │   │   ├── mod.rs
-│   │   │   ├── account_objects.rs
-│   │   │   ├── account_tx.rs
-│   │   │   ├── market.rs
-│   │   │   ├── nft.rs
-│   │   │   └── server_overview.rs
+│   │   │   ├── overview.rs          # Tab 0: Server + Oracle/FTSO
+│   │   │   ├── account_wallet.rs    # Tab 1: Wallet/Account + TxHistory
+│   │   │   ├── market_oracle.rs     # Tab 2: Book / Lines / AMM / FTSO
+│   │   │   ├── assets.rs            # Tab 3: NFT + ledger objects
+│   │   │   └── nft.rs               # used by AssetsTab
 │   │   └── shared/
 │   │       ├── mod.rs
 │   │       ├── fmt.rs
@@ -63,10 +68,12 @@ lazyxrp/
 │   ├── tui.rs
 │   ├── uninstall.rs
 │   ├── logging.rs
-│   ├── errors.rs
-│   └── utils.rs
+│   └── errors.rs
 └── docs/
     ├── README.md          # ドキュメント導線と一覧
+    ├── tx-detail.md       # TX 詳細オーバーレイ
+    ├── graphify.md        # graphify ナレッジグラフの使い方
+    ├── external/          # 外部システムのスナップショット（FAssets 等）
     ├── architecture/
     │   ├── c4-context.md
     │   └── c4-containers.md
@@ -116,20 +123,22 @@ lazyxrp/
 - `server.rs`: サーバー状態表示パネル。
 - `account.rs`: アカウント情報表示パネル。
 - `book.rs`: オーダーブック表示パネル。
+- `path_find.rs`: `ripple_path_find` ルート一覧（送信額・ホップ・経路、安い順）。
 - `amm.rs`: AMM プール詳細パネル。
+- `oracle.rs` / `flare_ftso.rs` / `combined_oracle.rs`: XRPL oracle 集約・Flare FTSOv2・Overview 用統合表示。
 
 - `trust_lines.rs`: TrustLine 一覧パネル（Table + Scrollbar、残高で色分け）。
 - `tx_history.rs`: TX 履歴パネル（Table + Scrollbar、tesSUCCESS で色分け）。
-- `wallet.rs`: seed 由来アカウントのウォレット概要パネル。
+- `wallet.rs`: seed 由来アカウントのサマリ + composer（取引一覧は `tx_history.rs`）。
 - `ledger_objects.rs`: `account_objects` の一覧表示（各パネルが種別でフィルタ）。
 
 ## 5. `src/components/tabs/` 配下の責務
 
-- `account_tx.rs`: Account + TxHistory の統合タブ。
-- `market.rs`: Book + Amm + TrustLines の統合タブ。
-- `server_overview.rs`: Server + Wallet の統合タブ。
-- `nft.rs`: NFT 一覧タブ（単体タブとして直接配置）。
-- `account_objects.rs`: **Objects** タブ — 上段に Check / Ticket / MPT / DID 等、下段左右に Payment Channel と Escrow（同一 `account_objects` 結果をフィルタ）。
+- `overview.rs`: Tab 0 — Server + Combined Oracle/FTSO。
+- `account_wallet.rs`: Tab 1 — Wallet（上）+ TxHistory（下）。seed 未設定時は Account パネル。
+- `market_oracle.rs`: Tab 2 — Book / Path-Find / AMM / Trust lines / Flare FTSO / XRPL Oracle。
+- `assets.rs`: Tab 3 — NFT + ledger objects（PayChannel / Escrow 含む）。
+- `nft.rs`: `AssetsTab` から利用する NFT サブビュー。
 
 ## 6. `src/components/shared/` 配下の責務
 

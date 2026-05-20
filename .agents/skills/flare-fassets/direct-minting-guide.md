@@ -88,6 +88,8 @@ Two binary formats are supported in the XRPL transaction memo field:
 
 **Skill script (ethers + xrpl):** [scripts/direct-mint-fxrp.ts](scripts/direct-mint-fxrp.ts) — reads Core Vault address and fee parameters, builds the 32-byte memo, and submits the XRPL Payment. Dry-run by default.
 
+**Executor skeleton (viem):** [scripts/execute-direct-mint.ts](scripts/execute-direct-mint.ts) — run from `scripts/` after `npm install`; use `npx tsx` (not legacy `ts-node`). Coston2 default; `EXECUTOR_MODE=watch` tails `DirectMintingExecuted` / `DirectMintingDelayed`; `execute` fetches FDC proof and calls `executeDirectMinting` (`DRY_RUN` by default). See [docs/external/fassets-direct-mint-monitoring.md](../../../docs/external/fassets-direct-mint-monitoring.md).
+
 ## Executor Restrictions
 
 Enforcement depends on which encoding method is used:

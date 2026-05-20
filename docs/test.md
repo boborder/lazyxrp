@@ -1,10 +1,10 @@
 # Test Strategy & Case List
 
-> Last Updated: 2026-05-14
+> Last Updated: 2026-05-16
 > Target: lazyxrp (Rust TUI for XRPL)
-> Total Test Cases: 79 (P0: 10, P1: 44, P2: 23, P3: 1)
-> Implemented: 79 / 79 (100%)
-> Estimated Effort (full catalog): 41h
+> Total Test Cases: 86 (P0: 10, P1: 47, P2: 28, P3: 1) — 84 Rust + 2 Vitest（FAssets スキル）
+> Implemented: 86 / 86 (100%)
+> Estimated Effort (full catalog): 42h
 
 ---
 
@@ -17,7 +17,8 @@
 | Network & Signing | 13         | 4  | 7  | 2  | 0  | 5h          | 13/13       |
 | CLI Integration   | 12         | 1  | 8  | 3  | 0  | 11h         | 12/12       |
 | Watch & TUI       | 9          | 0  | 2  | 6  | 1  | 6h          | 9/9         |
-| **Total**         | **79**     | **10** | **44** | **23** | **1** | **41h** | **79/79** |
+| FAssets skill scripts (Vitest) | 2 | 0  | 0  | 2  | 0  | 0.5h        | 2/2         |
+| **Total**         | **86**     | **10** | **47** | **28** | **1** | **42h** | **86/86** |
 
 ---
 
@@ -32,6 +33,7 @@
 ### Project-specific rules
 
 - Prefer inline `#[cfg(test)]` modules for unit and integration tests; avoid `tests/` directory.
+- **FAssets executor helpers**（`.agents/skills/flare-fassets/scripts/`）だけ Vitest + `npm test`。CI の主系は引き続き `cargo test`。
 - Use `pretty_assertions` for readable diffs.
 - Map cases to this list by `TC-XXX`.
 - Reference the ID in commit messages (e.g., `test(xrpl): add NFT parse case (TC-013)`).
@@ -61,9 +63,12 @@ cargo check
 # Format & lint
 cargo fmt --check
 cargo clippy
+
+# FAssets skill — Direct Mint executor helpers (Vitest)
+cd .agents/skills/flare-fassets/scripts && npm test
 ```
 
-CI（`.github/workflows/ci.yml`）は各ジョブで `cargo … --locked`（例: `cargo test --locked --all-features --workspace`）。ローカルでもロック整合を合わせたいときは同様に `--locked` を付けられる。
+CI（`.github/workflows/ci.yml`）は各ジョブで `cargo … --locked`（例: `cargo test --locked --all-features --workspace`）。ローカルでもロック整合を合わせたいときは同様に `--locked` を付けられる。Vitest はスキル配下のオプション検証用で、現状ワークスペース CI には含めていない。
 
 ---
 
@@ -82,7 +87,7 @@ CI（`.github/workflows/ci.yml`）は各ジョブで `cargo … --locked`（例:
 - **Target**: `src/xrpl/client.rs` -> `book_currency()`（旧 `parse_currency` 相当）
 - **Input**: `"XRP"`, `None`
 - **Expected Output**: `Currency::XRP(_)`
-- **Test File**: （当該関数専用テストなし；`book_offers` / `amm_info` 経由で間接的に使用）
+- **Test File**: `src/xrpl/client.rs` (inline) — `book_currency_xrp_uppercase`
 
 #### TC-002: parse_currency — XRP case-insensitive
 
@@ -93,7 +98,7 @@ CI（`.github/workflows/ci.yml`）は各ジョブで `cargo … --locked`（例:
 - **Target**: `src/xrpl/client.rs` -> `book_currency()`
 - **Input**: `"xrp"`, `Some("rIssuer")`
 - **Expected Output**: `Currency::XRP(_)`
-- **Test File**: （同上）
+- **Test File**: `src/xrpl/client.rs` (inline) — `book_currency_xrp_case_insensitive`
 
 #### TC-003: parse_currency — issued currency is not XRP
 
@@ -103,8 +108,8 @@ CI（`.github/workflows/ci.yml`）は各ジョブで `cargo … --locked`（例:
 - **Status**: [x] Done
 - **Target**: `src/xrpl/client.rs` -> `book_currency()`
 - **Input**: `"USD"`, `Some("rIssuer")`
-- **Expected Output**: Not `Currency::XRP`
-- **Test File**: （同上）
+- **Expected Output**: Issued JSON includes `currency` + `issuer` (not bare XRP object)
+- **Test File**: `src/xrpl/client.rs` (inline) — `book_currency_issued_includes_issuer`
 
 #### TC-004: json_str — nested path returns value
 
@@ -942,17 +947,116 @@ CI（`.github/workflows/ci.yml`）は各ジョブで `cargo … --locked`（例:
 - **Test File**: `src/components/shared/tx_detail/mod.rs` (inline)
 - **Notes**: All 29 typed parsers in `parsers.rs` converted from `serde_json::from_value(_tx.clone())` to direct `Value` field access. ~75% latency reduction on detail panel open.
 
-#### TC-072: Poll trigger — coalesces rapid bursts
+#### TC-087: Poll trigger — coalesces rapid bursts
 
 - **Priority**: P2
-- **Type**: Functional
-- **Size**: M
-- **Status**: [ ] Planned
-- **Target**: `src/xrpl/poll.rs` -> `run_poll_loop()` trigger handler
-- **Input**: Multiple `()` sent to `poll_trigger_tx` within one poll interval
-- **Expected Output**: Only one `poll_batch()` executes after MIN_POLL_INTERVAL
-- **Test File**: `src/xrpl/poll.rs` (inline) — requires async mock
-- **Notes**: `try_recv()` drain loop added in Stage 3 (2026-05-15). Full coalescing test blocked on async mock infrastructure.
+- **Type**: Unit
+- **Size**: S
+- **Status**: [x] Done
+- **Target**: `src/xrpl/poll.rs` -> `drain_poll_trigger_burst()`, `should_skip_poll_trigger()`
+- **Input**: Multiple `()` queued on `poll_trigger_rx`; `last_poll` within / past `MIN_POLL_INTERVAL`
+- **Expected Output**: Burst drained to one trigger; rate-limit helper skips poll when interval not elapsed
+- **Test File**: `src/xrpl/poll.rs` (inline)
+
+#### TC-088: Mainnet Payment guard (R-006)
+
+- **Priority**: P0
+- **Type**: Unit
+- **Size**: S
+- **Status**: [x] Done
+- **Target**: `src/xrpl/poll.rs` -> `submit_payment_transaction()`, `mainnet_write_guard_blocks()`
+- **Input**: `Network::Mainnet`, `skip_mainnet_prompt: false` vs `true`
+- **Expected Output**: Without `--yes` → `PaymentSubmitErr` mentioning `mainnet` / `--yes`; with `--yes` → guard skipped (later error allowed)
+- **Test File**: `src/xrpl/poll.rs` (inline)
+
+#### TC-089: account_tx not-found → empty history (I-7)
+
+- **Priority**: P0
+- **Type**: Unit
+- **Size**: S
+- **Status**: [x] Done
+- **Target**: `src/xrpl/client.rs` -> `empty_account_tx_page_on_not_found()`; `src/xrpl/poll.rs` -> `account_tx_poll_action()`
+- **Input**: `actNotFound` error string / `Result::Err`
+- **Expected Output**: Empty `AccountTxPage` or `Action::XrplTxHistory(vec![], None)` — never `XrplError` for not-found
+- **Test File**: `src/xrpl/client.rs`, `src/xrpl/poll.rs` (inline)
+
+#### TC-077: TxHistoryPanel — filter by tx_type
+
+- **Priority**: P2
+- **Type**: Unit
+- **Size**: S
+- **Status**: [x] Done
+- **Target**: `src/components/panels/tx_history.rs` -> `reapply_filter()`
+- **Input**: Rows with mixed `tx_type`; filter `payment`
+- **Expected Output**: Only matching rows remain visible
+- **Test File**: `src/components/panels/tx_history.rs` (inline)
+
+#### TC-078: TxHistoryPanel — filter by hash partial
+
+- **Priority**: P2
+- **Type**: Unit
+- **Size**: S
+- **Status**: [x] Done
+- **Target**: `src/components/panels/tx_history.rs` -> `reapply_filter()`
+- **Input**: Partial hash substring
+- **Expected Output**: Rows whose hash contains substring
+- **Test File**: `src/components/panels/tx_history.rs` (inline)
+
+#### TC-079: TxHistoryPanel — transaction filter
+
+- **Priority**: P2
+- **Type**: Unit
+- **Size**: S
+- **Status**: [x] Done
+- **Target**: `src/components/panels/tx_history.rs` -> `reapply_filter()`
+- **Input**: `filter_input` by tx type / hash
+- **Expected Output**: Filtered tx list matches criteria
+- **Test File**: `src/components/panels/tx_history.rs` (inline)
+- **Notes**: Wallet panel no longer embeds a tx table; Account tab lower pane owns history UI and filtering.
+
+#### TC-085: asset_display_name — known hex codes
+
+- **Priority**: P2
+- **Type**: Unit
+- **Size**: S
+- **Status**: [x] Done
+- **Target**: `src/xrpl/types.rs` -> `asset_display_name()`
+- **Input**: RLUSD / USDC hex currency codes
+- **Expected Output**: Human-readable symbols
+- **Test File**: `src/xrpl/types.rs` (inline)
+
+#### TC-086: asset_display_name — unknown passthrough
+
+- **Priority**: P2
+- **Type**: Unit
+- **Size**: S
+- **Status**: [x] Done
+- **Target**: `src/xrpl/types.rs` -> `asset_display_name()`
+- **Input**: `"UNKNOWN"`
+- **Expected Output**: Unchanged string
+- **Test File**: `src/xrpl/types.rs` (inline)
+
+#### TC-090: FAssets — `normalizeTxId` (XRPL payment hash for FDC)
+
+- **Priority**: P2
+- **Type**: Unit
+- **Size**: S
+- **Status**: [x] Done
+- **Target**: `.agents/skills/flare-fassets/scripts/execute-direct-mint.helpers.ts` → `normalizeTxId()`
+- **Input**: 64 hex with/without `0x`、不正長さ・非 hex
+- **Expected Output**: 大文字 64 hex の正規化、不正入力は `Error`
+- **Test File**: `.agents/skills/flare-fassets/scripts/execute-direct-mint.helpers.test.ts`（Vitest 4 ケース）
+
+#### TC-091: FAssets — `resolveWatchStartBlock` (watch 起点ブロック)
+
+- **Priority**: P2
+- **Type**: Unit
+- **Size**: S
+- **Status**: [x] Done
+- **Target**: `.agents/skills/flare-fassets/scripts/execute-direct-mint.helpers.ts` → `resolveWatchStartBlock()`
+- **Input**: `WATCH_FROM_BLOCK` 相当の文字列 or 未設定、`latest` ブロック番号
+- **Expected Output**: 既定は `latest - 5000`（下限 0）、`requested > latest` は clamp + `clamped` メタ
+- **Test File**: `.agents/skills/flare-fassets/scripts/execute-direct-mint.helpers.test.ts`（Vitest 7 ケース）
 
 ---
 
@@ -987,9 +1091,9 @@ CI（`.github/workflows/ci.yml`）は各ジョブで `cargo … --locked`（例:
 | Order | ID     | Test Case Name                        | Size | Status | Completed |
 | ----- | ------ | ------------------------------------- | ---- | ------ | --------- |
 | 15    | TC-060 | Watch startup without panic           | L    | [x]    | 2026-05-01 |
-| 16    | TC-061 | Quit stops background tasks           | L    | [x]    | 2026-05-01 |
-| 17    | TC-062 | RefreshAccount sends PollCommand      | M    | [x]    | 2026-05-01 |
-| 18    | TC-063 | RefreshBook sends PollCommand         | M    | [x]    | 2026-05-01 |
+| 16    | TC-061 | Quit stops background tasks           | L    | [x]    | 2026-05-16 |
+| 17    | TC-062 | RefreshAccount sends PollCommand      | M    | [x]    | 2026-05-16 |
+| 18    | TC-063 | RefreshBook sends PollCommand         | M    | [x]    | 2026-05-16 |
 
 ### Sprint 4: Edge Cases & Completeness (P2–P3)
 
@@ -1018,7 +1122,12 @@ CI（`.github/workflows/ci.yml`）は各ジョブで `cargo … --locked`（例:
 | 39    | TC-076 | `--self-uninstall` parse + `.bak` path    | S    | [x]    | 2026-05-12 |
 | 40    | TC-077 | TxHistoryPanel filter by tx_type          | S    | [x]    | 2026-05-14 |
 | 41    | TC-078 | TxHistoryPanel filter by hash partial     | S    | [x]    | 2026-05-14 |
-| 42    | TC-079 | WalletPanel (Recent txs) filter           | S    | [x]    | 2026-05-14 |
+| 42    | TC-079 | TxHistoryPanel filter                     | S    | [x]    | 2026-05-14 |
+| 43    | TC-087 | Poll trigger burst coalesce               | S    | [x]    | 2026-05-16 |
+| 44    | TC-088 | Mainnet Payment guard (R-006)             | S    | [x]    | 2026-05-16 |
+| 45    | TC-089 | account_tx not-found → empty (I-7)        | S    | [x]    | 2026-05-16 |
+| 46    | TC-090 | FAssets normalizeTxId                    | S    | [x]    | 2026-05-16 |
+| 47    | TC-091 | FAssets resolveWatchStartBlock           | S    | [x]    | 2026-05-16 |
 
 ---
 
@@ -1026,11 +1135,11 @@ CI（`.github/workflows/ci.yml`）は各ジョブで `cargo … --locked`（例:
 
 ### Overall
 
-- **Total Cases**: 79
-- **Implemented**: 79
-- **Passing**: 76（`cargo test`; 自動 86 のうち; 2026-05-12）
+- **Total Cases**: 86（うち TC-090/091 は Vitest・スキル配下）
+- **Implemented**: 86
+- **Passing**: 170+（`cargo test --locked`; 2026-05-16）+ Vitest 11（`cd .agents/skills/flare-fassets/scripts && npm test`）
 - **Failing**: 0
-- **Ignored**: 10 (TUI / live RPC / seed-dependent; see case notes)
+- **Ignored**: 5 (live RPC / benchmark / flare; see case notes)
 - **Todo**: 0
 - **Coverage**: CLI + watch paths exercised; line % not measured here
 
@@ -1042,7 +1151,10 @@ CI（`.github/workflows/ci.yml`）は各ジョブで `cargo … --locked`（例:
 | 2026-05-01 | TC-037 | Verified    | `cargo test` all green |
 | 2026-05-01 | TC-013–018, TC-033–036, TC-042 | Implemented | JSON fixture parsers + config env + `resolve_network` |
 | 2026-05-01 | TC-043–065 | Implemented | URL resolve, signing env priority, live RPC CLI |
-| 2026-05-01 | TC-060–065 | Ignored     | `App` TUI tests require TTY; isolated via `#[ignore]` |
+| 2026-05-16 | TC-061–065 | Implemented | `App` integration tests use `#[tokio::test]` (no `#[ignore]`) |
+| 2026-05-16 | TC-087–089 | Implemented | Poll burst coalesce, mainnet Payment guard, I-7 not-found |
+| 2026-05-16 | TC-090–091 | Implemented | Vitest: `normalizeTxId` + `resolveWatchStartBlock`（`execute-direct-mint` watch clamp） |
+| 2026-05-16 | TC-001–003 | Implemented | Direct `book_currency()` unit tests |
 | 2026-05-01 | — | Refactored | `TestEnvGuard` + `env_lock()` added to fix Mutex poison across env tests |
 | 2026-05-05 | TC-068–070 | Implemented | XRPL not-found handling, submit response validation, and book_offers currency_code selection |
 | 2026-05-12 | TC-076 | Implemented | `lazyxrp --self-uninstall` CLI + uninstall helper tests |
@@ -1065,4 +1177,5 @@ CI（`.github/workflows/ci.yml`）は各ジョブで `cargo … --locked`（例:
 - **`xrpl::tests::integration_live_network`** hits `https://xrplcluster.com` (90s timeout per case) and serializes calls with a test-local mutex to reduce public-node rate limiting. Offline / blocked CI: non-ignored live tests fail; prefer runners with outbound HTTPS or mark live tests ignored in CI if needed.
 - **`tokio::spawn` lifetime issue** (rust-lang/rust#100013) was previously tracked for watch startup; current `start_poll_task` / `start_ws_task` paths compile with direct `tokio::spawn` and should remain covered by `cargo check`.
 - **macOS linking warnings** from upstream deps are non-fatal; do not treat as test failures.
-- **TUI tests** (`TC-060`–`TC-065`) are `#[ignore = "requires interactive TTY and tokio runtime"]`; run locally with `cargo test --ignored` on a machine with a real terminal.
+- **TUI tests** (`TC-060`–`TC-065`) run under `#[tokio::test]`; they need a tokio runtime but not `#[ignore]`. Live RPC CLI tests remain `#[ignore]` when network/seed-dependent.
+- **TC-ID note**: `client.rs` uses TC-079–TC-084 for ripple_path_find / oracle parsers; catalog TC-079 is reserved for WalletPanel filters (see case body above).

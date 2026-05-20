@@ -14,6 +14,15 @@
 - [Crossterm crate docs](https://docs.rs/crossterm/latest/crossterm/)
 - [Clap crate docs](https://docs.rs/clap/latest/clap/)
 
+## Flare / FAssets
+
+- [FAssets operational parameters](https://dev.flare.network/fassets/operational-parameters)
+- [Direct minting (tag)](https://dev.flare.network/fassets/developer-guides/fassets-direct-minting-tag)
+- [Direct minting (memo)](https://dev.flare.network/fassets/developer-guides/fassets-direct-minting)
+- [Smart Accounts overview](https://dev.flare.network/smart-accounts/overview)
+- **Repo snapshot:** [`external/fassets-direct-mint-mainnet.md`](external/fassets-direct-mint-mainnet.md) (Tag + Memo + Smart Account, Mainnet checklist)
+- **Repo snapshot:** [`external/fassets-direct-mint-monitoring.md`](external/fassets-direct-mint-monitoring.md) (mint-job states, events, SLAs, runbook)
+
 ## XRPL
 
 - [XRP Ledger Documentation](https://xrpl.org/docs/)

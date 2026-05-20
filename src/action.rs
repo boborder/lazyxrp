@@ -44,11 +44,8 @@ pub enum Action {
     XrplTxHistory(Vec<TxRow>, Option<serde_json::Value>),
     /// Append page to existing tx history (pagination).
     XrplTxHistoryAppend(Vec<TxRow>, Option<serde_json::Value>),
-    XrplWalletOverview(
-        Option<AccountSummary>,
-        Vec<TxRow>,
-        Option<serde_json::Value>,
-    ),
+    /// Wallet tab account summary (tx history uses `XrplTxHistory` from the same poll cycle).
+    XrplWalletOverview(Option<AccountSummary>),
     /// Wallet tab shown but no seed configured — show hint instead of loading spinner.
     XrplWalletNotConfigured,
     XrplRlusdPrice(XrplRlusdPrice),

@@ -14,7 +14,7 @@
 | --- | --- | --- | --- |
 | S-01 | `unwrap`/`expect` 監査 | ✅ DONE | 非テストコードに残存なし |
 | S-02 | `docs/` 同期 | ✅ DONE | simulate フロー・新 TX 種別反映済 |
-| S-03 | `ripple_path_find` UI 接続 | TODO | API 準備済。swap レートプレビュー用 |
+| S-03 | `ripple_path_find` UI 接続 | ✅ DONE | Market タブ `PathFindPanel`（送信額・ホップ・ルート、安い順） |
 | S-04 | キー生成機能 | BLOCKED | SetRegularKey UI 有効化の前提 |
 
 ### バックエンド準備（UI 未着）
@@ -46,7 +46,7 @@
   - `simulate` ベースの安全な送信フロー（`simulate_tx`→sign→`submit`）
   - Wallet UI: Payment（XRP + IOU）、AccountSet
   - バックエンド: SetRegularKey、EscrowCreate、OfferCreate
-- 残：キー生成、ripple_path_find UI 接続、EscrowCreate/OfferCreate UI
+- 残：キー生成、EscrowCreate/OfferCreate UI
 
 ## 4. 完了タスク（履歴）
 
@@ -62,9 +62,10 @@
 | T-024〜T-027 | NFT / TrustLine / AMM / Tx 履歴 の RPC + CLI | Phase 1 読み取り拡張 |
 | T-028〜T-029 | `SigningConfig` 導入、mainnet 書き込み確認プロンプト | Phase 3 準備 |
 | T-030 | `docs/*.md` 重複・参照導線整備 | 本整理の前身 |
-| T-031〜T-034 | コンポーネント再編、WalletPanel、5タブ統合、`account_objects` | TUI 再構成 |
+| T-031〜T-034 | コンポーネント再編、WalletPanel、4タブ統合、`account_objects` | TUI 再構成 |
 | T-035 | `AccountSummary` 拡張（Flags, RegularKey, Domain hex） | ウォレット表示強化 |
 | T-036 | Payment IOU 対応 + Wallet UI（`i` トグル） | simulate フロー |
 | T-037 | `ripple_path_find` RPC API（client + types + tests） | パスファインディング準備 |
+| T-040 | `ripple_path_find` TUI（`PathFindPanel`） | Market タブ・安い順ソート・Enter で JSON |
 | T-038 | OfferCreate submit 配線（backend 完備） | signing + poll |
 | T-039 | TicketCreate 削除 + TrustSet 削除 | ユーザー判断 |

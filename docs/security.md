@@ -2,6 +2,23 @@
 
 Generated: 2026-05-01 | Scope: Full codebase (`src/`, `install.sh`, `docs/`)
 
+**SSOT split:** This file tracks **security review findings (S-xxx)** — what was audited and fixed. **Implementation risks (R-xxx)** and suggested tests live in [`agent/RISK_REGISTER.md`](agent/RISK_REGISTER.md). Invariants (I-1〜I-11) are in [`agent/INVARIANTS.md`](agent/INVARIANTS.md).
+
+## S-xxx ↔ R-xxx cross-reference
+
+| S-ID | Topic | Related R-ID | Notes |
+|------|-------|--------------|-------|
+| S-001 | Seed in `Debug` output | R-001 | Plaintext logging; use `secret_seed` only after `Config::new()` |
+| S-002 | `XRPL_SEED` not cleared from env | R-001, I-4 | `prime_seed_source` + `env_lock` |
+| S-003 | Config file seed permissions | R-001 | Unix warn on group/world read |
+| S-010 | Plaintext `seed` retained on `Config` | R-001, I-1 | Cleared in `Config::new()` |
+| S-011 | `--seed` visible in `ps` | R-001 | Prefer env/file; README warning |
+| S-006 | `Tui::drop` panic / raw mode | R-005, I-8 | `eprintln!` on `exit()` failure |
+| S-009 | `--self-uninstall` data deletion | — | User-driven; not an R entry |
+| S-004, S-005, S-007, S-008 | Paths, install verify, build-time config, logging | R-007 (merge), — | See table below |
+
+Risks without a matching S entry (e.g. R-002 submit errors swallowed, R-006 mainnet guard bypass, R-008 RPC 429) are tracked only in [`agent/RISK_REGISTER.md`](agent/RISK_REGISTER.md) and [`test.md`](test.md) / [`agent/RISK_TO_TESTS.md`](agent/RISK_TO_TESTS.md).
+
 ## 未対応・確認事項
 
 ### S-009: `--self-uninstall`（ユーザー主導でバイナリと設定データを削除）

@@ -41,53 +41,37 @@ use crate::{
 const TAB_TITLES: &[&str] = &["󰖟 Overview", "󰀉 Account", "󰠿 Market", "󰒍 Assets"];
 
 fn footer_line(active_tab: usize) -> Line<'static> {
-    let key = |k: &'static str| Span::styled(k, Style::new().add_modifier(Modifier::BOLD));
-    let sep = || Span::raw("  ");
-    let label = |s: &'static str| Span::raw(s);
-    let mut spans = vec![
-        key("?"),
-        label(":help"),
-        sep(),
-        key("Tab"),
-        label(":next"),
-        sep(),
-        key("1-4"),
-        label(":jump"),
-        sep(),
-        key("↑↓/jk"),
-        label(":row"),
-        sep(),
-        key("hl/←→"),
-        label(":focus"),
-        sep(),
-        key("^Z"),
-        label(":suspend"),
-        sep(),
-    ];
+    let bold = Style::new().add_modifier(Modifier::BOLD);
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    let mut hint = |key: &'static str, label: &'static str| {
+        spans.push(Span::styled(key, bold));
+        spans.push(Span::raw(label));
+        spans.push(Span::raw("  "));
+    };
+    hint("?", ":help");
+    hint("Tab", ":next");
+    hint("1-4", ":jump");
+    hint("↑↓/jk", ":row");
+    hint("hl/←→", ":focus");
+    hint("^Z", ":suspend");
     // Tab indices: 0 Overview, 1 Account, 2 Market, 3 Assets
     match active_tab {
+        0 => {
+            hint("t", ":tx");
+            hint("g", ":keygen");
+            hint("r", ":refresh");
+            hint("Enter", ":dUNL");
+        }
         1 => {
-            spans.extend([
-                key("t"),
-                label(":tx composer"),
-                sep(),
-                key("e/s"),
-                label(":in modal"),
-                sep(),
-                key("r"),
-                label(":refresh"),
-                sep(),
-            ]);
+            hint("t", ":tx");
+            hint("f", ":filter");
+            hint("r", ":refresh");
         }
-        2 => {
-            spans.extend([key("b"), label(":refresh book"), sep()]);
-        }
-        3 => {
-            spans.extend([key("o"), label(":obj refresh"), sep()]);
-        }
+        2 => hint("b", ":book"),
+        3 => hint("o", ":objects"),
         _ => {}
     }
-    spans.extend([key("q"), label(":quit")]);
+    hint("q", ":quit");
     Line::from(spans)
 }
 
@@ -763,9 +747,8 @@ mod tests {
     }
 
     /// TC-061
-    #[test]
-    #[ignore = "requires interactive TTY and tokio runtime"]
-    fn quit_action_sets_should_quit() -> color_eyre::Result<()> {
+    #[tokio::test]
+    async fn quit_action_sets_should_quit() -> color_eyre::Result<()> {
         let mut app = test_app()?;
         let mut tui = Tui::new()?;
         app.action_tx.send(Action::Quit)?;
@@ -775,9 +758,8 @@ mod tests {
     }
 
     /// TC-062
-    #[test]
-    #[ignore = "requires interactive TTY and tokio runtime"]
-    fn refresh_account_sends_poll_command() -> color_eyre::Result<()> {
+    #[tokio::test]
+    async fn refresh_account_sends_poll_command() -> color_eyre::Result<()> {
         let mut app = test_app()?;
         let mut tui = Tui::new()?;
         app.action_tx.send(Action::RefreshAccount)?;
@@ -793,9 +775,8 @@ mod tests {
     }
 
     /// TC-063
-    #[test]
-    #[ignore = "requires interactive TTY and tokio runtime"]
-    fn refresh_book_sends_poll_command() -> color_eyre::Result<()> {
+    #[tokio::test]
+    async fn refresh_book_sends_poll_command() -> color_eyre::Result<()> {
         let mut app = test_app()?;
         let mut tui = Tui::new()?;
         app.action_tx.send(Action::RefreshBook)?;
@@ -811,9 +792,8 @@ mod tests {
     }
 
     /// TC-064
-    #[test]
-    #[ignore = "requires interactive TTY and tokio runtime"]
-    fn tab_next_cycles_all_panels() -> color_eyre::Result<()> {
+    #[tokio::test]
+    async fn tab_next_cycles_all_panels() -> color_eyre::Result<()> {
         let mut app = test_app()?;
         let mut tui = Tui::new()?;
         assert_eq!(app.active_tab, 0);
@@ -826,9 +806,8 @@ mod tests {
     }
 
     /// TC-065 (HelpOverlay visibility is driven by `show_help` + `Action::Help`)
-    #[test]
-    #[ignore = "requires interactive TTY and tokio runtime"]
-    fn help_action_toggles_overlay_flag() -> color_eyre::Result<()> {
+    #[tokio::test]
+    async fn help_action_toggles_overlay_flag() -> color_eyre::Result<()> {
         let mut app = test_app()?;
         let mut tui = Tui::new()?;
         assert!(!app.show_help);
@@ -842,9 +821,8 @@ mod tests {
     }
 
     /// Esc closes overlay when help is shown (mirrors `on_key_event` + config keymap)
-    #[test]
-    #[ignore = "requires interactive TTY and tokio runtime"]
-    fn esc_while_help_sends_help_action() -> color_eyre::Result<()> {
+    #[tokio::test]
+    async fn esc_while_help_sends_help_action() -> color_eyre::Result<()> {
         let mut app = test_app()?;
         app.show_help = true;
         let esc = KeyEvent::new(KeyCode::Esc, KeyModifiers::empty());
@@ -856,9 +834,8 @@ mod tests {
     }
 
     /// `?` opens help via keybindings
-    #[test]
-    #[ignore = "requires interactive TTY and tokio runtime"]
-    fn question_opens_help_overlay() -> color_eyre::Result<()> {
+    #[tokio::test]
+    async fn question_opens_help_overlay() -> color_eyre::Result<()> {
         let mut app = test_app()?;
         let q = KeyEvent::new(KeyCode::Char('?'), KeyModifiers::empty());
         app.on_key_event(q)?;

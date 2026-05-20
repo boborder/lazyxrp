@@ -70,7 +70,6 @@ pub fn wallet_from_family_seed(
 /// Used for write paths that need a seed (e.g. CLI `Send` via `XRPL_SEED` or
 /// `config.toml [xrpl.signing] seed`). `load` clears `XRPL_SEED` from the
 /// process environment immediately after reading it.
-#[allow(dead_code)]
 pub struct SigningConfig {
     pub seed: Option<SecretString>,
 }
@@ -96,7 +95,7 @@ impl SigningConfig {
         Self { seed }
     }
 
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub fn has_seed(&self) -> bool {
         self.seed.is_some()
     }
@@ -111,7 +110,6 @@ impl SigningConfig {
 ///
 /// Non-TUI `Send` on mainnet calls this unless the caller passes `skip_prompt`
 /// (e.g. scripting / `--yes`).
-#[allow(dead_code)]
 pub fn prompt_mainnet_confirmation(operation: &str, network: &Network, skip_prompt: bool) -> bool {
     if !network.is_mainnet() || skip_prompt {
         return true;
@@ -182,6 +180,92 @@ pub fn create_and_sign_payment(
         .map_err(|e| color_eyre::eyre::eyre!("sign error: {:?}", e))?;
 
     encode(&payment).map_err(|e| color_eyre::eyre::eyre!("encode error: {:?}", e))
+}
+
+/// Unsigned Payment JSON for `simulate` (XRP or IOU).
+pub fn build_payment_tx_json_for_simulate(
+    account: &str,
+    destination: &str,
+    amount_spec: &str,
+    iou_currency: Option<&str>,
+    iou_issuer: Option<&str>,
+    sequence: u32,
+) -> color_eyre::Result<Value> {
+    use xrpl::models::transactions::payment::Payment;
+    use xrpl::models::transactions::{CommonFields, TransactionType};
+    use xrpl::models::{Amount, IssuedCurrencyAmount};
+
+    let amount: Amount = if let (Some(cur), Some(iss)) = (iou_currency, iou_issuer) {
+        let ica = IssuedCurrencyAmount {
+            currency: cur.to_string().into(),
+            issuer: iss.to_string().into(),
+            value: amount_spec.to_string().into(),
+        };
+        Amount::IssuedCurrencyAmount(ica)
+    } else {
+        let amount_drops = crate::xrpl::xrp_to_drops(amount_spec)?;
+        amount_drops.into()
+    };
+
+    let payment = Payment {
+        common_fields: CommonFields::from_account(account.to_string())
+            .with_transaction_type(TransactionType::Payment)
+            .with_sequence(sequence),
+        amount,
+        destination: destination.to_string().into(),
+        ..Default::default()
+    };
+
+    serde_json::to_value(&payment).map_err(|e| color_eyre::eyre::eyre!("payment tx_json: {e}"))
+}
+
+/// Unsigned AccountSet JSON for `simulate`.
+#[allow(clippy::too_many_arguments)]
+pub fn build_account_set_tx_json_for_simulate(
+    account: &str,
+    sequence: u32,
+    set_flag: Option<xrpl::models::transactions::account_set::AccountSetFlag>,
+    clear_flag: Option<xrpl::models::transactions::account_set::AccountSetFlag>,
+    domain_hex: Option<&str>,
+    tick_size: Option<u32>,
+    transfer_rate: Option<u32>,
+) -> color_eyre::Result<Value> {
+    use std::borrow::Cow;
+    use xrpl::models::transactions::account_set::AccountSet;
+    use xrpl::models::transactions::{CommonFields, TransactionType};
+
+    let tx = AccountSet {
+        common_fields: CommonFields::from_account(account.to_string())
+            .with_transaction_type(TransactionType::AccountSet)
+            .with_sequence(sequence),
+        set_flag,
+        clear_flag,
+        domain: domain_hex.map(|s| Cow::Owned(s.to_string())),
+        tick_size,
+        transfer_rate,
+        ..Default::default()
+    };
+
+    serde_json::to_value(&tx).map_err(|e| color_eyre::eyre::eyre!("account_set tx_json: {e}"))
+}
+
+/// Extract `Sequence`, `Fee`, and `LastLedgerSequence` from a successful simulate response.
+pub fn sequence_fee_ledger_from_simulate(tx_json: &Value) -> color_eyre::Result<(u32, u32, u32)> {
+    fn field_u32(tx: &Value, key: &str) -> color_eyre::Result<u32> {
+        let v = tx
+            .get(key)
+            .ok_or_else(|| color_eyre::eyre::eyre!("simulate tx_json missing {key}"))?;
+        let n = v
+            .as_u64()
+            .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
+            .ok_or_else(|| color_eyre::eyre::eyre!("simulate tx_json invalid {key}"))?;
+        u32::try_from(n).map_err(|_| color_eyre::eyre::eyre!("simulate tx_json {key} out of range"))
+    }
+    Ok((
+        field_u32(tx_json, "Sequence")?,
+        field_u32(tx_json, "Fee")?,
+        field_u32(tx_json, "LastLedgerSequence")?,
+    ))
 }
 
 /// Create unsigned Payment JSON for signing
@@ -288,6 +372,33 @@ pub fn create_and_sign_escrow_create(
     encode(&tx).map_err(|e| color_eyre::eyre::eyre!("encode error: {:?}", e))
 }
 
+enum OfferAmountSpec<'a> {
+    Xrp(&'a str),
+    Iou {
+        currency: &'a str,
+        issuer: &'a str,
+        value: &'a str,
+    },
+}
+
+fn parse_offer_amount_spec(spec: &str) -> color_eyre::Result<OfferAmountSpec<'_>> {
+    let parts: Vec<&str> = spec.splitn(3, ':').collect();
+    if parts.len() < 2 {
+        color_eyre::eyre::bail!("invalid amount spec (use XRP:drops or CUR:issuer:value): {spec}");
+    }
+    if parts[0] == "XRP" {
+        Ok(OfferAmountSpec::Xrp(parts[1]))
+    } else if parts.len() < 3 {
+        color_eyre::eyre::bail!("IOU amount needs 3 parts (CUR:issuer:value): {spec}");
+    } else {
+        Ok(OfferAmountSpec::Iou {
+            currency: parts[0],
+            issuer: parts[1],
+            value: parts[2],
+        })
+    }
+}
+
 /// Build an `Amount` from a compact spec string.
 /// `"XRP:100000000"` → XRP amount in drops.
 /// `"USD:rIssuer:100.5"` → issued currency amount.
@@ -295,22 +406,20 @@ pub fn create_and_sign_escrow_create(
 fn parse_offer_amount(spec: &str) -> color_eyre::Result<xrpl::models::Amount<'static>> {
     use xrpl::models::{Amount, IssuedCurrencyAmount, XRPAmount};
 
-    let parts: Vec<&str> = spec.splitn(3, ':').collect();
-    if parts.len() < 2 {
-        color_eyre::eyre::bail!("invalid amount spec (use XRP:drops or CUR:issuer:value): {spec}");
-    }
-    if parts[0] == "XRP" {
-        Ok(Amount::XRPAmount(XRPAmount::from(parts[1].to_string())))
-    } else {
-        if parts.len() < 3 {
-            color_eyre::eyre::bail!("IOU amount needs 3 parts (CUR:issuer:value): {spec}");
+    match parse_offer_amount_spec(spec)? {
+        OfferAmountSpec::Xrp(drops) => Ok(Amount::XRPAmount(XRPAmount::from(drops.to_string()))),
+        OfferAmountSpec::Iou {
+            currency,
+            issuer,
+            value,
+        } => {
+            let ica = IssuedCurrencyAmount {
+                currency: currency.to_string().into(),
+                issuer: issuer.to_string().into(),
+                value: value.to_string().into(),
+            };
+            Ok(Amount::IssuedCurrencyAmount(ica))
         }
-        let ica = IssuedCurrencyAmount {
-            currency: parts[0].to_string().into(),
-            issuer: parts[1].to_string().into(),
-            value: parts[2].to_string().into(),
-        };
-        Ok(Amount::IssuedCurrencyAmount(ica))
     }
 }
 
@@ -318,21 +427,17 @@ fn parse_offer_amount(spec: &str) -> color_eyre::Result<xrpl::models::Amount<'st
 /// use in simulate tx_json.
 #[allow(dead_code)]
 pub(crate) fn offer_spec_to_json_value(spec: &str) -> color_eyre::Result<serde_json::Value> {
-    let parts: Vec<&str> = spec.splitn(3, ':').collect();
-    if parts.len() < 2 {
-        color_eyre::eyre::bail!("invalid amount spec (use XRP:drops or CUR:issuer:value): {spec}");
-    }
-    if parts[0] == "XRP" {
-        Ok(serde_json::Value::String(parts[1].to_string()))
-    } else {
-        if parts.len() < 3 {
-            color_eyre::eyre::bail!("IOU amount needs 3 parts (CUR:issuer:value): {spec}");
-        }
-        Ok(serde_json::json!({
-            "currency": parts[0],
-            "issuer": parts[1],
-            "value": parts[2]
-        }))
+    match parse_offer_amount_spec(spec)? {
+        OfferAmountSpec::Xrp(drops) => Ok(serde_json::Value::String(drops.to_string())),
+        OfferAmountSpec::Iou {
+            currency,
+            issuer,
+            value,
+        } => Ok(serde_json::json!({
+            "currency": currency,
+            "issuer": issuer,
+            "value": value
+        })),
     }
 }
 
@@ -486,6 +591,27 @@ mod tests {
         _env.remove(SEED_ENV);
         let cfg = SigningConfig::prime_seed_source(None);
         assert!(!cfg.has_seed());
+    }
+
+    #[test]
+    fn sequence_fee_ledger_from_simulate_extracts_fields() {
+        let tx = serde_json::json!({
+            "Sequence": 42,
+            "Fee": "12",
+            "LastLedgerSequence": 9_999_999
+        });
+        let (seq, fee, lls) = sequence_fee_ledger_from_simulate(&tx).expect("fields should parse");
+        assert_eq!(seq, 42);
+        assert_eq!(fee, 12);
+        assert_eq!(lls, 9_999_999);
+    }
+
+    #[test]
+    fn build_payment_tx_json_for_simulate_xrp() {
+        let v = build_payment_tx_json_for_simulate("rSender", "rDest", "1", None, None, 7)
+            .expect("payment json");
+        assert_eq!(v["TransactionType"], "Payment");
+        assert_eq!(v["Sequence"], 7);
     }
 
     #[test]

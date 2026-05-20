@@ -178,13 +178,12 @@ impl RpcClient {
         }
         let value = match self.rpc_value("account_tx", req).await {
             Ok(value) => value,
-            Err(e) if is_not_found_error(&format!("{e}")) => {
-                return Ok(AccountTxPage {
-                    rows: vec![],
-                    marker: None,
-                });
+            Err(e) => {
+                if let Some(page) = empty_account_tx_page_on_not_found(&e) {
+                    return Ok(page);
+                }
+                return Err(e);
             }
-            Err(e) => return Err(e),
         };
         Ok(parse_account_tx_page(&value, watch_address))
     }
@@ -352,7 +351,6 @@ impl RpcClient {
     ///
     /// Returns the auto-filled `tx_json` (Fee, Sequence, etc.) and metadata
     /// without committing to the ledger.
-    #[allow(dead_code)]
     pub async fn simulate_tx(&self, tx_json: Value) -> color_eyre::Result<SimulateResult> {
         let value = self
             .rpc_value("simulate", json!({ "tx_json": tx_json }))
@@ -387,7 +385,6 @@ impl RpcClient {
     }
 
     /// Generate a new XRPL wallet via `wallet_propose`.
-    #[allow(dead_code)]
     pub async fn wallet_propose(&self, key_type: &str) -> color_eyre::Result<WalletProposeResult> {
         let params = json!({ "key_type": key_type });
         let value = self.rpc_value("wallet_propose", params).await?;
@@ -472,7 +469,6 @@ fn parse_submit_success(value: &Value) -> color_eyre::Result<TxSummary> {
     Ok(TxSummary { hash: tx_hash })
 }
 
-#[allow(dead_code)]
 fn parse_simulate_result(value: &Value) -> color_eyre::Result<SimulateResult> {
     let result = value.get("result").unwrap_or(&Value::Null);
     let tx_json = result
@@ -504,7 +500,6 @@ fn parse_simulate_result(value: &Value) -> color_eyre::Result<SimulateResult> {
     })
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 fn parse_ripple_path_find(value: &Value) -> color_eyre::Result<RipplePathFindResult> {
     let result = value.get("result").unwrap_or(&Value::Null);
 
@@ -536,7 +531,6 @@ fn parse_ripple_path_find(value: &Value) -> color_eyre::Result<RipplePathFindRes
     })
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 fn parse_aggregate_price_value(value: &Value) -> color_eyre::Result<AggregatePrice> {
     let result = value.get("result").unwrap_or(&Value::Null);
 
@@ -1102,7 +1096,20 @@ fn book_offer_best_price(value: &Value, invert: bool) -> Option<f64> {
     }
 }
 
-fn book_currency(currency: &str, issuer: Option<&str>) -> Value {
+pub(crate) fn empty_account_tx_page_on_not_found(
+    err: impl std::fmt::Display,
+) -> Option<AccountTxPage> {
+    if is_not_found_error(&format!("{err}")) {
+        Some(AccountTxPage {
+            rows: vec![],
+            marker: None,
+        })
+    } else {
+        None
+    }
+}
+
+pub(crate) fn book_currency(currency: &str, issuer: Option<&str>) -> Value {
     if currency.eq_ignore_ascii_case("XRP") {
         json!({ "currency": "XRP" })
     } else {
@@ -1241,6 +1248,41 @@ pub fn path_hop_count(paths_computed: &Value) -> usize {
         .map_or(0, |p| p.len())
 }
 
+/// Human-readable hop count for the Path-Find table (`direct` / `1 hop` / `N hops`).
+pub fn format_path_hops_label(hop_count: usize) -> String {
+    match hop_count {
+        0 => "direct".into(),
+        1 => "1 hop".into(),
+        n => format!("{n} hops"),
+    }
+}
+
+/// Source amount for path-find rows (always includes currency, e.g. `1.000000 XRP`).
+pub fn format_path_source_amount(value: &Value) -> String {
+    if let Some(s) = value.as_str() {
+        return format!("{} XRP", drops_to_xrp(s));
+    }
+    if let Some(obj) = value.as_object() {
+        let currency = obj.get("currency").and_then(Value::as_str).unwrap_or("?");
+        let value_str = obj.get("value").and_then(Value::as_str).unwrap_or("-");
+        if currency.eq_ignore_ascii_case("XRP") {
+            return format!("{} XRP", drops_to_xrp(value_str));
+        }
+        return format!("{value_str} {currency}");
+    }
+    "-".into()
+}
+
+fn source_amount_sort_key(value: &Value) -> f64 {
+    if let Some(s) = value.as_str() {
+        s.parse::<f64>().unwrap_or(f64::MAX)
+    } else if let Some(v) = value.get("value").and_then(Value::as_str) {
+        v.parse::<f64>().unwrap_or(f64::MAX)
+    } else {
+        f64::MAX
+    }
+}
+
 pub fn path_find_snapshot(result: &RipplePathFindResult, quote_label: &str) -> PathFindSnapshot {
     PathFindSnapshot {
         dest_summary: format_path_destination(&result.destination_amount, quote_label),
@@ -1249,14 +1291,20 @@ pub fn path_find_snapshot(result: &RipplePathFindResult, quote_label: &str) -> P
 }
 
 pub fn path_find_rows_from(result: &RipplePathFindResult) -> Vec<PathFindRow> {
-    result
-        .alternatives
+    let mut alternatives = result.alternatives.clone();
+    alternatives.sort_by(|a, b| {
+        source_amount_sort_key(&a.source_amount)
+            .partial_cmp(&source_amount_sort_key(&b.source_amount))
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| path_hop_count(&a.paths_computed).cmp(&path_hop_count(&b.paths_computed)))
+    });
+    alternatives
         .iter()
         .map(|alt| {
             let hops_n = path_hop_count(&alt.paths_computed);
             PathFindRow {
-                send: format_amount(Some(&alt.source_amount)),
-                hops: hops_n.to_string(),
+                send: format_path_source_amount(&alt.source_amount),
+                hops: format_path_hops_label(hops_n),
                 path: summarize_paths_computed(&alt.paths_computed),
                 raw_json: ArcValue::new(serde_json::json!({
                     "source_amount": alt.source_amount,
@@ -1646,6 +1694,44 @@ mod tests {
         assert!(s.ends_with("UTC"));
     }
 
+    /// TC-001
+    #[test]
+    fn book_currency_xrp_uppercase() {
+        let v = book_currency("XRP", None);
+        assert_eq!(v["currency"], "XRP");
+        assert!(v.get("issuer").is_none());
+    }
+
+    /// TC-002
+    #[test]
+    fn book_currency_xrp_case_insensitive() {
+        let v = book_currency("xrp", Some("rIssuer"));
+        assert_eq!(v["currency"], "XRP");
+        assert!(v.get("issuer").is_none());
+    }
+
+    /// TC-003
+    #[test]
+    fn book_currency_issued_includes_issuer() {
+        let v = book_currency("USD", Some("rIssuer"));
+        assert_eq!(v["currency"], "USD");
+        assert_eq!(v["issuer"], "rIssuer");
+    }
+
+    /// TC-089 (I-7): `account_tx` RPC not-found maps to empty page at client boundary
+    #[test]
+    fn empty_account_tx_page_on_not_found_maps_actnotfound() {
+        let page = empty_account_tx_page_on_not_found("actNotFound")
+            .expect("not-found should become empty page");
+        assert!(page.rows.is_empty());
+        assert!(page.marker.is_none());
+    }
+
+    #[test]
+    fn empty_account_tx_page_on_not_found_ignores_other_errors() {
+        assert!(empty_account_tx_page_on_not_found("timeout").is_none());
+    }
+
     #[test]
     fn check_xrpl_error_preserves_not_found_as_error() {
         let value = json!({
@@ -1933,8 +2019,38 @@ mod tests {
         };
         let rows = path_find_rows_from(&result);
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].send, "1.000000");
-        assert_eq!(rows[0].hops, "0");
+        assert_eq!(rows[0].send, "1.000000 XRP");
+        assert_eq!(rows[0].hops, "direct");
+    }
+
+    #[test]
+    fn format_path_hops_label_variants() {
+        assert_eq!(format_path_hops_label(0), "direct");
+        assert_eq!(format_path_hops_label(1), "1 hop");
+        assert_eq!(format_path_hops_label(3), "3 hops");
+    }
+
+    #[test]
+    fn path_find_rows_sorted_by_cheapest_send() {
+        let result = RipplePathFindResult {
+            alternatives: vec![
+                PathAlternative {
+                    paths_computed: json!([]),
+                    source_amount: json!("2000000"),
+                },
+                PathAlternative {
+                    paths_computed: json!([]),
+                    source_amount: json!("1000000"),
+                },
+            ],
+            destination_account: "rDest".into(),
+            destination_amount: json!("1000000"),
+            source_account: "rSrc".into(),
+        };
+        let rows = path_find_rows_from(&result);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].send, "1.000000 XRP");
+        assert_eq!(rows[1].send, "2.000000 XRP");
     }
 
     /// TC-081 ripple_path_find source_amount as string (XRP drops)
