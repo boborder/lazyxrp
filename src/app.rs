@@ -306,7 +306,7 @@ impl App {
 
         loop {
             self.handle_events(&mut tui).await?;
-            self.process_actions(&mut tui)?;
+            self.process_actions(Some(&mut tui))?;
             if self.should_suspend {
                 tui.suspend()?;
                 action_tx.send(Action::Resume)?;
@@ -425,7 +425,7 @@ impl App {
         }
     }
 
-    fn process_actions(&mut self, tui: &mut Tui) -> color_eyre::Result<()> {
+    fn process_actions(&mut self, mut tui: Option<&mut Tui>) -> color_eyre::Result<()> {
         while let Ok(action) = self.action_rx.try_recv() {
             if action != Action::Tick && action != Action::Render {
                 debug!("{action:?}");
@@ -440,11 +440,21 @@ impl App {
                 Action::Quit => self.should_quit = true,
                 Action::Suspend => self.should_suspend = true,
                 Action::Resume => self.should_suspend = false,
-                Action::ClearScreen => tui.terminal.clear()?,
-                Action::Resize(w, h) => self.on_resize(tui, *w, *h)?,
+                Action::ClearScreen => {
+                    if let Some(tui) = tui.as_deref_mut() {
+                        tui.terminal.clear()?;
+                    }
+                }
+                Action::Resize(w, h) => {
+                    if let Some(tui) = tui.as_deref_mut() {
+                        self.on_resize(tui, *w, *h)?;
+                    }
+                }
                 Action::Render if self.needs_draw => {
-                    self.render(tui)?;
-                    self.needs_draw = false;
+                    if let Some(tui) = tui.as_deref_mut() {
+                        self.render(tui)?;
+                        self.needs_draw = false;
+                    }
                 }
                 Action::Render => {}
                 Action::TabNext => {
@@ -721,7 +731,7 @@ mod tests {
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
     use super::*;
-    use crate::{config::Config, network::Network, tui::Tui};
+    use crate::{config::Config, network::Network};
 
     fn test_app() -> color_eyre::Result<App> {
         let config = Config::new()?;
@@ -750,9 +760,8 @@ mod tests {
     #[tokio::test]
     async fn quit_action_sets_should_quit() -> color_eyre::Result<()> {
         let mut app = test_app()?;
-        let mut tui = Tui::new()?;
         app.action_tx.send(Action::Quit)?;
-        app.process_actions(&mut tui)?;
+        app.process_actions(None)?;
         assert!(app.should_quit);
         Ok(())
     }
@@ -761,9 +770,8 @@ mod tests {
     #[tokio::test]
     async fn refresh_account_sends_poll_command() -> color_eyre::Result<()> {
         let mut app = test_app()?;
-        let mut tui = Tui::new()?;
         app.action_tx.send(Action::RefreshAccount)?;
-        app.process_actions(&mut tui)?;
+        app.process_actions(None)?;
         let cmd = app
             .test_poll_rx
             .as_mut()
@@ -778,9 +786,8 @@ mod tests {
     #[tokio::test]
     async fn refresh_book_sends_poll_command() -> color_eyre::Result<()> {
         let mut app = test_app()?;
-        let mut tui = Tui::new()?;
         app.action_tx.send(Action::RefreshBook)?;
-        app.process_actions(&mut tui)?;
+        app.process_actions(None)?;
         let cmd = app
             .test_poll_rx
             .as_mut()
@@ -795,11 +802,10 @@ mod tests {
     #[tokio::test]
     async fn tab_next_cycles_all_panels() -> color_eyre::Result<()> {
         let mut app = test_app()?;
-        let mut tui = Tui::new()?;
         assert_eq!(app.active_tab, 0);
         for i in 1..=TAB_TITLES.len() {
             app.action_tx.send(Action::TabNext)?;
-            app.process_actions(&mut tui)?;
+            app.process_actions(None)?;
             assert_eq!(app.active_tab, i % TAB_TITLES.len());
         }
         Ok(())
@@ -809,13 +815,12 @@ mod tests {
     #[tokio::test]
     async fn help_action_toggles_overlay_flag() -> color_eyre::Result<()> {
         let mut app = test_app()?;
-        let mut tui = Tui::new()?;
         assert!(!app.show_help);
         app.action_tx.send(Action::Help)?;
-        app.process_actions(&mut tui)?;
+        app.process_actions(None)?;
         assert!(app.show_help);
         app.action_tx.send(Action::Help)?;
-        app.process_actions(&mut tui)?;
+        app.process_actions(None)?;
         assert!(!app.show_help);
         Ok(())
     }
@@ -827,8 +832,7 @@ mod tests {
         app.show_help = true;
         let esc = KeyEvent::new(KeyCode::Esc, KeyModifiers::empty());
         app.on_key_event(esc)?;
-        let mut tui = Tui::new()?;
-        app.process_actions(&mut tui)?;
+        app.process_actions(None)?;
         assert!(!app.show_help);
         Ok(())
     }
@@ -839,8 +843,7 @@ mod tests {
         let mut app = test_app()?;
         let q = KeyEvent::new(KeyCode::Char('?'), KeyModifiers::empty());
         app.on_key_event(q)?;
-        let mut tui = Tui::new()?;
-        app.process_actions(&mut tui)?;
+        app.process_actions(None)?;
         assert!(app.show_help);
         Ok(())
     }
