@@ -66,3 +66,65 @@ jobs:
         env:
           RUSTDOCFLAGS: -D warnings
         run: cargo doc --locked --no-deps --document-private-items --all-features --workspace --examples
+
+  # Cargo.toml version + docs-only push to main → tag → CD (GitHub Release + crates.io).
+  auto-tag:
+    name: Auto Tag Release
+    needs: [test, rustfmt, clippy, docs]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Create release tag when version bumped (docs-only)
+        env:
+          BEFORE: ${{ github.event.before }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+
+          if [ "$BEFORE" = "0000000000000000000000000000000000000000" ]; then
+            echo "Initial or force push — skipping auto-tag"
+            exit 0
+          fi
+
+          CHANGED=$(git diff --name-only "$BEFORE" "$SHA")
+          if [ -z "$CHANGED" ]; then
+            echo "No changed files — skipping"
+            exit 0
+          fi
+
+          # docs/.+ (not docs/ alone): $ anchor on alternation branch blocked docs/RELEASE.md
+          ALLOWED='^(Cargo\.toml|docs/.+|README\.md|AGENTS\.md|\.github/.+)$'
+          while IFS= read -r file; do
+            [ -z "$file" ] && continue
+            if ! echo "$file" | grep -Eq "$ALLOWED"; then
+              echo "Non docs-only change: $file — skipping auto-tag"
+              exit 0
+            fi
+          done <<< "$CHANGED"
+
+          OLD_VERSION=$(git show "$BEFORE:Cargo.toml" | grep -m1 '^version = ' | sed -E 's/^version = "([^"]+)"/\1/')
+          NEW_VERSION=$(grep -m1 '^version = ' Cargo.toml | sed -E 's/^version = "([^"]+)"/\1/')
+
+          if [ "$OLD_VERSION" = "$NEW_VERSION" ]; then
+            echo "Cargo.toml version unchanged ($NEW_VERSION) — skipping"
+            exit 0
+          fi
+
+          TAG="v${NEW_VERSION}"
+          if git rev-parse "$TAG" >/dev/null 2>&1; then
+            echo "Tag $TAG already exists — skipping"
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$TAG" -m "Release $TAG"
+          git push origin "$TAG"
+          echo "Pushed $TAG — CD workflow will build and publish"

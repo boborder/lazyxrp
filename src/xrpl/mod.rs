@@ -1,5 +1,6 @@
 //! XRPL RPC / WebSocket integration, polling task, and CLI helpers.
 
+mod address;
 mod backoff;
 mod cli_exec;
 mod client;

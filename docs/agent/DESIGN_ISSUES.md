@@ -16,12 +16,12 @@
 **Impact**: Tight coupling between config layer and app layer. Minor — `Mode` currently has only one variant (`Splash`).
 **Recommendation**: Move `Mode` to `action.rs` or create `src/mode.rs`.
 
-## Issue 3: No runtime tab-panel consistency check
+## Issue 3: Tab-panel consistency (resolved)
 
-**Severity**: Low
-**Evidence**: `app.rs` hardcodes `TAB_TITLES: &[&str; 5]` and `panels: Vec<Box<dyn Component>>` with 5 entries. No assertion that lengths match.
-**Impact**: If a developer adds a 6th tab but forgets to add a panel, the 6th tab would render the wrong panel or panic.
-**Recommendation**: Add `debug_assert_eq!(TAB_TITLES.len(), panels.len())` in `App::new()`.
+**Severity**: Low (resolved 2026-07-30)
+**Evidence**: Historically undocumented drift claimed 5 tabs; product ships **4** tabs. `App::new()` now uses `debug_assert_eq!(TAB_TITLES.len(), panels.len())`, and TC-060 asserts length/active tab/watch account.
+**Impact**: Mitigated for debug/test builds. Keep `TAB_TITLES` and `panels` updates in the same change (I-9 / UA-1).
+**Recommendation**: None further — treat as invariant coverage, not an open design issue.
 
 ## Issue 4: Unbounded channels for high-frequency events
 

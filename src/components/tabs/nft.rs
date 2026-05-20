@@ -1,7 +1,7 @@
 use ratatui::{
     Frame,
-    layout::{Constraint, Layout, Rect},
-    widgets::{Row, Scrollbar, ScrollbarOrientation, Table},
+    layout::{Constraint, Rect},
+    widgets::{Row, Table},
 };
 
 use crate::{
@@ -9,7 +9,7 @@ use crate::{
     components::{
         Component,
         shared::{
-            selectable_table::SelectableTableState,
+            selectable_table::{SelectableTableState, render_selectable_table},
             theme,
             tx_detail::{TxDetailState, render_tx_detail},
             widgets::{render_empty, render_loading, titled_block_with_count},
@@ -141,21 +141,9 @@ impl Component for NftTab {
                 Constraint::Fill(1),
             ],
         )
-        .header(header)
-        .row_highlight_style(theme::selected_row_style(self.is_focused))
-        .highlight_symbol("▶ ");
+        .header(header);
 
-        let [tbl_area, sb_area] =
-            Layout::horizontal([Constraint::Fill(1), Constraint::Length(1)]).areas(inner);
-
-        frame.render_stateful_widget(table, tbl_area, self.table_state.table_mut());
-        frame.render_stateful_widget(
-            Scrollbar::new(ScrollbarOrientation::VerticalRight)
-                .style(theme::dim_style())
-                .thumb_style(theme::accent_style()),
-            sb_area,
-            self.table_state.scroll_mut(),
-        );
+        render_selectable_table(frame, inner, table, &mut self.table_state, self.is_focused);
 
         render_tx_detail(frame, area, &mut self.detail);
         Ok(())

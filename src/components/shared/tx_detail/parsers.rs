@@ -1181,18 +1181,42 @@ pub(crate) fn typed_detail_lines<'a>(tx: &'a Value) -> Option<Vec<Line<'a>>> {
 
 #[cfg(test)]
 mod registry_tests {
-    use super::TX_DETAIL_PARSERS;
+    use super::{TX_DETAIL_PARSERS, typed_detail_lines};
+    use serde_json::json;
 
+    /// Contract: critical TX types are registered exactly once and dispatch.
+    /// TC-094: registry covers required types without duplicates
     #[test]
-    fn tx_detail_parser_registry_has_29_types() {
-        assert_eq!(TX_DETAIL_PARSERS.len(), 29);
-        let mut names: Vec<_> = TX_DETAIL_PARSERS.iter().map(|(n, _)| *n).collect();
-        names.sort_unstable();
-        names.dedup();
+    fn registry_covers_required_types_without_duplicates() {
+        const REQUIRED: &[&str] = &[
+            "Payment",
+            "AccountSet",
+            "OfferCreate",
+            "TrustSet",
+            "EscrowCreate",
+            "NFTokenMint",
+            "AMMCreate",
+        ];
+        let names: Vec<&str> = TX_DETAIL_PARSERS.iter().map(|(n, _)| *n).collect();
+        let mut sorted = names.clone();
+        sorted.sort_unstable();
+        let mut uniq = sorted.clone();
+        uniq.dedup();
         assert_eq!(
-            names.len(),
-            29,
+            sorted.len(),
+            uniq.len(),
             "duplicate TransactionType in TX_DETAIL_PARSERS"
         );
+        for req in REQUIRED {
+            assert!(
+                names.contains(req),
+                "missing required TransactionType parser: {req}"
+            );
+            let tx = json!({"TransactionType": req, "Account": "rTest"});
+            assert!(
+                typed_detail_lines(&tx).is_some(),
+                "typed_detail_lines should dispatch for {req}"
+            );
+        }
     }
 }

@@ -58,12 +58,28 @@ impl Component for CombinedOraclePanel {
         let inner = block.inner(area);
         frame.render_widget(block, area);
 
-        let [oracle_area, ftso_area] =
-            Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)])
-                .areas(inner);
+        let [oracle_area, _gap, ftso_area] = Layout::horizontal([
+            Constraint::Fill(1),
+            Constraint::Length(1),
+            Constraint::Fill(1),
+        ])
+        .areas(inner);
 
-        self.oracle.render_content(frame, oracle_area);
-        self.ftso.render_content(frame, ftso_area);
+        let sub_border = if self.is_focused {
+            theme::accent_style()
+        } else {
+            theme::dim_style()
+        };
+
+        let oracle_block = Block::bordered().title(" Oracle ").border_style(sub_border);
+        let oracle_inner = oracle_block.inner(oracle_area);
+        frame.render_widget(oracle_block, oracle_area);
+        self.oracle.render_content(frame, oracle_inner);
+
+        let ftso_block = Block::bordered().title(" FTSO ").border_style(sub_border);
+        let ftso_inner = ftso_block.inner(ftso_area);
+        frame.render_widget(ftso_block, ftso_area);
+        self.ftso.render_content(frame, ftso_inner);
         Ok(())
     }
 }

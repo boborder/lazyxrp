@@ -1,13 +1,16 @@
 use ratatui::{
     Frame,
-    layout::{Constraint, Layout, Rect},
-    style::{Modifier, Style},
+    layout::{Constraint, Rect},
     text::{Line, Span},
-    widgets::{Block, BorderType, Cell, Paragraph, Row, Scrollbar, ScrollbarOrientation, Table},
+    widgets::{Block, Cell, Paragraph, Row, Table},
 };
 
 use crate::{
-    components::shared::{fmt, selectable_table::SelectableTableState, theme},
+    components::shared::{
+        fmt,
+        selectable_table::{SelectableTableState, render_selectable_table},
+        theme,
+    },
     xrpl::TxRow,
 };
 
@@ -59,24 +62,12 @@ pub fn render_tx_scroll_table(
         ],
     )
     .header(header)
-    .column_spacing(1)
-    .row_highlight_style(theme::selected_row_style(is_focused))
-    .highlight_symbol("▶ ");
+    .column_spacing(1);
 
-    let [tbl_area, sb_area] =
-        Layout::horizontal([Constraint::Fill(1), Constraint::Length(1)]).areas(area);
-
-    frame.render_stateful_widget(table, tbl_area, table_state.table_mut());
-    frame.render_stateful_widget(
-        Scrollbar::new(ScrollbarOrientation::VerticalRight)
-            .style(theme::dim_style())
-            .thumb_style(theme::secondary_style()),
-        sb_area,
-        table_state.scroll_mut(),
-    );
+    render_selectable_table(frame, area, table, table_state, is_focused);
 }
 
-pub fn titled_block(title: &str, is_focused: bool) -> Block<'_> {
+pub fn titled_block(title: &str, is_focused: bool) -> Block<'static> {
     theme::panel_block(title, is_focused)
 }
 
@@ -85,29 +76,15 @@ pub fn titled_block_with_count(
     selected: Option<usize>,
     total: usize,
     is_focused: bool,
-) -> Block<'_> {
+) -> Block<'static> {
     if total == 0 {
         return theme::panel_block(title, is_focused);
     }
-    let count = match selected {
-        Some(i) => format!(" {title} ({}/{total}) ", i + 1),
+    let titled = match selected {
+        Some(i) => format!(" {title} ({}/{}) ", i + 1, total),
         None => format!(" {title} ({total}) "),
     };
-    let border_color = if is_focused {
-        theme::ACCENT
-    } else {
-        theme::MUTED
-    };
-    let title_color = if is_focused {
-        theme::TITLE
-    } else {
-        theme::MUTED
-    };
-    Block::bordered()
-        .border_type(BorderType::Rounded)
-        .border_style(Style::new().fg(border_color))
-        .title_style(Style::new().fg(title_color).add_modifier(Modifier::BOLD))
-        .title(count)
+    theme::panel_block_owned(titled, is_focused)
 }
 
 const SPINNER_FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];

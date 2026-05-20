@@ -1,9 +1,8 @@
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
-    style::Style,
     text::Line,
-    widgets::{Bar, BarChart, BarGroup, Row, Scrollbar, ScrollbarOrientation, Table},
+    widgets::{Bar, BarChart, BarGroup, Row, Table},
 };
 
 use crate::{
@@ -11,7 +10,7 @@ use crate::{
     components::{
         Component,
         shared::{
-            selectable_table::SelectableTableState,
+            selectable_table::{SelectableTableState, render_selectable_table},
             theme,
             tx_detail::{TxDetailState, render_tx_detail},
             widgets::{render_empty, render_loading, titled_block_with_count},
@@ -134,21 +133,14 @@ impl Component for BookPanel {
                 Constraint::Fill(1),
             ],
         )
-        .header(header)
-        .row_highlight_style(theme::selected_row_style(self.is_focused))
-        .highlight_symbol("▶ ");
+        .header(header);
 
-        // leave 1-col gap on the right for the scrollbar
-        let [tbl_area, sb_area] =
-            Layout::horizontal([Constraint::Fill(1), Constraint::Length(1)]).areas(table_area);
-
-        frame.render_stateful_widget(table, tbl_area, self.table_state.table_mut());
-        frame.render_stateful_widget(
-            Scrollbar::new(ScrollbarOrientation::VerticalRight)
-                .style(theme::dim_style())
-                .thumb_style(theme::accent_style()),
-            sb_area,
-            self.table_state.scroll_mut(),
+        render_selectable_table(
+            frame,
+            table_area,
+            table,
+            &mut self.table_state,
+            self.is_focused,
         );
 
         // ── BarChart::grouped — quality distribution ──
@@ -189,7 +181,7 @@ impl Component for BookPanel {
             ])
             .bar_width(3)
             .bar_gap(0)
-            .bar_style(Style::new().fg(theme::ACCENT))
+            .bar_style(theme::accent_style())
             .value_style(theme::dim_style());
             frame.render_widget(chart, chart_area);
         }

@@ -6,6 +6,7 @@ use tokio_util::sync::CancellationToken;
 
 use tracing::warn;
 
+use super::address::{ensure_xaddress_matches_network, resolve_payment_destination};
 use crate::action::Action;
 use crate::network::Network;
 use crate::signing::{self, SigningConfig};
@@ -543,26 +544,6 @@ async fn submit_account_set_transaction(
     .await;
 }
 
-fn resolve_wallet_payment_destination(trimmed: &str) -> color_eyre::Result<String> {
-    use xrpl::core::addresscodec::{
-        is_valid_classic_address, is_valid_xaddress, xaddress_to_classic_address,
-    };
-    if trimmed.is_empty() {
-        return Err(color_eyre::eyre::eyre!("destination is empty"));
-    }
-    if is_valid_classic_address(trimmed) {
-        return Ok(trimmed.to_string());
-    }
-    if is_valid_xaddress(trimmed) {
-        let (classic, _, _) = xaddress_to_classic_address(trimmed)
-            .map_err(|e| color_eyre::eyre::eyre!("invalid X-address: {e:?}"))?;
-        return Ok(classic);
-    }
-    Err(color_eyre::eyre::eyre!(
-        "invalid destination (need classic `r…` or X-address)"
-    ))
-}
-
 async fn submit_payment_transaction(
     rpc: &RpcClient,
     network: &Network,
@@ -571,16 +552,50 @@ async fn submit_payment_transaction(
 ) {
     let err = Action::PaymentSubmitErr;
     if params.amount.trim().is_empty() {
-        send_action(action_tx, err("amount is empty — enter XRP to send".into()));
+        send_action(
+            action_tx,
+            err("amount is empty — enter an amount to send".into()),
+        );
         return;
     }
-    let destination_resolved = match resolve_wallet_payment_destination(params.destination.trim()) {
+    let is_iou = params.iou_currency.is_some() && params.iou_issuer.is_some();
+    // XRP payments debit `amount` drops; IOU payments only need XRP for the fee.
+    let amount_drops = if is_iou {
+        let Ok(v) = params.amount.trim().parse::<f64>() else {
+            send_action(action_tx, err("amount must be a number".into()));
+            return;
+        };
+        if v <= 0.0 {
+            send_action(action_tx, err("amount must be greater than zero".into()));
+            return;
+        }
+        0
+    } else {
+        match xrp_to_drops(params.amount.trim()) {
+            Ok(d) => d,
+            Err(e) => {
+                send_action(action_tx, err(format!("amount: {e}")));
+                return;
+            }
+        }
+    };
+    if !is_iou && amount_drops == 0 {
+        send_action(action_tx, err("amount must be greater than zero".into()));
+        return;
+    }
+    let destination = match resolve_payment_destination(params.destination.trim()) {
         Ok(d) => d,
         Err(e) => {
             send_action(action_tx, err(format!("{e}")));
             return;
         }
     };
+    if let Err(e) = ensure_xaddress_matches_network(&destination, network) {
+        send_action(action_tx, err(format!("{e}")));
+        return;
+    }
+    let destination_resolved = destination.classic;
+    let destination_tag = params.destination_tag.or(destination.destination_tag);
     if mainnet_write_guard_blocks(network, params.skip_mainnet_prompt) {
         send_action(
             action_tx,
@@ -609,18 +624,6 @@ async fn submit_payment_transaction(
         return;
     }
 
-    let amount_drops = match xrp_to_drops(params.amount.trim()) {
-        Ok(d) => d,
-        Err(e) => {
-            send_action(action_tx, err(format!("amount: {e}")));
-            return;
-        }
-    };
-    if amount_drops == 0 {
-        send_action(action_tx, err("amount must be greater than zero".into()));
-        return;
-    }
-
     let Some(account_info) = fetch_account_summary_for_submit(rpc, &account, err, action_tx).await
     else {
         return;
@@ -632,6 +635,7 @@ async fn submit_payment_transaction(
         params.amount.trim(),
         params.iou_currency.as_deref(),
         params.iou_issuer.as_deref(),
+        destination_tag,
         account_info.sequence,
     ) {
         Ok(j) => j,
@@ -658,13 +662,19 @@ async fn submit_payment_transaction(
     };
 
     let balance_drops = xrp_to_drops(&account_info.balance_xrp).unwrap_or(0);
-    if balance_drops < amount_drops + u64::from(fee_drops) {
-        let total_need = amount_drops.saturating_add(u64::from(fee_drops));
+    let total_need = amount_drops.saturating_add(u64::from(fee_drops));
+    if balance_drops < total_need {
         send_action(
             action_tx,
-            err(format!(
-                "insufficient balance: have {balance_drops} drops, need {total_need} (amount {amount_drops} + fee {fee_drops})"
-            )),
+            err(if is_iou {
+                format!(
+                    "insufficient XRP for fee: have {balance_drops} drops, need {fee_drops} fee"
+                )
+            } else {
+                format!(
+                    "insufficient balance: have {balance_drops} drops, need {total_need} (amount {amount_drops} + fee {fee_drops})"
+                )
+            }),
         );
         return;
     }
@@ -681,6 +691,7 @@ async fn submit_payment_transaction(
                 params.amount.trim(),
                 params.iou_currency.as_deref(),
                 params.iou_issuer.as_deref(),
+                destination_tag,
                 sequence,
                 fee_drops,
                 last_ledger_sequence,
@@ -921,23 +932,15 @@ async fn run_poll_loop(
                         submit_payment_transaction(&rpc, &network, params, &action_tx).await;
                     }
                     PollCommand::WalletPropose(key_type) => {
-                        match tokio::time::timeout(RPC_TIMEOUT, rpc.wallet_propose(&key_type)).await
-                        {
-                            Ok(Ok(result)) => {
+                        match crate::signing::propose_wallet_local(&key_type) {
+                            Ok(result) => {
                                 if let Err(e) = action_tx.send(Action::WalletProposeOk(result)) {
                                     warn!(?e, "action channel closed");
                                 }
                             }
-                            Ok(Err(e)) => {
+                            Err(e) => {
                                 if let Err(e) =
                                     action_tx.send(Action::WalletProposeErr(format!("{e}")))
-                                {
-                                    warn!(?e, "action channel closed");
-                                }
-                            }
-                            Err(_) => {
-                                if let Err(e) = action_tx
-                                    .send(Action::WalletProposeErr("wallet_propose: timeout".into()))
                                 {
                                     warn!(?e, "action channel closed");
                                 }
@@ -958,7 +961,9 @@ mod tests {
     use tokio::sync::mpsc;
 
     use super::*;
+    use crate::config::{TestEnvGuard, env_lock};
     use crate::network::Network;
+    use crate::signing::SEED_ENV;
     use crate::xrpl::client::RpcClient;
     use crate::xrpl::types::PaymentSubmitParams;
 
@@ -1024,6 +1029,7 @@ mod tests {
             amount: "0.001".into(),
             iou_currency: None,
             iou_issuer: None,
+            destination_tag: None,
             skip_mainnet_prompt: false,
             config_seed: None,
         };
@@ -1040,6 +1046,12 @@ mod tests {
 
     #[tokio::test]
     async fn payment_submit_mainnet_with_yes_skips_mainnet_guard() {
+        let _env = {
+            let _g = env_lock();
+            let env = TestEnvGuard::new(&[SEED_ENV]);
+            env.remove(SEED_ENV);
+            env
+        };
         let (action_tx, mut action_rx) = mpsc::unbounded_channel();
         let rpc = RpcClient::connect("http://127.0.0.1:1").expect("rpc client");
         let params = PaymentSubmitParams {
@@ -1047,6 +1059,7 @@ mod tests {
             amount: "0.001".into(),
             iou_currency: None,
             iou_issuer: None,
+            destination_tag: None,
             skip_mainnet_prompt: true,
             config_seed: None,
         };
@@ -1058,9 +1071,32 @@ mod tests {
                     !msg.contains("restart lazyxrp with --yes"),
                     "mainnet guard should be skipped when --yes is set: {msg}"
                 );
+                assert!(
+                    msg.contains("no signing seed"),
+                    "expected seed error after guard skip, got: {msg}"
+                );
             }
-            Action::PaymentSubmitOk(_) => {}
-            other => panic!("unexpected action after mainnet guard: {other:?}"),
+            other => panic!("expected PaymentSubmitErr after guard skip, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn resolve_xaddress_preserves_destination_tag() {
+        use xrpl::core::addresscodec::classic_address_to_xaddress;
+        let classic = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh";
+        let xaddr = classic_address_to_xaddress(classic, Some(42), false).expect("xaddr");
+        let resolved = resolve_payment_destination(&xaddr).expect("resolve");
+        assert_eq!(resolved.classic, classic);
+        assert_eq!(resolved.destination_tag, Some(42));
+        assert_eq!(resolved.xaddress_is_test, Some(false));
+    }
+
+    #[test]
+    fn resolve_classic_address_has_no_tag() {
+        let classic = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh";
+        let resolved = resolve_payment_destination(classic).expect("resolve");
+        assert_eq!(resolved.classic, classic);
+        assert!(resolved.destination_tag.is_none());
+        assert!(resolved.xaddress_is_test.is_none());
     }
 }

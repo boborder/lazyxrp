@@ -939,12 +939,12 @@ network = "mainnet"
         Ok(())
     }
 
-    /// TC-075
+    /// TC-092: Config merge — XRPL_RPC_SERVER overrides rpc_server from file
     #[test]
     fn config_merge_rpc_server_env_overrides_file() -> color_eyre::Result<()> {
         let _g = env_lock();
         let _env = TestEnvGuard::new(&["LAZYXRP_CONFIG", "XDG_CONFIG_HOME", XRPL_RPC_SERVER_ENV]);
-        let root = std::env::temp_dir().join(format!("lazyxrp-tc075-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("lazyxrp-tc092-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root)?;
         let toml = r#"[xrpl]

@@ -4,9 +4,8 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
-    style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Clear, Paragraph},
+    widgets::Paragraph,
 };
 use secrecy::ExposeSecret;
 
@@ -21,7 +20,7 @@ use crate::{
     },
     config::Config,
     network::Network,
-    xrpl::{AccountSetSubmitParams, AccountSummary, PaymentSubmitParams, WalletProposeResult},
+    xrpl::{AccountSummary, WalletProposeResult},
 };
 
 /// Dropdown options for SetFlag / ClearFlag (must match [`crate::signing::parse_account_set_flag_choice`]).
@@ -67,6 +66,13 @@ pub fn seed_to_address(seed: &str) -> Result<String, String> {
         .map(|w| w.classic_address.clone())
         .map_err(|e| format!("{e}"))
 }
+
+#[path = "wallet_composer.rs"]
+mod composer;
+#[path = "wallet_keygen.rs"]
+mod keygen;
+#[path = "wallet_keys.rs"]
+mod keys;
 
 pub struct WalletPanel {
     account: Option<AccountSummary>,
@@ -141,634 +147,6 @@ impl WalletPanel {
                 .as_ref()
                 .map(|s| s.expose_secret().to_string())
         })
-    }
-
-    fn open_account_set_composer(&mut self) {
-        self.domain = self
-            .account
-            .as_ref()
-            .and_then(|a| a.domain_hex.as_deref())
-            .and_then(Self::decode_domain_hex)
-            .unwrap_or_default();
-        self.tick_size.clear();
-        self.transfer_rate.clear();
-        self.set_flag_ix = 0;
-        self.clear_flag_ix = 0;
-        self.field_row = 0;
-        self.is_form_editing = false;
-        self.composer = Some(ComposerPhase::AccountSet);
-    }
-
-    /// XRP payment defaults to 1 XRP; IOU fields start empty until toggled.
-    fn open_payment_composer(&mut self) {
-        self.composer = Some(ComposerPhase::Payment {
-            row: 0,
-            destination: String::new(),
-            amount: "1".to_string(),
-            iou_currency: String::new(),
-            iou_issuer: String::new(),
-            is_iou: false,
-        });
-        self.is_form_editing = false;
-    }
-
-    fn queue_submit_account_set(&mut self) -> Option<Action> {
-        let set = Self::label_for_flag(self.set_flag_ix);
-        let clr = Self::label_for_flag(self.clear_flag_ix);
-        Some(Action::AccountSetSubmit(AccountSetSubmitParams {
-            set_flag: if set == "(none)" { None } else { Some(set) },
-            clear_flag: if clr == "(none)" { None } else { Some(clr) },
-            domain_ascii: self.domain.clone(),
-            tick_size: self.tick_size.clone(),
-            transfer_rate: self.transfer_rate.clone(),
-            skip_mainnet_prompt: self.skip_mainnet_prompt,
-            config_seed: self.config_seed(),
-        }))
-    }
-
-    fn queue_submit_payment(
-        &self,
-        dest: String,
-        amt: String,
-        iou_currency: String,
-        iou_issuer: String,
-    ) -> Action {
-        Action::PaymentSubmit(PaymentSubmitParams {
-            destination: dest,
-            amount: amt,
-            iou_currency: if iou_currency.is_empty() {
-                None
-            } else {
-                Some(iou_currency.to_uppercase())
-            },
-            iou_issuer: if iou_issuer.is_empty() {
-                None
-            } else {
-                Some(iou_issuer)
-            },
-            skip_mainnet_prompt: self.skip_mainnet_prompt,
-            config_seed: self.config_seed(),
-        })
-    }
-
-    fn set_submit_flash(&mut self, flash: SubmitFlash) {
-        self.submit_flash = Some(flash);
-    }
-
-    fn payment_validate(
-        dest: &str,
-        amt: &str,
-        is_iou: bool,
-        currency: &str,
-        issuer: &str,
-    ) -> Result<(), &'static str> {
-        if dest.trim().is_empty() {
-            return Err("destination required");
-        }
-        if amt.trim().is_empty() {
-            return Err("amount required");
-        }
-        let Ok(v) = amt.trim().parse::<f64>() else {
-            return Err("amount must be a number");
-        };
-        if v <= 0.0 {
-            return Err("amount must be > 0");
-        }
-        if is_iou {
-            let cur = currency.trim();
-            if cur.len() != 3 {
-                return Err("IOU currency must be 3 characters");
-            }
-            let iss = issuer.trim();
-            if iss.is_empty() {
-                return Err("IOU issuer required");
-            }
-            if !iss.starts_with('r') {
-                return Err("issuer must start with 'r'");
-            }
-        }
-        Ok(())
-    }
-
-    fn payment_preview(
-        destination: &str,
-        amount: &str,
-        iou_currency: &str,
-        iou_issuer: &str,
-        is_iou: bool,
-    ) -> (String, Style) {
-        let destination_trimmed = destination.trim();
-        let amount_trimmed = amount.trim();
-        let currency_trimmed = iou_currency.trim();
-        let issuer_trimmed = iou_issuer.trim();
-        let amount_ok = amount_trimmed.parse::<f64>().ok().filter(|v| *v > 0.0);
-
-        if destination_trimmed.is_empty() {
-            return (
-                "Need destination (classic r… or X-address)".to_string(),
-                theme::warning_style(),
-            );
-        }
-        if amount_trimmed.is_empty() {
-            return ("Need amount".to_string(), theme::warning_style());
-        }
-        if amount_ok.is_none() {
-            return (
-                "Amount must be a number > 0".to_string(),
-                theme::warning_style(),
-            );
-        }
-        if is_iou && currency_trimmed.len() != 3 {
-            return (
-                "IOU mode: need 3-char currency code".to_string(),
-                theme::warning_style(),
-            );
-        }
-        if is_iou && issuer_trimmed.is_empty() {
-            return (
-                "IOU mode: need issuer address (r…)".to_string(),
-                theme::warning_style(),
-            );
-        }
-        if is_iou && !issuer_trimmed.starts_with('r') {
-            return (
-                "Issuer must start with 'r'".to_string(),
-                theme::warning_style(),
-            );
-        }
-        if is_iou {
-            return (
-                format!(
-                    "▸ Pay {} {currency_trimmed} (issued by {}) → {}",
-                    amount_trimmed,
-                    Self::shorten_display(issuer_trimmed, 20),
-                    Self::shorten_display(destination_trimmed, 20)
-                ),
-                theme::success_style(),
-            );
-        }
-        (
-            format!(
-                "▸ Send {} XRP → {}",
-                amount_trimmed,
-                Self::shorten_display(destination_trimmed, 30)
-            ),
-            theme::success_style(),
-        )
-    }
-
-    fn flag_labels(flags: u32) -> Vec<&'static str> {
-        let mut labels = Vec::new();
-        if flags & 0x00800000 != 0 {
-            labels.push("DefaultRipple");
-        }
-        if flags & 0x01000000 != 0 {
-            labels.push("DepositAuth");
-        }
-        if flags & 0x00100000 != 0 {
-            labels.push("DisableMaster");
-        }
-        if flags & 0x00080000 != 0 {
-            labels.push("DisallowXRP");
-        }
-        if flags & 0x00400000 != 0 {
-            labels.push("GlobalFreeze");
-        }
-        if flags & 0x00200000 != 0 {
-            labels.push("NoFreeze");
-        }
-        if flags & 0x00040000 != 0 {
-            labels.push("RequireAuth");
-        }
-        if flags & 0x00020000 != 0 {
-            labels.push("RequireDest");
-        }
-        if flags & 0x00010000 != 0 {
-            labels.push("PasswordSpent");
-        }
-        labels
-    }
-
-    fn shorten_display(s: &str, max: usize) -> String {
-        let t = s.trim();
-        if t.len() <= max {
-            return t.to_string();
-        }
-        let keep = max.saturating_sub(1).max(8);
-        let head = keep * 2 / 3;
-        let tail = keep - head;
-        format!("{}…{}", &t[..head], &t[t.len() - tail..])
-    }
-
-    /// Decode `AccountRoot.domain` hex → ASCII string, or None if invalid.
-    fn decode_domain_hex(hex: &str) -> Option<String> {
-        let hex = hex.trim();
-        if !hex.len().is_multiple_of(2) {
-            return None;
-        }
-        let bytes: Vec<u8> = (0..hex.len())
-            .step_by(2)
-            .filter_map(|i| u8::from_str_radix(&hex[i..i + 2], 16).ok())
-            .collect();
-        if bytes.len() != hex.len() / 2 {
-            return None;
-        }
-        String::from_utf8(bytes).ok()
-    }
-
-    fn account_set_edit_keys(&mut self, key: &KeyEvent) -> bool {
-        if !self.is_form_editing || self.field_row < 2 {
-            return false;
-        }
-        match key.code {
-            KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
-                match self.field_row {
-                    2 => self.domain.push(c),
-                    3 if c.is_ascii_digit() => self.tick_size.push(c),
-                    4 if c.is_ascii_digit() => self.transfer_rate.push(c),
-                    _ => {}
-                }
-                true
-            }
-            KeyCode::Backspace => {
-                match self.field_row {
-                    2 => {
-                        self.domain.pop();
-                    }
-                    3 => {
-                        self.tick_size.pop();
-                    }
-                    4 => {
-                        self.transfer_rate.pop();
-                    }
-                    _ => {}
-                }
-                true
-            }
-            _ => false,
-        }
-    }
-
-    fn payment_edit_keys(
-        dest: &mut String,
-        amt: &mut String,
-        currency: &mut String,
-        issuer: &mut String,
-        is_iou: bool,
-        row: usize,
-        key: &KeyEvent,
-    ) -> bool {
-        // In IOU mode, rows 1 (currency) and 2 (issuer) are text fields;
-        // row 3 is amount. In XRP mode, row 1 is amount.
-        let target_row = if is_iou && row == 1 {
-            currency
-        } else if is_iou && row == 2 {
-            issuer
-        } else {
-            amt
-        };
-        let is_dest = row == 0;
-        let is_iou_text = is_iou && (row == 1 || row == 2);
-
-        match key.code {
-            KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
-                let accept = if is_dest {
-                    c.is_ascii_graphic()
-                } else if is_iou_text && row == 1 {
-                    c.is_ascii_alphabetic() && target_row.len() < 3
-                } else if is_iou_text && row == 2 {
-                    c.is_ascii_graphic()
-                } else if !is_iou_text {
-                    c.is_ascii_digit() || (c == '.' && !target_row.contains('.'))
-                } else {
-                    false
-                };
-                if accept {
-                    if is_dest {
-                        dest.push(c);
-                    } else {
-                        target_row.push(c);
-                    }
-                    true
-                } else {
-                    false
-                }
-            }
-            KeyCode::Backspace => {
-                if is_dest {
-                    dest.pop();
-                } else {
-                    target_row.pop();
-                }
-                true
-            }
-            _ => false,
-        }
-    }
-
-    fn handle_account_set_modal_keys(&mut self, key: KeyEvent) -> Option<Action> {
-        if self.account_set_edit_keys(&key) {
-            return None;
-        }
-        match key.code {
-            KeyCode::Char('e') | KeyCode::Char('E')
-                if !key.modifiers.contains(KeyModifiers::CONTROL) =>
-            {
-                self.is_form_editing = !self.is_form_editing;
-                return Some(Action::SetKeymapSuppression(true));
-            }
-            KeyCode::Char('s') | KeyCode::Char('S')
-                if key.modifiers.contains(KeyModifiers::CONTROL) || !self.is_form_editing =>
-            {
-                return self.queue_submit_account_set();
-            }
-            KeyCode::Char('[') => {
-                self.field_row = (self.field_row + ACCOUNT_SET_ROWS - 1) % ACCOUNT_SET_ROWS;
-            }
-            KeyCode::Char(']') => {
-                self.field_row = (self.field_row + 1) % ACCOUNT_SET_ROWS;
-            }
-            KeyCode::Tab => {
-                self.field_row = (self.field_row + 1) % ACCOUNT_SET_ROWS;
-            }
-            KeyCode::BackTab => {
-                self.field_row = (self.field_row + ACCOUNT_SET_ROWS - 1) % ACCOUNT_SET_ROWS;
-            }
-            KeyCode::Char(',') if self.field_row <= 1 => {
-                if self.field_row == 0 {
-                    self.set_flag_ix =
-                        (self.set_flag_ix + FLAG_OPTIONS.len() - 1) % FLAG_OPTIONS.len();
-                } else {
-                    self.clear_flag_ix =
-                        (self.clear_flag_ix + FLAG_OPTIONS.len() - 1) % FLAG_OPTIONS.len();
-                }
-            }
-            KeyCode::Char('.') if self.field_row <= 1 => {
-                if self.field_row == 0 {
-                    self.set_flag_ix = (self.set_flag_ix + 1) % FLAG_OPTIONS.len();
-                } else {
-                    self.clear_flag_ix = (self.clear_flag_ix + 1) % FLAG_OPTIONS.len();
-                }
-            }
-            _ => {}
-        }
-        None
-    }
-
-    fn render_composer(&self, frame: &mut Frame, area: Rect) {
-        let Some(phase) = &self.composer else {
-            return;
-        };
-
-        let popup_w = area.width.clamp(54, 74);
-        let popup_h = match phase {
-            ComposerPhase::PickKind { .. } => 12u16,
-            ComposerPhase::AccountSet => 21u16,
-            ComposerPhase::Payment { is_iou, .. } => {
-                if *is_iou {
-                    20u16
-                } else {
-                    16u16
-                }
-            }
-        }
-        .min(area.height.saturating_sub(2))
-        .max(8);
-
-        let x = area.x + (area.width.saturating_sub(popup_w)) / 2;
-        let y = area.y + (area.height.saturating_sub(popup_h)) / 2;
-        let popup = Rect::new(x, y, popup_w, popup_h);
-
-        frame.render_widget(Clear, popup);
-        let inner_title = match phase {
-            ComposerPhase::PickKind { .. } => "Transaction type",
-            ComposerPhase::AccountSet => "AccountSet",
-            ComposerPhase::Payment { is_iou, .. } => {
-                if *is_iou {
-                    "Payment (IOU)"
-                } else {
-                    "Payment (XRP)"
-                }
-            }
-        };
-        let block = theme::panel_block(inner_title, true);
-        let inner = block.inner(popup);
-        frame.render_widget(block, popup);
-
-        let label = theme::dim_style();
-        let value = theme::accent_style();
-        let hi = Style::new().add_modifier(Modifier::BOLD | Modifier::UNDERLINED);
-
-        let body = match phase {
-            ComposerPhase::PickKind { selected } => {
-                let hi0 = if *selected == 0 { hi } else { label };
-                let hi1 = if *selected == 1 { hi } else { label };
-                Paragraph::new(vec![
-                    Line::from(""),
-                    Line::from(vec![
-                        Span::raw(if *selected == 0 { "⟩ " } else { "  " }),
-                        Span::styled(
-                            "AccountSet — SetFlag / ClearFlag, domain, TickSize, TransferRate",
-                            hi0,
-                        ),
-                    ]),
-                    Line::from(vec![
-                        Span::raw(if *selected == 1 { "⟩ " } else { "  " }),
-                        Span::styled("Payment — XRP to classic `r…` or X-address", hi1),
-                    ]),
-                    Line::from(""),
-                    Line::from(Span::styled(
-                        "j/k · ↑/↓ · Tab · Enter open · Esc close",
-                        theme::secondary_style(),
-                    )),
-                ])
-            }
-            ComposerPhase::AccountSet => {
-                let net_note = if self.network.is_mainnet() && !self.skip_mainnet_prompt {
-                    " · mainnet writes need --yes"
-                } else {
-                    ""
-                };
-                Paragraph::new(vec![
-                    Line::from(vec![
-                        Span::styled(
-                            format!("SetFlag [{}]", if self.field_row == 0 { "*" } else { " " }),
-                            if self.field_row == 0 { hi } else { label },
-                        ),
-                        Span::styled(Self::label_for_flag(self.set_flag_ix), value),
-                        Span::raw("  , ."),
-                    ]),
-                    Line::from(vec![
-                        Span::styled(
-                            format!(
-                                "ClearFlag [{}]",
-                                if self.field_row == 1 { "*" } else { " " }
-                            ),
-                            if self.field_row == 1 { hi } else { label },
-                        ),
-                        Span::styled(Self::label_for_flag(self.clear_flag_ix), value),
-                        Span::raw("  , ."),
-                    ]),
-                    Line::from(vec![
-                        Span::styled(
-                            format!(
-                                "Domain(ascii) [{}]",
-                                if self.field_row == 2 { "*" } else { " " }
-                            ),
-                            if self.field_row == 2 { hi } else { label },
-                        ),
-                        Span::styled(self.domain.clone(), value),
-                    ]),
-                    Line::from(vec![
-                        Span::styled(
-                            format!("TickSize [{}]", if self.field_row == 3 { "*" } else { " " }),
-                            if self.field_row == 3 { hi } else { label },
-                        ),
-                        Span::styled(self.tick_size.clone(), value),
-                        Span::raw("  0 or 3–15, empty=skip"),
-                    ]),
-                    Line::from(vec![
-                        Span::styled(
-                            format!(
-                                "TransferRate [{}]",
-                                if self.field_row == 4 { "*" } else { " " }
-                            ),
-                            if self.field_row == 4 { hi } else { label },
-                        ),
-                        Span::styled(self.transfer_rate.clone(), value),
-                        Span::raw("  empty=skip"),
-                    ]),
-                    Line::from(""),
-                    Line::from(Span::styled(
-                        format!("[ ] Tab row · e edit · s send · ^S send · Esc ← picker{net_note}"),
-                        theme::secondary_style(),
-                    )),
-                ])
-            }
-            ComposerPhase::Payment {
-                row,
-                destination,
-                amount,
-                iou_currency,
-                iou_issuer,
-                is_iou,
-            } => {
-                let net_note = if self.network.is_mainnet() && !self.skip_mainnet_prompt {
-                    " · mainnet sends need --yes"
-                } else {
-                    ""
-                };
-                let (preview_text, preview_st) =
-                    Self::payment_preview(destination, amount, iou_currency, iou_issuer, *is_iou);
-
-                let value_st = theme::accent_style();
-                let labels = theme::dim_style();
-
-                let mut lines: Vec<Line> = vec![Line::from(vec![
-                    Span::styled(
-                        format!("Destination   [{}]", if *row == 0 { "*" } else { " " }),
-                        if *row == 0 { hi } else { labels },
-                    ),
-                    Span::styled(destination.clone(), value_st),
-                ])];
-
-                if *is_iou {
-                    lines.push(Line::from(vec![
-                        Span::styled(
-                            format!("Currency (3c) [{}]", if *row == 1 { "*" } else { " " }),
-                            if *row == 1 { hi } else { labels },
-                        ),
-                        Span::styled(iou_currency.clone(), value_st),
-                    ]));
-                    lines.push(Line::from(vec![
-                        Span::styled(
-                            format!("Issuer (r…)   [{}]", if *row == 2 { "*" } else { " " }),
-                            if *row == 2 { hi } else { labels },
-                        ),
-                        Span::styled(iou_issuer.clone(), value_st),
-                    ]));
-                    lines.push(Line::from(vec![
-                        Span::styled(
-                            format!("Amount        [{}]", if *row == 3 { "*" } else { " " }),
-                            if *row == 3 { hi } else { labels },
-                        ),
-                        Span::styled(amount.clone(), value_st),
-                    ]));
-                } else {
-                    lines.push(Line::from(vec![
-                        Span::styled(
-                            format!("Amount XRP    [{}]", if *row == 1 { "*" } else { " " }),
-                            if *row == 1 { hi } else { labels },
-                        ),
-                        Span::styled(amount.clone(), value_st),
-                    ]));
-                }
-
-                lines.push(Line::from(""));
-                lines.push(Line::from(Span::styled(preview_text, preview_st)));
-                lines.push(Line::from(Span::styled(
-                    format!(
-                        "[ ] Tab rows · Enter edit · i toggle XRP/IOU · e type · s send · Esc back{net_note}",
-                    ),
-                    theme::secondary_style(),
-                )));
-                Paragraph::new(lines)
-            }
-        };
-        frame.render_widget(body, inner);
-    }
-
-    fn render_keygen_popup(&self, frame: &mut Frame, area: Rect) {
-        let Some(ref result) = self.keygen_result else {
-            return;
-        };
-
-        let popup_w = 60u16;
-        let popup_h = 11u16;
-        let x = area.x + (area.width.saturating_sub(popup_w)) / 2;
-        let y = area.y + (area.height.saturating_sub(popup_h)) / 2;
-        let popup = Rect::new(x, y, popup_w, popup_h);
-
-        frame.render_widget(Clear, popup);
-        let block = theme::panel_block("New Key (wallet_propose)", true);
-        let inner = block.inner(popup);
-        frame.render_widget(block, popup);
-
-        let label = theme::dim_style();
-        let value = theme::accent_style();
-        let warn = theme::warning_style();
-
-        let body = Paragraph::new(vec![
-            Line::from(vec![
-                Span::styled("Seed:   ", label),
-                Span::styled(result.master_seed.clone(), warn),
-            ]),
-            Line::from(vec![
-                Span::styled("Addr:   ", label),
-                Span::styled(result.account_id.clone(), value),
-            ]),
-            Line::from(vec![
-                Span::styled("PubKey: ", label),
-                Span::styled(result.public_key.clone(), theme::secondary_style()),
-            ]),
-            Line::from(vec![
-                Span::styled("Type:   ", label),
-                Span::raw(format!(
-                    "{}  Seed hex: {}",
-                    result.key_type, result.master_seed_hex
-                )),
-            ]),
-            Line::from(""),
-            Line::from(Span::styled(
-                "⚠ Save the seed offline!  Set XRPL_SEED=<seed>",
-                warn.add_modifier(Modifier::BOLD),
-            )),
-            Line::from(Span::styled(
-                "   to activate · Esc / g to dismiss",
-                theme::secondary_style(),
-            )),
-        ]);
-        frame.render_widget(body, inner);
     }
 }
 
@@ -871,14 +249,14 @@ impl Component for WalletPanel {
             });
         }
 
-        // 'i' toggles between XRP and IOU payment mode
+        // 'i' toggles between XRP and IOU payment mode (disabled while typing)
         if let Some(ComposerPhase::Payment {
             ref mut is_iou,
             ref mut iou_currency,
             ref mut iou_issuer,
-            row: _,
             ..
         }) = self.composer
+            && !self.is_form_editing
             && matches!(key.code, KeyCode::Char('i') | KeyCode::Char('I'))
             && !key.modifiers.contains(KeyModifiers::CONTROL)
         {
@@ -939,6 +317,12 @@ impl Component for WalletPanel {
                 self.set_submit_flash(SubmitFlash::Error(m.to_string()));
                 return Ok(None);
             }
+            // XRP mode must not leak leftover IOU fields into PaymentSubmitParams.
+            let (cur, iss) = if iou {
+                (cur, iss)
+            } else {
+                (String::new(), String::new())
+            };
             return Ok(Some(self.queue_submit_payment(d, a, cur, iss)));
         }
 
@@ -1174,11 +558,58 @@ impl Component for WalletPanel {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    fn key(c: char) -> KeyEvent {
+        KeyEvent::new(KeyCode::Char(c), KeyModifiers::empty())
+    }
 
     #[test]
-    fn payment_validate_rejects_invalid_iou_currency() {
-        assert!(WalletPanel::payment_validate("rTest", "1", true, "US", "rIssuer").is_err());
-        assert!(WalletPanel::payment_validate("rTest", "1", true, "USD", "rIssuer123").is_ok());
+    #[allow(clippy::type_complexity)]
+    fn payment_validate_table() {
+        let cases: &[(&str, &str, bool, &str, &str, Result<(), &str>)] = &[
+            ("", "1", false, "", "", Err("destination required")),
+            ("rDest", "", false, "", "", Err("amount required")),
+            (
+                "rDest",
+                "abc",
+                false,
+                "",
+                "",
+                Err("amount must be a number"),
+            ),
+            ("rDest", "0", false, "", "", Err("amount must be > 0")),
+            ("rDest", "-1", false, "", "", Err("amount must be > 0")),
+            ("rDest", "1", false, "", "", Ok(())),
+            (
+                "rDest",
+                "1",
+                true,
+                "US",
+                "rIssuer",
+                Err("IOU currency must be 3 characters"),
+            ),
+            ("rDest", "1", true, "USD", "", Err("IOU issuer required")),
+            (
+                "rDest",
+                "1",
+                true,
+                "USD",
+                "notClassic",
+                Err("issuer must start with 'r'"),
+            ),
+            ("rDest", "1", true, "USD", "rIssuer123", Ok(())),
+            ("  rDest  ", " 1.5 ", true, " usd ", " rIssuer ", Ok(())),
+            ("rDest", "NaN", false, "", "", Err("amount must be > 0")),
+            ("rDest", "inf", false, "", "", Err("amount must be > 0")),
+        ];
+        for (dest, amt, is_iou, cur, iss, expected) in cases {
+            assert_eq!(
+                WalletPanel::payment_validate(dest, amt, *is_iou, cur, iss),
+                *expected,
+                "dest={dest:?} amt={amt:?} iou={is_iou} cur={cur:?} iss={iss:?}"
+            );
+        }
     }
 
     #[test]
@@ -1186,12 +617,161 @@ mod tests {
         let mut panel = WalletPanel::new(false);
         panel.open_payment_composer();
         match &panel.composer {
-            Some(ComposerPhase::Payment { amount, is_iou, .. }) => {
+            Some(ComposerPhase::Payment {
+                amount,
+                is_iou,
+                destination,
+                iou_currency,
+                iou_issuer,
+                row,
+            }) => {
                 assert_eq!(amount, "1");
                 assert!(!is_iou);
+                assert!(destination.is_empty());
+                assert!(iou_currency.is_empty());
+                assert!(iou_issuer.is_empty());
+                assert_eq!(*row, 0);
             }
             _ => panic!("expected payment composer"),
         }
+    }
+
+    #[test]
+    fn payment_i_toggles_iou_and_clears_fields_on_xrp() {
+        let mut panel = WalletPanel::new(false);
+        panel.is_focused = true;
+        panel.open_payment_composer();
+        panel.handle_key_event(key('i')).expect("toggle to iou");
+        match &panel.composer {
+            Some(ComposerPhase::Payment { is_iou, .. }) => assert!(*is_iou),
+            _ => panic!("expected payment composer"),
+        }
+        // Seed IOU fields then toggle back to XRP — fields must clear.
+        if let Some(ComposerPhase::Payment {
+            iou_currency,
+            iou_issuer,
+            ..
+        }) = &mut panel.composer
+        {
+            *iou_currency = "usd".into();
+            *iou_issuer = "rIssuer".into();
+        }
+        panel.handle_key_event(key('i')).expect("toggle to xrp");
+        match &panel.composer {
+            Some(ComposerPhase::Payment {
+                is_iou,
+                iou_currency,
+                iou_issuer,
+                ..
+            }) => {
+                assert!(!is_iou);
+                assert!(iou_currency.is_empty());
+                assert!(iou_issuer.is_empty());
+            }
+            _ => panic!("expected payment composer"),
+        }
+    }
+
+    #[test]
+    fn payment_i_while_editing_types_into_destination() {
+        let mut panel = WalletPanel::new(false);
+        panel.is_focused = true;
+        panel.open_payment_composer();
+        panel.is_form_editing = true;
+        panel
+            .handle_key_event(key('i'))
+            .expect("type i while editing");
+        match &panel.composer {
+            Some(ComposerPhase::Payment {
+                is_iou,
+                destination,
+                ..
+            }) => {
+                assert!(!is_iou, "must not toggle while editing");
+                assert_eq!(destination, "i");
+            }
+            _ => panic!("expected payment composer"),
+        }
+    }
+
+    #[test]
+    fn queue_submit_payment_uppercases_currency_and_omits_empty() {
+        let panel = WalletPanel::new(true);
+        match panel.queue_submit_payment(
+            "rDest".into(),
+            "2.5".into(),
+            "usd".into(),
+            "rIssuer".into(),
+        ) {
+            Action::PaymentSubmit(p) => {
+                assert_eq!(p.destination, "rDest");
+                assert_eq!(p.amount, "2.5");
+                assert_eq!(p.iou_currency.as_deref(), Some("USD"));
+                assert_eq!(p.iou_issuer.as_deref(), Some("rIssuer"));
+                assert!(p.skip_mainnet_prompt);
+            }
+            other => panic!("expected PaymentSubmit, got {other:?}"),
+        }
+        match panel.queue_submit_payment("rDest".into(), "1".into(), String::new(), String::new()) {
+            Action::PaymentSubmit(p) => {
+                assert!(p.iou_currency.is_none());
+                assert!(p.iou_issuer.is_none());
+            }
+            other => panic!("expected PaymentSubmit, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn payment_submit_key_queues_action_and_xrp_mode_drops_iou_fields() {
+        let mut panel = WalletPanel::new(false);
+        panel.is_focused = true;
+        panel.open_payment_composer();
+        if let Some(ComposerPhase::Payment {
+            destination,
+            amount,
+            iou_currency,
+            iou_issuer,
+            is_iou,
+            ..
+        }) = &mut panel.composer
+        {
+            *destination = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh".into();
+            *amount = "1.25".into();
+            // Leftover IOU fields must be ignored while is_iou=false.
+            *iou_currency = "usd".into();
+            *iou_issuer = "rIssuer".into();
+            *is_iou = false;
+        }
+        let action = panel
+            .handle_key_event(key('s'))
+            .expect("submit")
+            .expect("PaymentSubmit action");
+        match action {
+            Action::PaymentSubmit(p) => {
+                assert_eq!(p.destination, "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh");
+                assert_eq!(p.amount, "1.25");
+                assert!(p.iou_currency.is_none());
+                assert!(p.iou_issuer.is_none());
+            }
+            other => panic!("expected PaymentSubmit, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn payment_preview_xrp_and_iou_ready_messages() {
+        let (xrp, _) = WalletPanel::payment_preview("rDestAddressLongEnough", "1.5", "", "", false);
+        assert!(xrp.contains("Send 1.5 XRP"), "{xrp}");
+        assert!(xrp.contains('→'), "{xrp}");
+
+        let (iou, _) = WalletPanel::payment_preview(
+            "rDestAddressLongEnough",
+            "10",
+            "USD",
+            "rIssuerAddressLong",
+            true,
+        );
+        assert!(iou.contains("Pay 10 USD"), "{iou}");
+        assert!(iou.contains("issued by"), "{iou}");
     }
 
     #[test]

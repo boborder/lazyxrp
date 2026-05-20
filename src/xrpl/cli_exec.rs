@@ -11,6 +11,7 @@ pub async fn execute_cli_command(
     rpc_url: &str,
     network: &Network,
     signing_seed: Option<String>,
+    yes: bool,
 ) -> color_eyre::Result<()> {
     let rpc = RpcClient::connect(rpc_url)?;
     match cmd {
@@ -113,6 +114,8 @@ pub async fn execute_cli_command(
             destination,
             amount,
         } => {
+            use super::address::{ensure_xaddress_matches_network, resolve_payment_destination};
+
             let signing_config = SigningConfig::prime_seed_source(signing_seed.clone());
             let Some(seed) = signing_config.seed.as_ref() else {
                 return Err(color_eyre::eyre::eyre!(
@@ -123,13 +126,21 @@ pub async fn execute_cli_command(
                 .map_err(|e| color_eyre::eyre::eyre!(e))?;
             let account = wallet.classic_address.clone();
 
+            let resolved = resolve_payment_destination(destination.trim())?;
+            ensure_xaddress_matches_network(&resolved, network)?;
+            let destination_classic = resolved.classic;
+            let destination_tag = resolved.destination_tag;
+
             let account_info = rpc.account_info(&account).await?;
             let balance_xrp_str = account_info.balance_xrp;
             let balance_drops = xrp_to_drops(&balance_xrp_str).unwrap_or(0);
             let sequence = account_info.sequence;
 
             println!("From: {}", account);
-            println!("To: {}", destination);
+            println!("To: {}", destination_classic);
+            if let Some(tag) = destination_tag {
+                println!("Destination Tag: {}", tag);
+            }
             println!("Amount: {} XRP", amount);
             println!("Current Balance: {} XRP", balance_xrp_str);
             println!("Account Sequence: {}", sequence);
@@ -149,9 +160,9 @@ pub async fn execute_cli_command(
             let last_ledger_sequence = server_info.ledger_index + 20;
 
             if !prompt_mainnet_confirmation(
-                &format!("Send {} XRP to {}", amount, destination),
+                &format!("Send {} XRP to {}", amount, destination_classic),
                 network,
-                false,
+                yes,
             ) {
                 println!("Transaction cancelled by user.");
                 return Ok(());
@@ -160,10 +171,11 @@ pub async fn execute_cli_command(
             match signing::create_and_sign_payment(
                 seed,
                 &account,
-                &destination,
+                &destination_classic,
                 &amount,
                 None, // iou_currency: XRP-only
                 None, // iou_issuer: XRP-only
+                destination_tag,
                 sequence,
                 fee_drops,
                 last_ledger_sequence,
@@ -217,7 +229,7 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(250)).await;
             tokio::time::timeout(
                 Duration::from_secs(90),
-                execute_cli_command(cmd, RPC, &Network::Mainnet, None),
+                execute_cli_command(cmd, RPC, &Network::Mainnet, None, false),
             )
             .await
             .map_err(|_| color_eyre::eyre::eyre!("XRPL integration test timed out"))?
@@ -313,6 +325,7 @@ mod tests {
                 RPC,
                 &Network::Mainnet,
                 None,
+                false,
             )
             .await;
             assert!(r.is_err());

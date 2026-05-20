@@ -3,12 +3,8 @@ use std::collections::VecDeque;
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
-    style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{
-        BarChart, Block, BorderType, Cell, Clear, Paragraph, Row, Scrollbar, ScrollbarOrientation,
-        ScrollbarState, Table, Wrap,
-    },
+    widgets::{BarChart, Block, Cell, Paragraph, Row, Table},
 };
 
 use crate::{
@@ -17,328 +13,28 @@ use crate::{
         Component,
         shared::{
             fmt,
-            selectable_table::SelectableTableState,
+            selectable_table::{SelectableTableState, render_selectable_table},
             theme,
-            widgets::{centered_popup_rect, render_loading, titled_block, titled_block_with_count},
+            widgets::{render_loading, titled_block, titled_block_with_count},
         },
     },
-    xrpl::{DunlSummary, DunlValidatorRow, ServerInfoSummary, XrplTomlData},
+    xrpl::{DunlSummary, ServerInfoSummary},
 };
 
 const FEE_HISTORY_LEN: usize = 40;
 const METRICS_LINES: u16 = 4;
 const DUNL_FOOTER_LINES: u16 = 1;
 
-#[derive(Default)]
-struct ValidatorDetail {
-    visible: bool,
-    scroll: usize,
-    lines: Vec<Line<'static>>,
-    toml: Option<Result<XrplTomlData, String>>,
-    toml_raw: Option<String>,
-    status: u16,
-    content_type: Option<String>,
-}
+#[path = "server_detail.rs"]
+mod detail;
+#[path = "server_dunl.rs"]
+mod dunl;
+#[path = "server_metrics.rs"]
+mod metrics;
 
-impl ValidatorDetail {
-    fn open(&mut self, row: &DunlValidatorRow, index: usize, dunl: &DunlSummary) {
-        self.visible = true;
-        self.scroll = 0;
-        self.toml = None;
-        self.toml_raw = None;
-        self.status = 0;
-        self.content_type = None;
-        self.lines = validator_detail_lines(
-            row,
-            index,
-            dunl,
-            &self.toml,
-            self.toml_raw.as_deref(),
-            self.status,
-            self.content_type.as_deref(),
-        );
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn set_toml(
-        &mut self,
-        row: &DunlValidatorRow,
-        index: usize,
-        dunl: &DunlSummary,
-        status: u16,
-        content_type: Option<String>,
-        raw: Option<String>,
-        result: Result<XrplTomlData, String>,
-    ) {
-        self.toml = Some(result);
-        self.toml_raw = raw;
-        self.status = status;
-        self.content_type = content_type;
-        self.lines = validator_detail_lines(
-            row,
-            index,
-            dunl,
-            &self.toml,
-            self.toml_raw.as_deref(),
-            self.status,
-            self.content_type.as_deref(),
-        );
-    }
-
-    fn close(&mut self) {
-        self.visible = false;
-        self.scroll = 0;
-        self.lines.clear();
-        self.toml = None;
-        self.toml_raw = None;
-    }
-}
-
-fn validator_row_label(v: &DunlValidatorRow, max_chars: usize) -> String {
-    if let Some(d) = &v.domain {
-        fmt::truncate_middle(d, max_chars)
-    } else if v.has_manifest {
-        "(no domain)".to_string()
-    } else {
-        fmt::short_hex(&v.validation_public_key, 8, 6)
-    }
-}
-
-fn validator_detail_lines(
-    row: &DunlValidatorRow,
-    index: usize,
-    dunl: &DunlSummary,
-    toml: &Option<Result<XrplTomlData, String>>,
-    raw: Option<&str>,
-    status: u16,
-    content_type: Option<&str>,
-) -> Vec<Line<'static>> {
-    let label = theme::dim_style();
-    let value = theme::accent_style();
-    let ok = theme::success_style();
-    let warn = theme::warning_style();
-
-    let mut lines = vec![
-        Line::from(vec![Span::styled(
-            format!("Validator #{}", index + 1),
-            theme::accent_style(),
-        )]),
-        Line::from(""),
-    ];
-
-    let push = |lines: &mut Vec<Line<'static>>, key: &str, val: String, style: Style| {
-        lines.push(Line::from(vec![
-            Span::styled(format!("{key:<16}"), label),
-            Span::styled(val, style),
-        ]));
-    };
-
-    push(
-        &mut lines,
-        "Domain",
-        row.domain.clone().unwrap_or_else(|| "—".to_string()),
-        if row.domain.is_some() { ok } else { warn },
-    );
-    push(
-        &mut lines,
-        "Manifest",
-        if row.has_manifest {
-            "present".to_string()
-        } else {
-            "missing".to_string()
-        },
-        if row.has_manifest { ok } else { warn },
-    );
-    push(
-        &mut lines,
-        "Sequence",
-        row.sequence
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| "—".to_string()),
-        value,
-    );
-    push(
-        &mut lines,
-        "Signing key",
-        row.validation_public_key.clone(),
-        theme::secondary_style(),
-    );
-    push(
-        &mut lines,
-        "Master key",
-        row.master_public_key
-            .clone()
-            .unwrap_or_else(|| "—".to_string()),
-        theme::secondary_style(),
-    );
-    if row.master_differs_from_signing() {
-        lines.push(Line::from(Span::styled(
-            "  (master ≠ signing — rotated or dual-key setup)",
-            warn,
-        )));
-    }
-
-    lines.push(Line::from(""));
-    lines.push(Line::from(vec![
-        Span::styled("dUNL list", label),
-        Span::raw(format!(
-            " · seq {} · {} validators · exp {}",
-            dunl.sequence, dunl.validator_count, dunl.expiration_utc
-        )),
-    ]));
-    if let Some(days) = dunl.days_until_expiry() {
-        let style = if days < 14 { warn } else { label };
-        lines.push(Line::from(Span::styled(
-            format!("  expires in {days} day(s)"),
-            style,
-        )));
-    }
-
-    lines.push(Line::from(""));
-    lines.push(Line::from(vec![Span::styled("xrp-ledger.toml", label)]));
-    let status_style = if (200..300).contains(&status) {
-        ok
-    } else if status >= 400 {
-        theme::error_style()
-    } else {
-        warn
-    };
-    lines.push(Line::from(vec![
-        Span::styled("  HTTP status:", label),
-        Span::styled(
-            if status > 0 {
-                status.to_string()
-            } else {
-                "—".to_string()
-            },
-            status_style,
-        ),
-    ]));
-    if let Some(ct) = content_type {
-        lines.push(Line::from(vec![
-            Span::styled("  Content-Type:", label),
-            Span::styled(ct.to_string(), value),
-        ]));
-    }
-    match toml {
-        None => {
-            lines.push(Line::from(Span::styled(
-                "  fetching...",
-                theme::dim_style(),
-            )));
-        }
-        Some(Ok(data)) => {
-            let verified_style = if data.validator_found { ok } else { warn };
-            lines.push(Line::from(vec![
-                Span::styled("  Domain verified:", label),
-                Span::styled(
-                    if data.validator_found { "Yes" } else { "No" },
-                    verified_style,
-                ),
-            ]));
-            lines.push(Line::from(vec![
-                Span::styled("  Validators listed:", label),
-                Span::styled(data.validator_count.to_string(), value),
-            ]));
-            if let Some(att) = &data.attestation {
-                lines.push(Line::from(vec![
-                    Span::styled("  Attestation:", label),
-                    Span::styled(att.clone(), theme::secondary_style()),
-                ]));
-            }
-        }
-        Some(Err(e)) => {
-            lines.push(Line::from(Span::styled(
-                format!("  Error: {e}"),
-                theme::error_style(),
-            )));
-        }
-    }
-
-    if let Some(raw) = raw {
-        lines.push(Line::from(""));
-        lines.push(Line::from(vec![Span::styled("Raw TOML", label)]));
-        for line_text in raw.lines() {
-            lines.push(Line::from(Span::styled(
-                line_text.to_string(),
-                theme::dim_style(),
-            )));
-        }
-    }
-
-    lines
-}
-
-fn render_validator_detail(frame: &mut Frame, area: Rect, state: &mut ValidatorDetail) {
-    if !state.visible {
-        return;
-    }
-
-    let height = (state.lines.len() as u16 + 2).clamp(14, 24);
-    let popup = centered_popup_rect(area, 44, height);
-
-    frame.render_widget(Clear, popup);
-
-    let title = state
-        .lines
-        .first()
-        .and_then(|l| l.spans.first())
-        .map(|s| s.content.to_string())
-        .unwrap_or_else(|| "Validator".to_string());
-
-    let block = Block::bordered()
-        .border_type(BorderType::Rounded)
-        .border_style(Style::new().fg(theme::ACCENT))
-        .title_style(Style::new().fg(theme::TITLE).add_modifier(Modifier::BOLD))
-        .title(format!(" {title} "));
-    let inner = block.inner(popup);
-    frame.render_widget(block, popup);
-
-    let line_count = state.lines.len();
-    let paragraph = Paragraph::new(state.lines.clone())
-        .wrap(Wrap { trim: true })
-        .scroll((state.scroll as u16, 0));
-
-    let [content_area, sb_area] =
-        Layout::horizontal([Constraint::Fill(1), Constraint::Length(1)]).areas(inner);
-
-    frame.render_widget(paragraph, content_area);
-
-    let content_height = content_area.height as usize;
-    let max_scroll = line_count.saturating_sub(content_height);
-    let mut sb_state = ScrollbarState::new(max_scroll).position(state.scroll);
-    frame.render_stateful_widget(
-        Scrollbar::new(ScrollbarOrientation::VerticalRight)
-            .style(theme::dim_style())
-            .thumb_style(theme::secondary_style()),
-        sb_area,
-        &mut sb_state,
-    );
-}
-
-fn dunl_expiry_tag(dunl: &DunlSummary) -> String {
-    dunl.days_until_expiry()
-        .map(|d| {
-            if d < 0 {
-                "expired".to_string()
-            } else if d < 14 {
-                format!("{d}d left!")
-            } else {
-                format!("{d}d left")
-            }
-        })
-        .unwrap_or_default()
-}
-
-fn quorum_match_tag(quorum: Option<u32>, dunl_count: u32) -> Option<&'static str> {
-    quorum.map(|q| {
-        if q == dunl_count {
-            "matches dUNL"
-        } else {
-            "≠ dUNL size"
-        }
-    })
-}
+use detail::{ValidatorDetail, render_validator_detail};
+use dunl::validator_row_label;
+use metrics::{dunl_expiry_tag, quorum_match_tag};
 
 #[derive(Default)]
 pub struct ServerPanel {
@@ -393,6 +89,31 @@ impl Component for ServerPanel {
                     return Ok(None);
                 }
                 Action::Quit => return Ok(None),
+                Action::XrplTomlFetched {
+                    status,
+                    content_type,
+                    raw,
+                    result,
+                    ..
+                } => {
+                    if let Some(idx) = self.dunl_table.selected()
+                        && let (Some(d), Some(row)) = (
+                            self.dunl.as_ref(),
+                            self.dunl.as_ref().and_then(|d| d.validators.get(idx)),
+                        )
+                    {
+                        self.detail.set_toml(
+                            row,
+                            idx,
+                            d,
+                            *status,
+                            content_type.clone(),
+                            raw.clone(),
+                            result.clone(),
+                        );
+                    }
+                    return Ok(None);
+                }
                 _ => return Ok(None),
             }
         }
@@ -712,21 +433,14 @@ impl Component for ServerPanel {
                 .header(
                     Row::new(vec!["#", "Domain / key", "Seq", "M", "Signing"])
                         .style(theme::header_row_style()),
-                )
-                .row_highlight_style(theme::selected_row_style(self.is_focused))
-                .highlight_symbol("▶ ");
+                );
 
-                let [tbl_area, sb_area] =
-                    Layout::horizontal([Constraint::Fill(1), Constraint::Length(1)])
-                        .areas(table_area);
-
-                frame.render_stateful_widget(table, tbl_area, self.dunl_table.table_mut());
-                frame.render_stateful_widget(
-                    Scrollbar::new(ScrollbarOrientation::VerticalRight)
-                        .style(theme::dim_style())
-                        .thumb_style(theme::accent_style()),
-                    sb_area,
-                    self.dunl_table.scroll_mut(),
+                render_selectable_table(
+                    frame,
+                    table_area,
+                    table,
+                    &mut self.dunl_table,
+                    self.is_focused,
                 );
             }
         }
