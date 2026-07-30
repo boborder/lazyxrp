@@ -115,7 +115,7 @@ pub enum Action {
     OfferCreateSubmit(OfferCreateSubmitParams),
     OfferCreateSubmitOk(String),
     OfferCreateSubmitErr(String),
-    /// Request key generation via wallet_propose.
+    /// Request local key generation (Wallet tab, `g`).
     WalletPropose,
     WalletProposeOk(WalletProposeResult),
     WalletProposeErr(String),

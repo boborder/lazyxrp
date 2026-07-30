@@ -15,8 +15,44 @@ use secrecy::{ExposeSecret, SecretString};
 use serde_json::Value;
 
 use crate::network::Network;
+use crate::xrpl::WalletProposeResult;
 
 pub const SEED_ENV: &str = "XRPL_SEED";
+
+/// Generate a new key pair locally (no `wallet_propose` RPC).
+///
+/// Public RPC / Clio endpoints often omit `master_seed` or reject the method;
+/// local generation matches rippled `wallet_propose` semantics for TUI keygen.
+pub fn propose_wallet_local(key_type: &str) -> color_eyre::Result<WalletProposeResult> {
+    use xrpl::constants::CryptoAlgorithm;
+    use xrpl::core::addresscodec::decode_seed;
+    use xrpl::wallet::Wallet;
+
+    let (algo, key_type_label) = match key_type.to_lowercase().as_str() {
+        "ed25519" => (CryptoAlgorithm::ED25519, "ed25519"),
+        "secp256k1" => (CryptoAlgorithm::SECP256K1, "secp256k1"),
+        other => {
+            return Err(color_eyre::eyre::eyre!(
+                "unsupported key_type: {other} (expected ed25519 or secp256k1)"
+            ));
+        }
+    };
+
+    let wallet =
+        Wallet::create(Some(algo)).map_err(|e| color_eyre::eyre::eyre!("keygen: {e:?}"))?;
+    let (entropy, _) = decode_seed(&wallet.seed)
+        .map_err(|e| color_eyre::eyre::eyre!("keygen: decode seed: {e:?}"))?;
+    let master_seed_hex: String = entropy.iter().map(|b| format!("{b:02X}")).collect();
+
+    Ok(WalletProposeResult {
+        master_seed: wallet.seed.clone(),
+        master_seed_hex,
+        account_id: wallet.classic_address.clone(),
+        public_key: wallet.public_key.clone(),
+        public_key_hex: wallet.public_key.clone(),
+        key_type: key_type_label.into(),
+    })
+}
 
 /// Trim whitespace from a family seed (`s...` / `sEd...`); shells and dotenv often add `\n`.
 #[must_use]
@@ -137,6 +173,7 @@ pub fn create_and_sign_payment(
     amount_spec: &str,
     iou_currency: Option<&str>,
     iou_issuer: Option<&str>,
+    destination_tag: Option<u32>,
     sequence: u32,
     fee_drops: u32,
     last_ledger_sequence: u32,
@@ -151,18 +188,24 @@ pub fn create_and_sign_payment(
     let wallet =
         wallet_from_family_seed(seed.expose_secret(), 0).map_err(|e| color_eyre::eyre::eyre!(e))?;
 
-    let amount: Amount = if let (Some(cur), Some(iss)) = (iou_currency, iou_issuer) {
-        // IOU mode: build IssuedCurrencyAmount
-        let ica = xrpl::models::IssuedCurrencyAmount {
-            currency: cur.to_string().into(),
-            issuer: iss.to_string().into(),
-            value: amount_spec.to_string().into(),
-        };
-        Amount::IssuedCurrencyAmount(ica)
-    } else {
-        // XRP mode: convert to drops
-        let amount_drops = crate::xrpl::xrp_to_drops(amount_spec)?;
-        amount_drops.into()
+    let amount: Amount = match (iou_currency, iou_issuer) {
+        (Some(cur), Some(iss)) => {
+            let ica = xrpl::models::IssuedCurrencyAmount {
+                currency: cur.to_string().into(),
+                issuer: iss.to_string().into(),
+                value: amount_spec.to_string().into(),
+            };
+            Amount::IssuedCurrencyAmount(ica)
+        }
+        (None, None) => {
+            let amount_drops = crate::xrpl::xrp_to_drops(amount_spec)?;
+            amount_drops.into()
+        }
+        _ => {
+            return Err(color_eyre::eyre::eyre!(
+                "IOU payment requires both currency and issuer"
+            ));
+        }
     };
 
     let mut payment = Payment {
@@ -173,6 +216,7 @@ pub fn create_and_sign_payment(
             .with_last_ledger_sequence(last_ledger_sequence),
         amount,
         destination: destination.to_string().into(),
+        destination_tag,
         ..Default::default()
     };
 
@@ -189,22 +233,31 @@ pub fn build_payment_tx_json_for_simulate(
     amount_spec: &str,
     iou_currency: Option<&str>,
     iou_issuer: Option<&str>,
+    destination_tag: Option<u32>,
     sequence: u32,
 ) -> color_eyre::Result<Value> {
     use xrpl::models::transactions::payment::Payment;
     use xrpl::models::transactions::{CommonFields, TransactionType};
     use xrpl::models::{Amount, IssuedCurrencyAmount};
 
-    let amount: Amount = if let (Some(cur), Some(iss)) = (iou_currency, iou_issuer) {
-        let ica = IssuedCurrencyAmount {
-            currency: cur.to_string().into(),
-            issuer: iss.to_string().into(),
-            value: amount_spec.to_string().into(),
-        };
-        Amount::IssuedCurrencyAmount(ica)
-    } else {
-        let amount_drops = crate::xrpl::xrp_to_drops(amount_spec)?;
-        amount_drops.into()
+    let amount: Amount = match (iou_currency, iou_issuer) {
+        (Some(cur), Some(iss)) => {
+            let ica = IssuedCurrencyAmount {
+                currency: cur.to_string().into(),
+                issuer: iss.to_string().into(),
+                value: amount_spec.to_string().into(),
+            };
+            Amount::IssuedCurrencyAmount(ica)
+        }
+        (None, None) => {
+            let amount_drops = crate::xrpl::xrp_to_drops(amount_spec)?;
+            amount_drops.into()
+        }
+        _ => {
+            return Err(color_eyre::eyre::eyre!(
+                "IOU payment requires both currency and issuer"
+            ));
+        }
     };
 
     let payment = Payment {
@@ -213,6 +266,7 @@ pub fn build_payment_tx_json_for_simulate(
             .with_sequence(sequence),
         amount,
         destination: destination.to_string().into(),
+        destination_tag,
         ..Default::default()
     };
 
@@ -608,10 +662,50 @@ mod tests {
 
     #[test]
     fn build_payment_tx_json_for_simulate_xrp() {
-        let v = build_payment_tx_json_for_simulate("rSender", "rDest", "1", None, None, 7)
+        let v = build_payment_tx_json_for_simulate("rSender", "rDest", "1", None, None, None, 7)
             .expect("payment json");
         assert_eq!(v["TransactionType"], "Payment");
         assert_eq!(v["Sequence"], 7);
+        assert_eq!(v["Account"], "rSender");
+        assert_eq!(v["Destination"], "rDest");
+        assert_eq!(v["Amount"], "1000000");
+    }
+
+    #[test]
+    fn build_payment_tx_json_for_simulate_iou() {
+        let v = build_payment_tx_json_for_simulate(
+            "rSender",
+            "rDest",
+            "12.5",
+            Some("USD"),
+            Some("rIssuer"),
+            None,
+            9,
+        )
+        .expect("iou payment json");
+        assert_eq!(v["TransactionType"], "Payment");
+        assert_eq!(v["Sequence"], 9);
+        assert_eq!(v["Account"], "rSender");
+        assert_eq!(v["Destination"], "rDest");
+        assert_eq!(v["Amount"]["currency"], "USD");
+        assert_eq!(v["Amount"]["issuer"], "rIssuer");
+        assert_eq!(v["Amount"]["value"], "12.5");
+    }
+
+    #[test]
+    fn build_payment_tx_json_for_simulate_includes_destination_tag() {
+        let v =
+            build_payment_tx_json_for_simulate("rSender", "rDest", "1", None, None, Some(12345), 3)
+                .expect("tagged payment json");
+        assert_eq!(v["DestinationTag"], 12345);
+    }
+
+    #[test]
+    fn build_payment_tx_json_rejects_partial_iou() {
+        let err =
+            build_payment_tx_json_for_simulate("rSender", "rDest", "1", Some("USD"), None, None, 1)
+                .expect_err("partial iou");
+        assert!(format!("{err}").contains("both currency and issuer"));
     }
 
     #[test]
@@ -665,17 +759,26 @@ mod tests {
     }
 
     #[test]
+    fn propose_wallet_local_ed25519() {
+        let r = propose_wallet_local("ed25519").expect("local keygen");
+        assert!(r.master_seed.starts_with("sEd") || r.master_seed.starts_with('s'));
+        assert!(r.account_id.starts_with('r'));
+        assert_eq!(r.key_type, "ed25519");
+        assert_eq!(r.master_seed_hex.len(), 32);
+    }
+
+    #[test]
     fn ed25519_family_seed_wallet_new_ok() {
         let seed = "sEdSkooMk31MeTjbHVE7vLvgCpEMAdB";
         let w = wallet_from_family_seed(seed, 0).expect("ed25519 wallet");
-        assert!(w.classic_address.starts_with('r'));
+        assert_eq!(w.classic_address, "rU3Cw9Vezt3m3E7EonCnfGN1raFdudq4QQ");
     }
 
     #[test]
     fn ed25519_seed_trims_whitespace() {
         let seed = "sEdSkooMk31MeTjbHVE7vLvgCpEMAdB  \n";
         let w = wallet_from_family_seed(seed, 0).expect("trimmed ed25519");
-        assert!(w.classic_address.starts_with('r'));
+        assert_eq!(w.classic_address, "rU3Cw9Vezt3m3E7EonCnfGN1raFdudq4QQ");
     }
 
     #[test]

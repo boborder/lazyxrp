@@ -87,4 +87,4 @@
 
 1. **Module dependency test**: Use `cargo-modules` or similar to assert `components/` never imports `xrpl/client` or `xrpl/poll`.
 2. **Config precedence test**: Assert exact config merge order for each config key (built-in → file → env → CLI).
-3. **Tab-panel consistency test**: Assert `TAB_TITLES.len() == panels.len()` at runtime.
+3. **Tab-panel consistency test**: Covered — `debug_assert_eq!(TAB_TITLES.len(), panels.len())` in `App::new()` + TC-060 (currently 4).

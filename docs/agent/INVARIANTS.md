@@ -45,9 +45,9 @@
 **Confidence**: high.
 
 ### I-9: Tab index matches panel order
-**Rule**: `TAB_TITLES` array and `panels` Vec MUST have same length and index correspondence.
-**Enforcement**: Inline assertion: `TAB_TITLES.len() == panels.len()` checked at construction (implicit — both hardcoded at 5).
-**Confidence**: high (but no runtime assert).
+**Rule**: `TAB_TITLES` array and `panels` Vec MUST have same length and index correspondence (currently 4).
+**Enforcement**: `app.rs` — `debug_assert_eq!(TAB_TITLES.len(), panels.len(), ...)` at construction; unit test asserts equality.
+**Confidence**: high.
 
 ### I-10: ArcValue sharing prevents deep clones
 **Rule**: `TxRow.tx_json` and `TxRow.meta_json` use `ArcValue` to share JSON across components. Components MUST NOT mutate shared JSON.
@@ -71,13 +71,13 @@
 | I-6 | `poll.rs:run_poll_loop()` | `.max(MIN_POLL_INTERVAL)` |
 | I-7 | `poll.rs:poll_batch()` | `is_not_found_error()` guard |
 | I-8 | `tui.rs:Drop` | Error-caught exit |
-| I-9 | `app.rs` | Implicit (hardcoded) |
+| I-9 | `app.rs` | `debug_assert_eq!` + unit test (currently 4) |
 | I-10 | `types.rs:ArcValue` | Arc immutability convention |
 | I-11 | `poll.rs` | `tokio::time::timeout` |
 
 ## Unenforced Assumptions
 
-- **UA-1** (medium risk): No runtime assertion that `TAB_TITLES.len() == panels.len()`. A future change adding a panel without updating titles would cause index mismatch.
+- **UA-1** (resolved): Tab/panel length is asserted in `app.rs` (`debug_assert_eq!`) and covered by a unit test. Keep both `TAB_TITLES` and `panels` updates in the same change.
 - **UA-2** (medium risk): `ArcValue` sharing relies on convention — nothing prevents a component from calling `Arc::make_mut` and mutating shared JSON.
 - **UA-3** (low risk): `CancellationToken` cancellation is fire-and-forget. No guarantee that WS/poll tasks observe cancellation before `Tui::exit()`.
 - **UA-4** (low risk): `Action` channel is `unbounded`. If the consumer (`App::process_actions`) blocks or lags, memory grows without bound.

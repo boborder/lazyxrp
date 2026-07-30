@@ -235,10 +235,12 @@ mod tests {
     #[test]
     fn format_value_long_object_truncated() {
         let v = json!({"a":"x".repeat(100)});
+        let full = v.to_string();
+        assert!(full.len() > 80, "fixture must exceed truncate threshold");
         let result = format_value("Foo", &v);
         assert!(result.ends_with('…'));
-        // "…" is 3 bytes in UTF-8, so total byte length is 83
-        assert_eq!(result.len(), 83);
+        assert_eq!(&result.as_bytes()[..80], &full.as_bytes()[..80]);
+        assert_eq!(result.len(), 80 + '…'.len_utf8());
     }
 
     #[test]

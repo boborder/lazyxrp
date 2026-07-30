@@ -179,6 +179,8 @@ impl App {
                 Some(secrecy::SecretString::from(trimmed_seed.to_string()))
             };
         }
+        // Keep wallet UI / config network aligned with the resolved CLI/env network.
+        config.xrpl.network = network;
         let watch_account = account.unwrap_or_else(|| config.xrpl.account.clone());
         let panels: Vec<Box<dyn Component>> = vec![
             Box::new(OverviewTab::new(rpc_server.clone())),
@@ -430,13 +432,23 @@ impl App {
             if action != Action::Tick && action != Action::Render {
                 debug!("{action:?}");
             }
-            if action != Action::Render {
-                self.needs_draw = true;
-            }
+            // Dirty policy (ratatui plan Phase 3):
+            // keys/resize/data/UI => always; Tick => splash only here;
+            // FPS label refresh marks dirty after fps.note_action; Render never marks.
             match &action {
+                Action::Render => {}
                 Action::Tick => {
                     self.last_tick_key_events.drain(..);
+                    if !self.startup_done {
+                        self.needs_draw = true;
+                    }
                 }
+                _ => {
+                    self.needs_draw = true;
+                }
+            }
+            match &action {
+                Action::Tick => {}
                 Action::Quit => self.should_quit = true,
                 Action::Suspend => self.should_suspend = true,
                 Action::Resume => self.should_suspend = false,
@@ -454,6 +466,8 @@ impl App {
                     if let Some(tui) = tui.as_deref_mut() {
                         self.render(tui)?;
                         self.needs_draw = false;
+                        // Count actual draws for the FPS label (not raw Render events).
+                        let _ = self.fps.note_action(&Action::Render);
                     }
                 }
                 Action::Render => {}
@@ -610,8 +624,9 @@ impl App {
             if let Some(a) = self.status_bar.update(&action)? {
                 self.action_tx.send(a)?;
             }
-            if let Some(a) = self.fps.update(&action)? {
-                self.action_tx.send(a)?;
+            // FPS tick-rate label: dirty at most once/sec when the text changes.
+            if matches!(action, Action::Tick) && self.fps.note_action(&action) {
+                self.needs_draw = true;
             }
             if !self.startup_done {
                 self.splash.update(&action)?;
@@ -623,6 +638,7 @@ impl App {
     fn on_resize(&mut self, tui: &mut Tui, w: u16, h: u16) -> color_eyre::Result<()> {
         tui.resize(Rect::new(0, 0, w, h))?;
         self.render(tui)?;
+        let _ = self.fps.note_action(&Action::Render);
         Ok(())
     }
 
@@ -748,11 +764,16 @@ mod tests {
         )
     }
 
-    /// TC-060
+    /// TC-060: App constructs with one panel per tab (I-9)
     #[test]
-    fn watch_app_new_does_not_panic() -> color_eyre::Result<()> {
+    fn watch_app_new_builds_four_tabs() -> color_eyre::Result<()> {
         let app = test_app()?;
-        assert_eq!(app.panels.len(), TAB_TITLES.len());
+        assert_eq!(TAB_TITLES.len(), 4, "product currently ships 4 tabs");
+        assert_eq!(app.panels.len(), 4);
+        assert_eq!(app.active_tab, 0);
+        assert_eq!(app.watch_account, "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh");
+        assert!(!app.should_quit);
+        assert!(!app.show_help);
         Ok(())
     }
 
@@ -798,9 +819,9 @@ mod tests {
         Ok(())
     }
 
-    /// TC-064
+    /// TC-064: TabNext / TabPrev wrap around all panels
     #[tokio::test]
-    async fn tab_next_cycles_all_panels() -> color_eyre::Result<()> {
+    async fn tab_next_and_prev_cycle_all_panels() -> color_eyre::Result<()> {
         let mut app = test_app()?;
         assert_eq!(app.active_tab, 0);
         for i in 1..=TAB_TITLES.len() {
@@ -808,6 +829,13 @@ mod tests {
             app.process_actions(None)?;
             assert_eq!(app.active_tab, i % TAB_TITLES.len());
         }
+        assert_eq!(app.active_tab, 0);
+        app.action_tx.send(Action::TabPrev)?;
+        app.process_actions(None)?;
+        assert_eq!(app.active_tab, TAB_TITLES.len() - 1);
+        app.action_tx.send(Action::TabPrev)?;
+        app.process_actions(None)?;
+        assert_eq!(app.active_tab, TAB_TITLES.len() - 2);
         Ok(())
     }
 

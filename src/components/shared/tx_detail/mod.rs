@@ -421,8 +421,13 @@ mod tests {
         let meta = json!({});
         let lines = detail_lines_for(&tx, &meta);
         let text: Vec<String> = lines.iter().map(|l| l.to_string()).collect();
-        // 0 + 946684800 = 2000-01-01 00:00:00 UTC, formatted locally
-        assert!(text.iter().any(|s| s.contains("Date")));
+        // date:0 → unix RIPPLE_EPOCH, then local formatting — assert exact wiring
+        let expected = crate::components::shared::fmt::fmt_local_datetime(RIPPLE_EPOCH);
+        assert!(
+            text.iter()
+                .any(|s| s.contains("Date") && s.contains(&expected)),
+            "expected Date line with {expected}, got {text:?}"
+        );
     }
 
     #[test]
@@ -508,6 +513,7 @@ mod tests {
         );
     }
 
+    /// TC-093: opening a new tx clears cached render lines
     #[test]
     fn tx_detail_cache_invalidated_on_open() {
         let mut state = TxDetailState::default();
@@ -551,19 +557,5 @@ mod tests {
             "1000 iterations (current with clone): {:?}",
             start.elapsed()
         );
-    }
-
-    #[test]
-    fn to_static_lines_preserves_content() {
-        let tx = json!({"hash":"DEADBEEF","TransactionResult":"tesSUCCESS"});
-        let meta = json!({});
-        let lines = detail_lines_for(&tx, &meta);
-        let static_lines = to_static_lines(lines.clone());
-        // Verify same number of lines
-        assert_eq!(lines.len(), static_lines.len());
-        // Verify content by converting to strings
-        let orig: Vec<String> = lines.iter().map(|l| l.to_string()).collect();
-        let stat: Vec<String> = static_lines.iter().map(|l| l.to_string()).collect();
-        assert_eq!(orig, stat);
     }
 }

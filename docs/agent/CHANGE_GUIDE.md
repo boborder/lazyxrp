@@ -83,7 +83,19 @@
 - **Never** mutate `ArcValue` — treat as read-only
 - **Never** sign a transaction without simulation first (invariant I-3)
 - **Never** add mainnet write paths without `--yes` guard (invariant I-2)
+- **Never** use `config.xrpl.signing.seed` (cleared after `Config::new()`) — always use `secret_seed`
 - **Never** increase `Config` coupling beyond current imports
+- **Never** remove features just to bypass compile errors
+- **Never** mix unrelated refactors/renames into the same change
+
+## Development workflow
+
+- Follow Rust 2024 conventions; channel is in `rust-toolchain.toml` (`stable`), MSRV in `Cargo.toml`.
+- Commit `Cargo.lock` and use `cargo … --locked` in CI.
+- Use Conventional Commits (e.g. `fix(xrpl): avoid tokio spawn lifetime issue`).
+- Follow GitHub Flow: branch from `main`, merge via PR.
+- Do not run destructive git operations (e.g. `reset --hard`) without explicit agreement.
+- Project pointers: directory layout in `docs/directory.md`; install/distribution in `README.md`; troubleshooting in `docs/problems.md`.
 
 ## Documentation Update Checklist
 

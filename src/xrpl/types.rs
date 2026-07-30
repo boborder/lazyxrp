@@ -237,7 +237,7 @@ pub struct RipplePathFindResult {
     pub source_account: String,
 }
 
-/// Result from `wallet_propose` RPC.
+/// Key generation result (TUI: local via `signing::propose_wallet_local`; RPC parser in `client`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WalletProposeResult {
     /// Master seed (Ed25519 family seed, starts with `s`).
@@ -331,6 +331,26 @@ pub static CURRENCY_HEX_MAP: &[(&str, &str)] = &[
     ("504F4C0000000000000000000000000000000000", "DOT"),
 ];
 
+/// Decode a standard XRPL 160-bit currency (3 ASCII letters + zero padding).
+fn currency_from_standard_hex(hex: &str) -> Option<String> {
+    if hex.len() != 40 || !hex.chars().all(|c| c.is_ascii_hexdigit()) {
+        return None;
+    }
+    let suffix = &hex[6..];
+    if !suffix.chars().all(|c| c == '0') {
+        return None;
+    }
+    let mut letters = [0u8; 3];
+    for (i, byte) in letters.iter_mut().enumerate() {
+        let pair = &hex[i * 2..i * 2 + 2];
+        *byte = u8::from_str_radix(pair, 16).ok()?;
+        if !byte.is_ascii_graphic() {
+            return None;
+        }
+    }
+    std::str::from_utf8(&letters).ok().map(str::to_string)
+}
+
 /// Convert an XRPL currency code (hex or 3-letter string) to a display name.
 #[must_use]
 pub fn asset_display_name(asset: &str) -> String {
@@ -339,6 +359,9 @@ pub fn asset_display_name(asset: &str) -> String {
         if upper == *hex {
             return (*display).to_string();
         }
+    }
+    if let Some(code) = currency_from_standard_hex(&upper) {
+        return code;
     }
     asset.to_string()
 }
@@ -496,8 +519,8 @@ pub struct AccountSetSubmitParams {
 /// XRP or IOU Payment from the Wallet modal.
 ///
 /// **XRP mode** (iou_currency == None): `amount` = XRP value, classic payment.
-/// **IOU mode** (iou_currency set): `amount` = IOU value, uses `iou_currency` + `iou_issuer`.
-/// Auto-bridging: self-payment with `iou_currency` → swap via DEX order books.
+/// **IOU mode** (iou_currency + iou_issuer set): `amount` = issued-currency value.
+/// Self-payment DEX swap previews use `PathFind` / `ripple_path_find`, not this params type.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PaymentSubmitParams {
     pub destination: String,
@@ -507,6 +530,8 @@ pub struct PaymentSubmitParams {
     pub iou_currency: Option<String>,
     /// Issuer address for IOU mode.
     pub iou_issuer: Option<String>,
+    /// Destination tag extracted from an X-address (or set explicitly).
+    pub destination_tag: Option<u32>,
     pub skip_mainnet_prompt: bool,
     pub config_seed: Option<String>,
 }
@@ -596,6 +621,7 @@ pub struct XrplTomlData {
 mod tests {
     use super::*;
 
+    /// TC-070: issued quote uses currency_code (160-bit), not display symbol
     #[test]
     fn book_pair_uses_currency_code_for_issued_quote() {
         let pair = BookPair {
@@ -630,5 +656,13 @@ mod tests {
     #[test]
     fn asset_display_name_unknown_passthrough() {
         assert_eq!(asset_display_name("UNKNOWN"), "UNKNOWN");
+    }
+
+    #[test]
+    fn asset_display_name_decodes_standard_hex_usd() {
+        assert_eq!(
+            asset_display_name("5553440000000000000000000000000000000000"),
+            "USD"
+        );
     }
 }

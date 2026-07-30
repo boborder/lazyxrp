@@ -9,7 +9,7 @@ use super::types::{
     DunlValidatorRow, FeeSummary, LedgerObjectRow, NFTOKEN_FLAG_MUTABLE, NftRow,
     NodeValidatorListSummary, OfferRow, OracleId, PathAlternative, PathFindRow, PathFindSnapshot,
     PriceStats, RipplePathFindResult, ServerInfoSummary, SimulateResult, TrustLineRow, TxRow,
-    TxSummary, WalletProposeResult, XrplRlusdPrice,
+    TxSummary, WalletProposeResult, XrplRlusdPrice, asset_display_name,
 };
 
 pub(crate) const RPC_TIMEOUT: Duration = Duration::from_secs(20);
@@ -384,7 +384,11 @@ impl RpcClient {
         parse_ripple_path_find(&value)
     }
 
-    /// Generate a new XRPL wallet via `wallet_propose`.
+    /// Generate a new XRPL wallet via `wallet_propose` RPC (tests / optional callers).
+    ///
+    /// TUI keygen uses [`crate::signing::propose_wallet_local`] because public RPC nodes
+    /// often omit `master_seed`.
+    #[allow(dead_code)]
     pub async fn wallet_propose(&self, key_type: &str) -> color_eyre::Result<WalletProposeResult> {
         let params = json!({ "key_type": key_type });
         let value = self.rpc_value("wallet_propose", params).await?;
@@ -576,6 +580,7 @@ fn parse_aggregate_price_value(value: &Value) -> color_eyre::Result<AggregatePri
     })
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 fn parse_wallet_propose(value: &Value) -> color_eyre::Result<WalletProposeResult> {
     let result = value.get("result").unwrap_or(&Value::Null);
 
@@ -583,7 +588,11 @@ fn parse_wallet_propose(value: &Value) -> color_eyre::Result<WalletProposeResult
         .get("master_seed")
         .and_then(Value::as_str)
         .map(String::from)
-        .ok_or_else(|| color_eyre::eyre::eyre!("wallet_propose: missing master_seed"))?;
+        .ok_or_else(|| {
+            color_eyre::eyre::eyre!(
+                "wallet_propose: missing master_seed (node may disable wallet methods on public/Clio RPC)"
+            )
+        })?;
 
     let account_id = result
         .get("account_id")
@@ -1183,7 +1192,7 @@ pub fn format_path_destination(value: &Value, quote_label: &str) -> String {
         if currency.eq_ignore_ascii_case("XRP") {
             return format!("{} XRP", drops_to_xrp(value_str));
         }
-        return format!("{value_str} {currency}");
+        return format!("{value_str} {}", asset_display_name(currency));
     }
     "-".to_string()
 }
@@ -1218,6 +1227,9 @@ pub fn summarize_paths_computed(paths_computed: &Value) -> String {
 }
 
 fn path_step_label(step: &Value) -> String {
+    if let Some(account) = step.as_str() {
+        return shorten_r_address(account);
+    }
     if let Some(account) = step.get("account").and_then(Value::as_str) {
         return shorten_r_address(account);
     }
@@ -1225,10 +1237,11 @@ fn path_step_label(step: &Value) -> String {
     if currency.eq_ignore_ascii_case("XRP") {
         return "XRP".into();
     }
+    let label = asset_display_name(currency);
     if let Some(issuer) = step.get("issuer").and_then(Value::as_str) {
-        format!("{currency}@{}", shorten_r_address(issuer))
+        format!("{label}@{}", shorten_r_address(issuer))
     } else {
-        currency.to_string()
+        label
     }
 }
 
@@ -1268,7 +1281,7 @@ pub fn format_path_source_amount(value: &Value) -> String {
         if currency.eq_ignore_ascii_case("XRP") {
             return format!("{} XRP", drops_to_xrp(value_str));
         }
-        return format!("{value_str} {currency}");
+        return format!("{value_str} {}", asset_display_name(currency));
     }
     "-".into()
 }
@@ -1484,7 +1497,6 @@ mod tests {
         assert!(rows[0].is_mutable);
     }
 
-    /// TC-014
     /// TC-075: xrpl-rust Payment<'static> deserialize from JSON
     #[test]
     fn payment_static_deserialize() {
@@ -1506,6 +1518,7 @@ mod tests {
         assert_eq!(payment.destination, "rf1BiGeXwwQoi8Z2ueFYTEXSwuJYfV2Jpn");
     }
 
+    /// TC-014
     #[test]
     fn parse_account_lines_fixture() {
         let v = json!({
@@ -1863,14 +1876,26 @@ mod tests {
         assert_eq!(rows[0].ledger_type, "Check");
         assert_eq!(rows[0].index, "CHK1");
         assert!(rows[0].detail.contains("rDest1"));
+        assert!(rows[0].detail.contains("2.000000"));
 
         assert_eq!(rows[1].ledger_type, "Ticket");
+        assert_eq!(rows[1].index, "TIK1");
         assert!(rows[1].detail.contains('7'));
 
+        assert_eq!(rows[2].ledger_type, "MPToken");
+        assert_eq!(rows[2].index, "MPT1");
+        assert!(rows[2].detail.contains("001122"));
+        assert!(rows[2].detail.contains("99"));
+
         assert_eq!(rows[3].ledger_type, "PayChannel");
+        assert_eq!(rows[3].index, "PC1");
         assert!(rows[3].detail.contains("rDestPC"));
+        assert!(rows[3].detail.contains("5.000000"));
 
         assert_eq!(rows[4].ledger_type, "Escrow");
+        assert_eq!(rows[4].index, "ES1");
+        assert!(rows[4].detail.contains("rDestE"));
+        assert!(rows[4].detail.contains("1.000000"));
     }
 
     /// TC-073
@@ -2005,6 +2030,34 @@ mod tests {
         assert!(s.contains("USD"));
     }
 
+    #[test]
+    fn summarize_paths_computed_string_account_step() {
+        let paths = json!([["rN7n67967NcFqXSBYfSouqMDPMaFmMgfe"]]);
+        let s = summarize_paths_computed(&paths);
+        assert!(s.contains('r'));
+        assert!(s.contains('…'));
+    }
+
+    #[test]
+    fn summarize_paths_computed_hex_currency_display_name() {
+        let paths = json!([[
+            {"currency": "524C555344000000000000000000000000000000", "issuer": "rIssuer1", "type": 48}
+        ]]);
+        let s = summarize_paths_computed(&paths);
+        assert!(s.contains("RLUSD"));
+        assert!(!s.contains("524C555344"));
+    }
+
+    #[test]
+    fn format_path_source_amount_hex_currency() {
+        let amount = json!({
+            "currency": "524C555344000000000000000000000000000000",
+            "issuer": "rIssuer",
+            "value": "1.05"
+        });
+        assert_eq!(format_path_source_amount(&amount), "1.05 RLUSD");
+    }
+
     /// TC-082b path_find_rows_from builds display rows
     #[test]
     fn path_find_rows_from_alternatives() {
@@ -2021,13 +2074,6 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].send, "1.000000 XRP");
         assert_eq!(rows[0].hops, "direct");
-    }
-
-    #[test]
-    fn format_path_hops_label_variants() {
-        assert_eq!(format_path_hops_label(0), "direct");
-        assert_eq!(format_path_hops_label(1), "1 hop");
-        assert_eq!(format_path_hops_label(3), "3 hops");
     }
 
     #[test]
@@ -2091,11 +2137,18 @@ mod tests {
             }
         });
         let r = parse_wallet_propose(&value).expect("wallet_propose should parse");
-        assert!(r.master_seed.starts_with('s'));
-        assert!(r.account_id.starts_with('r'));
-        assert!(r.public_key.starts_with('a'));
+        assert_eq!(r.master_seed, "sEdTzYqD8TKiF4MjRmq9h5RZVvqQeGF");
+        assert_eq!(r.account_id, "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh");
+        assert_eq!(
+            r.public_key,
+            "aBQG8RQAzjs1eTKFEAQXr2gSJutMrk9oXqVtYN7qFZjNn82BScnG"
+        );
         assert_eq!(r.key_type, "ed25519");
-        assert!(!r.master_seed_hex.is_empty());
+        assert_eq!(r.master_seed_hex, "DEDCE9CE67B451D852FD4E846FCDE31C");
+        assert_eq!(
+            r.public_key_hex,
+            "ED74D4036C6591A4BDF9C54CEFA39B996A5DCE5F86D11FDA1878C3A9E45606A5AB"
+        );
     }
 
     /// TC-083: get_aggregate_price parser — full response

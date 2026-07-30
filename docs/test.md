@@ -1,9 +1,9 @@
 # Test Strategy & Case List
 
-> Last Updated: 2026-05-16
+> Last Updated: 2026-07-30
 > Target: lazyxrp (Rust TUI for XRPL)
-> Total Test Cases: 86 (P0: 10, P1: 47, P2: 28, P3: 1) — 84 Rust + 2 Vitest（FAssets スキル）
-> Implemented: 86 / 86 (100%)
+> Total Test Cases: 87 (P0: 10, P1: 45, P2: 31, P3: 1) — 85 Rust + 2 Vitest（FAssets スキル）
+> Implemented: 87 / 87 (100%)
 > Estimated Effort (full catalog): 42h
 
 ---
@@ -12,13 +12,13 @@
 
 | Category          | Test Count | P0 | P1 | P2 | P3 | Est. Effort | Implemented |
 | ----------------- | ---------- | -- | -- | -- | -- | ----------- | ----------- |
-| XRPL Core         | 25         | 4  | 18 | 3  | 0  | 11h         | 25/25       |
-| Config & Keybinds | 19         | 1  | 9  | 9  | 0  | 8h          | 19/19       |
+| XRPL Core         | 24         | 4  | 17 | 3  | 0  | 11h         | 24/24       |
+| Config & Keybinds | 19         | 1  | 9  | 8  | 0  | 8h          | 19/19       |
 | Network & Signing | 13         | 4  | 7  | 2  | 0  | 5h          | 13/13       |
-| CLI Integration   | 12         | 1  | 8  | 3  | 0  | 11h         | 12/12       |
-| Watch & TUI       | 9          | 0  | 2  | 6  | 1  | 6h          | 9/9         |
+| CLI Integration   | 11         | 1  | 7  | 3  | 0  | 11h         | 11/11       |
+| Watch & TUI       | 18         | 0  | 5  | 12 | 1  | 6h          | 18/18       |
 | FAssets skill scripts (Vitest) | 2 | 0  | 0  | 2  | 0  | 0.5h        | 2/2         |
-| **Total**         | **86**     | **10** | **47** | **28** | **1** | **42h** | **86/86** |
+| **Total**         | **87**     | **10** | **45** | **31** | **1** | **42h** | **87/87** |
 
 ---
 
@@ -543,6 +543,18 @@ CI（`.github/workflows/ci.yml`）は各ジョブで `cargo … --locked`（例:
 - **Input**: `"<invalid>"`
 - **Expected Output**: `Err` or gracefully ignored
 - **Test File**: `src/config.rs` (inline)
+#### TC-092: Config merge — `XRPL_RPC_SERVER` overrides `rpc_server` from file
+
+- **Priority**: P1
+- **Type**: Unit
+- **Size**: S
+- **Status**: [x] Done
+- **Target**: `src/config.rs` -> `Config::new()` XRPL env merge
+- **Preconditions**: `config.toml` sets `rpc_server`; `XRPL_RPC_SERVER` env set to a different URL
+- **Expected Output**: `xrpl.rpc_server` matches env
+- **Test File**: `src/config.rs` (inline)
+- **Notes**: Formerly mislabeled as TC-075 (collision with Payment deserialize).
+
 
 ### Network & Signing
 
@@ -632,16 +644,6 @@ CI（`.github/workflows/ci.yml`）は各ジョブで `cargo … --locked`（例:
 - **Expected Output**: `wss://cli`
 - **Test File**: `src/main.rs` (inline)
 
-#### TC-075: Config merge — `XRPL_RPC_SERVER` overrides `rpc_server` from file
-
-- **Priority**: P1
-- **Type**: Unit
-- **Size**: S
-- **Status**: [x] Done
-- **Target**: `src/config.rs` -> `Config::new()` XRPL env merge
-- **Preconditions**: `config.toml` sets `rpc_server`; `XRPL_RPC_SERVER` env set to a different URL
-- **Expected Output**: `xrpl.rpc_server` matches env
-- **Test File**: `src/config.rs` (inline)
 
 #### TC-045: SigningConfig::load — no source returns no seed
 
@@ -821,7 +823,7 @@ CI（`.github/workflows/ci.yml`）は各ジョブで `cargo … --locked`（例:
 
 ### Watch & TUI
 
-#### TC-060: Watch mode — startup without panic
+#### TC-060: Watch mode — App builds 4 tabs with watch account (I-9)
 
 - **Priority**: P1
 - **Type**: Integration
@@ -829,7 +831,7 @@ CI（`.github/workflows/ci.yml`）は各ジョブで `cargo … --locked`（例:
 - **Status**: [x] Done
 - **Target**: `src/app.rs` -> `App::new()`
 - **Preconditions**: Valid config (`Config::new` via `ENV_TEST_LOCK`)
-- **Expected Output**: `App` builds; panel count matches tab count
+- **Expected Output**: 4 tabs/panels; `active_tab == 0`; watch account set; not quit / help closed
 - **Test File**: `src/app.rs` (inline)
 - **Notes**: Full `App::run()` loop not exercised here. `test_app` passes `Config::new()` into `App::new`; production Watch passes the same `Config` as `main` after `prime_seed_source` so merged `XRPL_SEED` is not lost.
 
@@ -854,7 +856,7 @@ CI（`.github/workflows/ci.yml`）は各ジョブで `cargo … --locked`（例:
 - **Target**: `src/app.rs` -> `Action::RefreshAccount` → poll channel
 - **Preconditions**: `App::new` (test build keeps `test_poll_rx`)
 - **Input**: `Action::RefreshAccount`
-- **Expected Output**: `PollCommand::RefreshAccount` received
+- **Expected Output**: `PollCommand::Account` received
 - **Test File**: `src/app.rs` (inline)
 
 #### TC-063: Watch mode — RefreshBook sends PollCommand
@@ -865,18 +867,18 @@ CI（`.github/workflows/ci.yml`）は各ジョブで `cargo … --locked`（例:
 - **Status**: [x] Done
 - **Target**: `src/app.rs` -> `Action::RefreshBook` → poll channel
 - **Input**: `Action::RefreshBook`
-- **Expected Output**: `PollCommand::RefreshBook` received
+- **Expected Output**: `PollCommand::Book` received
 - **Test File**: `src/app.rs` (inline)
 
-#### TC-064: Watch mode — TabNext/TabPrev cycles panels
+#### TC-064: Watch mode — TabNext/TabPrev wrap around panels
 
 - **Priority**: P2
 - **Type**: Integration
 - **Size**: M
 - **Status**: [x] Done
-- **Target**: `src/app.rs` -> `Action::TabNext`
-- **Input**: Repeated `Action::TabNext`
-- **Expected Output**: `active_tab` cycles `0..=6` and returns to `0`
+- **Target**: `src/app.rs` -> `Action::TabNext` / `Action::TabPrev`
+- **Input**: Repeated `Action::TabNext` then `Action::TabPrev`
+- **Expected Output**: With 4 tabs, `active_tab` cycles `0→1→2→3→0` then `0→3→2→1→0`
 - **Test File**: `src/app.rs` (inline)
 
 #### TC-065: Watch mode — HelpOverlay toggles on `?` and Esc
@@ -913,7 +915,7 @@ CI（`.github/workflows/ci.yml`）は各ジョブで `cargo … --locked`（例:
 - **Expected Output**: Success returns `TxSummary`; failed engine result returns an error
 - **Test File**: `src/xrpl/client.rs` (inline)
 
-#### TC-070: TxDetail render cache — invalidated on open
+#### TC-093: TxDetail render cache — invalidated on open
 
 - **Priority**: P1
 - **Type**: Unit
@@ -923,29 +925,19 @@ CI（`.github/workflows/ci.yml`）は各ジョブで `cargo … --locked`（例:
 - **Input**: `TxDetailState::open()` with two different JSON payloads
 - **Expected Output**: `cached_lines` is `None` after each `open()` call
 - **Test File**: `src/components/shared/tx_detail/mod.rs` (inline)
+- **Notes**: Formerly mislabeled as TC-070 (collision with book_offers currency_code). Identity `to_static_lines` test removed as non-behavioral.
 
-#### TC-071: TxDetail static lines — preserves content
+#### TC-094: TxDetail parser registry — required types, no duplicates
 
-- **Priority**: P1
+- **Priority**: P2
 - **Type**: Unit
 - **Size**: S
 - **Status**: [x] Done
-- **Target**: `src/components/shared/tx_detail/mod.rs` -> `to_static_lines()`
-- **Input**: `Vec<Line>` from `detail_lines_for()` with mixed borrowed/owned spans
-- **Expected Output**: `Vec<Line<'static>>` renders identical text after conversion
-- **Test File**: `src/components/shared/tx_detail/mod.rs` (inline)
-
-#### TC-073: TxDetail parser clone elimination — Payment benchmark
-
-- **Priority**: P1
-- **Type**: Unit (benchmark)
-- **Size**: S
-- **Status**: [x] Done
-- **Target**: `src/xrpl/poll.rs` -> `payment_detail_lines()` (and all 29 typed parsers)
-- **Input**: `bench_detail_lines_payment_current` — 1000 iterations of `detail_lines_for()` on Payment JSON
-- **Expected Output**: Execution time < 10ms (measured: ~5.8ms after Stage 4, down from ~22ms)
-- **Test File**: `src/components/shared/tx_detail/mod.rs` (inline)
-- **Notes**: All 29 typed parsers in `parsers.rs` converted from `serde_json::from_value(_tx.clone())` to direct `Value` field access. ~75% latency reduction on detail panel open.
+- **Target**: `src/components/shared/tx_detail/parsers.rs` -> `TX_DETAIL_PARSERS`
+- **Input**: Registry table
+- **Expected Output**: Contains required TransactionType names; no duplicate names (avoids magic `len() == 29` drift)
+- **Test File**: `src/components/shared/tx_detail/parsers.rs` (inline)
+- **Notes**: Replaces the old count-only registry assert. Benchmark `bench_detail_lines_payment_current` remains `#[ignore]` (not a TC).
 
 #### TC-087: Poll trigger — coalesces rapid bursts
 
@@ -1036,6 +1028,8 @@ CI（`.github/workflows/ci.yml`）は各ジョブで `cargo … --locked`（例:
 - **Expected Output**: Unchanged string
 - **Test File**: `src/xrpl/types.rs` (inline)
 
+### FAssets skill scripts (Vitest)
+
 #### TC-090: FAssets — `normalizeTxId` (XRPL payment hash for FDC)
 
 - **Priority**: P2
@@ -1090,7 +1084,7 @@ CI（`.github/workflows/ci.yml`）は各ジョブで `cargo … --locked`（例:
 
 | Order | ID     | Test Case Name                        | Size | Status | Completed |
 | ----- | ------ | ------------------------------------- | ---- | ------ | --------- |
-| 15    | TC-060 | Watch startup without panic           | L    | [x]    | 2026-05-01 |
+| 15    | TC-060 | App builds 4 tabs (I-9)               | L    | [x]    | 2026-07-30 |
 | 16    | TC-061 | Quit stops background tasks           | L    | [x]    | 2026-05-16 |
 | 17    | TC-062 | RefreshAccount sends PollCommand      | M    | [x]    | 2026-05-16 |
 | 18    | TC-063 | RefreshBook sends PollCommand         | M    | [x]    | 2026-05-16 |
@@ -1119,6 +1113,9 @@ CI（`.github/workflows/ci.yml`）は各ジョブで `cargo … --locked`（例:
 | 36    | TC-073 | ledger object tab filters                   | S    | [x]    | 2026-05-11 |
 | 37    | TC-074 | account_nfts tfMutable (dNFT)             | S    | [x]    | 2026-05-11 |
 | 38    | TC-075 | xrpl-rust Payment<'static> deserialize    | S    | [x]    | 2026-05-13 |
+| 38b   | TC-092 | Config XRPL_RPC_SERVER overrides file      | S    | [x]    | 2026-07-30 |
+| 38c   | TC-093 | TxDetail cache invalidated on open         | S    | [x]    | 2026-07-30 |
+| 38d   | TC-094 | TxDetail parser registry coverage          | S    | [x]    | 2026-07-30 |
 | 39    | TC-076 | `--self-uninstall` parse + `.bak` path    | S    | [x]    | 2026-05-12 |
 | 40    | TC-077 | TxHistoryPanel filter by tx_type          | S    | [x]    | 2026-05-14 |
 | 41    | TC-078 | TxHistoryPanel filter by hash partial     | S    | [x]    | 2026-05-14 |
@@ -1135,9 +1132,9 @@ CI（`.github/workflows/ci.yml`）は各ジョブで `cargo … --locked`（例:
 
 ### Overall
 
-- **Total Cases**: 86（うち TC-090/091 は Vitest・スキル配下）
-- **Implemented**: 86
-- **Passing**: 170+（`cargo test --locked`; 2026-05-16）+ Vitest 11（`cd .agents/skills/flare-fassets/scripts && npm test`）
+- **Total Cases**: 87（うち TC-090/091 は Vitest・スキル配下; TC-092〜094 は 2026-07-30 に重複 ID 解消 / 弱い assert 置換で付番）
+- **Implemented**: 87
+- **Passing**: `cargo test --locked` green after 2026-07-30 cleanup + Vitest 11（`cd .agents/skills/flare-fassets/scripts && npm test`）
 - **Failing**: 0
 - **Ignored**: 5 (live RPC / benchmark / flare; see case notes)
 - **Todo**: 0
@@ -1154,6 +1151,7 @@ CI（`.github/workflows/ci.yml`）は各ジョブで `cargo … --locked`（例:
 | 2026-05-16 | TC-061–065 | Implemented | `App` integration tests use `#[tokio::test]` (no `#[ignore]`) |
 | 2026-05-16 | TC-087–089 | Implemented | Poll burst coalesce, mainnet Payment guard, I-7 not-found |
 | 2026-05-16 | TC-090–091 | Implemented | Vitest: `normalizeTxId` + `resolveWatchStartBlock`（`execute-direct-mint` watch clamp） |
+| 2026-07-30 | TC cleanup | Fixed | Removed identity/mirror tests; fixed TC-014 mislabel; renumbered colliding IDs → TC-092/093/094; strengthened asserts |
 | 2026-05-16 | TC-001–003 | Implemented | Direct `book_currency()` unit tests |
 | 2026-05-01 | — | Refactored | `TestEnvGuard` + `env_lock()` added to fix Mutex poison across env tests |
 | 2026-05-05 | TC-068–070 | Implemented | XRPL not-found handling, submit response validation, and book_offers currency_code selection |
@@ -1173,7 +1171,7 @@ CI（`.github/workflows/ci.yml`）は各ジョブで `cargo … --locked`（例:
 
 ## Known Issues & Constraints
 
-- **Environment variable tests** (`TC-033`–`TC-036`, `TC-042`–`TC-044`, `TC-045`–`TC-049`, `TC-075`) use `config::env_lock()` + `TestEnvGuard` for RAII save/restore of env vars; `env_lock()` recovers from Mutex poison automatically.
+- **Environment variable tests** (`TC-033`–`TC-036`, `TC-042`–`TC-044`, `TC-045`–`TC-049`, `TC-092`) use `config::env_lock()` + `TestEnvGuard` for RAII save/restore of env vars; `env_lock()` recovers from Mutex poison automatically.
 - **`xrpl::tests::integration_live_network`** hits `https://xrplcluster.com` (90s timeout per case) and serializes calls with a test-local mutex to reduce public-node rate limiting. Offline / blocked CI: non-ignored live tests fail; prefer runners with outbound HTTPS or mark live tests ignored in CI if needed.
 - **`tokio::spawn` lifetime issue** (rust-lang/rust#100013) was previously tracked for watch startup; current `start_poll_task` / `start_ws_task` paths compile with direct `tokio::spawn` and should remain covered by `cargo check`.
 - **macOS linking warnings** from upstream deps are non-fatal; do not treat as test failures.

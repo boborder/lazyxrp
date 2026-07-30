@@ -103,6 +103,7 @@ async fn main() -> color_eyre::Result<()> {
                     .secret_seed
                     .as_ref()
                     .map(|s| s.expose_secret().to_string()),
+                yes,
             )
             .await?;
         }

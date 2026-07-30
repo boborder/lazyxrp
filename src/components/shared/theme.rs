@@ -14,16 +14,23 @@ pub const SUCCESS: Color = Color::Rgb(60, 179, 113); // Medium Sea Green
 pub const ERROR: Color = Color::Rgb(220, 20, 60); // Crimson
 pub const WARNING: Color = Color::Rgb(255, 165, 0); // Orange
 pub const HIGHLIGHT_FG: Color = Color::Rgb(255, 255, 255); // White
+/// Light sky blue for account flag chips (brand accent sibling).
+pub const FLAG: Color = Color::Rgb(100, 200, 255);
 pub const HIGHLIGHT_BG: Color = BORDER;
 
-pub fn panel_block(title: &str, is_focused: bool) -> Block<'_> {
+pub fn panel_block(title: &str, is_focused: bool) -> Block<'static> {
+    panel_block_owned(format!(" {title} "), is_focused)
+}
+
+/// Like [`panel_block`], but `title` is used as-is (caller supplies spacing/count text).
+pub fn panel_block_owned(title: String, is_focused: bool) -> Block<'static> {
     let border_color = if is_focused { ACCENT } else { MUTED };
     let title_color = if is_focused { TITLE } else { MUTED };
     Block::bordered()
         .border_type(BorderType::Rounded)
         .border_style(Style::new().fg(border_color))
         .title_style(Style::new().fg(title_color).add_modifier(Modifier::BOLD))
-        .title(format!(" {title} "))
+        .title(title)
 }
 
 pub fn header_row_style() -> Style {
@@ -68,7 +75,5 @@ pub fn warning_style() -> Style {
 }
 
 pub fn flag_style() -> Style {
-    Style::new()
-        .fg(Color::Rgb(100, 200, 255))
-        .add_modifier(Modifier::BOLD)
+    Style::new().fg(FLAG).add_modifier(Modifier::BOLD)
 }

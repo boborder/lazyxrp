@@ -4,14 +4,12 @@ use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
     style::Style,
-    // style::{Style, Stylize},
     text::Span,
     widgets::Paragraph,
 };
 
-use crate::components::Component;
-
 use crate::action::Action;
+use crate::components::Component;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct FpsCounter {
@@ -42,7 +40,8 @@ impl FpsCounter {
         }
     }
 
-    fn app_tick(&mut self) -> color_eyre::Result<()> {
+    /// Returns `true` when the on-screen tick-rate label should refresh.
+    fn app_tick(&mut self) -> bool {
         self.tick_count += 1;
         let now = Instant::now();
         let elapsed = (now - self.last_tick_update).as_secs_f64();
@@ -50,11 +49,13 @@ impl FpsCounter {
             self.ticks_per_second = self.tick_count as f64 / elapsed;
             self.last_tick_update = now;
             self.tick_count = 0;
+            return true;
         }
-        Ok(())
+        false
     }
 
-    fn render_tick(&mut self) -> color_eyre::Result<()> {
+    /// Returns `true` when the on-screen FPS label should refresh.
+    fn render_tick(&mut self) -> bool {
         self.frame_count += 1;
         let now = Instant::now();
         let elapsed = (now - self.last_frame_update).as_secs_f64();
@@ -62,18 +63,24 @@ impl FpsCounter {
             self.frames_per_second = self.frame_count as f64 / elapsed;
             self.last_frame_update = now;
             self.frame_count = 0;
+            return true;
         }
-        Ok(())
+        false
+    }
+
+    /// Update counters; `true` if the FPS widget text changed.
+    pub fn note_action(&mut self, action: &Action) -> bool {
+        match action {
+            Action::Tick => self.app_tick(),
+            Action::Render => self.render_tick(),
+            _ => false,
+        }
     }
 }
 
 impl Component for FpsCounter {
     fn update(&mut self, action: &Action) -> color_eyre::Result<Option<Action>> {
-        match action {
-            Action::Tick => self.app_tick()?,
-            Action::Render => self.render_tick()?,
-            _ => {}
-        };
+        let _ = self.note_action(action);
         Ok(None)
     }
 

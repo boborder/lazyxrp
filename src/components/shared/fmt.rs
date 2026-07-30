@@ -183,16 +183,16 @@ mod tests {
     #[test]
     fn truncate_middle_shortens_long_domain() {
         let s = "validator.xrpl-labs.example.com";
-        let out = truncate_middle(s, 20);
-        assert!(out.contains('…'));
-        assert!(out.chars().count() <= 20);
+        assert_eq!(truncate_middle(s, 20), "validator…ample.com");
+        assert_eq!(truncate_middle("short", 20), "short");
+        assert_eq!(truncate_middle(s, 3), s); // max_chars <= 3 keeps original
     }
 
     #[test]
     fn group_u64_matches_str() {
         assert_eq!(group_digits_u64(0), "0");
-        assert_eq!(group_digits_u64(1234), group_digits("1234"));
-        assert_eq!(group_digits_u64(1_234_567), group_digits("1234567"));
+        assert_eq!(group_digits_u64(1234), "1,234");
+        assert_eq!(group_digits_u64(1_234_567), "1,234,567");
         assert_eq!(
             group_digits_u64(u64::MAX),
             group_digits(&u64::MAX.to_string())
