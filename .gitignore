@@ -8,13 +8,14 @@
 
 /graphify-out
 
-# Local Pi harness state (not part of the product)
+# Local agent / harness state (not part of the product)
 .pi/
-
-# FAssets skill scripts — install with `npm install` under scripts/
-.agents/skills/flare-fassets/scripts/node_modules/
-# Local Pi runtime state
 .atl/
+.scratch/
+
+# Dependency install dirs (global ignore may cover these; keep repo self-contained)
+/node_modules/
+.agents/skills/flare-fassets/scripts/node_modules/
 
 !skills-lock.json
 ./agents/
