@@ -67,7 +67,8 @@ jobs:
           RUSTDOCFLAGS: -D warnings
         run: cargo doc --locked --no-deps --document-private-items --all-features --workspace --examples
 
-  # Cargo.toml version + docs-only push to main → tag → CD (GitHub Release + crates.io).
+  # Cargo.toml version bump on main → tag → CD (GitHub Release + crates.io).
+  # Path filter intentionally omitted: real releases always touch src/ and Cargo.lock.
   auto-tag:
     name: Auto Tag Release
     needs: [test, rustfmt, clippy, docs]
@@ -81,7 +82,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Create release tag when version bumped (docs-only)
+      - name: Create release tag when Cargo.toml version bumps
         env:
           BEFORE: ${{ github.event.before }}
           SHA: ${{ github.sha }}
@@ -93,24 +94,18 @@ jobs:
             exit 0
           fi
 
-          CHANGED=$(git diff --name-only "$BEFORE" "$SHA")
-          if [ -z "$CHANGED" ]; then
-            echo "No changed files — skipping"
+          if ! git cat-file -e "$BEFORE:Cargo.toml" 2>/dev/null; then
+            echo "No Cargo.toml at $BEFORE — skipping"
             exit 0
           fi
 
-          # docs/.+ (not docs/ alone): $ anchor on alternation branch blocked docs/RELEASE.md
-          ALLOWED='^(Cargo\.toml|docs/.+|README\.md|AGENTS\.md|\.github/.+)$'
-          while IFS= read -r file; do
-            [ -z "$file" ] && continue
-            if ! echo "$file" | grep -Eq "$ALLOWED"; then
-              echo "Non docs-only change: $file — skipping auto-tag"
-              exit 0
-            fi
-          done <<< "$CHANGED"
-
           OLD_VERSION=$(git show "$BEFORE:Cargo.toml" | grep -m1 '^version = ' | sed -E 's/^version = "([^"]+)"/\1/')
           NEW_VERSION=$(grep -m1 '^version = ' Cargo.toml | sed -E 's/^version = "([^"]+)"/\1/')
+
+          if [ -z "$OLD_VERSION" ] || [ -z "$NEW_VERSION" ]; then
+            echo "Could not parse Cargo.toml version — skipping"
+            exit 0
+          fi
 
           if [ "$OLD_VERSION" = "$NEW_VERSION" ]; then
             echo "Cargo.toml version unchanged ($NEW_VERSION) — skipping"
@@ -123,6 +118,7 @@ jobs:
             exit 0
           fi
 
+          echo "Version bump detected: $OLD_VERSION → $NEW_VERSION"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git tag -a "$TAG" -m "Release $TAG"
