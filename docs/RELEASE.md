@@ -46,26 +46,20 @@ Index: [`docs/README.md`](README.md).
 - [ ] Version bumped in `Cargo.toml` before tag
 - [ ] GitHub Release notes mention breaking changes and mainnet `--yes` requirement
 
-### Automated release (docs-only)
+### Automated release (Cargo.toml version bump)
 
-When a push to `main` changes **only** these paths and bumps `Cargo.toml` `version`, CI creates the tag after all checks pass; [`.github/workflows/cd.yml`](../.github/workflows/cd.yml) then builds binaries and publishes GitHub Release + crates.io:
+When a push to `main` bumps `Cargo.toml` `version` and CI (`test`, `rustfmt`, `clippy`, `docs`) is green, `auto-tag` creates `v<version>` and [`.github/workflows/cd.yml`](../.github/workflows/cd.yml) builds binaries + publishes GitHub Release / crates.io.
 
-| Allowed paths |
-|---------------|
-| `Cargo.toml` |
-| `docs/**` |
-| `README.md` |
-| `AGENTS.md` |
-| `.github/**` (CI/CD workflow updates only) |
+`src/`, `Cargo.lock`, docs, and workflow changes are all allowed — the gate is **version string change only** (plus CI green / tag not already present).
 
 Typical flow:
 
-1. Bump `version` in `Cargo.toml` and sync docs.
-2. Push to `main`.
-3. CI (`test`, `rustfmt`, `clippy`, `docs`) runs, then `auto-tag` pushes `v<version>`.
+1. Bump `version` in `Cargo.toml` (and sync docs / lockfile as needed).
+2. Merge / push to `main`.
+3. CI runs, then `auto-tag` pushes `v<version>`.
 4. CD runs on the new tag.
 
-If the commit also touches `src/`, `Cargo.lock`, or other paths, auto-tag is skipped — use `mise run tag-push` manually after review.
+Fallback if CI is red or you need to retag carefully: `mise run tag-push` (reads `Cargo.toml`, creates and pushes that single tag).
 
 ## Post-release
 
