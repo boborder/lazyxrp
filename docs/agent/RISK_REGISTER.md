@@ -16,6 +16,7 @@
 | R-008 | — | RPC 429 / backoff |
 | R-009 | — | Submit hash not verified |
 | R-010 | — | Duplicate poll on ledger close |
+| R-011 | — | Poll `RpcClient::connect` “instant death” (**accepted / non-issue**) |
 
 ## R-001: Seed priority chain inconsistency
 
@@ -119,3 +120,14 @@
 - **Affected files**: `src/xrpl/ws.rs`, `src/xrpl/poll.rs`
 - **Suggested test**: Check for duplicate poll within one ledger index.
 - **Suggested fix**: Track last polled ledger index, skip if trigger is for same index.
+
+## R-011: Poll task exits on `RpcClient::connect` failure (accepted)
+
+- **Severity**: Low (accepted / non-issue)
+- **Confidence**: High
+- **Status**: Resolved as **non-harmful** (quality-pass B4, 2026-07-31)
+- **Evidence**: `RpcClient::connect` only parses the URL and builds `AsyncJsonRpcClient` + `reqwest` (`HttpClient::new()`). No network I/O. `xrpl-rust` defers HTTP to `request_impl`. `drive_poll_loop` returns early only on URL/builder failure; runtime RPC failures use existing `backoff_until` in `select!`.
+- **Failure scenario**: Only malformed URL / HTTP client builder errors kill the poll task — not unreachable nodes.
+- **Affected files**: `src/xrpl/client.rs`, `src/xrpl/poll.rs`
+- **Decision**: **Do not** add a connect-retry loop. Document only; keep backoff for request failures.
+

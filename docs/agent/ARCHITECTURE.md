@@ -1,6 +1,6 @@
 # Architecture Reconstruction
 
-> **Read**: `REPO_INVENTORY.md`. **Scope**: full repository. **Confidence**: high. **Generated**: 2026-05-14 (Pass 2).
+> **Read**: `REPO_INVENTORY.md`. **Scope**: full repository. **Confidence**: high. **Generated**: 2026-05-14 (Pass 2). **Updated**: 2026-07-31 (dirty-render / selectable_table).
 
 ## Architecture Overview
 
@@ -11,6 +11,8 @@ The codebase follows a **layered + vertical-slice hybrid**:
 - **`components/`** — presentation layer (panels, tabs, shared widgets)
 - **`app.rs`** — orchestration layer (event loop, action routing, lifecycle)
 - **`config.rs`** / **`network.rs`** / **`signing.rs`** — infrastructure layer
+
+**Render policy**: `App` keeps a `needs_draw` dirty flag. `Action::Render` only redraws when dirty (or force paths), avoiding full-frame work on every tick. List panels share chrome via `components/shared/selectable_table.rs` (`SelectableTableState` + `render_selectable_table`) instead of per-panel table boilerplate.
 
 No formal hexagonal/clean architecture boundaries. Domain logic is interwoven with network I/O in `xrpl/poll.rs` and display logic in `components/`.
 

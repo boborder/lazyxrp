@@ -1,6 +1,6 @@
 # Repository Inventory
 
-> **Scope**: full repository. **Confidence**: high. **Generated**: 2026-05-14 (Pass 1).
+> **Scope**: full repository. **Confidence**: high. **Updated**: 2026-07-31 (v0.1.22 quality-pass sync).
 
 ## Project Summary
 
@@ -10,7 +10,7 @@
 - **MSRV**: 1.91
 - **License**: MIT
 - **Repo**: `github.com/boborder/lazyxrp`
-- **Version**: 0.1.14
+- **Version**: 0.1.22
 
 ## Build / Test / Validate Commands
 
@@ -28,9 +28,9 @@
 
 | Entry | File | Description |
 |-------|------|-------------|
-| `main()` | `src/main.rs:44` | Async runtime start. Routes to `App::run()` (TUI watch) or `execute_cli_command()` (CLI). Resolves network/seed/URL priority chain. |
-| `Cli` struct | `src/cli.rs:11` | Clap-derived CLI. Subcommands: `Watch`, `Info`, `Account`, `Book`, `Summary`, `Nfts`, `Lines`, `Amm`, `TxHistory`, `AccountStatus`, `Send`. |
-| `App::run()` | `src/app.rs:171` | TUI main loop: event handling → action processing → render. Spawns WS + poll background tasks. |
+| `main()` | `src/main.rs` | Async runtime start. Routes to `App::run()` (TUI watch) or `execute_cli_command()` (CLI). Resolves network/seed/URL priority chain. |
+| `Cli` struct | `src/cli.rs` | Clap-derived CLI. Subcommands: `Watch`, `Info`, `Account`, `Book`, `Summary`, `Nfts`, `Lines`, `Amm`, `TxHistory`, `AccountStatus`, `Send`. |
+| `App::run()` | `src/app.rs` | TUI main loop: event handling → action processing → dirty-flagged render (`needs_draw`). Spawns WS + poll background tasks. |
 | `execute_cli_command()` | `src/xrpl/cli_exec.rs` | Non-TUI CLI command dispatcher. |
 | `Config::new()` | `src/config.rs` | Config loading: built-in defaults → user config.toml → env vars. |
 | `build.rs` | `build.rs` | Build-time metadata (vergen-gix for commit hash, date). |
@@ -40,7 +40,7 @@
 ```
 src/
 ├── main.rs              Entry point, network/seed URL resolution
-├── app.rs               TUI application loop (Elm-like TEA)
+├── app.rs               TUI application loop (Elm-like TEA; dirty-render via needs_draw)
 ├── action.rs            Action enum (all internal messages)
 ├── cli.rs               CLI argument parsing (clap)
 ├── config.rs            Config loading/merging, keybinds, styles (~1000 lines)
@@ -50,28 +50,38 @@ src/
 ├── errors.rs            Error handling init (color-eyre, human-panic, better-panic)
 ├── logging.rs           Tracing/logging initialization
 ├── uninstall.rs         --self-uninstall logic
+├── flare.rs             Flare FTSOv2 price fetch helpers
 ├── xrpl/                XRPL integration
 │   ├── mod.rs           Re-exports
-│   ├── client.rs        RpcClient (JSON-RPC calls, response parsing, xrp_to_drops)
+│   ├── address.rs       Classic / X-Address resolve + network match checks
+│   ├── client.rs        RpcClient (JSON-RPC, response parse, xrp_to_drops, dUNL manifest)
 │   ├── ws.rs            WebSocket subscription task
 │   ├── poll.rs          Polling task (periodic + on-demand RPC, submit flows)
 │   ├── cli_exec.rs      CLI command execution
 │   ├── types.rs         Data types: row structs, BookPair, PollContext/Command
 │   ├── json_util.rs     JSON path helpers (json_str, extract_json_u32)
+│   ├── toml.rs          xrp-ledger.toml fetch/parse
 │   └── backoff.rs       Reconnection backoff timing
 └── components/          UI components
     ├── mod.rs           Component trait definition
-    ├── panels/          Standalone panels (account, book, amm, server, wallet, etc.)
+    ├── panels/          Standalone panels (account, book, amm, server, wallet, …)
+    │                    server_{detail,dunl,metrics}.rs and wallet_{composer,keys,keygen}.rs
+    │                    are #[path] siblings of server.rs / wallet.rs
     ├── tabs/            Composite tab views (overview, account_wallet, market_oracle, assets, nft)
-    └── shared/          Shared widgets (theme, fps, splash, status_bar, help_overlay, tx_detail, etc.)
+    └── shared/          Shared widgets
+        ├── selectable_table.rs  Shared selectable list/table chrome
+        ├── tx_detail/           Overlay: mod / format / parsers
+        └── theme, fps, splash, status_bar, help_overlay, widgets, fmt, …
 
 docs/
+├── agent/               Agent-facing architecture docs (REPO_INVENTORY, ARCHITECTURE, …)
 ├── architecture/        C4 architecture diagrams
 ├── design.md            Architecture overview, module responsibilities, data flow
 ├── tech.md              Tech stack, dependencies, build config
-├── test.md              Test policy, TC-ID case list, TDD roadmap
+├── test.md              Test policy, important-case TC roster
 ├── tasks.md             Task status and milestones
-├── directory.md         Directory structure index (this doc's source)
+├── directory.md         Directory structure index
+├── RELEASE.md           Release / auto-tag checklist
 ├── requirements.md      Functional/non-functional requirements
 ├── security.md          Security design, threat model
 ├── problems.md          Known issues and workarounds
@@ -97,12 +107,12 @@ docs/
 ## Unknowns
 
 - **Observed** (low confidence): Windows support status — code has `#[cfg(not(windows))]` guards for SIGTSTP but no explicit Windows testing.
-- **Observed** (low confidence): The `graphify` knowledge graph reports 281 isolated nodes (≤1 connection), suggesting undocumented or weakly-connected components.
+- **Observed** (low confidence): The `graphify` knowledge graph may be stale after large refactors; run `graphify update .` before relying on it.
 - **Observed** (medium confidence): No explicit integration tests for WS reconnect scenarios under network failure conditions.
 
 ## Next Recommended Analysis Targets
 
-1. `src/app.rs` — application loop and component orchestration (Pass 2)
-2. `src/xrpl/poll.rs` — polling task architecture and submit flows (Pass 2-3)
-3. `src/components/shared/tx_detail/` — transaction detail rendering pipeline (Pass 2-3)
-4. `src/config.rs` — config merge logic and keybinding resolution (Pass 3)
+1. `src/xrpl/client.rs` — flatten-extract format / dunl / parse siblings (~2259 LOC blob; quality-pass Should)
+2. `src/components/panels/server_dunl.rs` — finish drawing extraction from `server.rs` facade
+3. `src/components/panels/wallet.rs` — remove thin `seed_to_address` re-export (call `signing` directly)
+4. Row-cache / visible-window for `tx_history` — Later; only if measured FPS pain
