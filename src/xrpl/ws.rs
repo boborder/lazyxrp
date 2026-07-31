@@ -41,14 +41,33 @@ async fn drive_ws_reconnect_loop(
     loop {
         tokio::select! {
             _ = cancel.cancelled() => return,
-            _ = tokio::time::sleep(Duration::from_secs(backoff_secs)) => {
-                match connect_and_subscribe(&ws_url, &watch_address, &action_tx, &poll_trigger_tx, &cancel).await {
-                    Ok(()) => return,
-                    Err(e) => {
-                        tracing::error!("ws error: {e}");
-                        backoff_secs = next_backoff_secs(backoff_secs);
-                    }
+            _ = tokio::time::sleep(Duration::from_secs(backoff_secs)) => {}
+        }
+
+        let mut subscribed = false;
+        match connect_and_subscribe(
+            &ws_url,
+            &watch_address,
+            &action_tx,
+            &poll_trigger_tx,
+            &cancel,
+            &mut subscribed,
+        )
+        .await
+        {
+            Ok(()) => return,
+            Err(e) => {
+                if subscribed {
+                    // Live session ended — restart backoff from the floor.
+                    backoff_secs = next_backoff_secs(0);
+                } else {
+                    backoff_secs = next_backoff_secs(backoff_secs);
                 }
+                tracing::warn!(
+                    delay_secs = backoff_secs,
+                    error = %e,
+                    "ws reconnect scheduled"
+                );
             }
         }
     }
@@ -60,6 +79,7 @@ async fn connect_and_subscribe(
     action_tx: &UnboundedSender<Action>,
     poll_trigger_tx: &UnboundedSender<()>,
     cancel: &CancellationToken,
+    subscribed: &mut bool,
 ) -> color_eyre::Result<()> {
     let parsed_url = ws_url
         .parse()
@@ -82,6 +102,7 @@ async fn connect_and_subscribe(
         None,
     );
     ws.xrpl_send(sub.into()).await?;
+    *subscribed = true;
 
     loop {
         tokio::select! {
@@ -110,11 +131,9 @@ async fn connect_and_subscribe(
                         }
                     }
                     Ok(None) => {
-                        tracing::warn!("ws stream ended");
                         return Err(color_eyre::eyre::eyre!("websocket closed"));
                     }
                     Err(e) => {
-                        tracing::error!("ws receive error: {e}");
                         return Err(e.into());
                     }
                 }

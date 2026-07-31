@@ -9,11 +9,11 @@ pub use super::format::{path_find_snapshot, xrp_to_drops};
 use super::json_util::{extract_json_u32, json_str};
 pub(crate) use super::parse::empty_account_tx_page_on_not_found;
 use super::parse::{
-    book_currency, book_offer_best_price, is_not_found_error, parse_account_lines_value,
-    parse_account_nfts_value, parse_account_objects_value, parse_account_tx_page,
-    parse_aggregate_price_value, parse_amm_info_value, parse_book_offers_value, parse_fee_value,
-    parse_ripple_path_find, parse_server_info_value, parse_simulate_result, parse_submit_success,
-    parse_wallet_propose,
+    book_currency, book_offer_best_price, is_not_found_error, is_rate_limited_error,
+    parse_account_lines_value, parse_account_nfts_value, parse_account_objects_value,
+    parse_account_tx_page, parse_aggregate_price_value, parse_amm_info_value,
+    parse_book_offers_value, parse_fee_value, parse_ripple_path_find, parse_server_info_value,
+    parse_simulate_result, parse_submit_success, parse_wallet_propose,
 };
 use super::types::{
     AccountSummary, AccountTxPage, AggregatePrice, AmmSummary, DunlSummary, FeeSummary,
@@ -47,13 +47,22 @@ impl RpcClient {
                         .await
                         .map_err(|_| color_eyre::eyre::eyre!("{method} timeout"))?
                         .map_err(|e| color_eyre::eyre::eyre!("{method} request error: {e}"))?;
+                let status = resp.status();
                 let text = tokio::time::timeout(RPC_TIMEOUT, resp.text())
                     .await
                     .map_err(|_| color_eyre::eyre::eyre!("{method} response timeout"))?
                     .map_err(|e| color_eyre::eyre::eyre!("{method} response error: {e}"))?;
+                if status.as_u16() == 429 {
+                    let preview: String = text.chars().take(120).collect();
+                    return Err(color_eyre::eyre::eyre!(
+                        "{method} Rate limited (HTTP 429); body={preview:?}"
+                    ));
+                }
                 serde_json::from_str::<Value>(&text).map_err(|e| {
                     let preview: String = text.chars().take(120).collect();
-                    color_eyre::eyre::eyre!("{method} JSON parse error: {e}; body={preview:?}")
+                    color_eyre::eyre::eyre!(
+                        "{method} JSON parse error: {e}; status={status}; body={preview:?}"
+                    )
                 })
             }
             .await;
@@ -65,13 +74,17 @@ impl RpcClient {
                 }
                 Err(e) if attempt < 2 => {
                     let message = format!("{e}");
-                    tracing::warn!("{method} attempt {} failed: {message}", attempt + 1);
                     last_error = Some(e);
-                    let delay = if message.contains("Rate limited") {
+                    let delay = if is_rate_limited_error(&message) {
                         Duration::from_secs(2 * (attempt + 1) as u64)
                     } else {
                         Duration::from_millis(100 * (attempt + 1) as u64)
                     };
+                    tracing::warn!(
+                        attempt = attempt + 1,
+                        delay_ms = delay.as_millis() as u64,
+                        "{method} retry after: {message}"
+                    );
                     tokio::time::sleep(delay).await;
                 }
                 Err(e) => return Err(e),

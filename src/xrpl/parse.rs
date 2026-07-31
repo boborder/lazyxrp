@@ -407,6 +407,16 @@ pub(crate) fn is_not_found_error(msg: &str) -> bool {
         || lower.contains("account not found")
 }
 
+/// HTTP/RPC rate-limit / overload signals (case-insensitive).
+pub(crate) fn is_rate_limited_error(msg: &str) -> bool {
+    let lower = msg.to_lowercase();
+    lower.contains("rate limited")
+        || lower.contains("too many requests")
+        || lower.contains("http 429")
+        || lower.contains("status 429")
+        || lower.contains("(429)")
+}
+
 pub(crate) fn book_offer_best_price(value: &Value, invert: bool) -> Option<f64> {
     let offers = value
         .get("result")
@@ -810,6 +820,25 @@ mod tests {
     #[test]
     fn empty_account_tx_page_on_not_found_ignores_other_errors() {
         assert!(empty_account_tx_page_on_not_found("timeout").is_none());
+    }
+
+    #[test]
+    fn is_rate_limited_error_matches_common_signals() {
+        assert!(is_rate_limited_error("Rate limited"));
+        assert!(is_rate_limited_error("HTTP 429 from upstream"));
+        assert!(is_rate_limited_error("Error: Too Many Requests"));
+        assert!(!is_rate_limited_error("timeout"));
+        assert!(!is_rate_limited_error("actNotFound"));
+    }
+
+    #[test]
+    fn is_not_found_error_matches_skill_substrings() {
+        assert!(is_not_found_error("actNotFound"));
+        assert!(is_not_found_error("entryNotFound"));
+        assert!(is_not_found_error("lgrNotFound"));
+        assert!(is_not_found_error("Object not found"));
+        assert!(is_not_found_error("Account not found."));
+        assert!(!is_not_found_error("tecUNFUNDED_PAYMENT"));
     }
 
     #[test]
