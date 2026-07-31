@@ -6,6 +6,7 @@
 #   BINARY_INSTALL  Set to 1 to skip source build even when Cargo.toml is present
 #   VERSION         Specific version for binary install (default: latest release tag)
 #   NO_VERIFY       Set to 1 to skip checksum verification (binary install only)
+#   CI              When set, force non-interactive defaults (same as -q)
 #
 # GitHub Releases API (`releases/latest`): optional auth to reduce rate-limit failures —
 # set GITHUB_TOKEN or GITHUB_API_TOKEN (fine-grained: read repo metadata / contents).
@@ -15,6 +16,7 @@ set -eu
 # ── Globals for EXIT cleanup (avoid nested trap overwriting main cleanup) ───
 TMP_DOWNLOAD_DIR=""
 PARTIAL_BIN_DEST=""
+PARTIAL_RP_DEST=""
 
 # ── Configuration ────────────────────────────────────────────────────────────
 UA="lazyxrp-installer/2.1"
@@ -56,8 +58,9 @@ Options:
   --method binary        Download prebuilt release archive
 
 Environment:
-  INSTALL_DIR, BINARY_INSTALL, VERSION, NO_VERIFY (see script header)
+  INSTALL_DIR, BINARY_INSTALL, VERSION, NO_VERIFY, CI (see script header)
   NO_VERIFY=1            Skip checksum verification (binary install only). ⚠️  Increases MITM risk.
+  CI=1                   Non-interactive (same as -q); auto-updates shell PATH when needed
   Optional: GITHUB_TOKEN or GITHUB_API_TOKEN — authenticated GitHub REST (release / commit lookups)
 
 Examples:
@@ -73,7 +76,7 @@ Manual uninstall (this script does not remove lazyxrp for you):
     lazyxrp --self-uninstall --yes   # skip "type yes" confirmation
 
   Prebuilt/binary install — remove the executable (and backup if present):
-    rm -f INSTALL_DIR/lazyxrp INSTALL_DIR/lazyxrp.bak
+    rm -f INSTALL_DIR/lazyxrp INSTALL_DIR/lazyxrp.bak INSTALL_DIR/rp
     Replace INSTALL_DIR with your target (default: ~/.local/bin).
 
   Source install via this script into ~/.local/bin (cargo install --root ~/.local):
@@ -113,7 +116,7 @@ lazyxrp — manual uninstall (nothing is executed by this script)
 
 1) Binary / GitHub-release install (installer copied lazyxrp to INSTALL_DIR):
 
-   rm -f INSTALL_DIR/lazyxrp INSTALL_DIR/lazyxrp.bak
+   rm -f INSTALL_DIR/lazyxrp INSTALL_DIR/lazyxrp.bak INSTALL_DIR/rp
 
    Default INSTALL_DIR is ~/.local/bin. Use the same directory you chose at install.
 
@@ -192,6 +195,17 @@ parse_args() {
 
 parse_args "$@"
 
+# CI / automation: non-interactive defaults (CodeRabbit-style)
+if [ -n "${CI:-}" ]; then
+    QUIET=1
+fi
+
+# Expand leading ~ in INSTALL_DIR
+case "$INSTALL_DIR" in
+    "~")   INSTALL_DIR="$HOME" ;;
+    "~/"*) INSTALL_DIR="$HOME/${INSTALL_DIR#~/}" ;;
+esac
+
 # ── Colours ──────────────────────────────────────────────────────────────────
 IS_TTY=0
 if [ -t 1 ] && [ "$QUIET" = 0 ]; then
@@ -237,19 +251,35 @@ step()  { printf '\n  %b%b▸ %s%b\n' "$BOLD" "$WHITE" "$*" "$RESET"; }
 # ── Helpers ──────────────────────────────────────────────────────────────────
 has() { command -v "$1" > /dev/null 2>&1; }
 
-ensure_curl() {
-    has curl || die "curl is the only hard requirement. Please install curl first."
+ensure_downloader() {
+    if has curl || has wget; then
+        return 0
+    fi
+    die "curl or wget is required. Please install one of them first."
 }
 
+# Prefer curl; fall back to wget (CodeRabbit-style).
 fetch() {
-    curl -fsSL "${CURL_RETRY[@]}" -H "User-Agent: ${UA}" "$1"
+    local url="$1"
+    if has curl; then
+        curl -fsSL "${CURL_RETRY[@]}" -H "User-Agent: ${UA}" "$url"
+    else
+        wget -q --user-agent="${UA}" -O - "$url"
+    fi
 }
 
 fetch_soft() {
-    curl -sSL "${CURL_RETRY[@]}" \
-        -H "Accept: application/vnd.github+json" \
-        -H "User-Agent: ${UA}" \
-        "$1"
+    local url="$1"
+    if has curl; then
+        curl -sSL "${CURL_RETRY[@]}" \
+            -H "Accept: application/vnd.github+json" \
+            -H "User-Agent: ${UA}" \
+            "$url"
+    else
+        wget -q --user-agent="${UA}" \
+            --header="Accept: application/vnd.github+json" \
+            -O - "$url"
+    fi
 }
 
 # Authenticated GitHub REST (optional; lowers risk of REST rate-limit on NAT/CI-ish IPs).
@@ -257,12 +287,20 @@ curl_github_rest() {
     local url="$1"
     local token="${GITHUB_TOKEN:-${GITHUB_API_TOKEN:-}}"
     if [ -n "$token" ]; then
-        curl -sSL "${CURL_RETRY[@]}" \
-            -H "Accept: application/vnd.github+json" \
-            -H "Authorization: Bearer ${token}" \
-            -H "User-Agent: ${UA}" \
-            -H "X-GitHub-Api-Version: 2022-11-28" \
-            "$url"
+        if has curl; then
+            curl -sSL "${CURL_RETRY[@]}" \
+                -H "Accept: application/vnd.github+json" \
+                -H "Authorization: Bearer ${token}" \
+                -H "User-Agent: ${UA}" \
+                -H "X-GitHub-Api-Version: 2022-11-28" \
+                "$url"
+        else
+            wget -q --user-agent="${UA}" \
+                --header="Accept: application/vnd.github+json" \
+                --header="Authorization: Bearer ${token}" \
+                --header="X-GitHub-Api-Version: 2022-11-28" \
+                -O - "$url"
+        fi
     else
         fetch_soft "$url"
     fi
@@ -270,7 +308,15 @@ curl_github_rest() {
 
 fetch_file() {
     local url="$1" dest="$2"
-    curl -fsSL "${CURL_RETRY[@]}" --progress-bar -o "$dest" "$url"
+    if has curl; then
+        if [ "$IS_TTY" = 1 ]; then
+            curl -fsSL "${CURL_RETRY[@]}" --progress-bar -o "$dest" "$url"
+        else
+            curl -fsSL "${CURL_RETRY[@]}" -o "$dest" "$url"
+        fi
+    else
+        wget -q --user-agent="${UA}" -O "$dest" "$url"
+    fi
 }
 
 # ── Tool Installers ─────────────────────────────────────────────────────────
@@ -316,7 +362,11 @@ offer_install_rustup() {
     local rustup_init
     rustup_init=$(mktemp)
     spinner_start "Downloading rustup-init..."
-    curl -sSf "${CURL_RETRY[@]}" -o "$rustup_init" https://sh.rustup.rs
+    if has curl; then
+        curl -sSf "${CURL_RETRY[@]}" -o "$rustup_init" https://sh.rustup.rs
+    else
+        wget -q -O "$rustup_init" https://sh.rustup.rs
+    fi
     spinner_stop
 
     local default_tc
@@ -658,6 +708,22 @@ verify_checksum() {
     ok "Checksum verified (SHA-256)"
 }
 
+
+# Create short-command symlink: rp -> lazyxrp (same INSTALL_DIR).
+# Skip if a real `rp` binary is already present (cargo install / release archive).
+link_rp_alias() {
+    local dest="${INSTALL_DIR}/${BIN_NAME}"
+    local alias_path="${INSTALL_DIR}/rp"
+    [ -x "$dest" ] || die "Cannot link rp: missing ${dest}"
+    if [ -e "$alias_path" ] && [ ! -L "$alias_path" ]; then
+        ok "Short command already present: ${BOLD}${alias_path}${RESET}"
+        return 0
+    fi
+    # Relative symlink so the install dir stays movable.
+    ln -sfn "${BIN_NAME}" "$alias_path"
+    ok "Short command linked: ${BOLD}${alias_path}${RESET} -> ${BIN_NAME}"
+}
+
 # ── Install Methods ──────────────────────────────────────────────────────────
 install_via_cargo() {
     local repo_root="$1"
@@ -692,6 +758,7 @@ install_via_cargo() {
 
     [ -x "$dest_bin" ] || die "Binary not found: ${dest_bin}"
     ok "Binary installed: ${BOLD}${dest_bin}${RESET}"
+    link_rp_alias
 }
 
 install_via_binary() {
@@ -712,6 +779,7 @@ Install from source instead:
     info "URL: ${DIM}${DOWNLOAD_URL}${RESET}"
 
     TMP_DIR=$(mktemp -d)
+    chmod 700 "$TMP_DIR"
     TMP_DOWNLOAD_DIR="$TMP_DIR"
 
     if [ "$IS_TTY" = 1 ]; then
@@ -738,6 +806,7 @@ Install from source instead:
 
     EXTRACTED="${TMP_DIR}/${BIN_NAME}"
     [ -f "$EXTRACTED" ] || die "Binary not found after extraction"
+    EXTRACTED_RP="${TMP_DIR}/rp"
 
     if [ ! -d "$INSTALL_DIR" ]; then
         info "Creating ${INSTALL_DIR}"
@@ -758,6 +827,18 @@ Install from source instead:
 
     mv "$PARTIAL_BIN_DEST" "$DEST"
     PARTIAL_BIN_DEST=""
+
+    if [ -f "$EXTRACTED_RP" ]; then
+        RP_DEST="${INSTALL_DIR}/rp"
+        PARTIAL_RP_DEST="${RP_DEST}.partial.$$"
+        cp "$EXTRACTED_RP" "$PARTIAL_RP_DEST"
+        chmod 755 "$PARTIAL_RP_DEST"
+        mv "$PARTIAL_RP_DEST" "$RP_DEST"
+        PARTIAL_RP_DEST=""
+        ok "Short command installed: ${BOLD}${RP_DEST}${RESET}"
+    else
+        link_rp_alias
+    fi
 
     rm -rf "$TMP_DIR"
     TMP_DOWNLOAD_DIR=""
@@ -834,21 +915,117 @@ print_success() {
     printf '  %bGet started:%b\n' "$BOLD" "$RESET"
     printf '    %b$ %s --help%b\n' "$CYAN" "$BIN_NAME" "$RESET"
     printf '    %b$ %s watch --account <r-address>%b\n' "$CYAN" "$BIN_NAME" "$RESET"
+    printf '    %b$ rp -t <txid|r-address>%b\n' "$CYAN" "$RESET"
+    printf '  %bTip:%b `rp` is a short lookup command (separate binary; older archives may use a symlink)\n' "$DIM" "$RESET"
     printf '\n'
 }
 
-hint_path_notice() {
+install_dir_in_path() {
     case ":${PATH}:" in
-        *:"${INSTALL_DIR}":*)
+        *:"${INSTALL_DIR}":*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+detect_shell_profile() {
+    local shell_name
+    shell_name=$(basename "${SHELL:-}")
+    case "$shell_name" in
+        bash)
+            if [ -f "$HOME/.bash_profile" ]; then
+                SHELL_PROFILE="$HOME/.bash_profile"
+            elif [ -f "$HOME/.bashrc" ]; then
+                SHELL_PROFILE="$HOME/.bashrc"
+            else
+                SHELL_PROFILE="$HOME/.bash_profile"
+            fi
+            SHELL_RELOAD_COMMAND=". \"$SHELL_PROFILE\""
+            ;;
+        zsh)
+            SHELL_PROFILE="$HOME/.zshrc"
+            SHELL_RELOAD_COMMAND=". \"$SHELL_PROFILE\""
+            ;;
+        fish)
+            SHELL_PROFILE="$HOME/.config/fish/config.fish"
+            SHELL_RELOAD_COMMAND="source \"$SHELL_PROFILE\""
             ;;
         *)
-            printf '\n'
-            printf '  %b%b ⚠  NOTE %b  %s is not in your PATH.\n' "$BG_BLUE" "$WHITE" "$RESET" "$INSTALL_DIR"
-            printf '  Add to your shell profile:\n'
-            printf '\n'
-            printf '    %bexport PATH="$PATH:%s"%b\n' "$CYAN" "$INSTALL_DIR" "$RESET"
+            SHELL_PROFILE="$HOME/.profile"
+            SHELL_RELOAD_COMMAND=". \"$SHELL_PROFILE\""
             ;;
     esac
+}
+
+# Append INSTALL_DIR to the active shell profile when missing from PATH.
+# Interactive: ask. Non-interactive/CI: auto-append (CodeRabbit-style).
+setup_path() {
+    local path_export fish_path_export
+    PATH_UPDATE_STATUS="not_needed"
+    install_dir_in_path && return 0
+
+    detect_shell_profile
+    path_export="export PATH=\"${INSTALL_DIR}:\$PATH\""
+
+    if [ "$IS_TTY" = 1 ]; then
+        if ! prompt_yn "Add ${BOLD}${INSTALL_DIR}${RESET} to PATH in ${SHELL_PROFILE}?" "y"; then
+            PATH_UPDATE_STATUS="skipped"
+            printf '\n'
+            printf '  %b%b ⚠  NOTE %b  %s is not in your PATH.\n' "$BG_BLUE" "$WHITE" "$RESET" "$INSTALL_DIR"
+            printf '  Add manually:\n'
+            printf '    %b%s%b\n' "$CYAN" "$path_export" "$RESET"
+            return 1
+        fi
+    fi
+
+    case "$(basename "${SHELL:-}")" in
+        fish)
+            fish_path_export="set -gx PATH ${INSTALL_DIR} \$PATH"
+            mkdir -p "$(dirname "$SHELL_PROFILE")" 2>/dev/null || true
+            if [ ! -f "$SHELL_PROFILE" ]; then
+                touch "$SHELL_PROFILE" 2>/dev/null || {
+                    warn "Failed to update PATH in $SHELL_PROFILE"
+                    PATH_UPDATE_STATUS="failed"
+                    return 1
+                }
+            fi
+            if ! grep -qF "$fish_path_export" "$SHELL_PROFILE" 2>/dev/null; then
+                if ! printf '%s\n' "$fish_path_export" >> "$SHELL_PROFILE" 2>/dev/null; then
+                    warn "Failed to update PATH in $SHELL_PROFILE"
+                    PATH_UPDATE_STATUS="failed"
+                    return 1
+                fi
+            fi
+            ;;
+        *)
+            if [ ! -f "$SHELL_PROFILE" ]; then
+                touch "$SHELL_PROFILE" 2>/dev/null || {
+                    warn "Failed to update PATH in $SHELL_PROFILE"
+                    PATH_UPDATE_STATUS="failed"
+                    return 1
+                }
+            fi
+            if ! grep -qF "$path_export" "$SHELL_PROFILE" 2>/dev/null; then
+                if ! (
+                    printf '\n' >> "$SHELL_PROFILE" &&
+                    printf '%s\n' '# Added by lazyxrp installer' >> "$SHELL_PROFILE" &&
+                    printf '%s\n' "$path_export" >> "$SHELL_PROFILE"
+                ) 2>/dev/null; then
+                    warn "Failed to update PATH in $SHELL_PROFILE"
+                    PATH_UPDATE_STATUS="failed"
+                    return 1
+                fi
+            fi
+            ;;
+    esac
+
+    PATH_UPDATE_STATUS="updated"
+    ok "Added ${INSTALL_DIR} to PATH in ${SHELL_PROFILE}"
+    warn "Restart your shell or run: ${SHELL_RELOAD_COMMAND}"
+    return 0
+}
+
+hint_path_notice() {
+    setup_path || true
 }
 
 # ── Cleanup on exit ──────────────────────────────────────────────────────────
@@ -858,6 +1035,10 @@ cleanup() {
         rm -f "$PARTIAL_BIN_DEST"
     fi
     PARTIAL_BIN_DEST=""
+    if [ -n "${PARTIAL_RP_DEST:-}" ] && [ -f "$PARTIAL_RP_DEST" ]; then
+        rm -f "$PARTIAL_RP_DEST"
+    fi
+    PARTIAL_RP_DEST=""
     if [ -n "${TMP_DOWNLOAD_DIR:-}" ] && [ -d "$TMP_DOWNLOAD_DIR" ]; then
         rm -rf "$TMP_DOWNLOAD_DIR"
     fi
@@ -876,8 +1057,8 @@ main() {
     print_animated_banner
     print_subtitle
 
-    # Hard requirement: curl
-    ensure_curl
+    # Hard requirement: curl or wget
+    ensure_downloader
 
     # Detect platform (needed for system info display)
     detect_platform
@@ -968,7 +1149,11 @@ main() {
 
     # Pre-flight checks
     step "Pre-flight checks"
-    ok "curl $(curl --version 2>/dev/null | head -1 | sed 's/curl //' | cut -d' ' -f1)"
+    if has curl; then
+        ok "curl $(curl --version 2>/dev/null | head -1 | sed 's/curl //' | cut -d' ' -f1)"
+    else
+        ok "wget $(wget --version 2>/dev/null | head -1 | sed 's/^GNU Wget //' | cut -d' ' -f1)"
+    fi
     sleep_tick 0.1
 
     if has tar; then
