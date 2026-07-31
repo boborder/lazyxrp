@@ -87,7 +87,7 @@ pub fn parse_xrpl_toml(
     domain: &str,
 ) -> color_eyre::Result<XrplTomlData> {
     let value: toml::Table = toml::from_str(text)?;
-    let mut data = XrplTomlData {
+    let mut toml_data = XrplTomlData {
         domain: domain.to_string(),
         ..XrplTomlData::default()
     };
@@ -98,15 +98,15 @@ pub fn parse_xrpl_toml(
         .map(|arr| arr.as_slice())
         .unwrap_or(&[]);
 
-    data.validator_count = validators.len();
+    toml_data.validator_count = validators.len();
 
     for v in validators {
         if let Some(table) = v.as_table()
             && let Some(key) = table.get("public_key").and_then(|k| k.as_str())
             && key.eq_ignore_ascii_case(expected_pubkey)
         {
-            data.validator_found = true;
-            data.attestation = table
+            toml_data.validator_found = true;
+            toml_data.attestation = table
                 .get("attestation")
                 .and_then(|a| a.as_str())
                 .map(|s| s.to_string());
@@ -114,7 +114,7 @@ pub fn parse_xrpl_toml(
         }
     }
 
-    Ok(data)
+    Ok(toml_data)
 }
 
 #[cfg(test)]
@@ -131,10 +131,10 @@ attestation = "Test"
 [[VALIDATORS]]
 public_key = "ABCDEF123456"
 "#;
-        let data = parse_xrpl_toml(text, "abcdef123456", "example.com").unwrap();
-        assert!(data.validator_found);
-        assert_eq!(data.validator_count, 2);
-        assert!(data.attestation.is_none());
+        let toml_data = parse_xrpl_toml(text, "abcdef123456", "example.com").unwrap();
+        assert!(toml_data.validator_found);
+        assert_eq!(toml_data.validator_count, 2);
+        assert!(toml_data.attestation.is_none());
     }
 
     #[test]
@@ -142,8 +142,8 @@ public_key = "ABCDEF123456"
         let text = r#"[[VALIDATORS]]
 public_key = "OTHER"
 "#;
-        let data = parse_xrpl_toml(text, "MISMATCH", "example.com").unwrap();
-        assert!(!data.validator_found);
-        assert_eq!(data.validator_count, 1);
+        let toml_data = parse_xrpl_toml(text, "MISMATCH", "example.com").unwrap();
+        assert!(!toml_data.validator_found);
+        assert_eq!(toml_data.validator_count, 1);
     }
 }

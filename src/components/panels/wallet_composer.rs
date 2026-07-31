@@ -292,14 +292,22 @@ impl WalletPanel {
         let inner = block.inner(popup);
         frame.render_widget(block, popup);
 
-        let label = theme::dim_style();
-        let value = theme::accent_style();
-        let hi = Style::new().add_modifier(Modifier::BOLD | Modifier::UNDERLINED);
+        let label_style = theme::dim_style();
+        let value_style = theme::accent_style();
+        let highlight_style = Style::new().add_modifier(Modifier::BOLD | Modifier::UNDERLINED);
 
         let body = match phase {
             ComposerPhase::PickKind { selected } => {
-                let hi0 = if *selected == 0 { hi } else { label };
-                let hi1 = if *selected == 1 { hi } else { label };
+                let hi0 = if *selected == 0 {
+                    highlight_style
+                } else {
+                    label_style
+                };
+                let hi1 = if *selected == 1 {
+                    highlight_style
+                } else {
+                    label_style
+                };
                 Paragraph::new(vec![
                     Line::from(""),
                     Line::from(vec![
@@ -330,9 +338,13 @@ impl WalletPanel {
                     Line::from(vec![
                         Span::styled(
                             format!("SetFlag [{}]", if self.field_row == 0 { "*" } else { " " }),
-                            if self.field_row == 0 { hi } else { label },
+                            if self.field_row == 0 {
+                                highlight_style
+                            } else {
+                                label_style
+                            },
                         ),
-                        Span::styled(Self::label_for_flag(self.set_flag_ix), value),
+                        Span::styled(Self::label_for_flag(self.set_flag_ix), value_style),
                         Span::raw("  , ."),
                     ]),
                     Line::from(vec![
@@ -341,9 +353,13 @@ impl WalletPanel {
                                 "ClearFlag [{}]",
                                 if self.field_row == 1 { "*" } else { " " }
                             ),
-                            if self.field_row == 1 { hi } else { label },
+                            if self.field_row == 1 {
+                                highlight_style
+                            } else {
+                                label_style
+                            },
                         ),
-                        Span::styled(Self::label_for_flag(self.clear_flag_ix), value),
+                        Span::styled(Self::label_for_flag(self.clear_flag_ix), value_style),
                         Span::raw("  , ."),
                     ]),
                     Line::from(vec![
@@ -352,16 +368,24 @@ impl WalletPanel {
                                 "Domain(ascii) [{}]",
                                 if self.field_row == 2 { "*" } else { " " }
                             ),
-                            if self.field_row == 2 { hi } else { label },
+                            if self.field_row == 2 {
+                                highlight_style
+                            } else {
+                                label_style
+                            },
                         ),
-                        Span::styled(self.domain.clone(), value),
+                        Span::styled(self.domain.clone(), value_style),
                     ]),
                     Line::from(vec![
                         Span::styled(
                             format!("TickSize [{}]", if self.field_row == 3 { "*" } else { " " }),
-                            if self.field_row == 3 { hi } else { label },
+                            if self.field_row == 3 {
+                                highlight_style
+                            } else {
+                                label_style
+                            },
                         ),
-                        Span::styled(self.tick_size.clone(), value),
+                        Span::styled(self.tick_size.clone(), value_style),
                         Span::raw("  0 or 3–15, empty=skip"),
                     ]),
                     Line::from(vec![
@@ -370,9 +394,13 @@ impl WalletPanel {
                                 "TransferRate [{}]",
                                 if self.field_row == 4 { "*" } else { " " }
                             ),
-                            if self.field_row == 4 { hi } else { label },
+                            if self.field_row == 4 {
+                                highlight_style
+                            } else {
+                                label_style
+                            },
                         ),
-                        Span::styled(self.transfer_rate.clone(), value),
+                        Span::styled(self.transfer_rate.clone(), value_style),
                         Span::raw("  empty=skip"),
                     ]),
                     Line::from(""),
@@ -404,7 +432,7 @@ impl WalletPanel {
                 let mut lines: Vec<Line> = vec![Line::from(vec![
                     Span::styled(
                         format!("Destination   [{}]", if *row == 0 { "*" } else { " " }),
-                        if *row == 0 { hi } else { labels },
+                        if *row == 0 { highlight_style } else { labels },
                     ),
                     Span::styled(destination.clone(), value_st),
                 ])];
@@ -413,21 +441,21 @@ impl WalletPanel {
                     lines.push(Line::from(vec![
                         Span::styled(
                             format!("Currency (3c) [{}]", if *row == 1 { "*" } else { " " }),
-                            if *row == 1 { hi } else { labels },
+                            if *row == 1 { highlight_style } else { labels },
                         ),
                         Span::styled(iou_currency.clone(), value_st),
                     ]));
                     lines.push(Line::from(vec![
                         Span::styled(
                             format!("Issuer (r…)   [{}]", if *row == 2 { "*" } else { " " }),
-                            if *row == 2 { hi } else { labels },
+                            if *row == 2 { highlight_style } else { labels },
                         ),
                         Span::styled(iou_issuer.clone(), value_st),
                     ]));
                     lines.push(Line::from(vec![
                         Span::styled(
                             format!("Amount        [{}]", if *row == 3 { "*" } else { " " }),
-                            if *row == 3 { hi } else { labels },
+                            if *row == 3 { highlight_style } else { labels },
                         ),
                         Span::styled(amount.clone(), value_st),
                     ]));
@@ -435,7 +463,7 @@ impl WalletPanel {
                     lines.push(Line::from(vec![
                         Span::styled(
                             format!("Amount XRP    [{}]", if *row == 1 { "*" } else { " " }),
-                            if *row == 1 { hi } else { labels },
+                            if *row == 1 { highlight_style } else { labels },
                         ),
                         Span::styled(amount.clone(), value_st),
                     ]));

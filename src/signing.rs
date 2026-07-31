@@ -650,8 +650,8 @@ mod tests {
         let _g = env_lock();
         let _env = TestEnvGuard::new(&[SEED_ENV]);
         _env.remove(SEED_ENV);
-        let cfg = SigningConfig::prime_seed_source(None);
-        assert!(!cfg.has_seed());
+        let signing_config = SigningConfig::prime_seed_source(None);
+        assert!(!signing_config.has_seed());
     }
 
     #[test]
@@ -720,8 +720,8 @@ mod tests {
         let _g = env_lock();
         let _env = TestEnvGuard::new(&[SEED_ENV]);
         _env.remove(SEED_ENV);
-        let cfg = SigningConfig::prime_seed_source(Some("sTest1234".to_string()));
-        assert!(cfg.has_seed());
+        let signing_config = SigningConfig::prime_seed_source(Some("sTest1234".to_string()));
+        assert!(signing_config.has_seed());
     }
 
     #[test]
@@ -803,10 +803,11 @@ mod tests {
         let _g = env_lock();
         let _env = TestEnvGuard::new(&[SEED_ENV]);
         _env.set(SEED_ENV, "sFromEnvOverride");
-        let cfg = SigningConfig::prime_seed_source(Some("sFromConfigIgnored".to_string()));
-        assert!(cfg.has_seed());
+        let signing_config =
+            SigningConfig::prime_seed_source(Some("sFromConfigIgnored".to_string()));
+        assert!(signing_config.has_seed());
         assert_eq!(
-            cfg.seed.as_ref().unwrap().expose_secret(),
+            signing_config.seed.as_ref().unwrap().expose_secret(),
             "sFromEnvOverride"
         );
     }

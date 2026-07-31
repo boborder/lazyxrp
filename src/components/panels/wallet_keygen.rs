@@ -27,25 +27,25 @@ impl WalletPanel {
         let inner = block.inner(popup);
         frame.render_widget(block, popup);
 
-        let label = theme::dim_style();
-        let value = theme::accent_style();
-        let warn = theme::warning_style();
+        let label_style = theme::dim_style();
+        let value_style = theme::accent_style();
+        let warning_style = theme::warning_style();
 
         let body = Paragraph::new(vec![
             Line::from(vec![
-                Span::styled("Seed:   ", label),
-                Span::styled(result.master_seed.clone(), warn),
+                Span::styled("Seed:   ", label_style),
+                Span::styled(result.master_seed.clone(), warning_style),
             ]),
             Line::from(vec![
-                Span::styled("Addr:   ", label),
-                Span::styled(result.account_id.clone(), value),
+                Span::styled("Addr:   ", label_style),
+                Span::styled(result.account_id.clone(), value_style),
             ]),
             Line::from(vec![
-                Span::styled("PubKey: ", label),
+                Span::styled("PubKey: ", label_style),
                 Span::styled(result.public_key.clone(), theme::secondary_style()),
             ]),
             Line::from(vec![
-                Span::styled("Type:   ", label),
+                Span::styled("Type:   ", label_style),
                 Span::raw(format!(
                     "{}  Seed hex: {}",
                     result.key_type, result.master_seed_hex
@@ -54,7 +54,7 @@ impl WalletPanel {
             Line::from(""),
             Line::from(Span::styled(
                 "⚠ Save the seed offline!  Set XRPL_SEED=<seed>",
-                warn.add_modifier(Modifier::BOLD),
+                warning_style.add_modifier(Modifier::BOLD),
             )),
             Line::from(Span::styled(
                 "   to activate · Esc / g to dismiss",

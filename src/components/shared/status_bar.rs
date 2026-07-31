@@ -69,7 +69,10 @@ impl StatusBar {
         }
     }
 
-    fn update_freshness(cache: &mut Option<(u64, String)>, latest: Option<Instant>) -> String {
+    fn cached_freshness_label(
+        cache: &mut Option<(u64, String)>,
+        latest: Option<Instant>,
+    ) -> String {
         match latest {
             Some(t) => {
                 let secs = t.elapsed().as_secs();
@@ -78,15 +81,15 @@ impl StatusBar {
                 {
                     return cached_str.clone();
                 }
-                let s = if secs < 60 {
+                let freshness_label = if secs < 60 {
                     format!("{secs}s")
                 } else if secs < 3600 {
                     format!("{}m", secs / 60)
                 } else {
                     format!("{}h", secs / 3600)
                 };
-                *cache = Some((secs, s.clone()));
-                s
+                *cache = Some((secs, freshness_label.clone()));
+                freshness_label
             }
             None => {
                 *cache = None;
@@ -106,11 +109,11 @@ impl StatusBar {
     }
 }
 
-fn short_account(s: &str) -> String {
-    if s.len() > 12 {
-        format!("{}…{}", &s[..6], &s[s.len() - 4..])
+fn short_account(address: &str) -> String {
+    if address.len() > 12 {
+        format!("{}…{}", &address[..6], &address[address.len() - 4..])
     } else {
-        s.to_string()
+        address.to_string()
     }
 }
 
@@ -175,7 +178,7 @@ impl Component for StatusBar {
         let state_style = Style::new()
             .fg(state_color)
             .add_modifier(Modifier::BOLD | Modifier::REVERSED);
-        let label = theme::dim_style();
+        let label_style = theme::dim_style();
         let state_icon = match state {
             "ONLINE" => "●",
             "OFFLINE" => "✖",
@@ -188,37 +191,37 @@ impl Component for StatusBar {
         let mut spans = vec![
             Span::styled(state_display.clone(), state_style),
             Span::raw(" "),
-            Span::styled("acct:", label),
+            Span::styled("acct:", label_style),
             Span::styled(self.account_short.clone(), theme::accent_style()),
             Span::raw("  "),
-            Span::styled("srv:", label),
-            Span::raw(Self::update_freshness(
+            Span::styled("srv:", label_style),
+            Span::raw(Self::cached_freshness_label(
                 &mut self.freshness_srv,
                 self.last_server_update,
             )),
             Span::raw("  "),
-            Span::styled("acc:", label),
-            Span::raw(Self::update_freshness(
+            Span::styled("acc:", label_style),
+            Span::raw(Self::cached_freshness_label(
                 &mut self.freshness_acc,
                 self.last_account_update,
             )),
             Span::raw("  "),
-            Span::styled("bk:", label),
-            Span::raw(Self::update_freshness(
+            Span::styled("bk:", label_style),
+            Span::raw(Self::cached_freshness_label(
                 &mut self.freshness_book,
                 self.last_book_update,
             )),
         ];
         if let Some(t) = self.last_any_update_wall {
             spans.push(Span::raw("  "));
-            spans.push(Span::styled("@", label));
+            spans.push(Span::styled("@", label_style));
             // Cache wall-time string (changes once per second)
             let wall_str = match &self.cached_wall_time {
-                Some(s) if s.len() >= 8 => s.clone(), // rough heuristic; reformat below
+                Some(address) if address.len() >= 8 => address.clone(), // rough heuristic; reformat below
                 _ => {
-                    let s = fmt::fmt_local_hms(t);
-                    self.cached_wall_time = Some(s.clone());
-                    s
+                    let address = fmt::fmt_local_hms(t);
+                    self.cached_wall_time = Some(address.clone());
+                    address
                 }
             };
             spans.push(Span::styled(wall_str, theme::accent_style()));
@@ -227,10 +230,10 @@ impl Component for StatusBar {
             spans.extend(self.cached_price_spans.clone());
         }
         if self.refreshing_account || self.refreshing_book {
-            let s = crate::components::shared::widgets::spinner(self.tick);
+            let address = crate::components::shared::widgets::spinner(self.tick);
             spans.push(Span::raw("  "));
-            spans.push(Span::styled(s, theme::accent_style()));
-            spans.push(Span::styled(" refreshing", label));
+            spans.push(Span::styled(address, theme::accent_style()));
+            spans.push(Span::styled(" refreshing", label_style));
         }
         if let Some(err_display) = &self.cached_error_display {
             spans.push(Span::raw("  "));

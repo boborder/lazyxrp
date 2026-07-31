@@ -239,7 +239,7 @@ impl Component for ServerPanel {
         ])
         .areas(inner);
 
-        let label = theme::dim_style();
+        let label_style = theme::dim_style();
         let server_info = self.server_info.as_ref();
         let ledger = server_info
             .map(|s| fmt::group_digits_u64(u64::from(s.ledger_index)))
@@ -270,33 +270,33 @@ impl Component for ServerPanel {
 
         let mut lines = vec![
             Line::from(vec![
-                Span::styled("URL:     ", label),
+                Span::styled("URL:     ", label_style),
                 Span::styled(
                     fmt::truncate_middle(&self.server_url, 48),
                     theme::accent_style(),
                 ),
             ]),
             Line::from(vec![
-                Span::styled("Ledger:  ", label),
+                Span::styled("Ledger:  ", label_style),
                 Span::styled(ledger, theme::accent_style()),
-                Span::styled("  Host: ", label),
+                Span::styled("  Host: ", label_style),
                 Span::raw(host),
             ]),
             Line::from(vec![
-                Span::styled("Fee:     ", label),
+                Span::styled("Fee:     ", label_style),
                 Span::raw(format!("{fee} drops")),
-                Span::styled("  Reserve: ", label),
+                Span::styled("  Reserve: ", label_style),
                 Span::raw(format!("{reserve} XRP")),
             ]),
             Line::from(vec![
-                Span::styled("Quorum:  ", label),
+                Span::styled("Quorum:  ", label_style),
                 Span::raw(&quorum),
-                Span::styled("  dUNL: ", label),
+                Span::styled("  dUNL: ", label_style),
                 Span::styled(
                     format!("{dunl_count} · seq {dunl_seq}"),
                     theme::accent_style(),
                 ),
-                Span::styled("  ", label),
+                Span::styled("  ", label_style),
                 Span::styled(
                     dunl_exp.clone(),
                     if dunl_exp.contains('!') {
@@ -312,7 +312,7 @@ impl Component for ServerPanel {
             let match_note =
                 quorum_match_tag(server_info.and_then(|s| s.validation_quorum), vl.count);
             let mut spans = vec![
-                Span::styled("Node UNL:", label),
+                Span::styled("Node UNL:", label_style),
                 Span::raw(" "),
                 Span::styled(
                     format!("{} · {} val", vl.status, vl.count),

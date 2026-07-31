@@ -596,8 +596,8 @@ impl<'de> Deserialize<'de> for Styles {
 pub fn parse_style(line: &str) -> Style {
     let (foreground, background) =
         line.split_at(line.to_lowercase().find("on ").unwrap_or(line.len()));
-    let foreground = process_color_string(foreground);
-    let background = process_color_string(&background.replace("on ", ""));
+    let foreground = extract_color_and_modifiers(foreground);
+    let background = extract_color_and_modifiers(&background.replace("on ", ""));
 
     let mut style = Style::default();
     if let Some(fg) = parse_color(&foreground.0) {
@@ -610,7 +610,7 @@ pub fn parse_style(line: &str) -> Style {
     style
 }
 
-fn process_color_string(color_str: &str) -> (String, Modifier) {
+fn extract_color_and_modifiers(color_str: &str) -> (String, Modifier) {
     let color = color_str
         .replace("grey", "gray")
         .replace("bright ", "")
@@ -786,8 +786,8 @@ mod tests {
     }
 
     #[test]
-    fn test_process_color_string() {
-        let (color, modifiers) = process_color_string("underline bold inverse gray");
+    fn test_extract_color_and_modifiers() {
+        let (color, modifiers) = extract_color_and_modifiers("underline bold inverse gray");
         assert_eq!(color, "gray");
         assert!(modifiers.contains(Modifier::UNDERLINED));
         assert!(modifiers.contains(Modifier::BOLD));

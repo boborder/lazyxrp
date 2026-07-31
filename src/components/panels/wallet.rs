@@ -459,8 +459,8 @@ impl Component for WalletPanel {
         let inner = block.inner(area);
         frame.render_widget(block, area);
 
-        let label = theme::dim_style();
-        let value = theme::accent_style();
+        let label_style = theme::dim_style();
+        let value_style = theme::accent_style();
 
         let [summary_area, hint] =
             Layout::vertical([Constraint::Fill(1), Constraint::Length(1)]).areas(inner);
@@ -482,17 +482,17 @@ impl Component for WalletPanel {
 
         let mut summary = vec![
             Line::from(vec![
-                Span::styled("Account ", label),
-                Span::styled(Self::shorten_display(&account.account, 42), value),
+                Span::styled("Account ", label_style),
+                Span::styled(Self::shorten_display(&account.account, 42), value_style),
             ]),
             Line::from(vec![
-                Span::styled("Balance ", label),
+                Span::styled("Balance ", label_style),
                 Span::styled(
                     format!(
                         "{} XRP",
                         fmt::fmt_xrp(account.balance_xrp.parse().unwrap_or(0.0))
                     ),
-                    value,
+                    value_style,
                 ),
                 Span::styled(
                     format!(
@@ -507,7 +507,7 @@ impl Component for WalletPanel {
                 ),
             ]),
             {
-                let mut spans: Vec<Span> = vec![Span::styled("Flags", label)];
+                let mut spans: Vec<Span> = vec![Span::styled("Flags", label_style)];
                 spans.extend(flag_spans);
                 spans.push(Span::styled(
                     "  ·  t composer  g keygen",
@@ -518,14 +518,14 @@ impl Component for WalletPanel {
         ];
         if let Some(ref rk) = account.regular_key {
             summary.push(Line::from(vec![
-                Span::styled("RegKey ", label),
+                Span::styled("RegKey ", label_style),
                 Span::styled(Self::shorten_display(rk, 36), theme::warning_style()),
             ]));
         }
         if let Some(ref dh) = account.domain_hex {
             let domain_str = Self::decode_domain_hex(dh).unwrap_or_else(|| dh.clone());
             summary.push(Line::from(vec![
-                Span::styled("Domain ", label),
+                Span::styled("Domain ", label_style),
                 Span::styled(domain_str, theme::dim_style()),
             ]));
         }

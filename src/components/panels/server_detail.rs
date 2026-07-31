@@ -91,10 +91,10 @@ pub(super) fn validator_detail_lines(
     status: u16,
     content_type: Option<&str>,
 ) -> Vec<Line<'static>> {
-    let label = theme::dim_style();
-    let value = theme::accent_style();
-    let ok = theme::success_style();
-    let warn = theme::warning_style();
+    let label_style = theme::dim_style();
+    let value_style = theme::accent_style();
+    let success_style = theme::success_style();
+    let warning_style = theme::warning_style();
 
     let mut lines = vec![
         Line::from(vec![Span::styled(
@@ -106,7 +106,7 @@ pub(super) fn validator_detail_lines(
 
     let push = |lines: &mut Vec<Line<'static>>, key: &str, val: String, style: Style| {
         lines.push(Line::from(vec![
-            Span::styled(format!("{key:<16}"), label),
+            Span::styled(format!("{key:<16}"), label_style),
             Span::styled(val, style),
         ]));
     };
@@ -115,7 +115,11 @@ pub(super) fn validator_detail_lines(
         &mut lines,
         "Domain",
         row.domain.clone().unwrap_or_else(|| "—".to_string()),
-        if row.domain.is_some() { ok } else { warn },
+        if row.domain.is_some() {
+            success_style
+        } else {
+            warning_style
+        },
     );
     push(
         &mut lines,
@@ -125,7 +129,11 @@ pub(super) fn validator_detail_lines(
         } else {
             "missing".to_string()
         },
-        if row.has_manifest { ok } else { warn },
+        if row.has_manifest {
+            success_style
+        } else {
+            warning_style
+        },
     );
     push(
         &mut lines,
@@ -133,7 +141,7 @@ pub(super) fn validator_detail_lines(
         row.sequence
             .map(|s| s.to_string())
             .unwrap_or_else(|| "—".to_string()),
-        value,
+        value_style,
     );
     push(
         &mut lines,
@@ -152,20 +160,24 @@ pub(super) fn validator_detail_lines(
     if row.master_differs_from_signing() {
         lines.push(Line::from(Span::styled(
             "  (master ≠ signing — rotated or dual-key setup)",
-            warn,
+            warning_style,
         )));
     }
 
     lines.push(Line::from(""));
     lines.push(Line::from(vec![
-        Span::styled("dUNL list", label),
+        Span::styled("dUNL list", label_style),
         Span::raw(format!(
             " · seq {} · {} validators · exp {}",
             dunl.sequence, dunl.validator_count, dunl.expiration_utc
         )),
     ]));
     if let Some(days) = dunl.days_until_expiry() {
-        let style = if days < 14 { warn } else { label };
+        let style = if days < 14 {
+            warning_style
+        } else {
+            label_style
+        };
         lines.push(Line::from(Span::styled(
             format!("  expires in {days} day(s)"),
             style,
@@ -173,16 +185,19 @@ pub(super) fn validator_detail_lines(
     }
 
     lines.push(Line::from(""));
-    lines.push(Line::from(vec![Span::styled("xrp-ledger.toml", label)]));
+    lines.push(Line::from(vec![Span::styled(
+        "xrp-ledger.toml",
+        label_style,
+    )]));
     let status_style = if (200..300).contains(&status) {
-        ok
+        success_style
     } else if status >= 400 {
         theme::error_style()
     } else {
-        warn
+        warning_style
     };
     lines.push(Line::from(vec![
-        Span::styled("  HTTP status:", label),
+        Span::styled("  HTTP status:", label_style),
         Span::styled(
             if status > 0 {
                 status.to_string()
@@ -194,8 +209,8 @@ pub(super) fn validator_detail_lines(
     ]));
     if let Some(ct) = content_type {
         lines.push(Line::from(vec![
-            Span::styled("  Content-Type:", label),
-            Span::styled(ct.to_string(), value),
+            Span::styled("  Content-Type:", label_style),
+            Span::styled(ct.to_string(), value_style),
         ]));
     }
     match toml {
@@ -207,21 +222,25 @@ pub(super) fn validator_detail_lines(
         }
         None => {}
         Some(Ok(data)) => {
-            let verified_style = if data.validator_found { ok } else { warn };
+            let verified_style = if data.validator_found {
+                success_style
+            } else {
+                warning_style
+            };
             lines.push(Line::from(vec![
-                Span::styled("  Domain verified:", label),
+                Span::styled("  Domain verified:", label_style),
                 Span::styled(
                     if data.validator_found { "Yes" } else { "No" },
                     verified_style,
                 ),
             ]));
             lines.push(Line::from(vec![
-                Span::styled("  Validators listed:", label),
-                Span::styled(data.validator_count.to_string(), value),
+                Span::styled("  Validators listed:", label_style),
+                Span::styled(data.validator_count.to_string(), value_style),
             ]));
             if let Some(att) = &data.attestation {
                 lines.push(Line::from(vec![
-                    Span::styled("  Attestation:", label),
+                    Span::styled("  Attestation:", label_style),
                     Span::styled(att.clone(), theme::secondary_style()),
                 ]));
             }
@@ -236,7 +255,7 @@ pub(super) fn validator_detail_lines(
 
     if let Some(raw) = raw {
         lines.push(Line::from(""));
-        lines.push(Line::from(vec![Span::styled("Raw TOML", label)]));
+        lines.push(Line::from(vec![Span::styled("Raw TOML", label_style)]));
         for line_text in raw.lines() {
             lines.push(Line::from(Span::styled(
                 line_text.to_string(),

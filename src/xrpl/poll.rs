@@ -72,7 +72,7 @@ pub(crate) fn action_from_account_tx_result(
     }
 }
 
-pub(crate) async fn run_simulate(
+pub(crate) async fn simulate_tx_requiring_tes_success(
     rpc: &RpcClient,
     tx_json: Value,
 ) -> Result<SimulateResult, String> {
@@ -547,7 +547,7 @@ async fn submit_account_set_transaction(
         }
     };
 
-    let sim = match run_simulate(rpc, tx_json).await {
+    let sim = match simulate_tx_requiring_tes_success(rpc, tx_json).await {
         Ok(s) => s,
         Err(e) => {
             send_action(action_tx, err(e));
@@ -674,7 +674,7 @@ async fn submit_payment_transaction(
         }
     };
 
-    let sim = match run_simulate(rpc, tx_json).await {
+    let sim = match simulate_tx_requiring_tes_success(rpc, tx_json).await {
         Ok(s) => s,
         Err(e) => {
             send_action(action_tx, err(e));

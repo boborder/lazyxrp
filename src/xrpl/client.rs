@@ -56,7 +56,7 @@ impl RpcClient {
 
             match result {
                 Ok(value) => {
-                    check_xrpl_error(&value)?;
+                    ensure_no_xrpl_rpc_error(&value)?;
                     return Ok(value);
                 }
                 Err(e) if attempt < 2 => {
@@ -206,8 +206,8 @@ impl RpcClient {
         let account = match info_res {
             Ok(Ok(acc)) => Some(acc),
             Ok(Err(e)) => {
-                let msg = format!("{e}");
-                if is_not_found_error(&msg) {
+                let error_text = format!("{e}");
+                if is_not_found_error(&error_text) {
                     None
                 } else {
                     return Err(e);
@@ -219,8 +219,8 @@ impl RpcClient {
         let (txs, marker) = match tx_res {
             Ok(Ok(page)) => (page.rows, page.marker),
             Ok(Err(e)) => {
-                let msg = format!("{e}");
-                if is_not_found_error(&msg) {
+                let error_text = format!("{e}");
+                if is_not_found_error(&error_text) {
                     (vec![], None)
                 } else {
                     return Err(e);
@@ -426,7 +426,7 @@ impl RpcClient {
     }
 }
 
-fn check_xrpl_error(value: &Value) -> color_eyre::Result<()> {
+fn ensure_no_xrpl_rpc_error(value: &Value) -> color_eyre::Result<()> {
     if let Some(result) = value.get("result")
         && let Some(error) = result.get("error").and_then(Value::as_str)
     {
@@ -434,7 +434,7 @@ fn check_xrpl_error(value: &Value) -> color_eyre::Result<()> {
             .get("error_code")
             .and_then(|v| v.as_u64())
             .unwrap_or(0);
-        let msg = result
+        let error_message = result
             .get("error_message")
             .and_then(Value::as_str)
             .unwrap_or(error);
@@ -443,7 +443,7 @@ fn check_xrpl_error(value: &Value) -> color_eyre::Result<()> {
         } else {
             code.to_string()
         };
-        return Err(color_eyre::eyre::eyre!("[XRPL-{kind}] {msg}"));
+        return Err(color_eyre::eyre::eyre!("[XRPL-{kind}] {error_message}"));
     }
     Ok(())
 }
@@ -1394,44 +1394,58 @@ fn parse_account_objects_value(value: &Value) -> Vec<LedgerObjectRow> {
     arr.iter().filter_map(parse_one_ledger_object_row).collect()
 }
 
-fn parse_one_ledger_object_row(obj: &Value) -> Option<LedgerObjectRow> {
-    let ledger_type = obj.get("LedgerEntryType")?.as_str()?.to_string();
-    let index = obj
+fn parse_one_ledger_object_row(ledger_object_json: &Value) -> Option<LedgerObjectRow> {
+    let ledger_type = ledger_object_json
+        .get("LedgerEntryType")?
+        .as_str()?
+        .to_string();
+    let index = ledger_object_json
         .get("index")
         .and_then(Value::as_str)
         .filter(|s| !s.is_empty())
         .map(str::to_string)
-        .or_else(|| obj.get("hash").and_then(Value::as_str).map(str::to_string))
+        .or_else(|| {
+            ledger_object_json
+                .get("hash")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
         .unwrap_or_default();
-    let detail = summarize_ledger_object(obj);
+    let detail = summarize_ledger_object(ledger_object_json);
     Some(LedgerObjectRow {
         ledger_type,
         index,
         detail,
-        raw_json: ArcValue::new(obj.clone()),
+        raw_json: ArcValue::new(ledger_object_json.clone()),
     })
 }
 
-fn summarize_ledger_object(obj: &Value) -> String {
-    let ledger_entry_type = json_str(obj, &["LedgerEntryType"]);
-    let destination = json_str(obj, &["Destination"]);
+fn summarize_ledger_object(ledger_object_json: &Value) -> String {
+    let ledger_entry_type = json_str(ledger_object_json, &["LedgerEntryType"]);
+    let destination = json_str(ledger_object_json, &["Destination"]);
     match ledger_entry_type {
         "Check" => {
-            let amt = format_amount(obj.get("SendMax"));
+            let amt = format_amount(ledger_object_json.get("SendMax"));
             if destination.is_empty() {
                 format!("Check · {amt}")
             } else {
                 format!("→ {destination} · {amt}")
             }
         }
-        "Ticket" => format!("seq {}", extract_json_u32(obj, &["TicketSequence"])),
+        "Ticket" => format!(
+            "seq {}",
+            extract_json_u32(ledger_object_json, &["TicketSequence"])
+        ),
         "MPToken" | "MPTokenIssuance" => {
-            let mid = json_str(obj, &["MPTokenIssuanceID"]);
-            let raw_amt = obj.get("Amount").map(|v| v.to_string()).unwrap_or_default();
+            let mid = json_str(ledger_object_json, &["MPTokenIssuanceID"]);
+            let raw_amt = ledger_object_json
+                .get("Amount")
+                .map(|v| v.to_string())
+                .unwrap_or_default();
             format!("MPT · {mid} · {raw_amt}")
         }
         "PayChannel" => {
-            let amt = format_amount(obj.get("Amount"));
+            let amt = format_amount(ledger_object_json.get("Amount"));
             if destination.is_empty() {
                 format!("PayChan · {amt}")
             } else {
@@ -1439,7 +1453,7 @@ fn summarize_ledger_object(obj: &Value) -> String {
             }
         }
         "Escrow" => {
-            let amt = format_amount(obj.get("Amount"));
+            let amt = format_amount(ledger_object_json.get("Amount"));
             if destination.is_empty() {
                 format!("Escrow · {amt}")
             } else {
@@ -1447,12 +1461,15 @@ fn summarize_ledger_object(obj: &Value) -> String {
             }
         }
         "DepositPreauth" => {
-            let authorized_account = json_str(obj, &["Authorize"]);
+            let authorized_account = json_str(ledger_object_json, &["Authorize"]);
             format!("auth {authorized_account}")
         }
-        "SignerList" => format!("quorum {}", extract_json_u32(obj, &["SignerQuorum"])),
+        "SignerList" => format!(
+            "quorum {}",
+            extract_json_u32(ledger_object_json, &["SignerQuorum"])
+        ),
         _ => {
-            let raw_json = obj.to_string();
+            let raw_json = ledger_object_json.to_string();
             let truncated_json = raw_json.chars().take(88).collect::<String>();
             if raw_json.len() > 88 {
                 format!("{truncated_json}…")
@@ -1789,7 +1806,7 @@ mod tests {
     }
 
     #[test]
-    fn check_xrpl_error_preserves_not_found_as_error() {
+    fn ensure_no_xrpl_rpc_error_preserves_not_found_as_error() {
         let value = json!({
             "result": {
                 "error": "actNotFound",
@@ -1797,7 +1814,7 @@ mod tests {
                 "error_message": "Account not found."
             }
         });
-        let err = check_xrpl_error(&value).expect_err("not found must not be swallowed");
+        let err = ensure_no_xrpl_rpc_error(&value).expect_err("not found must not be swallowed");
         assert!(is_not_found_error(&format!("{err}")));
     }
 

@@ -78,31 +78,31 @@ impl Component for AmmPanel {
             return Ok(());
         };
         let block = titled_block("AMM Pool", self.is_focused);
-        let label = theme::dim_style();
-        let value = theme::accent_style();
+        let label_style = theme::dim_style();
+        let value_style = theme::accent_style();
         let lines = vec![
             Line::from(vec![
-                Span::styled("Asset1:      ", label),
-                Span::styled(amm.asset1.clone(), value),
+                Span::styled("Asset1:      ", label_style),
+                Span::styled(amm.asset1.clone(), value_style),
             ]),
             Line::from(vec![
-                Span::styled("Asset2:      ", label),
-                Span::styled(amm.asset2.clone(), value),
+                Span::styled("Asset2:      ", label_style),
+                Span::styled(amm.asset2.clone(), value_style),
             ]),
             Line::from(vec![
-                Span::styled("Pool1:       ", label),
+                Span::styled("Pool1:       ", label_style),
                 Span::raw(amm.pool1.clone()),
             ]),
             Line::from(vec![
-                Span::styled("Pool2:       ", label),
+                Span::styled("Pool2:       ", label_style),
                 Span::raw(amm.pool2.clone()),
             ]),
             Line::from(vec![
-                Span::styled("LP Token:    ", label),
+                Span::styled("LP Token:    ", label_style),
                 Span::raw(amm.lp_token.clone()),
             ]),
             Line::from(vec![
-                Span::styled("Trading Fee: ", label),
+                Span::styled("Trading Fee: ", label_style),
                 Span::raw(format!("{} (× 0.001%)", amm.trading_fee)),
             ]),
         ];

@@ -101,8 +101,8 @@ impl Component for AccountPanel {
                 .areas(inner);
 
         // ── Left: identity / activity ─────────────────────────────────────
-        let label = theme::dim_style();
-        let value = theme::accent_style();
+        let label_style = theme::dim_style();
+        let value_style = theme::accent_style();
         let currency = self
             .config
             .as_ref()
@@ -120,27 +120,27 @@ impl Component for AccountPanel {
         };
         let id_lines = vec![
             Line::from(vec![
-                Span::styled("Account:    ", label),
-                Span::styled(account.account.clone(), value),
+                Span::styled("Account:    ", label_style),
+                Span::styled(account.account.clone(), value_style),
             ]),
             Line::from(vec![
-                Span::styled("Sequence:   ", label),
+                Span::styled("Sequence:   ", label_style),
                 Span::raw(fmt::group_digits_u64(u64::from(account.sequence))),
             ]),
             Line::from(vec![
-                Span::styled("OwnerCount: ", label),
+                Span::styled("OwnerCount: ", label_style),
                 Span::raw(account.owner_count.to_string()),
             ]),
             Line::from(vec![
-                Span::styled("Last Tx:    ", label),
+                Span::styled("Last Tx:    ", label_style),
                 Span::raw(self.last_tx_hash.clone().unwrap_or_else(|| "-".to_string())),
             ]),
             Line::from(vec![
-                Span::styled("Top Price:  ", label),
+                Span::styled("Top Price:  ", label_style),
                 Span::raw(self.last_price.clone().unwrap_or_else(|| "-".to_string())),
             ]),
             Line::from(vec![
-                Span::styled("Est. Value: ", label),
+                Span::styled("Est. Value: ", label_style),
                 Span::raw(est_value),
             ]),
         ];
@@ -166,21 +166,21 @@ impl Component for AccountPanel {
 
         let balance_lines = vec![
             Line::from(vec![
-                Span::styled("Balance:    ", label),
+                Span::styled("Balance:    ", label_style),
                 Span::styled(
                     format!("{} XRP", fmt::fmt_xrp(balance_xrp)),
                     theme::success_style().add_modifier(Modifier::BOLD),
                 ),
             ]),
             Line::from(vec![
-                Span::styled("Spendable:  ", label),
+                Span::styled("Spendable:  ", label_style),
                 Span::styled(
                     format!("{} XRP", fmt::fmt_xrp(spendable_xrp)),
                     theme::accent_style(),
                 ),
             ]),
             Line::from(vec![
-                Span::styled("Reserve:    ", label),
+                Span::styled("Reserve:    ", label_style),
                 Span::raw(format!(
                     "{} XRP  ({} base + {} owners × {} XRP)",
                     fmt::fmt_xrp(required_reserve_xrp),
@@ -207,7 +207,7 @@ impl Component for AccountPanel {
             theme::SUCCESS
         };
         frame.render_widget(
-            Paragraph::new(Span::styled("Reserve usage", label)),
+            Paragraph::new(Span::styled("Reserve usage", label_style)),
             gauge_label_area,
         );
         let gauge = Gauge::default()

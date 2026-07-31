@@ -390,13 +390,13 @@ CI（`.github/workflows/ci.yml`）は各ジョブで `cargo … --locked`（例:
 - **Expected Output**: fg=red, bg=blue, underlined
 - **Test File**: `src/config.rs` (inline)
 
-#### TC-023: process_color_string — extracts modifiers and color
+#### TC-023: extract_color_and_modifiers — extracts modifiers and color
 
 - **Priority**: P2
 - **Type**: Unit
 - **Size**: S
 - **Status**: [x] Done
-- **Target**: `src/config.rs` -> `process_color_string()`
+- **Target**: `src/config.rs` -> `extract_color_and_modifiers()`
 - **Input**: `"underline bold inverse gray"`
 - **Expected Output**: color=`"gray"`, modifiers contain UNDERLINED/BOLD/REVERSED
 - **Test File**: `src/config.rs` (inline)
@@ -923,7 +923,7 @@ CI（`.github/workflows/ci.yml`）は各ジョブで `cargo … --locked`（例:
 - **Type**: Functional
 - **Size**: S
 - **Status**: [x] Done
-- **Target**: `src/xrpl/client.rs` -> `check_xrpl_error`
+- **Target**: `src/xrpl/client.rs` -> `ensure_no_xrpl_rpc_error`
 - **Input**: XRPL response with `error = "actNotFound"`
 - **Expected Output**: Function returns an error that remains classifiable as not-found
 - **Test File**: `src/xrpl/client.rs` (inline)
