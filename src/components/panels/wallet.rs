@@ -44,10 +44,23 @@ enum SubmitFlash {
     Error(String),
 }
 
+#[derive(Clone, Copy, Debug)]
+enum DangerResume {
+    AccountSet,
+    SetRegularKey,
+}
+
 #[derive(Clone, Debug)]
 enum ComposerPhase {
     PickKind {
         selected: usize,
+    },
+    /// Type-to-confirm for destructive AccountSet / SetRegularKey clear.
+    DangerConfirm {
+        expected: String,
+        hint: String,
+        typed: String,
+        resume: DangerResume,
     },
     AccountSet,
     Payment {
@@ -100,7 +113,6 @@ pub struct WalletPanel {
     has_received_wallet_data: bool,
     /// False when no signing key is configured; the wallet tab shows a hint.
     wallet_configured: bool,
-    seed: Option<String>,
     seed_address: Option<Result<String, String>>,
     pub is_focused: bool,
     skip_mainnet_prompt: bool,
@@ -129,7 +141,6 @@ impl Default for WalletPanel {
             tick: 0,
             has_received_wallet_data: false,
             wallet_configured: true,
-            seed: None,
             seed_address: None,
             is_focused: false,
             skip_mainnet_prompt: false,
@@ -161,31 +172,24 @@ impl WalletPanel {
     fn label_for_flag(ix: usize) -> String {
         FLAG_OPTIONS.get(ix).unwrap_or(&"(none)").to_string()
     }
+}
 
-    fn config_seed(&self) -> Option<String> {
-        self.config.as_ref().and_then(|c| {
-            c.xrpl
-                .signing
-                .secret_seed
-                .as_ref()
-                .map(|s| s.expose_secret().to_string())
-        })
-    }
+/// Ctrl+S (or bare S outside form editing) submits the open composer.
+fn submit_shortcut(key: &KeyEvent, is_form_editing: bool) -> bool {
+    matches!(key.code, KeyCode::Char('s') | KeyCode::Char('S'))
+        && (key.modifiers.contains(KeyModifiers::CONTROL) || !is_form_editing)
 }
 
 impl Component for WalletPanel {
     fn register_config_handler(&mut self, config: Arc<Config>) -> color_eyre::Result<()> {
-        self.seed = config
+        self.seed_address = config
             .xrpl
             .signing
             .secret_seed
             .as_ref()
-            .map(|s| s.expose_secret().to_string());
+            .map(|s| crate::signing::seed_to_address(s.expose_secret()));
         self.network = config.xrpl.network;
         self.config = Some(config);
-        if let Some(ref s) = self.seed {
-            self.seed_address = Some(crate::signing::seed_to_address(s));
-        }
         Ok(())
     }
 
@@ -334,6 +338,17 @@ impl Component for WalletPanel {
                     self.composer = Some(ComposerPhase::PickKind { selected: 0 });
                     None
                 }
+                Some(ComposerPhase::DangerConfirm { resume, .. }) => {
+                    let resume = *resume;
+                    self.composer = Some(match resume {
+                        DangerResume::AccountSet => ComposerPhase::AccountSet,
+                        DangerResume::SetRegularKey => ComposerPhase::SetRegularKey {
+                            regular_key: String::new(),
+                        },
+                    });
+                    self.is_form_editing = false;
+                    None
+                }
                 Some(ComposerPhase::AccountSet) => {
                     self.composer = Some(ComposerPhase::PickKind { selected: 1 });
                     None
@@ -402,30 +417,68 @@ impl Component for WalletPanel {
             return Ok(None);
         }
 
-        if matches!(&self.composer, Some(ComposerPhase::SetRegularKey { .. }))
-            && matches!(key.code, KeyCode::Char('s') | KeyCode::Char('S'))
-            && (key.modifiers.contains(KeyModifiers::CONTROL) || !self.is_form_editing)
+        if let Some(ComposerPhase::DangerConfirm {
+            expected,
+            typed,
+            resume,
+            ..
+        }) = &mut self.composer
         {
-            return Ok(Some(self.queue_submit_set_regular_key()));
+            match key.code {
+                KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    typed.push(c);
+                }
+                KeyCode::Backspace => {
+                    typed.pop();
+                }
+                KeyCode::Enter => {
+                    if typed.as_str() == expected {
+                        let resume = *resume;
+                        self.is_form_editing = false;
+                        let action = match resume {
+                            DangerResume::AccountSet => {
+                                self.composer = Some(ComposerPhase::AccountSet);
+                                Some(self.queue_submit_account_set_confirmed())
+                            }
+                            DangerResume::SetRegularKey => {
+                                self.composer = Some(ComposerPhase::SetRegularKey {
+                                    regular_key: String::new(),
+                                });
+                                Some(self.queue_submit_set_regular_key_confirmed())
+                            }
+                        };
+                        return Ok(action);
+                    }
+                    let expected = expected.clone();
+                    self.set_submit_flash(SubmitFlash::Error(format!(
+                        "confirmation mismatch — type {expected} exactly"
+                    )));
+                }
+                _ => {}
+            }
+            return Ok(None);
+        }
+
+        if matches!(&self.composer, Some(ComposerPhase::SetRegularKey { .. }))
+            && submit_shortcut(&key, self.is_form_editing)
+        {
+            return Ok(self.queue_submit_set_regular_key());
         }
 
         if matches!(&self.composer, Some(ComposerPhase::OfferCreate { .. }))
-            && matches!(key.code, KeyCode::Char('s') | KeyCode::Char('S'))
-            && (key.modifiers.contains(KeyModifiers::CONTROL) || !self.is_form_editing)
+            && submit_shortcut(&key, self.is_form_editing)
         {
             return Ok(Some(self.queue_submit_offer_create()));
         }
 
         if matches!(&self.composer, Some(ComposerPhase::TrustSet { .. }))
-            && matches!(key.code, KeyCode::Char('s') | KeyCode::Char('S'))
-            && (key.modifiers.contains(KeyModifiers::CONTROL) || !self.is_form_editing)
+            && submit_shortcut(&key, self.is_form_editing)
         {
             return Ok(Some(self.queue_submit_trust_set()));
         }
 
         if matches!(&self.composer, Some(ComposerPhase::FxrpDirectMint { .. }))
-            && matches!(key.code, KeyCode::Char('s') | KeyCode::Char('S'))
-            && (key.modifiers.contains(KeyModifiers::CONTROL) || !self.is_form_editing)
+            && submit_shortcut(&key, self.is_form_editing)
         {
             return Ok(Some(self.queue_submit_fxrp_direct_mint()));
         }
@@ -433,8 +486,7 @@ impl Component for WalletPanel {
         if matches!(
             &self.composer,
             Some(ComposerPhase::FxrpExecuteDirectMint { .. })
-        ) && matches!(key.code, KeyCode::Char('s') | KeyCode::Char('S'))
-            && (key.modifiers.contains(KeyModifiers::CONTROL) || !self.is_form_editing)
+        ) && submit_shortcut(&key, self.is_form_editing)
         {
             return Ok(Some(self.queue_submit_fxrp_execute_direct_mint()));
         }
@@ -553,17 +605,13 @@ impl Component for WalletPanel {
                 iou_issuer,
                 is_iou,
                 ..
-            }) if matches!(key.code, KeyCode::Char('s') | KeyCode::Char('S'))
-                && (key.modifiers.contains(KeyModifiers::CONTROL) || !self.is_form_editing) =>
-            {
-                Some((
-                    destination.clone(),
-                    amount.clone(),
-                    iou_currency.clone(),
-                    iou_issuer.clone(),
-                    *is_iou,
-                ))
-            }
+            }) if submit_shortcut(&key, self.is_form_editing) => Some((
+                destination.clone(),
+                amount.clone(),
+                iou_currency.clone(),
+                iou_issuer.clone(),
+                *is_iou,
+            )),
             _ => None,
         };
 
@@ -772,6 +820,9 @@ impl Component for WalletPanel {
                 }
                 return Ok(None);
             }
+            Some(ComposerPhase::DangerConfirm { .. }) => {
+                // Handled above in the dedicated DangerConfirm key branch.
+            }
             None => {}
         }
 
@@ -797,7 +848,7 @@ impl Component for WalletPanel {
     }
 
     fn draw(&mut self, frame: &mut Frame, area: Rect) -> color_eyre::Result<()> {
-        if self.seed.is_none() {
+        if self.seed_address.is_none() {
             render_empty(
                 frame,
                 area,
@@ -1225,7 +1276,7 @@ mod tests {
             *regular_key = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh".into();
         }
         match panel.queue_submit_set_regular_key() {
-            Action::SetRegularKeySubmit(p) => {
+            Some(Action::SetRegularKeySubmit(p)) => {
                 assert_eq!(p.regular_key, "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh");
                 assert!(p.skip_mainnet_prompt);
             }
@@ -1247,5 +1298,52 @@ mod tests {
         });
         panel.open_account_set_composer();
         assert_eq!(panel.domain, "example.com");
+    }
+
+    #[test]
+    fn empty_set_regular_key_requires_clear_confirm() {
+        let mut panel = WalletPanel::new(true);
+        panel.open_set_regular_key_composer();
+        assert!(panel.queue_submit_set_regular_key().is_none());
+        match &panel.composer {
+            Some(ComposerPhase::DangerConfirm {
+                expected,
+                resume: DangerResume::SetRegularKey,
+                ..
+            }) => assert_eq!(expected, "CLEAR"),
+            other => panic!("expected DangerConfirm CLEAR, got {other:?}"),
+        }
+        // After typing CLEAR (simulated by calling confirmed path), submit clears the key.
+        let action = panel.queue_submit_set_regular_key_confirmed();
+        match action {
+            Action::SetRegularKeySubmit(p) => assert!(p.regular_key.is_empty()),
+            other => panic!("expected SetRegularKeySubmit, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn disable_master_requires_disable_confirm() {
+        let mut panel = WalletPanel::new(true);
+        panel.open_account_set_composer();
+        // FLAG_OPTIONS index of DisableMaster
+        panel.set_flag_ix = FLAG_OPTIONS
+            .iter()
+            .position(|f| *f == "DisableMaster")
+            .expect("DisableMaster flag");
+        assert!(panel.queue_submit_account_set().is_none());
+        match &panel.composer {
+            Some(ComposerPhase::DangerConfirm {
+                expected,
+                resume: DangerResume::AccountSet,
+                ..
+            }) => assert_eq!(expected, "DISABLE"),
+            other => panic!("expected DangerConfirm DISABLE, got {other:?}"),
+        }
+        match panel.queue_submit_account_set_confirmed() {
+            Action::AccountSetSubmit(p) => {
+                assert_eq!(p.set_flag.as_deref(), Some("DisableMaster"));
+            }
+            other => panic!("expected AccountSetSubmit, got {other:?}"),
+        }
     }
 }

@@ -35,8 +35,14 @@ pub struct Cli {
     pub self_uninstall: bool,
 
     /// Signing seed (family seed format). Overrides XRPL_SEED env var and config.
+    ///
+    /// Deprecated: appears in process argv / shell history. Prefer `XRPL_SEED` or config.
     #[arg(long)]
     pub seed: Option<String>,
+
+    /// Allow `http://` / `ws://` custom RPC/WS endpoints (default: https/wss only).
+    #[arg(long, default_value_t = false)]
+    pub allow_insecure_rpc: bool,
 
     #[command(subcommand)]
     pub command: Option<Cmd>,
@@ -55,6 +61,10 @@ pub struct RpCli {
 
     #[arg(long)]
     pub server: Option<String>,
+
+    /// Allow `http://` custom RPC endpoint (default: https only).
+    #[arg(long, default_value_t = false)]
+    pub allow_insecure_rpc: bool,
 
     /// Target: 64-char tx hash or classic/X address
     #[arg(short = 't', long = "target", value_name = "TXID_OR_ADDRESS")]

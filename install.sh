@@ -699,8 +699,7 @@ verify_checksum() {
         ( cd "$(dirname "$archive")" && sha256sum -c "$checksum_file" > /dev/null 2>&1 ) || result=1
     else
         spinner_stop
-        warn "No checksum tool found — skipping"
-        return
+        die "No checksum tool found (need shasum or sha256sum). Refusing insecure install."
     fi
     spinner_stop
 
@@ -800,6 +799,23 @@ Install from source instead:
     verify_checksum "${TMP_DIR}/${ARCHIVE}" "${TMP_DIR}/${CHECKSUM}"
 
     step "Installing"
+    spinner_start "Verifying archive members..."
+    while IFS= read -r member; do
+        case "$member" in
+            "" ) continue ;;
+            */* | *..* | /* | ./*/* )
+                spinner_stop
+                die "Refusing unsafe tar member: ${member}"
+                ;;
+            "${BIN_NAME}" | "rp" | "./${BIN_NAME}" | "./rp" ) ;;
+            * )
+                spinner_stop
+                die "Unexpected tar member: ${member} (expected ${BIN_NAME} and optional rp)"
+                ;;
+        esac
+    done < <(tar -tzf "${TMP_DIR}/${ARCHIVE}")
+    spinner_stop
+
     spinner_start "Extracting ${ARCHIVE}..."
     tar -xzf "${TMP_DIR}/${ARCHIVE}" -C "$TMP_DIR"
     spinner_stop

@@ -196,3 +196,23 @@ mod tests {
         assert_eq!(group_digits_u64(u64::MAX), "18,446,744,073,709,551,615");
     }
 }
+
+/// Strip control characters and truncate for safe TUI display of untrusted RPC strings.
+#[must_use]
+pub fn sanitize_display(s: &str, max_chars: usize) -> String {
+    s.chars()
+        .filter(|c| !c.is_control())
+        .take(max_chars)
+        .collect()
+}
+
+#[cfg(test)]
+mod sanitize_tests {
+    use super::*;
+
+    #[test]
+    fn sanitize_display_strips_controls_and_truncates() {
+        assert_eq!(sanitize_display("ab\u{1b}c\nd", 10), "abcd");
+        assert_eq!(sanitize_display("hello-world", 5), "hello");
+    }
+}

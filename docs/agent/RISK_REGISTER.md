@@ -22,7 +22,7 @@
 
 - **Severity**: High
 - **Confidence**: Medium
-- **Evidence**: Seed can arrive from 3 sources: `--seed` CLI flag (`main.rs:67-74`), `XRPL_SEED` env var (`signing.rs:prime_seed_source`), `config.toml [xrpl.signing] seed` (`config.rs:Config::new`). The CLI path sets `config.xrpl.signing.secret_seed` directly, then `prime_seed_source` is called with that value. If someone adds a new code path that reads `config.xrpl.signing.seed` directly (not `secret_seed`), they'd get stale/cleared data.
+- **Evidence**: Seed can arrive from 3 sources: `--seed` CLI flag (deprecated, `lib.rs:run`), `XRPL_SEED` env var (cleared by `config.rs:Config::new`), `config.toml [xrpl.signing] seed` (`config.rs:Config::new`). Production passes the resolved `secret_seed` to the poll task via `PollContext.signing_seed` / `execute_cli_command`; `prime_seed_source` is now test/CLI-helper only. If someone adds a new code path that reads `config.xrpl.signing.seed` directly (not `secret_seed`), they'd get stale/cleared data.
 - **Failure scenario**: New feature adds seed resolution in a different location, reads the cleared `seed` field instead of `secret_seed`, signs with wrong key or fails to sign.
 - **Affected files**: `src/main.rs`, `src/config.rs`, `src/signing.rs`
 - **Suggested test**: Integration test that sets seed via CLI, env, and file simultaneously, asserts correct wallet address derived.

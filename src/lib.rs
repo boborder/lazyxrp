@@ -3,7 +3,6 @@ use clap::Parser;
 use cli::{Cli, Cmd, RpCli};
 use config::Config;
 use network::Network;
-use secrecy::ExposeSecret;
 use std::env;
 use std::path::Path;
 
@@ -21,22 +20,34 @@ mod tui;
 mod uninstall;
 mod xrpl;
 
-fn resolve_network(args: &Cli, config: &Config) -> Network {
-    args.network
-        .or_else(|| {
-            env::var(config::XRPL_NETWORK_ENV)
-                .ok()
-                .and_then(|s| s.parse().ok())
-        })
-        .unwrap_or(config.xrpl.network)
+#[derive(Clone, Copy)]
+enum EndpointKind {
+    Http,
+    Ws,
 }
 
-fn resolve_rpc_url(args: &Cli, config: &Config, network: &Network) -> String {
-    args.server
-        .clone()
-        .or_else(|| env::var(config::XRPL_RPC_SERVER_ENV).ok())
-        .or_else(|| config.xrpl.rpc_server.clone())
-        .unwrap_or_else(|| network.rpc_url().to_string())
+fn ensure_secure_endpoint(
+    url: &str,
+    kind: EndpointKind,
+    allow_insecure: bool,
+) -> color_eyre::Result<String> {
+    let trimmed = url.trim();
+    let ok = match kind {
+        EndpointKind::Http => {
+            trimmed.starts_with("https://") || (allow_insecure && trimmed.starts_with("http://"))
+        }
+        EndpointKind::Ws => {
+            trimmed.starts_with("wss://") || (allow_insecure && trimmed.starts_with("ws://"))
+        }
+    };
+    if ok {
+        return Ok(trimmed.to_string());
+    }
+    let expected = match kind {
+        EndpointKind::Http => "https:// (or http:// with --allow-insecure-rpc)",
+        EndpointKind::Ws => "wss:// (or ws:// with --allow-insecure-rpc)",
+    };
+    color_eyre::eyre::bail!("refusing insecure RPC/WS URL '{trimmed}'; expected {expected}")
 }
 
 fn resolve_ws_url(args: &Cli, config: &Config, network: &Network) -> String {
@@ -64,7 +75,7 @@ fn is_rp_alias_bin(name: &str) -> bool {
     stem.eq_ignore_ascii_case("rp")
 }
 
-fn resolve_network_opt(cli_network: Option<Network>, config: &Config) -> Network {
+fn resolve_network(cli_network: Option<Network>, config: &Config) -> Network {
     cli_network
         .or_else(|| {
             env::var(config::XRPL_NETWORK_ENV)
@@ -74,7 +85,7 @@ fn resolve_network_opt(cli_network: Option<Network>, config: &Config) -> Network
         .unwrap_or(config.xrpl.network)
 }
 
-fn resolve_rpc_url_opt(cli_server: Option<String>, config: &Config, network: &Network) -> String {
+fn resolve_rpc_url(cli_server: Option<String>, config: &Config, network: &Network) -> String {
     cli_server
         .or_else(|| env::var(config::XRPL_RPC_SERVER_ENV).ok())
         .or_else(|| config.xrpl.rpc_server.clone())
@@ -85,8 +96,12 @@ async fn run_rp_inner() -> color_eyre::Result<()> {
     let args = RpCli::parse();
     let config = Config::new()?;
     crate::logging::init(config.resolved_data_dir())?;
-    let network = resolve_network_opt(args.network, &config);
-    let rpc_url = resolve_rpc_url_opt(args.server.clone(), &config, &network);
+    let network = resolve_network(args.network, &config);
+    let rpc_url = ensure_secure_endpoint(
+        &resolve_rpc_url(args.server.clone(), &config, &network),
+        EndpointKind::Http,
+        args.allow_insecure_rpc,
+    )?;
     let target = args.resolved_target()?;
     xrpl::execute_rp_lookup(&rpc_url, target).await
 }
@@ -116,27 +131,29 @@ pub async fn run() -> color_eyre::Result<()> {
 
     let mut config = Config::new()?;
     crate::logging::init(config.resolved_data_dir())?;
-    if let Some(cli_seed) = args.seed.clone() {
-        let t = signing::trim_family_seed(&cli_seed);
+    if let Some(cli_seed) = args.seed.as_ref() {
+        eprintln!(
+            "lazyxrp: warning: --seed exposes the family seed in process argv and shell history; prefer XRPL_SEED or config"
+        );
+        let family_seed = signing::trim_family_seed(cli_seed);
         config.xrpl.signing.seed = None;
-        config.xrpl.signing.secret_seed = if t.is_empty() {
+        config.xrpl.signing.secret_seed = if family_seed.is_empty() {
             None
         } else {
-            Some(secrecy::SecretString::from(t.to_string()))
+            Some(secrecy::SecretString::from(family_seed.to_string()))
         };
     }
-    let _ = signing::SigningConfig::prime_seed_source(
-        config
-            .xrpl
-            .signing
-            .secret_seed
-            .as_ref()
-            .map(|s| s.expose_secret().to_string()),
-    );
-
-    let network = resolve_network(&args, &config);
-    let rpc_url = resolve_rpc_url(&args, &config, &network);
-    let ws_url = resolve_ws_url(&args, &config, &network);
+    let network = resolve_network(args.network, &config);
+    let rpc_url = ensure_secure_endpoint(
+        &resolve_rpc_url(args.server.clone(), &config, &network),
+        EndpointKind::Http,
+        args.allow_insecure_rpc,
+    )?;
+    let ws_url = ensure_secure_endpoint(
+        &resolve_ws_url(&args, &config, &network),
+        EndpointKind::Ws,
+        args.allow_insecure_rpc,
+    )?;
     let tick_rate = args.tick_rate;
     let frame_rate = args.frame_rate;
     let yes = args.yes;
@@ -153,12 +170,7 @@ pub async fn run() -> color_eyre::Result<()> {
                 other,
                 &rpc_url,
                 &network,
-                config
-                    .xrpl
-                    .signing
-                    .secret_seed
-                    .as_ref()
-                    .map(|s| s.expose_secret().to_string()),
+                config.xrpl.signing.secret_seed.clone(),
                 yes,
             )
             .await?;
@@ -185,8 +197,8 @@ mod network_resolve_tests {
         let cli = Cli::try_parse_from(["lazyxrp", "--network", "devnet"])
             .map_err(|e| color_eyre::eyre::eyre!("{e}"))?;
         _env.set(config::XRPL_NETWORK_ENV, "testnet");
-        let n = resolve_network(&cli, &config);
-        assert_eq!(n, Network::Devnet);
+        let network = resolve_network(cli.network, &config);
+        assert_eq!(network, Network::Devnet);
         Ok(())
     }
 
@@ -223,8 +235,8 @@ network = "mainnet"
         let config = Config::new()?;
         let cli =
             Cli::try_parse_from(["lazyxrp", "info"]).map_err(|e| color_eyre::eyre::eyre!("{e}"))?;
-        let network = resolve_network(&cli, &config);
-        let url = resolve_rpc_url(&cli, &config, &network);
+        let network = resolve_network(cli.network, &config);
+        let url = resolve_rpc_url(cli.server.clone(), &config, &network);
         assert_eq!(url, "https://xrplcluster.com");
         std::fs::remove_dir_all(&root).ok();
         Ok(())
@@ -251,10 +263,32 @@ network = "mainnet"
         let config = Config::new()?;
         let cli = Cli::try_parse_from(["lazyxrp", "--ws-server", "wss://cli", "info"])
             .map_err(|e| color_eyre::eyre::eyre!("{e}"))?;
-        let network = resolve_network(&cli, &config);
+        let network = resolve_network(cli.network, &config);
         let url = resolve_ws_url(&cli, &config, &network);
         assert_eq!(url, "wss://cli");
         std::fs::remove_dir_all(&root).ok();
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod endpoint_security_tests {
+    use super::*;
+
+    #[test]
+    fn ensure_secure_endpoint_rejects_http_without_flag() {
+        let err =
+            ensure_secure_endpoint("http://example.com", EndpointKind::Http, false).unwrap_err();
+        assert!(err.to_string().contains("refusing insecure"));
+        assert!(ensure_secure_endpoint("https://example.com", EndpointKind::Http, false).is_ok());
+        assert!(ensure_secure_endpoint("http://example.com", EndpointKind::Http, true).is_ok());
+    }
+
+    #[test]
+    fn ensure_secure_endpoint_rejects_ws_without_flag() {
+        let err = ensure_secure_endpoint("ws://example.com", EndpointKind::Ws, false).unwrap_err();
+        assert!(err.to_string().contains("refusing insecure"));
+        assert!(ensure_secure_endpoint("wss://example.com", EndpointKind::Ws, false).is_ok());
+        assert!(ensure_secure_endpoint("ws://example.com", EndpointKind::Ws, true).is_ok());
     }
 }

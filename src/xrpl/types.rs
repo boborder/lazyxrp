@@ -144,6 +144,8 @@ impl DunlSummary {
 pub struct ServerInfoSummary {
     pub ledger_index: u32,
     pub hostid: String,
+    /// rippled/Clio `build_version` from `server_info` (empty when absent).
+    pub build_version: String,
     pub validation_quorum: Option<u32>,
     pub validator_list: Option<NodeValidatorListSummary>,
 }
@@ -238,7 +240,9 @@ pub struct RipplePathFindResult {
 }
 
 /// Key generation result (TUI: local via `signing::propose_wallet_local`; RPC parser in `client`).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// Security: `Debug` redacts `master_seed` / `master_seed_hex`.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WalletProposeResult {
     /// Master seed (Ed25519 family seed, starts with `s`).
     pub master_seed: String,
@@ -252,6 +256,19 @@ pub struct WalletProposeResult {
     pub public_key_hex: String,
     /// Key algorithm: `"ed25519"` or `"secp256k1"`.
     pub key_type: String,
+}
+
+impl std::fmt::Debug for WalletProposeResult {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WalletProposeResult")
+            .field("master_seed", &"[REDACTED]")
+            .field("master_seed_hex", &"[REDACTED]")
+            .field("account_id", &self.account_id)
+            .field("public_key", &self.public_key)
+            .field("public_key_hex", &self.public_key_hex)
+            .field("key_type", &self.key_type)
+            .finish()
+    }
 }
 
 /// NFToken mint flag: URI may be updated via `NFTokenModify` (dynamic NFT / dNFT).
@@ -528,7 +545,6 @@ pub struct AccountSetSubmitParams {
     pub transfer_rate: String,
     /// From CLI `--yes` via Wallet panel.
     pub skip_mainnet_prompt: bool,
-    pub config_seed: Option<String>,
 }
 
 /// XRP or IOU Payment from the Wallet modal.
@@ -548,7 +564,6 @@ pub struct PaymentSubmitParams {
     /// Destination tag extracted from an X-address (or set explicitly).
     pub destination_tag: Option<u32>,
     pub skip_mainnet_prompt: bool,
-    pub config_seed: Option<String>,
 }
 
 /// FXRP Direct Mint Payment: XRP to Core Vault with 32-byte recipient memo (C2).
@@ -561,7 +576,6 @@ pub struct FxrpDirectMintPaymentParams {
     /// XRP amount to send (fees deducted on Flare side from this payment).
     pub amount_xrp: String,
     pub skip_mainnet_prompt: bool,
-    pub config_seed: Option<String>,
 }
 
 /// FXRP C3: paste FDC Payment proof JSON and call `executeDirectMinting` (flagged).
@@ -578,7 +592,6 @@ pub struct FxrpExecuteDirectMintParams {
 pub struct SetRegularKeySubmitParams {
     pub regular_key: String,
     pub skip_mainnet_prompt: bool,
-    pub config_seed: Option<String>,
 }
 
 /// EscrowCreate from the Wallet form.
@@ -589,7 +602,6 @@ pub struct EscrowCreateSubmitParams {
     /// Seconds since Ripple Epoch; if 0, defaults to 30 days from now.
     pub finish_after: String,
     pub skip_mainnet_prompt: bool,
-    pub config_seed: Option<String>,
 }
 
 /// OfferCreate from the Wallet form.
@@ -599,7 +611,6 @@ pub struct OfferCreateSubmitParams {
     pub taker_gets: String,
     pub taker_pays: String,
     pub skip_mainnet_prompt: bool,
-    pub config_seed: Option<String>,
 }
 
 /// TrustSet from the Wallet form (v1: Limit + Currency + Issuer only).
@@ -609,7 +620,6 @@ pub struct TrustSetSubmitParams {
     pub issuer: String,
     pub limit: String,
     pub skip_mainnet_prompt: bool,
-    pub config_seed: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -648,6 +658,8 @@ pub struct PollContext {
     pub book_pair: BookPair,
     pub poll_interval: Duration,
     pub seed_address: Option<String>,
+    /// Signing seed held by the poll task (never sent over Action/params channels).
+    pub signing_seed: Option<secrecy::SecretString>,
     pub network_watch: watch::Receiver<Network>,
     /// Active UI tab index (0 Overview …) for optional heavy-RPC skips.
     pub tab_watch: watch::Receiver<usize>,
@@ -721,5 +733,26 @@ mod tests {
             asset_display_name("5553440000000000000000000000000000000000"),
             "USD"
         );
+    }
+}
+
+#[cfg(test)]
+mod wallet_propose_security_tests {
+    use super::*;
+
+    #[test]
+    fn wallet_propose_result_debug_redacts_seed() {
+        let r = WalletProposeResult {
+            master_seed: "sEdSecretShouldNotAppear".into(),
+            master_seed_hex: "DEADBEEF".into(),
+            account_id: "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh".into(),
+            public_key: "aPub".into(),
+            public_key_hex: "ED00".into(),
+            key_type: "ed25519".into(),
+        };
+        let dbg = format!("{r:?}");
+        assert!(dbg.contains("[REDACTED]"));
+        assert!(!dbg.contains("sEdSecretShouldNotAppear"));
+        assert!(!dbg.contains("DEADBEEF"));
     }
 }

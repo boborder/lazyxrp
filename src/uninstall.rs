@@ -14,22 +14,66 @@ fn backup_candidate(binary: &Path) -> Option<PathBuf> {
     Some(binary.with_file_name(format!("{name}.bak")))
 }
 
-/// `install.sh` creates `rp` → `lazyxrp` next to the binary.
-fn sibling_rp_alias(binary: &Path) -> Option<PathBuf> {
-    Some(binary.with_file_name("rp"))
+/// Security: only delete config/data dirs that look like lazyxrp project dirs.
+fn is_safe_uninstall_dir(path: &Path) -> bool {
+    let path = match path.canonicalize() {
+        Ok(p) => p,
+        Err(_) => path.to_path_buf(),
+    };
+    if path.as_os_str().is_empty() {
+        return false;
+    }
+    // Never wipe filesystem root.
+    if path.parent().is_none() {
+        return false;
+    }
+    if let Some(home) = std::env::var_os("HOME").map(PathBuf::from)
+        && path == home
+    {
+        return false;
+    }
+    // Require final component to contain "lazyxrp" (default XDG / ProjectDirs layout).
+    path.file_name()
+        .and_then(|n| n.to_str())
+        .map(|n| n.to_ascii_lowercase().contains("lazyxrp"))
+        .unwrap_or(false)
+}
+
+fn sibling_rp_alias_safe(binary: &Path) -> Option<PathBuf> {
+    let alias = binary.with_file_name("rp");
+    let meta = fs::symlink_metadata(&alias).ok()?;
+    if !meta.file_type().is_symlink() {
+        return None;
+    }
+    let target = fs::read_link(&alias).ok()?;
+    let target_name = target.file_name()?.to_string_lossy();
+    let bin_name = binary.file_name()?.to_string_lossy();
+    if target_name == bin_name || target_name == "lazyxrp" || target_name == "lazyxrp.exe" {
+        Some(alias)
+    } else {
+        None
+    }
 }
 
 /// Paths match `./install.sh --uninstall-help` (effective config/data dirs from `Config`).
 pub(crate) fn perform_self_uninstall(config: &Config, assume_yes: bool) -> color_eyre::Result<()> {
     let exe = std::env::current_exe()?;
     let backup = backup_candidate(&exe);
-    let rp_alias = sibling_rp_alias(&exe);
+    let rp_alias = sibling_rp_alias_safe(&exe);
     let resolved_cfg = config.resolved_config_dir();
     let resolved_data = config.resolved_data_dir();
 
     let mut dirs: BTreeSet<PathBuf> = BTreeSet::new();
-    dirs.insert(resolved_cfg);
-    dirs.insert(resolved_data);
+    for candidate in [resolved_cfg, resolved_data] {
+        if is_safe_uninstall_dir(&candidate) {
+            dirs.insert(candidate);
+        } else {
+            eprintln!(
+                "lazyxrp: refusing to delete unsafe path '{}' (must end with a lazyxrp* directory)",
+                candidate.display()
+            );
+        }
+    }
 
     eprintln!("lazyxrp — self-uninstall will remove:");
     eprintln!("  binary: {}", exe.display());
@@ -103,6 +147,16 @@ pub(crate) fn perform_self_uninstall(config: &Config, assume_yes: bool) -> color
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn is_safe_uninstall_dir_requires_lazyxrp_basename() {
+        assert!(is_safe_uninstall_dir(Path::new("/tmp/lazyxrp")));
+        assert!(is_safe_uninstall_dir(Path::new(
+            "/tmp/com.kdheepak.lazyxrp"
+        )));
+        assert!(!is_safe_uninstall_dir(Path::new("/tmp")));
+        assert!(!is_safe_uninstall_dir(Path::new("/")));
+    }
 
     #[test]
     fn backup_candidate_appends_bak_suffix() {

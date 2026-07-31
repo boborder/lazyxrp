@@ -16,8 +16,13 @@ pub fn init() -> color_eyre::Result<()> {
     std::panic::set_hook(Box::new(move |panic_info| {
         // Direct crossterm cleanup — never construct Tui inside panic hook
         // (it could itself panic, causing a double-panic and abort).
+        // Mirror Tui::exit: leave alt screen, show cursor, then leave raw mode.
+        let _ = crossterm::execute!(
+            std::io::stdout(),
+            crossterm::terminal::LeaveAlternateScreen,
+            crossterm::cursor::Show
+        );
         let _ = crossterm::terminal::disable_raw_mode();
-        let _ = crossterm::execute!(std::io::stdout(), crossterm::terminal::LeaveAlternateScreen);
 
         #[cfg(not(debug_assertions))]
         {

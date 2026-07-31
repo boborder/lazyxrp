@@ -11,7 +11,12 @@ lazy_static::lazy_static! {
 pub fn init(directory: std::path::PathBuf) -> color_eyre::Result<()> {
     std::fs::create_dir_all(&directory)?;
     let log_path = directory.join(&*LOG_FILE);
-    let log_file = std::fs::File::create(log_path)?;
+    let log_file = std::fs::File::create(&log_path)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&log_path, std::fs::Permissions::from_mode(0o600));
+    }
     let env_filter = EnvFilter::builder().with_default_directive(tracing::Level::INFO.into());
     // If the `RUST_LOG` environment variable is set, use that as the default, otherwise use the
     // value of the `LOG_ENV` environment variable. If the `LOG_ENV` environment variable contains

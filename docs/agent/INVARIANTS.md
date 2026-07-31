@@ -20,8 +20,8 @@
 **Confidence**: high.
 
 ### I-4: Single-threaded seed env mutation
-**Rule**: `SigningConfig::prime_seed_source()` clears `XRPL_SEED` env var via `unsafe`. MUST only be called during single-threaded startup before tokio runtime starts.
-**Enforcement**: Called from `main()` before `App::run()`. Comment in `signing.rs` documents the constraint.
+**Rule**: `XRPL_SEED` must be cleared from the process environment via `unsafe { env::remove_var }` during single-threaded startup before the tokio runtime starts (no other thread may read it).
+**Enforcement**: `Config::new()` clears it on read (`config.rs`); `SigningConfig::prime_seed_source()` (test/CLI helper only) clears it too. Both run before the poll task spawns. SAFETY comments document the constraint.
 **Confidence**: high.
 
 ### I-5: Config merge priority

@@ -187,6 +187,7 @@ pub(crate) fn parse_server_info_value(value: &Value) -> ServerInfoSummary {
     ServerInfoSummary {
         ledger_index: extract_json_u32(value, &["result", "info", "validated_ledger", "seq"]),
         hostid: json_str(value, &["result", "info", "hostid"]).to_string(),
+        build_version: json_str(value, &["result", "info", "build_version"]).to_string(),
         validation_quorum: quorum,
         validator_list,
     }
@@ -750,13 +751,15 @@ mod tests {
             "result": {
                 "info": {
                     "validated_ledger": {"seq": 80000000},
-                    "hostid": "test-host"
+                    "hostid": "test-host",
+                    "build_version": "2.5.0"
                 }
             }
         });
         let sum = parse_server_info_value(&si);
         assert_eq!(sum.ledger_index, 80000000);
         assert_eq!(sum.hostid, "test-host");
+        assert_eq!(sum.build_version, "2.5.0");
         assert_eq!(sum.validation_quorum, None);
 
         let si_vl = json!({
@@ -775,6 +778,7 @@ mod tests {
         });
         let with_vl = parse_server_info_value(&si_vl);
         assert_eq!(with_vl.validation_quorum, Some(28));
+        assert!(with_vl.build_version.is_empty());
         let vl = with_vl.validator_list.as_ref().expect("validator_list");
         assert_eq!(vl.count, 35);
         assert_eq!(vl.status, "active");

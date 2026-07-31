@@ -78,7 +78,7 @@ fn footer_line(active_tab: usize) -> Line<'static> {
 pub struct App {
     config: Arc<Config>,
     /// Wallet AccountSet form typing mode: skip Splash keymap in `on_key_event`.
-    keymap_suppress: bool,
+    keymap_suppressed: bool,
     tick_rate: f64,
     frame_rate: f64,
     /// One panel per tab — index matches TAB_TITLES
@@ -200,7 +200,7 @@ impl App {
             "TAB_TITLES and panels must have same length"
         );
         Ok(Self {
-            keymap_suppress: false,
+            keymap_suppressed: false,
             tick_rate,
             frame_rate,
             panels,
@@ -297,6 +297,7 @@ impl App {
                 book_pair,
                 poll_interval: Duration::from_millis(self.config.xrpl.poll_interval_ms),
                 seed_address,
+                signing_seed: self.config.xrpl.signing.secret_seed.clone(),
                 network_watch: self.net_tx.subscribe(),
                 tab_watch: self.tab_tx.subscribe(),
                 oracles: self.config.xrpl.oracles.clone(),
@@ -359,9 +360,11 @@ impl App {
 
     fn on_key_event(&mut self, key: KeyEvent) -> color_eyre::Result<()> {
         let action_tx = self.action_tx.clone();
-        if self.keymap_suppress {
+        if self.keymap_suppressed {
+            // Modal/form has key priority (ratatui modal routing): bare `q` must
+            // reach the focused composer (DangerConfirm / payment fields), not quit.
+            // Force-quit remains available via Ctrl-C / Ctrl-D.
             match key.code {
-                KeyCode::Char('q') => action_tx.send(Action::Quit)?,
                 KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                     action_tx.send(Action::Quit)?;
                 }
@@ -421,6 +424,13 @@ impl App {
             }
         }
         Ok(())
+    }
+
+    /// Send a poll command, logging a warning when the channel is closed.
+    fn send_poll(&self, command: PollCommand) {
+        if let Err(err) = self.poll_tx.send(command) {
+            warn!(?err, "poll command channel closed");
+        }
     }
 
     /// Send a poll command only if at least `min` duration has passed since the last one.
@@ -583,79 +593,34 @@ impl App {
                     );
                 }
                 Action::SetKeymapSuppression(on) => {
-                    self.keymap_suppress = *on;
+                    self.keymap_suppressed = *on;
                 }
                 Action::AccountSetSubmit(params) => {
-                    if let Err(err) = self
-                        .poll_tx
-                        .send(PollCommand::AccountSetSubmit(params.clone()))
-                    {
-                        warn!(?err, "poll command channel closed");
-                    }
+                    self.send_poll(PollCommand::AccountSetSubmit(params.clone()))
                 }
                 Action::PaymentSubmit(params) => {
-                    if let Err(err) = self
-                        .poll_tx
-                        .send(PollCommand::PaymentSubmit(params.clone()))
-                    {
-                        warn!(?err, "poll command channel closed");
-                    }
+                    self.send_poll(PollCommand::PaymentSubmit(params.clone()))
                 }
                 Action::SetRegularKeySubmit(params) => {
-                    if let Err(err) = self
-                        .poll_tx
-                        .send(PollCommand::SetRegularKeySubmit(params.clone()))
-                    {
-                        warn!(?err, "poll command channel closed");
-                    }
+                    self.send_poll(PollCommand::SetRegularKeySubmit(params.clone()))
                 }
                 Action::EscrowCreateSubmit(params) => {
-                    if let Err(err) = self
-                        .poll_tx
-                        .send(PollCommand::EscrowCreateSubmit(params.clone()))
-                    {
-                        warn!(?err, "poll command channel closed");
-                    }
+                    self.send_poll(PollCommand::EscrowCreateSubmit(params.clone()))
                 }
                 Action::OfferCreateSubmit(params) => {
-                    if let Err(err) = self
-                        .poll_tx
-                        .send(PollCommand::OfferCreateSubmit(params.clone()))
-                    {
-                        warn!(?err, "poll command channel closed");
-                    }
+                    self.send_poll(PollCommand::OfferCreateSubmit(params.clone()))
                 }
                 Action::TrustSetSubmit(params) => {
-                    if let Err(err) = self
-                        .poll_tx
-                        .send(PollCommand::TrustSetSubmit(params.clone()))
-                    {
-                        warn!(?err, "poll command channel closed");
-                    }
+                    self.send_poll(PollCommand::TrustSetSubmit(params.clone()))
                 }
                 Action::FxrpDirectMintPaymentSubmit(params) => {
-                    if let Err(err) = self
-                        .poll_tx
-                        .send(PollCommand::FxrpDirectMintPayment(params.clone()))
-                    {
-                        warn!(?err, "poll command channel closed");
-                    }
+                    self.send_poll(PollCommand::FxrpDirectMintPayment(params.clone()))
                 }
                 Action::FxrpExecuteDirectMintSubmit(params) => {
-                    if let Err(err) = self
-                        .poll_tx
-                        .send(PollCommand::FxrpExecuteDirectMint(params.clone()))
-                    {
-                        warn!(?err, "poll command channel closed");
-                    }
+                    self.send_poll(PollCommand::FxrpExecuteDirectMint(params.clone()))
                 }
                 Action::WalletPropose => {
-                    if let Err(err) = self
-                        .poll_tx
-                        .send(PollCommand::WalletPropose("ed25519".into()))
-                    {
-                        warn!(?err, "poll command channel closed");
-                    }
+                    self.send_poll(PollCommand::WalletPropose("ed25519".into()))
                 }
                 Action::XrplServerInfo(_) => self.startup_done = true,
                 Action::Help => self.show_help = !self.show_help,
@@ -914,6 +879,22 @@ mod tests {
         app.on_key_event(q)?;
         app.drain_and_dispatch_actions(None)?;
         assert!(app.show_help);
+        Ok(())
+    }
+
+    /// Form/modal typing must not treat bare `q` as quit (modal key priority).
+    #[tokio::test]
+    async fn keymap_suppressed_ignores_bare_q_but_allows_ctrl_c() -> color_eyre::Result<()> {
+        let mut app = test_app()?;
+        app.keymap_suppressed = true;
+
+        app.on_key_event(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::empty()))?;
+        app.drain_and_dispatch_actions(None)?;
+        assert!(!app.should_quit);
+
+        app.on_key_event(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL))?;
+        app.drain_and_dispatch_actions(None)?;
+        assert!(app.should_quit);
         Ok(())
     }
 }

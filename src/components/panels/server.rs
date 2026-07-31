@@ -22,7 +22,8 @@ use crate::{
 };
 
 const FEE_HISTORY_LEN: usize = 40;
-const METRICS_LINES: u16 = 4;
+/// URL / rippled version / ledger+host / fee+reserve / quorum+dUNL
+const METRICS_LINES: u16 = 5;
 #[path = "server_detail.rs"]
 mod detail;
 #[path = "server_dunl.rs"]
@@ -242,7 +243,12 @@ impl Component for ServerPanel {
             .map(|s| fmt::group_digits_u64(u64::from(s.ledger_index)))
             .unwrap_or_else(|| "-".to_string());
         let host = server_info
-            .map(|s| s.hostid.clone())
+            .map(|s| fmt::sanitize_display(&s.hostid, 64))
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "-".to_string());
+        let version = server_info
+            .map(|s| fmt::sanitize_display(&s.build_version, 64))
+            .filter(|v| !v.is_empty())
             .unwrap_or_else(|| "-".to_string());
         let fee = self
             .base_fee
@@ -272,6 +278,10 @@ impl Component for ServerPanel {
                     fmt::truncate_middle(&self.server_url, 48),
                     theme::accent_style(),
                 ),
+            ]),
+            Line::from(vec![
+                Span::styled("rippled: ", label_style),
+                Span::styled(version, theme::accent_style()),
             ]),
             Line::from(vec![
                 Span::styled("Ledger:  ", label_style),

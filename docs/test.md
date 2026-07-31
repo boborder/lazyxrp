@@ -834,7 +834,7 @@ CI（`.github/workflows/ci.yml`）は各ジョブで `cargo … --locked`（例:
 - **Preconditions**: Valid config (`Config::new` via `ENV_TEST_LOCK`)
 - **Expected Output**: 4 tabs/panels; `active_tab == 0`; watch account set; not quit / help closed
 - **Test File**: `src/app.rs` (inline)
-- **Notes**: Full `App::run()` loop not exercised here. `test_app` passes `Config::new()` into `App::new`; production Watch passes the same `Config` as `main` after `prime_seed_source` so merged `XRPL_SEED` is not lost.
+- **Notes**: Full `App::run()` loop not exercised here. `test_app` passes `Config::new()` into `App::new`; production Watch passes the same `Config` as `main` (which cleared `XRPL_SEED` in `Config::new`), so merged `XRPL_SEED` is not lost.
 
 #### TC-061: Watch mode — Quit action stops background tasks
 

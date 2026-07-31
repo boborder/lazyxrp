@@ -40,4 +40,4 @@ Risks without a matching S entry (e.g. R-002 submit errors swallowed, R-006 main
 | S-008 | tracing ログのデフォルトレベルが INFO | S-001 対処後に問題なし |
 | S-005 | `install.sh` で `NO_VERIFY=1` の警告が不十分 | `usage()` / ヘッダに MITM リスク警告を追加 |
 | S-010 | `Config` が平文 `seed` を `Arc<Config>` として継続保持 | `RawSigningConfig` に `secret_seed: Option<SecretString>` を追加し、`Config::new()` / `main.rs` / `app.rs` で平文を即座にクリア |
-| S-011 | CLI `--seed` がプロセス引数に残り `ps` から閲覧可能 | `README.md` Environment Variables セクションに警告を追加 |
+| S-011 | CLI `--seed` がプロセス引数に残り `ps` から閲覧可能 | `README.md` 警告 + 起動時 `eprintln!` 警告 + `--help` に非推奨注記 |

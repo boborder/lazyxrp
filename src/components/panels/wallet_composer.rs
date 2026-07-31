@@ -7,7 +7,7 @@ use ratatui::{
     widgets::{Clear, Paragraph},
 };
 
-use super::{ComposerPhase, SubmitFlash, WalletPanel};
+use super::{ComposerPhase, DangerResume, SubmitFlash, WalletPanel};
 use crate::{
     action::Action,
     components::shared::theme,
@@ -55,7 +55,39 @@ impl WalletPanel {
         self.is_form_editing = false;
     }
 
-    pub(super) fn queue_submit_set_regular_key(&self) -> Action {
+    /// Gate a destructive submit behind a type-to-confirm modal; the caller returns
+    /// `None` (deferred) until the user types `expected` in the DangerConfirm phase.
+    fn enter_danger_confirm(&mut self, expected: &str, hint: &str, resume: DangerResume) {
+        self.composer = Some(ComposerPhase::DangerConfirm {
+            expected: expected.into(),
+            hint: hint.into(),
+            typed: String::new(),
+            resume,
+        });
+        self.is_form_editing = true;
+        self.set_submit_flash(SubmitFlash::Error(format!(
+            "type {expected} to confirm — Esc cancels"
+        )));
+    }
+
+    pub(super) fn queue_submit_set_regular_key(&mut self) -> Option<Action> {
+        let regular_key = match &self.composer {
+            Some(ComposerPhase::SetRegularKey { regular_key }) => regular_key.clone(),
+            _ => String::new(),
+        };
+        if regular_key.trim().is_empty() {
+            self.enter_danger_confirm(
+                "CLEAR",
+                "Clearing regular key is dangerous — type CLEAR then Enter",
+                DangerResume::SetRegularKey,
+            );
+            return None;
+        }
+        Some(self.queue_submit_set_regular_key_confirmed())
+    }
+
+    pub(super) fn queue_submit_set_regular_key_confirmed(&self) -> Action {
+        // Callers restore `SetRegularKey` (empty) before confirming; DangerConfirm falls through.
         let regular_key = match &self.composer {
             Some(ComposerPhase::SetRegularKey { regular_key }) => regular_key.clone(),
             _ => String::new(),
@@ -63,7 +95,6 @@ impl WalletPanel {
         Action::SetRegularKeySubmit(SetRegularKeySubmitParams {
             regular_key,
             skip_mainnet_prompt: self.skip_mainnet_prompt,
-            config_seed: self.config_seed(),
         })
     }
 
@@ -89,7 +120,6 @@ impl WalletPanel {
             taker_gets,
             taker_pays,
             skip_mainnet_prompt: self.skip_mainnet_prompt,
-            config_seed: self.config_seed(),
         })
     }
 
@@ -118,7 +148,6 @@ impl WalletPanel {
             issuer,
             limit,
             skip_mainnet_prompt: self.skip_mainnet_prompt,
-            config_seed: self.config_seed(),
         })
     }
 
@@ -160,7 +189,6 @@ impl WalletPanel {
             flare_recipient,
             amount_xrp,
             skip_mainnet_prompt: self.skip_mainnet_prompt,
-            config_seed: self.config_seed(),
         })
     }
 
@@ -188,15 +216,36 @@ impl WalletPanel {
     pub(super) fn queue_submit_account_set(&mut self) -> Option<Action> {
         let set = Self::label_for_flag(self.set_flag_ix);
         let clr = Self::label_for_flag(self.clear_flag_ix);
-        Some(Action::AccountSetSubmit(AccountSetSubmitParams {
+        if (set == "DisableMaster" || clr == "DisableMaster")
+            && !matches!(
+                &self.composer,
+                Some(ComposerPhase::DangerConfirm {
+                    resume: DangerResume::AccountSet,
+                    ..
+                })
+            )
+        {
+            self.enter_danger_confirm(
+                "DISABLE",
+                "DisableMaster is irreversible without regular key — type DISABLE then Enter",
+                DangerResume::AccountSet,
+            );
+            return None;
+        }
+        Some(self.queue_submit_account_set_confirmed())
+    }
+
+    pub(super) fn queue_submit_account_set_confirmed(&self) -> Action {
+        let set = Self::label_for_flag(self.set_flag_ix);
+        let clr = Self::label_for_flag(self.clear_flag_ix);
+        Action::AccountSetSubmit(AccountSetSubmitParams {
             set_flag: if set == "(none)" { None } else { Some(set) },
             clear_flag: if clr == "(none)" { None } else { Some(clr) },
             domain_ascii: self.domain.clone(),
             tick_size: self.tick_size.clone(),
             transfer_rate: self.transfer_rate.clone(),
             skip_mainnet_prompt: self.skip_mainnet_prompt,
-            config_seed: self.config_seed(),
-        }))
+        })
     }
 
     pub(super) fn queue_submit_payment(
@@ -221,7 +270,6 @@ impl WalletPanel {
             },
             destination_tag: None,
             skip_mainnet_prompt: self.skip_mainnet_prompt,
-            config_seed: self.config_seed(),
         })
     }
 
@@ -409,6 +457,7 @@ impl WalletPanel {
                     16u16
                 }
             }
+            ComposerPhase::DangerConfirm { .. } => 12u16,
             ComposerPhase::SetRegularKey { .. } => 14u16,
             ComposerPhase::OfferCreate { .. } => 14u16,
             ComposerPhase::TrustSet { .. } => 16u16,
@@ -433,6 +482,7 @@ impl WalletPanel {
                     "Payment (XRP)"
                 }
             }
+            ComposerPhase::DangerConfirm { .. } => "Confirm dangerous action",
             ComposerPhase::SetRegularKey { .. } => "Regular key",
             ComposerPhase::OfferCreate { .. } => "Create offer",
             ComposerPhase::TrustSet { .. } => "Trust line",
@@ -481,6 +531,39 @@ impl WalletPanel {
                         "1–7 jump · j/k move · Enter open · Esc close",
                         theme::secondary_style(),
                     )),
+                ])
+            }
+            ComposerPhase::DangerConfirm {
+                hint,
+                typed,
+                expected,
+                ..
+            } => {
+                let warn = theme::warning_style();
+                let typed_style = if typed.is_empty() {
+                    theme::dim_style()
+                } else if expected.starts_with(typed.as_str()) {
+                    theme::accent_style().bold()
+                } else {
+                    theme::error_style().bold()
+                };
+                Paragraph::new(vec![
+                    Line::from(Span::styled(hint.clone(), warn.bold())),
+                    Line::from(""),
+                    Line::from(vec![
+                        Span::styled("Type ", theme::dim_style()),
+                        Span::styled(expected.clone(), theme::warning_style().bold()),
+                        Span::styled(": ", theme::dim_style()),
+                        Span::styled(typed.clone(), typed_style),
+                        Span::styled("▌", theme::accent_style()),
+                    ]),
+                    Line::from(""),
+                    Line::from(vec![
+                        Span::styled(" Enter ", theme::accent_style().bold()),
+                        Span::styled("confirm  ", theme::dim_style()),
+                        Span::styled(" Esc ", theme::accent_style().bold()),
+                        Span::styled("cancel", theme::dim_style()),
+                    ]),
                 ])
             }
             ComposerPhase::AccountSet => {

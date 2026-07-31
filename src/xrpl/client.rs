@@ -22,10 +22,37 @@ use super::types::{
 };
 
 pub(crate) const RPC_TIMEOUT: Duration = Duration::from_secs(20);
+/// Hard cap for JSON-RPC / dUNL response bodies (DoS guard).
+pub(crate) const MAX_RPC_BODY_BYTES: usize = 16 * 1024 * 1024;
 
 pub struct RpcClient {
     client: AsyncJsonRpcClient,
     http: reqwest::Client,
+}
+
+async fn read_response_text_capped(
+    resp: reqwest::Response,
+    label: &str,
+) -> color_eyre::Result<String> {
+    if let Some(len) = resp.content_length()
+        && len as usize > MAX_RPC_BODY_BYTES
+    {
+        color_eyre::eyre::bail!(
+            "{label}: response Content-Length {len} exceeds cap {MAX_RPC_BODY_BYTES}"
+        );
+    }
+    let bytes = tokio::time::timeout(RPC_TIMEOUT, resp.bytes())
+        .await
+        .map_err(|_| color_eyre::eyre::eyre!("{label} response timeout"))?
+        .map_err(|e| color_eyre::eyre::eyre!("{label} response error: {e}"))?;
+    if bytes.len() > MAX_RPC_BODY_BYTES {
+        color_eyre::eyre::bail!(
+            "{label}: response body {} bytes exceeds cap {MAX_RPC_BODY_BYTES}",
+            bytes.len()
+        );
+    }
+    String::from_utf8(bytes.to_vec())
+        .map_err(|e| color_eyre::eyre::eyre!("{label} response utf8 error: {e}"))
 }
 
 impl RpcClient {
@@ -48,10 +75,7 @@ impl RpcClient {
                         .map_err(|_| color_eyre::eyre::eyre!("{method} timeout"))?
                         .map_err(|e| color_eyre::eyre::eyre!("{method} request error: {e}"))?;
                 let status = resp.status();
-                let text = tokio::time::timeout(RPC_TIMEOUT, resp.text())
-                    .await
-                    .map_err(|_| color_eyre::eyre::eyre!("{method} response timeout"))?
-                    .map_err(|e| color_eyre::eyre::eyre!("{method} response error: {e}"))?;
+                let text = read_response_text_capped(resp, method).await?;
                 if status.as_u16() == 429 {
                     let preview: String = text.chars().take(120).collect();
                     return Err(color_eyre::eyre::eyre!(
@@ -103,10 +127,7 @@ impl RpcClient {
             .await
             .map_err(|_| color_eyre::eyre::eyre!("dUNL fetch timeout"))?
             .map_err(|e| color_eyre::eyre::eyre!("dUNL fetch error: {e}"))?;
-        let text = tokio::time::timeout(RPC_TIMEOUT, resp.text())
-            .await
-            .map_err(|_| color_eyre::eyre::eyre!("dUNL response timeout"))?
-            .map_err(|e| color_eyre::eyre::eyre!("dUNL response error: {e}"))?;
+        let text = read_response_text_capped(resp, "dUNL").await?;
         parse_xrplf_dunl_json(&text)
     }
 

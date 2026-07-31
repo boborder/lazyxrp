@@ -1,8 +1,8 @@
-use secrecy::ExposeSecret;
+use secrecy::{ExposeSecret, SecretString};
 
 use crate::cli::Cmd;
 use crate::network::Network;
-use crate::signing::{self, SigningConfig, prompt_mainnet_confirmation};
+use crate::signing::{self, prompt_mainnet_confirmation};
 
 use super::client::{RpcClient, xrp_to_drops};
 
@@ -10,7 +10,7 @@ pub async fn execute_cli_command(
     cmd: Cmd,
     rpc_url: &str,
     network: &Network,
-    signing_seed: Option<String>,
+    signing_seed: Option<SecretString>,
     yes: bool,
 ) -> color_eyre::Result<()> {
     let rpc = RpcClient::connect(rpc_url)?;
@@ -116,8 +116,7 @@ pub async fn execute_cli_command(
         } => {
             use super::address::{ensure_xaddress_matches_network, resolve_payment_destination};
 
-            let signing_config = SigningConfig::prime_seed_source(signing_seed.clone());
-            let Some(seed) = signing_config.seed.as_ref() else {
+            let Some(seed) = signing_seed.as_ref() else {
                 return Err(color_eyre::eyre::eyre!(
                     "No signing seed: set XRPL_SEED, put seed in config [xrpl.signing] seed, or use --seed (family seed s... or sEd...)."
                 ));

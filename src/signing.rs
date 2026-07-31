@@ -110,9 +110,10 @@ pub fn seed_to_address(seed: &str) -> Result<String, String> {
 
 /// Resolved signing credentials. Seed is memory-masked via `secrecy`.
 ///
-/// Used for write paths that need a seed (e.g. CLI `Send` via `XRPL_SEED` or
-/// `config.toml [xrpl.signing] seed`). `load` clears `XRPL_SEED` from the
-/// process environment immediately after reading it.
+/// Test/CLI helper now: production submit paths read the seed from
+/// `PollContext.signing_seed`. `prime_seed_source` also clears `XRPL_SEED`
+/// from the process environment after reading it.
+#[allow(dead_code)]
 pub struct SigningConfig {
     pub seed: Option<SecretString>,
 }
@@ -122,6 +123,7 @@ impl SigningConfig {
     /// Priority: `XRPL_SEED` env var > `config.toml [xrpl.signing] seed`.
     /// The plain string is immediately wrapped in `SecretString` to minimise
     /// the window where the value is unprotected in memory.
+    #[allow(dead_code)]
     pub fn prime_seed_source(seed_from_config: Option<String>) -> Self {
         let env_seed = env::var(SEED_ENV).ok();
         // Security: remove seed from environment immediately after reading to prevent

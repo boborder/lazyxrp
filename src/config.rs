@@ -304,6 +304,9 @@ impl Config {
 
         // Merge XRPL_SEED env var into signing config (env var takes priority over file)
         if let Ok(env_seed) = env::var(crate::signing::SEED_ENV) {
+            // SAFETY: Config::new runs during single-threaded startup before worker threads
+            // observe the environment — clear seed from /proc/self/environ immediately.
+            unsafe { env::remove_var(crate::signing::SEED_ENV) };
             let t = crate::signing::trim_family_seed(&env_seed);
             if !t.is_empty() {
                 config.xrpl.signing.secret_seed = Some(secrecy::SecretString::from(t.to_string()));

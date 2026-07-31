@@ -30,7 +30,7 @@ C4 diagrams: [architecture/c4-context.md](architecture/c4-context.md), [architec
 - **AccountSet**: **Tab / `[` `]`** 行移動、**`e`** 編集、**`s`** 送信。SetFlag/ClearFlag（`parse_account_set_flag_choice` ラベルのみ）、domain ASCII、tick size、transfer rate。
 - **Payment**: プレビュー（緑=送信可、橙=未入力/不正）、**`i`** XRP⇔IOU、IOU 時 4 行（Destination, Currency, Issuer, Amount）、**Tab / `[` `]`** + **Enter**、**`s`** / **^S** でキュー。送信前検証（宛先・正の amount、IOU は currency 非空・issuer `r` 始まり）。
 - 全 TX 送信: **simulate → sign → submit**（[`agent/INVARIANTS.md`](agent/INVARIANTS.md) I-3）。メインネット書き込みは CLI **`--yes`**（I-2）。
-- Watch 起動: **`main` で一度だけ構築した `Config`（`XRPL_SEED` マージ済み）を `App::new` に渡す**。`prime_seed_source` 後に `Config::new()` を再実行しない。
+- Watch 起動: **`main` で一度だけ構築した `Config`（`XRPL_SEED` マージ済み）を `App::new` に渡す**。`Config::new()` が `XRPL_SEED` を環境から除去済みなので、再実行も `prime_seed_source` の再呼び出しもしない（署名シードは `PollContext.signing_seed` 経由で poll タスクへ）。
 
 ## 3. ランタイム・データフロー
 
@@ -49,7 +49,7 @@ C4 diagrams: [architecture/c4-context.md](architecture/c4-context.md), [architec
   - `--server`（RPC URL）
   - `--ws-server`（WebSocket URL）
   - `--tick-rate`, `--frame-rate`
-  - `--seed`（署名用シード、env/config を上書き）
+  - `--seed`（署名用シード、env/config を上書き。**非推奨** — argv/shell history に露出するため `XRPL_SEED` / config を推奨）
   - `watch --account`（監視アカウント上書き）
 - 設定ファイル（`Config::xrpl`）:
   - 探索順序: `$XDG_CONFIG_HOME/lazyxrp/config.toml` → `~/.config/lazyxrp/config.toml`
