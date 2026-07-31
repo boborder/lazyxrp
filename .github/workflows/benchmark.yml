@@ -1,9 +1,12 @@
 name: Benchmark
 
 on:
-  push:
-    branches: [main]
-  pull_request:
+  # After a successful CD (tag release / manual CD). Uses the default-branch
+  # workflow file; checks out the CD head SHA so results match the release.
+  workflow_run:
+    workflows: ["CD # Continuous Deployment"]
+    types:
+      - completed
   workflow_dispatch:
     inputs:
       strict:
@@ -18,11 +21,17 @@ on:
 jobs:
   benchmark:
     name: Build & Startup Benchmark
+    # Skip failed/cancelled CD runs; always allow manual dispatch.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@v1
