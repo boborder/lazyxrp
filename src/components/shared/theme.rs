@@ -17,6 +17,9 @@ pub const HIGHLIGHT_FG: Color = Color::Rgb(255, 255, 255); // White
 /// Light sky blue for account flag chips (brand accent sibling).
 pub const FLAG: Color = Color::Rgb(100, 200, 255);
 pub const HIGHLIGHT_BG: Color = BORDER;
+/// Foreground for values drawn on ACCENT fills (BarChart labels, etc.).
+/// Dark slate — readable on ACCENT without hardcoded Color::Black.
+pub const CHART_VALUE_FG: Color = Color::Rgb(15, 23, 42); // Slate-900
 
 pub fn panel_block(title: &str, is_focused: bool) -> Block<'static> {
     panel_block_owned(format!(" {title} "), is_focused)
@@ -76,4 +79,8 @@ pub fn warning_style() -> Style {
 
 pub fn flag_style() -> Style {
     Style::new().fg(FLAG).add_modifier(Modifier::BOLD)
+}
+
+pub fn chart_value_style() -> Style {
+    Style::new().fg(CHART_VALUE_FG).bg(ACCENT)
 }

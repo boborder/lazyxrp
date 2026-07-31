@@ -348,11 +348,7 @@ impl Component for ServerPanel {
                 .bar_width(2)
                 .bar_gap(1)
                 .bar_style(theme::accent_style())
-                .value_style(
-                    ratatui::style::Style::new()
-                        .fg(ratatui::style::Color::Black)
-                        .bg(theme::ACCENT),
-                )
+                .value_style(theme::chart_value_style())
                 .block(spark_block);
             frame.render_widget(barchart, spark_area);
         }

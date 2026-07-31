@@ -88,11 +88,12 @@ pub fn render_tx_detail(frame: &mut Frame, area: Rect, state: &mut TxDetailState
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
 
-    if state.cached_lines.is_none() {
-        let lines = detail_lines_for(&state.tx_json.0, &state.meta_json.0);
-        state.cached_lines = Some(to_static_lines(lines));
-    }
-    let lines = state.cached_lines.as_ref().unwrap().clone();
+    let lines = state
+        .cached_lines
+        .get_or_insert_with(|| {
+            to_static_lines(detail_lines_for(&state.tx_json.0, &state.meta_json.0))
+        })
+        .clone();
     let line_count = lines.len();
     let paragraph = Paragraph::new(lines)
         .wrap(Wrap { trim: true })
