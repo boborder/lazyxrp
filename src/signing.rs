@@ -551,7 +551,6 @@ pub(crate) fn offer_spec_to_json_value(spec: &str) -> color_eyre::Result<serde_j
 
 /// Unsigned OfferCreate JSON for `simulate`.
 /// `taker_gets` / `taker_pays` use compact specs: `XRP:drops` or `CUR:issuer:value`.
-#[allow(dead_code)] // wired in ticket 06 poll/UI
 pub fn build_offer_create_tx_json_for_simulate(
     account: &str,
     taker_gets_spec: &str,
@@ -577,7 +576,6 @@ pub fn build_offer_create_tx_json_for_simulate(
 }
 
 /// Create and sign an `OfferCreate` transaction, returning the tx_blob hex.
-#[allow(dead_code)]
 #[allow(clippy::too_many_arguments)]
 pub fn create_and_sign_offer_create(
     seed: &SecretString,

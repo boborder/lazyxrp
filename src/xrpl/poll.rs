@@ -16,8 +16,8 @@ use super::client::{
     RPC_TIMEOUT, RpcClient, empty_account_tx_page_on_not_found, path_find_snapshot, xrp_to_drops,
 };
 use super::types::{
-    AccountSetSubmitParams, BookPair, OracleId, PaymentSubmitParams, PollCommand, PollContext,
-    SetRegularKeySubmitParams, SimulateResult,
+    AccountSetSubmitParams, BookPair, OfferCreateSubmitParams, OracleId, PaymentSubmitParams,
+    PollCommand, PollContext, SetRegularKeySubmitParams, SimulateResult,
 };
 use serde_json::Value;
 
@@ -589,6 +589,95 @@ async fn submit_account_set_transaction(
     .await;
 }
 
+async fn submit_offer_create_transaction(
+    rpc: &RpcClient,
+    network: &Network,
+    params: OfferCreateSubmitParams,
+    action_tx: &UnboundedSender<Action>,
+) {
+    let submit_err = Action::OfferCreateSubmitErr;
+    let taker_gets = match signing::require_nonempty_field("taker_gets", &params.taker_gets) {
+        Ok(s) => s.to_string(),
+        Err(e) => {
+            send_action(action_tx, submit_err(format!("{e}")));
+            return;
+        }
+    };
+    let taker_pays = match signing::require_nonempty_field("taker_pays", &params.taker_pays) {
+        Ok(s) => s.to_string(),
+        Err(e) => {
+            send_action(action_tx, submit_err(format!("{e}")));
+            return;
+        }
+    };
+
+    let Some((seed, wallet)) = resolve_submit_wallet(
+        network,
+        params.skip_mainnet_prompt,
+        params.config_seed.clone(),
+        "mainnet: restart lazyxrp with --yes to allow OfferCreate writes",
+        submit_err,
+        action_tx,
+    ) else {
+        return;
+    };
+    let account = wallet.classic_address.clone();
+
+    let Some(account_info) =
+        fetch_account_summary_for_submit(rpc, &account, submit_err, action_tx).await
+    else {
+        return;
+    };
+
+    let tx_json = match signing::build_offer_create_tx_json_for_simulate(
+        &account,
+        &taker_gets,
+        &taker_pays,
+        account_info.sequence,
+    ) {
+        Ok(j) => j,
+        Err(e) => {
+            send_action(action_tx, submit_err(format!("tx_json: {e}")));
+            return;
+        }
+    };
+
+    let sim = match simulate_tx_requiring_tes_success(rpc, tx_json).await {
+        Ok(s) => s,
+        Err(e) => {
+            send_action(action_tx, submit_err(e));
+            return;
+        }
+    };
+
+    finalize_simulate_sign_submit(
+        rpc,
+        action_tx,
+        sim,
+        |sequence, fee_drops, last_ledger_sequence| {
+            signing::create_and_sign_offer_create(
+                &seed,
+                &account,
+                &taker_gets,
+                &taker_pays,
+                sequence,
+                fee_drops,
+                last_ledger_sequence,
+                network,
+            )
+        },
+        submit_err,
+        |hash| {
+            vec![
+                Action::OfferCreateSubmitOk(hash),
+                Action::RefreshAccount,
+                Action::RefreshTxHistory,
+            ]
+        },
+    )
+    .await;
+}
+
 async fn submit_set_regular_key_transaction(
     rpc: &RpcClient,
     network: &Network,
@@ -1087,6 +1176,10 @@ async fn drive_poll_loop(
                         submit_set_regular_key_transaction(&rpc, &network, params, &action_tx)
                             .await;
                     }
+                    PollCommand::OfferCreateSubmit(params) => {
+                        let network = *network_watch.borrow();
+                        submit_offer_create_transaction(&rpc, &network, params, &action_tx).await;
+                    }
                     PollCommand::WalletPropose(key_type) => {
                         match crate::signing::propose_wallet_local(&key_type) {
                             Ok(result) => {
@@ -1103,8 +1196,8 @@ async fn drive_poll_loop(
                             }
                         }
                     }
-                    // OfferCreate / EscrowCreate / TrustSet: wire via
-                    // `.scratch/v024-next/assets/04-poll-handler-template.md` (tickets 06–07).
+                    // EscrowCreate / TrustSet: wire via
+                    // `.scratch/v024-next/assets/04-poll-handler-template.md` (ticket 07+).
                     // Do not silently drop new submit commands here.
                     _ => {}
                 }
@@ -1124,7 +1217,9 @@ mod tests {
     use crate::network::Network;
     use crate::signing::SEED_ENV;
     use crate::xrpl::client::RpcClient;
-    use crate::xrpl::types::{PaymentSubmitParams, SetRegularKeySubmitParams};
+    use crate::xrpl::types::{
+        OfferCreateSubmitParams, PaymentSubmitParams, SetRegularKeySubmitParams,
+    };
 
     /// TC-087: poll trigger burst drain
     #[test]
@@ -1308,6 +1403,27 @@ mod tests {
                 );
             }
             other => panic!("expected SetRegularKeySubmitErr after guard skip, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn offer_create_submit_mainnet_without_yes_is_rejected() {
+        let (action_tx, mut action_rx) = mpsc::unbounded_channel();
+        let rpc = RpcClient::connect("http://127.0.0.1:1").expect("rpc client");
+        let params = OfferCreateSubmitParams {
+            taker_gets: "XRP:1000000".into(),
+            taker_pays: "USD:rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh:10".into(),
+            skip_mainnet_prompt: false,
+            config_seed: None,
+        };
+        submit_offer_create_transaction(&rpc, &Network::Mainnet, params, &action_tx).await;
+        let action = action_rx.recv().await.expect("action");
+        match action {
+            Action::OfferCreateSubmitErr(msg) => {
+                assert!(msg.contains("mainnet"));
+                assert!(msg.contains("--yes"));
+            }
+            other => panic!("expected OfferCreateSubmitErr, got {other:?}"),
         }
     }
 

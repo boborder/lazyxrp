@@ -62,9 +62,14 @@ enum ComposerPhase {
     SetRegularKey {
         regular_key: String,
     },
+    OfferCreate {
+        row: usize,
+        taker_gets: String,
+        taker_pays: String,
+    },
 }
 
-const COMPOSER_KIND_COUNT: usize = 3;
+const COMPOSER_KIND_COUNT: usize = 4;
 
 #[path = "wallet_composer.rs"]
 mod composer;
@@ -216,6 +221,19 @@ impl Component for WalletPanel {
             Action::SetRegularKeySubmitErr(msg) => {
                 self.set_submit_flash(SubmitFlash::Error(format!("SetRegularKey · {msg}")));
             }
+            Action::OfferCreateSubmitOk(hash) => {
+                self.set_submit_flash(SubmitFlash::Success(format!(
+                    "OfferCreate submitted · {hash}"
+                )));
+                if matches!(&self.composer, Some(ComposerPhase::OfferCreate { .. })) {
+                    self.composer = None;
+                    self.is_form_editing = false;
+                    return Ok(Some(Action::SetKeymapSuppression(false)));
+                }
+            }
+            Action::OfferCreateSubmitErr(msg) => {
+                self.set_submit_flash(SubmitFlash::Error(format!("OfferCreate · {msg}")));
+            }
             Action::WalletProposeOk(result) => {
                 self.keygen_result = Some(result.clone());
             }
@@ -260,6 +278,10 @@ impl Component for WalletPanel {
                 }
                 Some(ComposerPhase::SetRegularKey { .. }) => {
                     self.composer = Some(ComposerPhase::PickKind { selected: 2 });
+                    None
+                }
+                Some(ComposerPhase::OfferCreate { .. }) => {
+                    self.composer = Some(ComposerPhase::PickKind { selected: 3 });
                     None
                 }
             });
@@ -311,6 +333,34 @@ impl Component for WalletPanel {
             && (key.modifiers.contains(KeyModifiers::CONTROL) || !self.is_form_editing)
         {
             return Ok(Some(self.queue_submit_set_regular_key()));
+        }
+
+        if matches!(&self.composer, Some(ComposerPhase::OfferCreate { .. }))
+            && matches!(key.code, KeyCode::Char('s') | KeyCode::Char('S'))
+            && (key.modifiers.contains(KeyModifiers::CONTROL) || !self.is_form_editing)
+        {
+            return Ok(Some(self.queue_submit_offer_create()));
+        }
+
+        if let Some(ComposerPhase::OfferCreate {
+            row,
+            ref mut taker_gets,
+            ref mut taker_pays,
+        }) = self.composer
+            && self.is_form_editing
+        {
+            let target = if row == 0 { taker_gets } else { taker_pays };
+            match key.code {
+                KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    target.push(c);
+                    return Ok(None);
+                }
+                KeyCode::Backspace => {
+                    target.pop();
+                    return Ok(None);
+                }
+                _ => {}
+            }
         }
 
         if let Some(ComposerPhase::SetRegularKey {
@@ -386,6 +436,7 @@ impl Component for WalletPanel {
                         0 => self.open_account_set_composer(),
                         1 => self.open_payment_composer(),
                         2 => self.open_set_regular_key_composer(),
+                        3 => self.open_offer_create_composer(),
                         _ => {}
                     },
                     _ => {}
@@ -437,6 +488,35 @@ impl Component for WalletPanel {
                     KeyCode::Enter if !self.is_form_editing => {
                         self.is_form_editing = true;
                         return Ok(Some(Action::SetKeymapSuppression(true)));
+                    }
+                    _ => {}
+                }
+                return Ok(None);
+            }
+            Some(ComposerPhase::OfferCreate { row, .. }) => {
+                const ROWS: usize = 2;
+                match key.code {
+                    KeyCode::Char('e') | KeyCode::Char('E')
+                        if !key.modifiers.contains(KeyModifiers::CONTROL) =>
+                    {
+                        self.is_form_editing = !self.is_form_editing;
+                        if self.is_form_editing {
+                            return Ok(Some(Action::SetKeymapSuppression(true)));
+                        }
+                    }
+                    KeyCode::Enter => {
+                        if self.is_form_editing {
+                            *row = (*row + 1) % ROWS;
+                        } else {
+                            self.is_form_editing = true;
+                            return Ok(Some(Action::SetKeymapSuppression(true)));
+                        }
+                    }
+                    KeyCode::Char('[') | KeyCode::BackTab => {
+                        *row = (*row + ROWS - 1) % ROWS;
+                    }
+                    KeyCode::Char(']') | KeyCode::Tab => {
+                        *row = (*row + 1) % ROWS;
                     }
                     _ => {}
                 }
@@ -830,6 +910,30 @@ mod tests {
         );
         assert!(iou.contains("Pay 10 USD"), "{iou}");
         assert!(iou.contains("issued by"), "{iou}");
+    }
+
+    #[test]
+    fn open_offer_create_composer_and_queue_submit() {
+        let mut panel = WalletPanel::new(true);
+        panel.open_offer_create_composer();
+        match &panel.composer {
+            Some(ComposerPhase::OfferCreate {
+                taker_gets,
+                taker_pays,
+                ..
+            }) => {
+                assert_eq!(taker_gets, "XRP:1000000");
+                assert!(taker_pays.starts_with("USD:"));
+            }
+            other => panic!("expected OfferCreate, got {other:?}"),
+        }
+        match panel.queue_submit_offer_create() {
+            Action::OfferCreateSubmit(p) => {
+                assert_eq!(p.taker_gets, "XRP:1000000");
+                assert!(p.skip_mainnet_prompt);
+            }
+            other => panic!("expected OfferCreateSubmit, got {other:?}"),
+        }
     }
 
     #[test]

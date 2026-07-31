@@ -11,7 +11,10 @@ use super::{ComposerPhase, SubmitFlash, WalletPanel};
 use crate::{
     action::Action,
     components::shared::theme,
-    xrpl::{AccountSetSubmitParams, PaymentSubmitParams, SetRegularKeySubmitParams},
+    xrpl::{
+        AccountSetSubmitParams, OfferCreateSubmitParams, PaymentSubmitParams,
+        SetRegularKeySubmitParams,
+    },
 };
 
 impl WalletPanel {
@@ -58,6 +61,32 @@ impl WalletPanel {
         };
         Action::SetRegularKeySubmit(SetRegularKeySubmitParams {
             regular_key,
+            skip_mainnet_prompt: self.skip_mainnet_prompt,
+            config_seed: self.config_seed(),
+        })
+    }
+
+    pub(super) fn open_offer_create_composer(&mut self) {
+        self.composer = Some(ComposerPhase::OfferCreate {
+            row: 0,
+            taker_gets: "XRP:1000000".to_string(),
+            taker_pays: "USD:rIssuerReplaceMe:10".to_string(),
+        });
+        self.is_form_editing = false;
+    }
+
+    pub(super) fn queue_submit_offer_create(&self) -> Action {
+        let (taker_gets, taker_pays) = match &self.composer {
+            Some(ComposerPhase::OfferCreate {
+                taker_gets,
+                taker_pays,
+                ..
+            }) => (taker_gets.clone(), taker_pays.clone()),
+            _ => (String::new(), String::new()),
+        };
+        Action::OfferCreateSubmit(OfferCreateSubmitParams {
+            taker_gets,
+            taker_pays,
             skip_mainnet_prompt: self.skip_mainnet_prompt,
             config_seed: self.config_seed(),
         })
@@ -278,7 +307,7 @@ impl WalletPanel {
 
         let popup_w = area.width.clamp(54, 74);
         let popup_h = match phase {
-            ComposerPhase::PickKind { .. } => 14u16,
+            ComposerPhase::PickKind { .. } => 16u16,
             ComposerPhase::AccountSet => 21u16,
             ComposerPhase::Payment { is_iou, .. } => {
                 if *is_iou {
@@ -288,6 +317,7 @@ impl WalletPanel {
                 }
             }
             ComposerPhase::SetRegularKey { .. } => 14u16,
+            ComposerPhase::OfferCreate { .. } => 14u16,
         }
         .min(area.height.saturating_sub(2))
         .max(8);
@@ -308,6 +338,7 @@ impl WalletPanel {
                 }
             }
             ComposerPhase::SetRegularKey { .. } => "SetRegularKey",
+            ComposerPhase::OfferCreate { .. } => "OfferCreate",
         };
         let block = theme::panel_block(inner_title, true);
         let inner = block.inner(popup);
@@ -334,6 +365,11 @@ impl WalletPanel {
                 } else {
                     label_style
                 };
+                let hi3 = if *selected == 3 {
+                    highlight_style
+                } else {
+                    label_style
+                };
                 Paragraph::new(vec![
                     Line::from(""),
                     Line::from(vec![
@@ -352,6 +388,13 @@ impl WalletPanel {
                         Span::styled(
                             "SetRegularKey — assign or CLEAR regular key (dangerous)",
                             hi2,
+                        ),
+                    ]),
+                    Line::from(vec![
+                        Span::raw(if *selected == 3 { "⟩ " } else { "  " }),
+                        Span::styled(
+                            "OfferCreate — TakerGets/Pays (XRP:drops or CUR:issuer:value)",
+                            hi3,
                         ),
                     ]),
                     Line::from(""),
@@ -536,6 +579,51 @@ impl WalletPanel {
                     Line::from(""),
                     Line::from(Span::styled(
                         "e edit · Ctrl+S / S submit · Esc back",
+                        theme::secondary_style(),
+                    )),
+                ])
+            }
+            ComposerPhase::OfferCreate {
+                row,
+                taker_gets,
+                taker_pays,
+            } => {
+                let net_note = if self.network.is_mainnet() && !self.skip_mainnet_prompt {
+                    " · mainnet writes need --yes"
+                } else {
+                    ""
+                };
+                Paragraph::new(vec![
+                    Line::from(Span::styled(
+                        format!("Specs: XRP:drops or CUR:issuer:value{net_note}"),
+                        theme::secondary_style(),
+                    )),
+                    Line::from(""),
+                    Line::from(vec![
+                        Span::styled(
+                            format!("TakerGets [{}] ", if *row == 0 { "*" } else { " " }),
+                            if *row == 0 {
+                                highlight_style
+                            } else {
+                                label_style
+                            },
+                        ),
+                        Span::styled(taker_gets.clone(), value_style),
+                    ]),
+                    Line::from(vec![
+                        Span::styled(
+                            format!("TakerPays [{}] ", if *row == 1 { "*" } else { " " }),
+                            if *row == 1 {
+                                highlight_style
+                            } else {
+                                label_style
+                            },
+                        ),
+                        Span::styled(taker_pays.clone(), value_style),
+                    ]),
+                    Line::from(""),
+                    Line::from(Span::styled(
+                        "e edit · Tab rows · Ctrl+S / S submit · Esc back",
                         theme::secondary_style(),
                     )),
                 ])
