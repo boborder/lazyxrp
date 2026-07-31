@@ -50,7 +50,7 @@ src/
 ├── errors.rs            Error handling init (color-eyre, human-panic, better-panic)
 ├── logging.rs           Tracing/logging initialization
 ├── uninstall.rs         --self-uninstall logic
-├── flare.rs             Flare FTSOv2 price fetch helpers
+├── flare.rs             Flare FTSOv2 + FXRP AssetManager C1 read helpers
 ├── xrpl/                XRPL integration
 │   ├── mod.rs           Re-exports
 │   ├── address.rs       Classic / X-Address resolve + network match checks

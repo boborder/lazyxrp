@@ -11,7 +11,7 @@ use crate::{
     },
 };
 
-/// Dashboard tab: server (left), Oracle/FTSO combined (right).
+/// Dashboard tab: server (left), Oracle/FTSO/FXRP combined (right).
 pub struct OverviewTab {
     server: ServerPanel,
     combined: CombinedOraclePanel,

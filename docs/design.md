@@ -179,7 +179,7 @@ TxHistory {
 - **`ledger_objects.rs`**: `account_objects` 応答の一覧・詳細ウィジェット。
 ### 5.6 タブ構成（4 タブ）と ledger objects
 
-- **Overview**: `OverviewTab` → `ServerPanel`（左）+ `CombinedOraclePanel`（XRPL aggregate + Flare FTSOv2）
+- **Overview**: `OverviewTab` → `ServerPanel`（左）+ `CombinedOraclePanel`（XRPL aggregate + Flare FTSOv2 + FXRP Direct Mint C1）
 - **Account**: `AccountWalletTab` — `WalletPanel` + `AccountPanel` + `TxHistoryPanel`
 - **Market**: `MarketOracleTab` — Book / **PathFind** / AMM / TrustLines / Flare FTSO / Oracle
 - **Assets**: `AssetsTab` — `NftTab` + `LedgerObjectsPanel`（Objects / Pay channels / Escrows）

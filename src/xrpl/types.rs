@@ -393,6 +393,21 @@ pub struct FlareFeedPrice {
     pub source: String,
 }
 
+/// FXRP Direct Mint read-only snapshot from AssetManagerFXRP (C1).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FxrpDirectMintInfo {
+    /// XRPL classic address of the Core Vault payment destination.
+    pub core_vault_xrpl: String,
+    /// Flare AssetManagerFXRP contract address (0x…).
+    pub asset_manager: String,
+    /// Minimum direct-mint fee in underlying base units (UBA; XRP drops).
+    pub min_fee_uba: u128,
+    /// Direct mint fee in BIPS (100 = 1%).
+    pub fee_bips: u64,
+    /// Preferred-executor fee in UBA (XRP drops).
+    pub executor_fee_uba: u128,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TxRow {
     pub hash: String,

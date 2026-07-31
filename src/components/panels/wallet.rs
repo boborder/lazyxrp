@@ -285,11 +285,11 @@ impl Component for WalletPanel {
                     self.composer = None;
                     Some(Action::SetKeymapSuppression(false))
                 }
-                Some(ComposerPhase::AccountSet) => {
+                Some(ComposerPhase::Payment { .. }) => {
                     self.composer = Some(ComposerPhase::PickKind { selected: 0 });
                     None
                 }
-                Some(ComposerPhase::Payment { .. }) => {
+                Some(ComposerPhase::AccountSet) => {
                     self.composer = Some(ComposerPhase::PickKind { selected: 1 });
                     None
                 }
@@ -487,13 +487,18 @@ impl Component for WalletPanel {
                         *selected = (*selected + COMPOSER_KIND_COUNT - 1) % COMPOSER_KIND_COUNT;
                     }
                     KeyCode::Enter => match *selected {
-                        0 => self.open_account_set_composer(),
-                        1 => self.open_payment_composer(),
+                        0 => self.open_payment_composer(),
+                        1 => self.open_account_set_composer(),
                         2 => self.open_set_regular_key_composer(),
                         3 => self.open_offer_create_composer(),
                         4 => self.open_trust_set_composer(),
                         _ => {}
                     },
+                    KeyCode::Char('1') => self.open_payment_composer(),
+                    KeyCode::Char('2') => self.open_account_set_composer(),
+                    KeyCode::Char('3') => self.open_set_regular_key_composer(),
+                    KeyCode::Char('4') => self.open_offer_create_composer(),
+                    KeyCode::Char('5') => self.open_trust_set_composer(),
                     _ => {}
                 }
                 return Ok(None);
@@ -736,7 +741,7 @@ impl Component for WalletPanel {
                 let mut spans: Vec<Span> = vec![Span::styled("Flags", label_style)];
                 spans.extend(flag_spans);
                 spans.push(Span::styled(
-                    "  ·  t composer  g keygen",
+                    "  ·  t send/configure  g new keys",
                     theme::dim_style(),
                 ));
                 Line::from(spans)
@@ -756,7 +761,7 @@ impl Component for WalletPanel {
             ]));
         }
         summary.push(Line::from(Span::styled(
-            "Transactions: lower pane · j/k f m Enter",
+            "Recent txs below · j/k select · f filter · Enter detail",
             theme::dim_style(),
         )));
         frame.render_widget(Paragraph::new(summary), summary_area);

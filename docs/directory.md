@@ -50,6 +50,7 @@ lazyxrp/
 │       │   ├── book.rs
 │       │   ├── combined_oracle.rs
 │       │   ├── flare_ftso.rs
+│       │   ├── fxrp_direct_mint.rs
 │       │   ├── ledger_objects.rs
 │       │   ├── oracle.rs
 │       │   ├── path_find.rs
@@ -65,7 +66,7 @@ lazyxrp/
 │       │   └── wallet_keys.rs
 │       ├── tabs/
 │       │   ├── mod.rs
-│       │   ├── overview.rs          # Tab 0: Server + Oracle/FTSO
+│       │   ├── overview.rs          # Tab 0: Server + Oracle/FTSO/FXRP
 │       │   ├── account_wallet.rs    # Tab 1: Wallet/Account + TxHistory
 │       │   ├── market_oracle.rs     # Tab 2: Book / Lines / AMM / FTSO
 │       │   ├── assets.rs            # Tab 3: NFT + ledger objects
@@ -142,7 +143,7 @@ lazyxrp/
 - `book.rs`: オーダーブック表示パネル。
 - `path_find.rs`: `ripple_path_find` ルート一覧（送信額・ホップ・経路、安い順）。
 - `amm.rs`: AMM プール詳細パネル。
-- `oracle.rs` / `flare_ftso.rs` / `combined_oracle.rs`: XRPL oracle 集約・Flare FTSOv2・Overview 用統合表示。
+- `oracle.rs` / `flare_ftso.rs` / `fxrp_direct_mint.rs` / `combined_oracle.rs`: XRPL oracle 集約・Flare FTSOv2・FXRP Direct Mint 読み取り・Overview 用統合表示。
 
 - `trust_lines.rs`: TrustLine 一覧パネル（Table + Scrollbar、残高で色分け）。
 - `tx_history.rs`: TX 履歴パネル（Table + Scrollbar、tesSUCCESS で色分け）。
@@ -151,7 +152,7 @@ lazyxrp/
 
 ## 5. `src/components/tabs/` 配下の責務
 
-- `overview.rs`: Tab 0 — Server + Combined Oracle/FTSO。
+- `overview.rs`: Tab 0 — Server + Combined Oracle/FTSO/FXRP。
 - `account_wallet.rs`: Tab 1 — Wallet（上）+ TxHistory（下）。seed 未設定時は Account パネル。
 - `market_oracle.rs`: Tab 2 — Book / Path-Find / AMM / Trust lines / Flare FTSO / XRPL Oracle。
 - `assets.rs`: Tab 3 — NFT + ledger objects（PayChannel / Escrow 含む）。

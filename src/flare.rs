@@ -6,12 +6,13 @@ use alloy::{
     sol,
 };
 
-use crate::xrpl::FlareFeedPrice;
+use crate::xrpl::{FlareFeedPrice, FxrpDirectMintInfo};
 
 pub const DEFAULT_FLARE_RPC: &str = "https://flare-api.flare.network/ext/C/rpc";
 pub const DEFAULT_FLARE_FEED: &str = "FXRP/USD";
 pub const DEFAULT_FLARE_FEEDS: &[&str] = &["FXRP/USD", "FLR/USD", "BTC/USD", "ETH/USD"];
 const FLARE_CONTRACT_REGISTRY: Address = address!("aD67FE66660Fb8dFE9d6b1b4240d8650e30F6019");
+const ASSET_MANAGER_FXRP_NAME: &str = "AssetManagerFXRP";
 
 sol! {
     #[sol(rpc)]
@@ -22,6 +23,15 @@ sol! {
     #[sol(rpc)]
     interface FtsoV2 {
         function getFeedById(bytes21 _feedId) external view returns (uint256 value, int8 decimals, uint64 timestamp);
+    }
+
+    /// Minimal IAssetManager surface for FXRP Direct Mint C1 reads.
+    #[sol(rpc)]
+    interface IAssetManager {
+        function directMintingPaymentAddress() external view returns (string memory);
+        function getDirectMintingMinimumFeeUBA() external view returns (uint256);
+        function getDirectMintingFeeBIPS() external view returns (uint256);
+        function getDirectMintingExecutorFeeUBA() external view returns (uint256);
     }
 }
 
@@ -44,6 +54,27 @@ fn format_price(value: U256, decimals: i8) -> String {
     let divisor = 10_f64.powi(decimals as i32);
     let human = value.to::<u128>() as f64 / divisor;
     format!("{human:.6}")
+}
+
+/// Stable UBA → XRP display (6 decimals like drops; trailing zeros trimmed).
+#[must_use]
+pub fn uba_to_xrp_display(uba: u128) -> String {
+    let whole = uba / 1_000_000;
+    let frac = uba % 1_000_000;
+    if frac == 0 {
+        format!("{whole}")
+    } else {
+        let s = format!("{whole}.{frac:06}");
+        s.trim_end_matches('0').to_string()
+    }
+}
+
+/// BIPS → percent string (`10` → `"0.10%"`, `100` → `"1.00%"`).
+#[must_use]
+pub fn bips_to_percent_display(bips: u64) -> String {
+    let whole = bips / 100;
+    let frac = bips % 100;
+    format!("{whole}.{frac:02}%")
 }
 
 async fn fetch_from_rpc(
@@ -112,9 +143,53 @@ pub async fn fetch_ftso_prices(
     fetch_from_rpc(rpc_url, feeds).await
 }
 
+/// Resolve AssetManagerFXRP and read Core Vault + direct-mint fee views (read-only).
+pub async fn fetch_fxrp_direct_mint_info(
+    rpc_url: &str,
+) -> color_eyre::Result<FxrpDirectMintInfo> {
+    let provider = ProviderBuilder::new().connect_http(rpc_url.parse()?);
+    let registry = FlareContractRegistry::new(FLARE_CONTRACT_REGISTRY, provider.clone());
+    let asset_manager_addr = registry
+        .getContractAddressByName(ASSET_MANAGER_FXRP_NAME.to_string())
+        .call()
+        .await?;
+    let am = IAssetManager::new(asset_manager_addr, provider);
+
+    let core_vault_xrpl = am.directMintingPaymentAddress().call().await?;
+    let min_fee = am.getDirectMintingMinimumFeeUBA().call().await?;
+    let fee_bips = am.getDirectMintingFeeBIPS().call().await?;
+    let executor_fee = am.getDirectMintingExecutorFeeUBA().call().await?;
+
+    Ok(FxrpDirectMintInfo {
+        core_vault_xrpl,
+        asset_manager: format!("{asset_manager_addr:#x}"),
+        min_fee_uba: min_fee.to::<u128>(),
+        fee_bips: fee_bips.to::<u64>(),
+        executor_fee_uba: executor_fee.to::<u128>(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn uba_to_xrp_display_table() {
+        assert_eq!(uba_to_xrp_display(0), "0");
+        assert_eq!(uba_to_xrp_display(100_000), "0.1");
+        assert_eq!(uba_to_xrp_display(200_000), "0.2");
+        assert_eq!(uba_to_xrp_display(1_000_000), "1");
+        assert_eq!(uba_to_xrp_display(10_500_000), "10.5");
+        assert_eq!(uba_to_xrp_display(1), "0.000001");
+    }
+
+    #[test]
+    fn bips_to_percent_display_table() {
+        assert_eq!(bips_to_percent_display(0), "0.00%");
+        assert_eq!(bips_to_percent_display(10), "0.10%");
+        assert_eq!(bips_to_percent_display(100), "1.00%");
+        assert_eq!(bips_to_percent_display(12), "0.12%");
+    }
 
     #[tokio::test]
     #[ignore = "live network dependency"]
@@ -130,6 +205,20 @@ mod tests {
         assert!(prices.iter().any(|p| p.pair == "BTC/USD"));
         assert!(prices.iter().any(|p| p.pair == "ETH/USD"));
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[ignore = "live network dependency"]
+    async fn fxrp_direct_mint_info_fetch_live() -> color_eyre::Result<()> {
+        let info = fetch_fxrp_direct_mint_info(DEFAULT_FLARE_RPC).await?;
+        assert!(
+            info.core_vault_xrpl.starts_with('r'),
+            "core vault should be classic XRPL addr: {}",
+            info.core_vault_xrpl
+        );
+        assert!(info.asset_manager.starts_with("0x"));
+        assert!(info.min_fee_uba > 0);
         Ok(())
     }
 }

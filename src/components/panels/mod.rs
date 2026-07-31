@@ -3,6 +3,7 @@ pub mod amm;
 pub mod book;
 pub mod combined_oracle;
 pub mod flare_ftso;
+pub mod fxrp_direct_mint;
 pub mod ledger_objects;
 pub mod oracle;
 pub mod path_find;

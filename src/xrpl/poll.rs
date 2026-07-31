@@ -454,7 +454,8 @@ async fn poll_batch(inputs: PollBatchInputs<'_>, action_tx: &UnboundedSender<Act
         }
     }
 
-    // FTSO is shown on Overview; skip when another tab is focused.
+    // FTSO + FXRP AssetManager are shown on Overview; skip when another tab is focused.
+    // Failures stay non-fatal so XRPL polling continues.
     if active_tab == 0
         && let Some(flare_rpc) = flare_rpc_url
     {
@@ -472,6 +473,23 @@ async fn poll_batch(inputs: PollBatchInputs<'_>, action_tx: &UnboundedSender<Act
             }
             Ok(Ok(_)) | Ok(Err(_)) | Err(_) => {
                 // Keep Oracle tab non-blocking when Flare endpoint/feed is unavailable.
+            }
+        }
+
+        match tokio::time::timeout(
+            RPC_TIMEOUT,
+            crate::flare::fetch_fxrp_direct_mint_info(flare_rpc),
+        )
+        .await
+        {
+            Ok(Ok(info)) => {
+                any_rpc_succeeded = true;
+                if let Err(e) = action_tx.send(Action::FxrpDirectMintInfo(Box::new(info))) {
+                    warn!(?e, "action channel closed (fxrp direct mint)");
+                }
+            }
+            Ok(Err(_)) | Err(_) => {
+                // Non-fatal: AssetManager read must not break XRPL poll.
             }
         }
     }

@@ -5,7 +5,7 @@ use crate::{
     network::Network,
     xrpl::{
         AccountSetSubmitParams, AccountSummary, AggregatePrice, AmmSummary, DunlSummary,
-        EscrowCreateSubmitParams, FeeSummary, FlareFeedPrice, LedgerObjectRow, NftRow,
+        EscrowCreateSubmitParams, FeeSummary, FlareFeedPrice, FxrpDirectMintInfo, LedgerObjectRow, NftRow,
         OfferCreateSubmitParams, OfferRow, PathFindSnapshot, PaymentSubmitParams,
         ServerInfoSummary, SetRegularKeySubmitParams, TrustLineRow, TrustSetSubmitParams, TxRow,
         TxSummary, WalletProposeResult, XrplRlusdPrice, XrplTomlData,
@@ -53,6 +53,8 @@ pub enum Action {
     XrplOraclePrices(Vec<AggregatePrice>),
     /// FTSOv2 prices from Flare (alloy).
     FlareOraclePrices(Vec<FlareFeedPrice>),
+    /// FXRP Direct Mint Core Vault + fees from AssetManager (read-only).
+    FxrpDirectMintInfo(Box<FxrpDirectMintInfo>),
     /// Oracle tab shown but no oracles configured.
     XrplOracleNotConfigured,
     /// `account_objects` snapshot; each tab filters rows by `LedgerEntryType`.

@@ -358,8 +358,8 @@ impl WalletPanel {
 
         frame.render_widget(Clear, popup);
         let inner_title = match phase {
-            ComposerPhase::PickKind { .. } => "Transaction type",
-            ComposerPhase::AccountSet => "AccountSet",
+            ComposerPhase::PickKind { .. } => "Choose action",
+            ComposerPhase::AccountSet => "Account settings",
             ComposerPhase::Payment { is_iou, .. } => {
                 if *is_iou {
                     "Payment (IOU)"
@@ -367,9 +367,9 @@ impl WalletPanel {
                     "Payment (XRP)"
                 }
             }
-            ComposerPhase::SetRegularKey { .. } => "SetRegularKey",
-            ComposerPhase::OfferCreate { .. } => "OfferCreate",
-            ComposerPhase::TrustSet { .. } => "TrustSet",
+            ComposerPhase::SetRegularKey { .. } => "Regular key",
+            ComposerPhase::OfferCreate { .. } => "Create offer",
+            ComposerPhase::TrustSet { .. } => "Trust line",
         };
         let block = theme::panel_block(inner_title, true);
         let inner = block.inner(popup);
@@ -381,68 +381,34 @@ impl WalletPanel {
 
         let body = match phase {
             ComposerPhase::PickKind { selected } => {
-                let hi0 = if *selected == 0 {
-                    highlight_style
-                } else {
-                    label_style
+                let hi = |i: usize| {
+                    if *selected == i {
+                        highlight_style
+                    } else {
+                        label_style
+                    }
                 };
-                let hi1 = if *selected == 1 {
-                    highlight_style
-                } else {
-                    label_style
-                };
-                let hi2 = if *selected == 2 {
-                    highlight_style
-                } else {
-                    label_style
-                };
-                let hi3 = if *selected == 3 {
-                    highlight_style
-                } else {
-                    label_style
-                };
-                let hi4 = if *selected == 4 {
-                    highlight_style
-                } else {
-                    label_style
+                let row = |i: usize, shortcut: &str, title: &str, blurb: &str| {
+                    Line::from(vec![
+                        Span::raw(if *selected == i { "⟩ " } else { "  " }),
+                        Span::styled(format!("[{shortcut}] {title}"), hi(i)),
+                        Span::styled(format!(" — {blurb}"), theme::dim_style()),
+                    ])
                 };
                 Paragraph::new(vec![
+                    Line::from(Span::styled(
+                        "What do you want to do?",
+                        theme::secondary_style(),
+                    )),
                     Line::from(""),
-                    Line::from(vec![
-                        Span::raw(if *selected == 0 { "⟩ " } else { "  " }),
-                        Span::styled(
-                            "AccountSet — SetFlag / ClearFlag, domain, TickSize, TransferRate",
-                            hi0,
-                        ),
-                    ]),
-                    Line::from(vec![
-                        Span::raw(if *selected == 1 { "⟩ " } else { "  " }),
-                        Span::styled("Payment — XRP to classic `r…` or X-address", hi1),
-                    ]),
-                    Line::from(vec![
-                        Span::raw(if *selected == 2 { "⟩ " } else { "  " }),
-                        Span::styled(
-                            "SetRegularKey — assign or CLEAR regular key (dangerous)",
-                            hi2,
-                        ),
-                    ]),
-                    Line::from(vec![
-                        Span::raw(if *selected == 3 { "⟩ " } else { "  " }),
-                        Span::styled(
-                            "OfferCreate — TakerGets/Pays (XRP:drops or CUR:issuer:value)",
-                            hi3,
-                        ),
-                    ]),
-                    Line::from(vec![
-                        Span::raw(if *selected == 4 { "⟩ " } else { "  " }),
-                        Span::styled(
-                            "TrustSet — Limit + Currency + Issuer (no rippling flags)",
-                            hi4,
-                        ),
-                    ]),
+                    row(0, "1", "Payment", "send XRP or IOU"),
+                    row(1, "2", "AccountSet", "flags, domain, rates"),
+                    row(2, "3", "SetRegularKey", "assign/clear key ⚠"),
+                    row(3, "4", "OfferCreate", "place DEX offer"),
+                    row(4, "5", "TrustSet", "open IOU trust line"),
                     Line::from(""),
                     Line::from(Span::styled(
-                        "j/k · ↑/↓ · Tab · Enter open · Esc close",
+                        "1–5 jump · j/k move · Enter open · Esc close",
                         theme::secondary_style(),
                     )),
                 ])

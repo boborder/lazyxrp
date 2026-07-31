@@ -90,7 +90,7 @@ main ──► app ──► components ──► (none, leaf nodes)
 ### Flow 2: Periodic Data Refresh
 1. `poll_batch()` runs every `poll_interval_ms` (min 10s guarded)
 2. Fires `tokio::join!` on: `server_info`, `fee`, `account_info`, `book_offers` (parallel), then `account_nfts`, `account_lines`, `account_tx` (sequential after 500ms sleep)
-3. Oracle refresh path: XRPL `get_aggregate_price` + Flare FTSOv2 (`crate::flare::fetch_ftso_prices`) are polled and normalized
+3. Oracle refresh path: XRPL `get_aggregate_price` + Flare FTSOv2 (`fetch_ftso_prices`) + FXRP AssetManager C1 (`fetch_fxrp_direct_mint_info`) are polled and normalized (Flare failures non-fatal)
 4. Results dispatched as `Action::XrplServerInfo`, `Action::XrplDunl` (XRPL Foundation UNL from `https://unl.xrplf.org`), `Action::XrplFee`, `Action::XrplBookOffers`, `Action::XrplPathFind`, `Action::XrplOraclePrices`, `Action::FlareOraclePrices`, etc.
 5. `App::drain_and_dispatch_actions()` routes to active components via `update()`
 
@@ -121,7 +121,7 @@ main ──► app ──► components ──► (none, leaf nodes)
 |----------|----------|-----------|
 | **Terminal I/O** | `tui.rs` | `crossterm` raw mode, alternate screen, `EventStream` |
 | **Network (RPC)** | `xrpl/client.rs` | `reqwest` HTTP POST to JSON-RPC endpoints |
-| **Network (Flare FTSOv2)** | `flare.rs` | `alloy` provider + ContractRegistry/FtsoV2 read calls |
+| **Network (Flare FTSOv2 + FXRP C1)** | `flare.rs` | `alloy` provider + ContractRegistry/FtsoV2 + AssetManagerFXRP read calls |
 | **Network (WS)** | `xrpl/ws.rs` | `xrpl-rust` WebSocket client |
 | **File system (config)** | `config.rs` | `config` crate reading `config.toml` |
 | **File system (logging)** | `logging.rs` | `tracing` file appender to data dir |
