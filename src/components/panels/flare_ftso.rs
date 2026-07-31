@@ -2,14 +2,18 @@
 use ratatui::{
     Frame,
     layout::{Constraint, Rect},
-    widgets::{Block, Paragraph, Row, Table},
+    widgets::{Paragraph, Row, Table},
 };
 
 use crate::{
     action::Action,
     components::{
         Component,
-        shared::{theme, widgets::render_loading},
+        shared::{
+            selectable_table::{SelectableTableState, render_selectable_table},
+            theme,
+            widgets::{render_loading, titled_block_with_count},
+        },
     },
     xrpl::FlareFeedPrice,
 };
@@ -17,6 +21,7 @@ use crate::{
 #[derive(Default)]
 pub struct FlareFtsoPanel {
     prices: Vec<FlareFeedPrice>,
+    table_state: SelectableTableState,
     tick: usize,
     pub is_focused: bool,
 }
@@ -69,7 +74,7 @@ impl FlareFtsoPanel {
             ],
         )
         .header(Row::new(vec!["Pair", "Price", "Time", "Source"]).style(theme::header_row_style()));
-        frame.render_widget(table, area);
+        render_selectable_table(frame, area, table, &mut self.table_state, self.is_focused);
     }
 }
 
@@ -80,6 +85,13 @@ impl Component for FlareFtsoPanel {
             Action::FlareOraclePrices(prices) => {
                 self.prices = prices.clone();
                 self.prices.sort_by(|a, b| a.pair.cmp(&b.pair));
+                self.table_state.reset_len(self.prices.len());
+            }
+            Action::SelectNext if !self.prices.is_empty() && self.is_focused => {
+                self.table_state.select_next(self.prices.len());
+            }
+            Action::SelectPrev if !self.prices.is_empty() && self.is_focused => {
+                self.table_state.select_prev(self.prices.len());
             }
             _ => {}
         }
@@ -87,13 +99,16 @@ impl Component for FlareFtsoPanel {
     }
 
     fn draw(&mut self, frame: &mut Frame, area: Rect) -> color_eyre::Result<()> {
-        let block = Block::bordered()
-            .title(" FTSOv2 ")
-            .border_style(if self.is_focused {
-                theme::accent_style()
-            } else {
-                theme::dim_style()
-            });
+        if self.prices.is_empty() {
+            self.render_content(frame, area);
+            return Ok(());
+        }
+        let block = titled_block_with_count(
+            "FTSOv2",
+            self.table_state.selected(),
+            self.prices.len(),
+            self.is_focused,
+        );
         let inner = block.inner(area);
         frame.render_widget(block, area);
         self.render_content(frame, inner);

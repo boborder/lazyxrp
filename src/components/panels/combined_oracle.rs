@@ -41,6 +41,9 @@ impl Component for CombinedOraclePanel {
     }
 
     fn update(&mut self, action: &Action) -> color_eyre::Result<Option<Action>> {
+        // Overview has no sub-focus: route selection keys to Oracle only.
+        self.oracle.is_focused = self.is_focused;
+        self.ftso.is_focused = false;
         if let Some(a) = self.oracle.update(action)? {
             return Ok(Some(a));
         }

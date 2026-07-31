@@ -1,14 +1,18 @@
 use ratatui::{
     Frame,
     layout::{Constraint, Rect},
-    widgets::{Block, Paragraph, Row, Table},
+    widgets::{Paragraph, Row, Table},
 };
 
 use crate::{
     action::Action,
     components::{
         Component,
-        shared::{theme, widgets::render_loading},
+        shared::{
+            selectable_table::{SelectableTableState, render_selectable_table},
+            theme,
+            widgets::{render_loading, titled_block_with_count},
+        },
     },
     xrpl::{AggregatePrice, asset_display_name},
 };
@@ -16,6 +20,7 @@ use crate::{
 #[derive(Default)]
 pub struct OraclePanel {
     prices: Vec<AggregatePrice>,
+    table_state: SelectableTableState,
     tick: usize,
     pub is_focused: bool,
     not_configured: bool,
@@ -85,7 +90,7 @@ impl OraclePanel {
             Row::new(vec!["Pair", "Mean", "Size", "Std Dev", "Time"])
                 .style(theme::header_row_style()),
         );
-        frame.render_widget(table, area);
+        render_selectable_table(frame, area, table, &mut self.table_state, self.is_focused);
     }
 }
 
@@ -108,10 +113,17 @@ impl Component for OraclePanel {
                     );
                     ak.cmp(&bk)
                 });
+                self.table_state.reset_len(self.prices.len());
                 self.not_configured = false;
             }
             Action::XrplOracleNotConfigured => {
                 self.not_configured = true;
+            }
+            Action::SelectNext if !self.prices.is_empty() && self.is_focused => {
+                self.table_state.select_next(self.prices.len());
+            }
+            Action::SelectPrev if !self.prices.is_empty() && self.is_focused => {
+                self.table_state.select_prev(self.prices.len());
             }
             _ => {}
         }
@@ -119,13 +131,17 @@ impl Component for OraclePanel {
     }
 
     fn draw(&mut self, frame: &mut Frame, area: Rect) -> color_eyre::Result<()> {
-        let block = Block::bordered()
-            .title(" Oracle Prices ")
-            .border_style(if self.is_focused {
-                theme::accent_style()
-            } else {
-                theme::dim_style()
-            });
+        if self.prices.is_empty() {
+            // Keep loading / not-configured messaging inside content (owns its own block).
+            self.render_content(frame, area);
+            return Ok(());
+        }
+        let block = titled_block_with_count(
+            "Oracle",
+            self.table_state.selected(),
+            self.prices.len(),
+            self.is_focused,
+        );
         let inner = block.inner(area);
         frame.render_widget(block, area);
         self.render_content(frame, inner);
