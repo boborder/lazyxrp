@@ -16,8 +16,9 @@ use super::client::{
     RPC_TIMEOUT, RpcClient, empty_account_tx_page_on_not_found, path_find_snapshot, xrp_to_drops,
 };
 use super::types::{
-    AccountSetSubmitParams, BookPair, FxrpDirectMintPaymentParams, FxrpExecuteDirectMintParams, OfferCreateSubmitParams, OracleId, PaymentSubmitParams,
-    PollCommand, PollContext, SetRegularKeySubmitParams, SimulateResult, TrustSetSubmitParams,
+    AccountSetSubmitParams, BookPair, FxrpDirectMintPaymentParams, FxrpExecuteDirectMintParams,
+    OfferCreateSubmitParams, OracleId, PaymentSubmitParams, PollCommand, PollContext,
+    SetRegularKeySubmitParams, SimulateResult, TrustSetSubmitParams,
 };
 use serde_json::Value;
 
@@ -1262,7 +1263,6 @@ async fn submit_fxrp_direct_mint_payment(
     .await;
 }
 
-
 fn dispatch_timed<T, F>(
     action_tx: &UnboundedSender<Action>,
     label: &str,
@@ -1289,7 +1289,6 @@ fn dispatch_timed<T, F>(
         }
     }
 }
-
 
 async fn submit_fxrp_execute_direct_mint(
     flare_rpc_url: Option<&str>,

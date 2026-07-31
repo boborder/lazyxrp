@@ -5,7 +5,7 @@
 
 This document is a **local checklist** for operating Tag, Memo, and Smart Account paths on **Flare Mainnet**. Values can change on-chain; always verify with `IAssetManager` / `IMintingTagManager` view calls before mainnet funds.
 
-**Not in scope for lazyxrp:** Flare `reserve`, `executeDirectMinting`, and `MasterAccountController.executeTransaction` require a separate Flare wallet or operator stack. lazyxrp can assist with XRPL `Payment` construction/submit only (mainnet writes need `--yes` and simulate → sign → submit).
+**lazyxrp 0.2.0+:** XRPL Direct Mint Payment (memo) + optional flagged `executeDirectMinting` (`[flare.fassets] execute=false` by default; separate `FLARE_EVM_KEY`). Still out of scope: Flare `reserve` / MintingTagManager path, `MasterAccountController.executeTransaction`, always-on executor bots. Mainnet XRPL/Flare writes need `--yes` and simulate → sign → submit.
 
 **In-repo helpers:** [`.agents/skills/flare-fassets/direct-minting-guide.md`](../../.agents/skills/flare-fassets/direct-minting-guide.md), scripts under [`.agents/skills/flare-fassets/scripts/`](../../.agents/skills/flare-fassets/scripts/) (`DRY_RUN=true` by default).
 

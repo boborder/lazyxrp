@@ -13,8 +13,8 @@ use crate::{
     components::shared::theme,
     xrpl::{
         AccountSetSubmitParams, FxrpDirectMintPaymentParams, FxrpExecuteDirectMintParams,
-        OfferCreateSubmitParams, PaymentSubmitParams,
-        SetRegularKeySubmitParams, TrustSetSubmitParams,
+        OfferCreateSubmitParams, PaymentSubmitParams, SetRegularKeySubmitParams,
+        TrustSetSubmitParams,
     },
 };
 
@@ -147,9 +147,7 @@ impl WalletPanel {
             _ => (String::new(), String::new()),
         };
         let Some(info) = &self.fxrp_direct_mint else {
-            return Action::FxrpDirectMintPaymentSubmitErr(
-                "Core Vault not loaded yet".into(),
-            );
+            return Action::FxrpDirectMintPaymentSubmitErr("Core Vault not loaded yet".into());
         };
         if let Err(e) = crate::signing::normalize_eth_address_hex(&flare_recipient) {
             return Action::FxrpDirectMintPaymentSubmitErr(format!("{e}"));

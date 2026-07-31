@@ -284,7 +284,10 @@ impl Component for WalletPanel {
                 self.set_submit_flash(SubmitFlash::Success(format!(
                     "FXRP executeDirectMinting · {hash}"
                 )));
-                if matches!(&self.composer, Some(ComposerPhase::FxrpExecuteDirectMint { .. })) {
+                if matches!(
+                    &self.composer,
+                    Some(ComposerPhase::FxrpExecuteDirectMint { .. })
+                ) {
                     self.composer = None;
                     self.is_form_editing = false;
                     return Ok(Some(Action::SetKeymapSuppression(false)));
@@ -427,8 +430,10 @@ impl Component for WalletPanel {
             return Ok(Some(self.queue_submit_fxrp_direct_mint()));
         }
 
-        if matches!(&self.composer, Some(ComposerPhase::FxrpExecuteDirectMint { .. }))
-            && matches!(key.code, KeyCode::Char('s') | KeyCode::Char('S'))
+        if matches!(
+            &self.composer,
+            Some(ComposerPhase::FxrpExecuteDirectMint { .. })
+        ) && matches!(key.code, KeyCode::Char('s') | KeyCode::Char('S'))
             && (key.modifiers.contains(KeyModifiers::CONTROL) || !self.is_form_editing)
         {
             return Ok(Some(self.queue_submit_fxrp_execute_direct_mint()));
@@ -485,9 +490,7 @@ impl Component for WalletPanel {
             }
         }
 
-        if let Some(ComposerPhase::FxrpExecuteDirectMint {
-            ref mut proof_json,
-        }) = self.composer
+        if let Some(ComposerPhase::FxrpExecuteDirectMint { ref mut proof_json }) = self.composer
             && self.is_form_editing
         {
             match key.code {

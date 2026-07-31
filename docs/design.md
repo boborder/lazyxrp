@@ -288,7 +288,7 @@ mainnet 時は警告色（赤系）で強調する。
 - `--yes` フラグで確認スキップ可能にする（CI/スクリプト用途）。
 - Payment 署名は xrpl-rust 1.1 の `wallet::Wallet` と `transaction::sign`（`models::transactions::payment::Payment`）を利用し、`binarycodec::encode` で `submit` 用の `tx_blob` に変換する。IOU Payment は `Amount` フィールドに `{currency, issuer, value}` オブジェクトを使用し、`create_and_sign_payment` が `iou_currency`/`iou_issuer` Option パラメータにより分岐する。`sEd...`（Ed25519 family seed）は xrpl-rust の `decode_seed` が secp 経路に落ちるケースがあるため、lazyxrp では `signing::wallet_from_family_seed` で Ed25519 プレフィックス専用デコードを先に行う。
 - **全 TX 送信は simulate フロー**：最小限の unsigned `tx_json` を構築→`simulate_tx` 実行→`engine_result == "tesSUCCESS"` 確認→サーバーが自動入力した `Sequence`/`Fee`/`ledger_index` を抽出→署名・エンコード→`submit`。これにより、手動での Sequence 管理や Fee 見積もりが不要になる。
-- **対応 TX 種別**：`Payment`（XRP + IOU）、`AccountSet`（SetFlag/ClearFlag/Domain/TickSize/TransferRate）、`SetRegularKey`（バックエンド準備済、UI はキー生成待ち）、`EscrowCreate`（バックエンド準備済）、`OfferCreate`（バックエンド準備済、compact spec `XRP:drops` / `CUR:issuer:value`）。`signing.rs` に各 `create_and_sign_*` 関数完備。`poll.rs` に `submit_*_transaction` 完備。
+- **対応 TX 種別**：`Payment`（XRP + IOU + optional Memo）、`AccountSet`、`SetRegularKey`、`OfferCreate`（compact `XRP:drops` / `CUR:issuer:value`）、`TrustSet`（Limit+Currency+Issuer）、`FXRP Direct Mint Payment`（Core Vault + 32-byte memo）、`FXRP Execute`（`[flare.fassets] execute=true` + proof JSON）。`EscrowCreate` はバックエンドのみ（UI defer）。`signing.rs` / `poll.rs` に各 submit 経路あり。
 
 ---
 

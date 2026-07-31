@@ -84,6 +84,7 @@
 | `FLARE_RPC_URL` | Flare FTSOv2 RPC URL（既定: mainnet） |
 | `FLARE_FEEDS` | Oracle タブ用 Flare フィード一覧（カンマ区切り） |
 | `FLARE_FEED` | 旧互換の単一フィード指定（`FLARE_FEEDS` 優先） |
+| `FLARE_EVM_KEY` | FXRP C3 `executeDirectMinting` 用 Flare EVM 鍵（`[flare.fassets] execute=true` 時のみ。既定 env 名は設定で変更可） |
 | `LAZYXRP_CONFIG` | 設定ディレクトリの明示オーバーライド（`..` は拒否） |
 | `LAZYXRP_DATA` | データディレクトリの明示オーバーライド |
 | `LAZYXRP_LOG_LEVEL` | ファイルログの既定フィルタ（`tracing-subscriber` の `EnvFilter`） |

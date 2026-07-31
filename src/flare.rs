@@ -154,9 +154,7 @@ pub async fn fetch_ftso_prices(
 }
 
 /// Resolve AssetManagerFXRP and read Core Vault + direct-mint fee views (read-only).
-pub async fn fetch_fxrp_direct_mint_info(
-    rpc_url: &str,
-) -> color_eyre::Result<FxrpDirectMintInfo> {
+pub async fn fetch_fxrp_direct_mint_info(rpc_url: &str) -> color_eyre::Result<FxrpDirectMintInfo> {
     let provider = ProviderBuilder::new().connect_http(rpc_url.parse()?);
     let registry = FlareContractRegistry::new(FLARE_CONTRACT_REGISTRY, provider.clone());
     let asset_manager_addr = registry

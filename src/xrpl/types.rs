@@ -551,7 +551,6 @@ pub struct PaymentSubmitParams {
     pub config_seed: Option<String>,
 }
 
-
 /// FXRP Direct Mint Payment: XRP to Core Vault with 32-byte recipient memo (C2).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FxrpDirectMintPaymentParams {

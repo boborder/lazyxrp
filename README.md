@@ -10,7 +10,7 @@ Watch mode uses **four top-level tabs** (jump with `1`–`4`):
 
 | Tab | Content |
 |-----|---------|
-| **Overview** | Server summary (left) + XRPL oracle + Flare FTSOv2 (right, combined) |
+| **Overview** | Server summary (left) + XRPL oracle + Flare FTSOv2 + FXRP Direct Mint read (right) |
 | **Account** | Wallet composer + account summary + recent transaction history |
 | **Market** | DEX book + Path-Find routes + AMM + trust lines + XRPL oracle + Flare FTSOv2 |
 | **Assets** | NFTs + account_objects (Objects / Pay channels / Escrows) |
@@ -105,7 +105,7 @@ Defaults ship in the embedded repo-root `config.json5` and merge with your user 
 | `h` / `l` or `←` / `→` | Move focus between panels in the current tab |
 | `j` / `k` or `↑` / `↓` | Move selection in the focused panel |
 | `Enter` | Open detail overlay (tables / dUNL row) |
-| `t` | Account tab: Payment / AccountSet composer |
+| `t` | Account tab: TX composer (Payment / AccountSet / SetRegularKey / OfferCreate / TrustSet / FXRP Mint / Execute) |
 | `g` | Account tab: local keygen overlay |
 | `f` | Account tab (tx history): filter mode |
 | `r` | Refresh account |
@@ -151,6 +151,7 @@ cp .config/lazyxrp/config.toml "${XDG_CONFIG_HOME:-$HOME/.config}/lazyxrp/config
 | `FLARE_RPC_URL` | Flare FTSOv2 RPC (default: Flare mainnet) |
 | `FLARE_FEEDS` | Flare feeds for Overview / Market (e.g. `FXRP/USD,FLR/USD`) |
 | `FLARE_FEED` | Legacy single-feed override |
+| `FLARE_EVM_KEY` | Flare executor key for FXRP C3 (`[flare.fassets] execute=true` only) |
 | `LAZYXRP_CONFIG` | Override config directory (`..` rejected) |
 | `LAZYXRP_DATA` | Override data directory |
 | `LAZYXRP_LOG_LEVEL` | Default file log filter (`tracing` `EnvFilter`) |
