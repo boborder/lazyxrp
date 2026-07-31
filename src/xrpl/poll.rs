@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use secrecy::ExposeSecret;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
@@ -43,8 +43,14 @@ pub(crate) fn drain_poll_trigger_burst(rx: &mut UnboundedReceiver<()>) {
     while rx.try_recv().is_ok() {}
 }
 
-pub(crate) fn should_skip_poll_trigger(last_poll: Option<std::time::Instant>) -> bool {
+pub(crate) fn should_skip_poll_trigger(last_poll: Option<Instant>) -> bool {
     last_poll.is_some_and(|last| last.elapsed() < MIN_POLL_INTERVAL)
+}
+
+/// True while a failed-poll backoff window is still open.
+/// Kept outside `select!` arms so cancel / PollCommand stay responsive (unlike sleeping in-arm).
+pub(crate) fn is_backoff_active(backoff_until: Option<Instant>) -> bool {
+    backoff_until.is_some_and(|until| Instant::now() < until)
 }
 
 pub(crate) fn account_tx_poll_action(
@@ -88,6 +94,39 @@ pub(crate) async fn run_simulate(
 
 fn mainnet_write_guard_blocks(network: &Network, skip_mainnet_prompt: bool) -> bool {
     network.is_mainnet() && !skip_mainnet_prompt
+}
+
+/// Shared mainnet guard + seed/wallet load for write submits (AccountSet / Payment).
+fn prepare_write_wallet<E>(
+    network: &Network,
+    skip_mainnet_prompt: bool,
+    config_seed: Option<String>,
+    mainnet_err: &str,
+    err: E,
+    action_tx: &UnboundedSender<Action>,
+) -> Option<(secrecy::SecretString, xrpl::wallet::Wallet)>
+where
+    E: Fn(String) -> Action,
+{
+    if mainnet_write_guard_blocks(network, skip_mainnet_prompt) {
+        send_action(action_tx, err(mainnet_err.into()));
+        return None;
+    }
+    let signing_config = SigningConfig::prime_seed_source(config_seed);
+    let Some(seed) = signing_config.seed else {
+        send_action(
+            action_tx,
+            err("no signing seed — set XRPL_SEED or config [xrpl.signing] seed".into()),
+        );
+        return None;
+    };
+    match signing::wallet_from_family_seed(seed.expose_secret(), 0) {
+        Ok(wallet) => Some((seed, wallet)),
+        Err(e) => {
+            send_action(action_tx, err(format!("wallet: {e:?}")));
+            None
+        }
+    }
 }
 
 fn send_action(action_tx: &UnboundedSender<Action>, action: Action) {
@@ -424,27 +463,15 @@ async fn submit_account_set_transaction(
         );
         return;
     }
-    if mainnet_write_guard_blocks(network, params.skip_mainnet_prompt) {
-        send_action(
-            action_tx,
-            err("mainnet: restart lazyxrp with --yes to allow AccountSet writes".into()),
-        );
+    let Some((seed, wallet)) = prepare_write_wallet(
+        network,
+        params.skip_mainnet_prompt,
+        params.config_seed.clone(),
+        "mainnet: restart lazyxrp with --yes to allow AccountSet writes",
+        err,
+        action_tx,
+    ) else {
         return;
-    }
-    let signing_config = SigningConfig::prime_seed_source(params.config_seed.clone());
-    let Some(seed) = signing_config.seed.as_ref() else {
-        send_action(
-            action_tx,
-            err("no signing seed — set XRPL_SEED or config [xrpl.signing] seed".into()),
-        );
-        return;
-    };
-    let wallet = match signing::wallet_from_family_seed(seed.expose_secret(), 0) {
-        Ok(w) => w,
-        Err(e) => {
-            send_action(action_tx, err(format!("wallet: {e:?}")));
-            return;
-        }
     };
     let account = wallet.classic_address.clone();
 
@@ -520,7 +547,7 @@ async fn submit_account_set_transaction(
         sim,
         |sequence, fee_drops, last_ledger_sequence| {
             signing::create_and_sign_account_set(
-                seed,
+                &seed,
                 &account,
                 sequence,
                 fee_drops,
@@ -596,27 +623,15 @@ async fn submit_payment_transaction(
     }
     let destination_resolved = destination.classic;
     let destination_tag = params.destination_tag.or(destination.destination_tag);
-    if mainnet_write_guard_blocks(network, params.skip_mainnet_prompt) {
-        send_action(
-            action_tx,
-            err("mainnet: restart lazyxrp with --yes to allow Payment writes".into()),
-        );
+    let Some((seed, wallet)) = prepare_write_wallet(
+        network,
+        params.skip_mainnet_prompt,
+        params.config_seed.clone(),
+        "mainnet: restart lazyxrp with --yes to allow Payment writes",
+        err,
+        action_tx,
+    ) else {
         return;
-    }
-    let signing_config = SigningConfig::prime_seed_source(params.config_seed.clone());
-    let Some(seed) = signing_config.seed.as_ref() else {
-        send_action(
-            action_tx,
-            err("no signing seed — set XRPL_SEED or config [xrpl.signing] seed".into()),
-        );
-        return;
-    };
-    let wallet = match signing::wallet_from_family_seed(seed.expose_secret(), 0) {
-        Ok(w) => w,
-        Err(e) => {
-            send_action(action_tx, err(format!("wallet: {e:?}")));
-            return;
-        }
     };
     let account = wallet.classic_address.clone();
     if account == destination_resolved {
@@ -685,7 +700,7 @@ async fn submit_payment_transaction(
         sim,
         |sequence, fee_drops, last_ledger_sequence| {
             signing::create_and_sign_payment(
-                seed,
+                &seed,
                 &account,
                 &destination_resolved,
                 params.amount.trim(),
@@ -743,20 +758,24 @@ async fn run_scheduled_poll(
     seed_address: Option<&str>,
     action_tx: &UnboundedSender<Action>,
     backoff_secs: &mut u64,
-) -> std::time::Instant {
-    if *backoff_secs > 0 {
-        tokio::time::sleep(Duration::from_secs(*backoff_secs)).await;
-    }
-    let batch_ok = poll_batch(inputs, action_tx).await;
-    if let Some(addr) = seed_address {
-        poll_wallet_overview(rpc, addr, action_tx).await;
-    }
-    if batch_ok {
+    backoff_until: &mut Option<Instant>,
+) -> Instant {
+    // Overlap wallet overview with the main batch (same RpcClient, independent RPCs).
+    let wallet_fut = async {
+        match seed_address {
+            Some(addr) => poll_wallet_overview(rpc, addr, action_tx).await,
+            None => false,
+        }
+    };
+    let (batch_ok, wallet_ok) = tokio::join!(poll_batch(inputs, action_tx), wallet_fut);
+    if batch_ok || wallet_ok {
         *backoff_secs = 0;
+        *backoff_until = None;
     } else {
         *backoff_secs = next_backoff_secs(*backoff_secs);
+        *backoff_until = Some(Instant::now() + Duration::from_secs(*backoff_secs));
     }
-    std::time::Instant::now()
+    Instant::now()
 }
 
 fn send_account_tx_action(action_tx: &UnboundedSender<Action>, action: Action) {
@@ -794,13 +813,17 @@ async fn run_poll_loop(
         }
     };
     let mut backoff_secs: u64 = 0;
+    let mut backoff_until: Option<Instant> = None;
     let mut tick = tokio::time::interval(poll_interval.max(Duration::from_millis(500)));
     let mut price_tick = tokio::time::interval(Duration::from_secs(90));
-    let mut last_poll: Option<std::time::Instant> = None;
+    let mut last_poll: Option<Instant> = None;
     loop {
         tokio::select! {
             _ = cancel.cancelled() => return,
             _ = tick.tick() => {
+                if is_backoff_active(backoff_until) {
+                    continue;
+                }
                 last_poll = Some(
                     run_scheduled_poll(
                         &rpc,
@@ -817,12 +840,16 @@ async fn run_poll_loop(
                         seed_address.as_deref(),
                         &action_tx,
                         &mut backoff_secs,
+                        &mut backoff_until,
                     )
                     .await,
                 );
             }
             Some(()) = poll_trigger_rx.recv() => {
                 drain_poll_trigger_burst(&mut poll_trigger_rx);
+                if is_backoff_active(backoff_until) {
+                    continue;
+                }
                 if should_skip_poll_trigger(last_poll) {
                     continue;
                 }
@@ -842,6 +869,7 @@ async fn run_poll_loop(
                         seed_address.as_deref(),
                         &action_tx,
                         &mut backoff_secs,
+                        &mut backoff_until,
                     )
                     .await,
                 );
@@ -988,6 +1016,25 @@ mod tests {
     fn should_skip_poll_trigger_after_min_interval() {
         let last = Instant::now() - MIN_POLL_INTERVAL - Duration::from_millis(1);
         assert!(!should_skip_poll_trigger(Some(last)));
+    }
+
+    #[test]
+    fn is_backoff_active_none_is_inactive() {
+        assert!(!is_backoff_active(None));
+    }
+
+    #[test]
+    fn is_backoff_active_future_deadline() {
+        assert!(is_backoff_active(Some(
+            Instant::now() + Duration::from_secs(30)
+        )));
+    }
+
+    #[test]
+    fn is_backoff_active_past_deadline() {
+        assert!(!is_backoff_active(Some(
+            Instant::now() - Duration::from_millis(1)
+        )));
     }
 
     /// TC-089 (I-7): account_tx not-found in poll batch → empty history, not error
