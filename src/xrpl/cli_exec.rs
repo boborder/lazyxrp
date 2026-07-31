@@ -176,6 +176,7 @@ pub async fn execute_cli_command(
                 None, // iou_currency: XRP-only
                 None, // iou_issuer: XRP-only
                 destination_tag,
+                None, // memo_data
                 sequence,
                 fee_drops,
                 last_ledger_sequence,

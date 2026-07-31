@@ -16,7 +16,7 @@ use super::client::{
     RPC_TIMEOUT, RpcClient, empty_account_tx_page_on_not_found, path_find_snapshot, xrp_to_drops,
 };
 use super::types::{
-    AccountSetSubmitParams, BookPair, OfferCreateSubmitParams, OracleId, PaymentSubmitParams,
+    AccountSetSubmitParams, BookPair, FxrpDirectMintPaymentParams, OfferCreateSubmitParams, OracleId, PaymentSubmitParams,
     PollCommand, PollContext, SetRegularKeySubmitParams, SimulateResult, TrustSetSubmitParams,
 };
 use serde_json::Value;
@@ -1041,6 +1041,7 @@ async fn submit_payment_transaction(
         params.iou_currency.as_deref(),
         params.iou_issuer.as_deref(),
         destination_tag,
+        None,
         account_info.sequence,
     ) {
         Ok(j) => j,
@@ -1097,6 +1098,7 @@ async fn submit_payment_transaction(
                 params.iou_currency.as_deref(),
                 params.iou_issuer.as_deref(),
                 destination_tag,
+                None,
                 sequence,
                 fee_drops,
                 last_ledger_sequence,
@@ -1114,6 +1116,152 @@ async fn submit_payment_transaction(
     )
     .await;
 }
+
+async fn submit_fxrp_direct_mint_payment(
+    rpc: &RpcClient,
+    network: &Network,
+    params: FxrpDirectMintPaymentParams,
+    action_tx: &UnboundedSender<Action>,
+) {
+    let submit_err = Action::FxrpDirectMintPaymentSubmitErr;
+    let memo = match signing::build_direct_mint_memo_data(&params.flare_recipient) {
+        Ok(m) => m,
+        Err(e) => {
+            send_action(action_tx, submit_err(format!("{e}")));
+            return;
+        }
+    };
+    let amount_drops = match xrp_to_drops(params.amount_xrp.trim()) {
+        Ok(v) => v,
+        Err(e) => {
+            send_action(action_tx, submit_err(format!("amount: {e}")));
+            return;
+        }
+    };
+    if amount_drops == 0 {
+        send_action(
+            action_tx,
+            submit_err("amount must be greater than zero".into()),
+        );
+        return;
+    }
+    let destination = match resolve_payment_destination(params.core_vault_xrpl.trim()) {
+        Ok(d) => d,
+        Err(e) => {
+            send_action(action_tx, submit_err(format!("{e}")));
+            return;
+        }
+    };
+    if destination.destination_tag.is_some() {
+        send_action(
+            action_tx,
+            submit_err("Core Vault destination must be classic address (no X-address tag)".into()),
+        );
+        return;
+    }
+    let destination_resolved = destination.classic;
+    let Some((seed, wallet)) = resolve_submit_wallet(
+        network,
+        params.skip_mainnet_prompt,
+        params.config_seed.clone(),
+        "mainnet: restart lazyxrp with --yes to allow FXRP Direct Mint Payment writes",
+        submit_err,
+        action_tx,
+    ) else {
+        return;
+    };
+    let account = wallet.classic_address.clone();
+    if account == destination_resolved {
+        send_action(
+            action_tx,
+            submit_err("Core Vault destination matches source account".into()),
+        );
+        return;
+    }
+
+    let Some(account_info) =
+        fetch_account_summary_for_submit(rpc, &account, submit_err, action_tx).await
+    else {
+        return;
+    };
+
+    let tx_json = match signing::build_payment_tx_json_for_simulate(
+        &account,
+        &destination_resolved,
+        params.amount_xrp.trim(),
+        None,
+        None,
+        None,
+        Some(memo.as_str()),
+        account_info.sequence,
+    ) {
+        Ok(j) => j,
+        Err(e) => {
+            send_action(action_tx, submit_err(format!("tx_json: {e}")));
+            return;
+        }
+    };
+
+    let sim = match simulate_tx_requiring_tes_success(rpc, tx_json).await {
+        Ok(s) => s,
+        Err(e) => {
+            send_action(action_tx, submit_err(e));
+            return;
+        }
+    };
+
+    let fee_drops = match signing::sequence_fee_ledger_from_simulate(&sim.tx_json) {
+        Ok((_, fee, _)) => fee,
+        Err(e) => {
+            send_action(action_tx, submit_err(format!("{e}")));
+            return;
+        }
+    };
+
+    let balance_drops = xrp_to_drops(&account_info.balance_xrp).unwrap_or(0);
+    let total_need = amount_drops.saturating_add(u64::from(fee_drops));
+    if balance_drops < total_need {
+        send_action(
+            action_tx,
+            submit_err(format!(
+                "insufficient balance: have {balance_drops} drops, need {total_need} (amount {amount_drops} + fee {fee_drops})"
+            )),
+        );
+        return;
+    }
+
+    finalize_simulate_sign_submit(
+        rpc,
+        action_tx,
+        sim,
+        |sequence, fee_drops, last_ledger_sequence| {
+            signing::create_and_sign_payment(
+                &seed,
+                &account,
+                &destination_resolved,
+                params.amount_xrp.trim(),
+                None,
+                None,
+                None,
+                Some(memo.as_str()),
+                sequence,
+                fee_drops,
+                last_ledger_sequence,
+                network,
+            )
+        },
+        submit_err,
+        |hash| {
+            vec![
+                Action::FxrpDirectMintPaymentSubmitOk(hash),
+                Action::RefreshAccount,
+                Action::RefreshTxHistory,
+            ]
+        },
+    )
+    .await;
+}
+
 
 fn dispatch_timed<T, F>(
     action_tx: &UnboundedSender<Action>,
@@ -1355,6 +1503,10 @@ async fn drive_poll_loop(
                         let network = *network_watch.borrow();
                         submit_payment_transaction(&rpc, &network, params, &action_tx).await;
                     }
+                    PollCommand::FxrpDirectMintPayment(params) => {
+                        let network = *network_watch.borrow();
+                        submit_fxrp_direct_mint_payment(&rpc, &network, params, &action_tx).await;
+                    }
                     PollCommand::SetRegularKeySubmit(params) => {
                         let network = *network_watch.borrow();
                         submit_set_regular_key_transaction(&rpc, &network, params, &action_tx)
@@ -1516,6 +1668,34 @@ mod tests {
                 assert!(msg.contains("--yes"));
             }
             other => panic!("expected PaymentSubmitErr, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn fxrp_direct_mint_payment_mainnet_requires_yes() {
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let params = FxrpDirectMintPaymentParams {
+            core_vault_xrpl: "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh".into(),
+            flare_recipient: "0xabcdef0123456789abcdef0123456789abcdef01".into(),
+            amount_xrp: "1".into(),
+            skip_mainnet_prompt: false,
+            config_seed: Some("sEd7rAnSwG32S2MK4NFZzG3zBAhhiGk".into()),
+        };
+        // No RPC: resolve_submit_wallet should reject mainnet without --yes.
+        // Use a dummy client only if connect works — mirror Payment test style.
+        let rpc = match RpcClient::connect("https://example.invalid") {
+            Ok(r) => r,
+            Err(_) => return, // environment without reqwest connect construction
+        };
+        submit_fxrp_direct_mint_payment(&rpc, &Network::Mainnet, params, &tx).await;
+        match rx.try_recv() {
+            Ok(Action::FxrpDirectMintPaymentSubmitErr(msg)) => {
+                assert!(
+                    msg.contains("--yes") || msg.contains("mainnet"),
+                    "unexpected err: {msg}"
+                );
+            }
+            other => panic!("expected FxrpDirectMintPaymentSubmitErr, got {other:?}"),
         }
     }
 

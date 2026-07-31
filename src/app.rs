@@ -631,6 +631,14 @@ impl App {
                         warn!(?err, "poll command channel closed");
                     }
                 }
+                Action::FxrpDirectMintPaymentSubmit(params) => {
+                    if let Err(err) = self
+                        .poll_tx
+                        .send(PollCommand::FxrpDirectMintPayment(params.clone()))
+                    {
+                        warn!(?err, "poll command channel closed");
+                    }
+                }
                 Action::WalletPropose => {
                     if let Err(err) = self
                         .poll_tx

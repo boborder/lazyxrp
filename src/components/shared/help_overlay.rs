@@ -22,7 +22,7 @@ const BINDINGS: &[(&str, &str)] = &[
     ),
     (
         "t / e / s (wallet modal)",
-        "Wallet: `t` open composer (1 Payment…5 TrustSet); Enter/`e` edit field; `s`/Ctrl-S send; Esc back",
+        "Wallet: `t` composer (1 Payment…6 FXRP Mint); Enter/`e` edit; `s`/Ctrl-S send; Esc back",
     ),
     ("Enter", "Transaction detail (all table panels)"),
     (

@@ -551,6 +551,20 @@ pub struct PaymentSubmitParams {
     pub config_seed: Option<String>,
 }
 
+
+/// FXRP Direct Mint Payment: XRP to Core Vault with 32-byte recipient memo (C2).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FxrpDirectMintPaymentParams {
+    /// Core Vault XRPL classic address (from C1 / AssetManager).
+    pub core_vault_xrpl: String,
+    /// Flare/EVM recipient address (`0x` + 40 hex).
+    pub flare_recipient: String,
+    /// XRP amount to send (fees deducted on Flare side from this payment).
+    pub amount_xrp: String,
+    pub skip_mainnet_prompt: bool,
+    pub config_seed: Option<String>,
+}
+
 /// SetRegularKey from the Wallet form.
 /// An empty `regular_key` means clear (remove) the existing regular key.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -606,6 +620,7 @@ pub enum PollCommand {
     AccountSetSubmit(AccountSetSubmitParams),
     /// Sign and submit Payment (wallet modal).
     PaymentSubmit(PaymentSubmitParams),
+    FxrpDirectMintPayment(FxrpDirectMintPaymentParams),
     /// Sign and submit SetRegularKey (wallet form).
     SetRegularKeySubmit(SetRegularKeySubmitParams),
     /// Sign and submit EscrowCreate (wallet form).

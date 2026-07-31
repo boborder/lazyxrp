@@ -12,7 +12,7 @@ use crate::{
     action::Action,
     components::shared::theme,
     xrpl::{
-        AccountSetSubmitParams, OfferCreateSubmitParams, PaymentSubmitParams,
+        AccountSetSubmitParams, FxrpDirectMintPaymentParams, OfferCreateSubmitParams, PaymentSubmitParams,
         SetRegularKeySubmitParams, TrustSetSubmitParams,
     },
 };
@@ -116,6 +116,50 @@ impl WalletPanel {
             currency: currency.to_uppercase(),
             issuer,
             limit,
+            skip_mainnet_prompt: self.skip_mainnet_prompt,
+            config_seed: self.config_seed(),
+        })
+    }
+
+    pub(super) fn open_fxrp_direct_mint_composer(&mut self) {
+        if self.fxrp_direct_mint.is_none() {
+            self.set_submit_flash(SubmitFlash::Error(
+                "FXRP Mint · Core Vault not loaded yet (stay on Overview a moment)".into(),
+            ));
+            return;
+        }
+        self.composer = Some(ComposerPhase::FxrpDirectMint {
+            row: 0,
+            flare_recipient: String::new(),
+            amount_xrp: "1".to_string(),
+        });
+        self.is_form_editing = false;
+    }
+
+    pub(super) fn queue_submit_fxrp_direct_mint(&mut self) -> Action {
+        let (flare_recipient, amount_xrp) = match &self.composer {
+            Some(ComposerPhase::FxrpDirectMint {
+                flare_recipient,
+                amount_xrp,
+                ..
+            }) => (flare_recipient.clone(), amount_xrp.clone()),
+            _ => (String::new(), String::new()),
+        };
+        let Some(info) = &self.fxrp_direct_mint else {
+            return Action::FxrpDirectMintPaymentSubmitErr(
+                "Core Vault not loaded yet".into(),
+            );
+        };
+        if let Err(e) = crate::signing::normalize_eth_address_hex(&flare_recipient) {
+            return Action::FxrpDirectMintPaymentSubmitErr(format!("{e}"));
+        }
+        if amount_xrp.trim().is_empty() {
+            return Action::FxrpDirectMintPaymentSubmitErr("amount required".into());
+        }
+        Action::FxrpDirectMintPaymentSubmit(FxrpDirectMintPaymentParams {
+            core_vault_xrpl: info.core_vault_xrpl.clone(),
+            flare_recipient,
+            amount_xrp,
             skip_mainnet_prompt: self.skip_mainnet_prompt,
             config_seed: self.config_seed(),
         })
@@ -336,7 +380,7 @@ impl WalletPanel {
 
         let popup_w = area.width.clamp(54, 74);
         let popup_h = match phase {
-            ComposerPhase::PickKind { .. } => 18u16,
+            ComposerPhase::PickKind { .. } => 20u16,
             ComposerPhase::AccountSet => 21u16,
             ComposerPhase::Payment { is_iou, .. } => {
                 if *is_iou {
@@ -348,6 +392,7 @@ impl WalletPanel {
             ComposerPhase::SetRegularKey { .. } => 14u16,
             ComposerPhase::OfferCreate { .. } => 14u16,
             ComposerPhase::TrustSet { .. } => 16u16,
+            ComposerPhase::FxrpDirectMint { .. } => 16u16,
         }
         .min(area.height.saturating_sub(2))
         .max(8);
@@ -370,6 +415,7 @@ impl WalletPanel {
             ComposerPhase::SetRegularKey { .. } => "Regular key",
             ComposerPhase::OfferCreate { .. } => "Create offer",
             ComposerPhase::TrustSet { .. } => "Trust line",
+            ComposerPhase::FxrpDirectMint { .. } => "FXRP Direct Mint",
         };
         let block = theme::panel_block(inner_title, true);
         let inner = block.inner(popup);
@@ -406,9 +452,10 @@ impl WalletPanel {
                     row(2, "3", "SetRegularKey", "assign/clear key ⚠"),
                     row(3, "4", "OfferCreate", "place DEX offer"),
                     row(4, "5", "TrustSet", "open IOU trust line"),
+                    row(5, "6", "FXRP Mint", "pay Core Vault + memo"),
                     Line::from(""),
                     Line::from(Span::styled(
-                        "1–5 jump · j/k move · Enter open · Esc close",
+                        "1–6 jump · j/k move · Enter open · Esc close",
                         theme::secondary_style(),
                     )),
                 ])
@@ -690,6 +737,60 @@ impl WalletPanel {
                     Line::from(""),
                     Line::from(Span::styled(
                         "e edit · Tab rows · Ctrl+S / S submit · Esc back",
+                        theme::secondary_style(),
+                    )),
+                ])
+            }
+            ComposerPhase::FxrpDirectMint {
+                row,
+                flare_recipient,
+                amount_xrp,
+            } => {
+                let vault = self
+                    .fxrp_direct_mint
+                    .as_ref()
+                    .map(|i| i.core_vault_xrpl.as_str())
+                    .unwrap_or("(not loaded)");
+                let net_note = if self.network.is_mainnet() && !self.skip_mainnet_prompt {
+                    " · mainnet writes need --yes"
+                } else {
+                    ""
+                };
+                Paragraph::new(vec![
+                    Line::from(Span::styled(
+                        format!("Core Vault {vault}{net_note}"),
+                        theme::secondary_style(),
+                    )),
+                    Line::from(""),
+                    Line::from(vec![
+                        Span::styled(
+                            "Flare recipient ",
+                            if *row == 0 {
+                                highlight_style
+                            } else {
+                                label_style
+                            },
+                        ),
+                        Span::styled(flare_recipient.clone(), value_style),
+                    ]),
+                    Line::from(vec![
+                        Span::styled(
+                            "Amount XRP ",
+                            if *row == 1 {
+                                highlight_style
+                            } else {
+                                label_style
+                            },
+                        ),
+                        Span::styled(amount_xrp.clone(), value_style),
+                    ]),
+                    Line::from(""),
+                    Line::from(Span::styled(
+                        "Memo = DIRECT_MINTING + recipient (32 bytes)",
+                        theme::dim_style(),
+                    )),
+                    Line::from(Span::styled(
+                        format!("e edit · Tab rows · s/Ctrl-S send · Esc back{net_note}"),
                         theme::secondary_style(),
                     )),
                 ])

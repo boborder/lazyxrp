@@ -90,7 +90,7 @@ main ──► app ──► components ──► (none, leaf nodes)
 ### Flow 2: Periodic Data Refresh
 1. `poll_batch()` runs every `poll_interval_ms` (min 10s guarded)
 2. Fires `tokio::join!` on: `server_info`, `fee`, `account_info`, `book_offers` (parallel), then `account_nfts`, `account_lines`, `account_tx` (sequential after 500ms sleep)
-3. Oracle refresh path: XRPL `get_aggregate_price` + Flare FTSOv2 (`fetch_ftso_prices`) + FXRP AssetManager C1 (`fetch_fxrp_direct_mint_info`) are polled and normalized (Flare failures non-fatal)
+3. Oracle refresh path: XRPL `get_aggregate_price` + Flare FTSOv2 (`fetch_ftso_prices`) + FXRP AssetManager C1 (`fetch_fxrp_direct_mint_info`) are polled and normalized (Flare failures non-fatal). C2 Direct Mint Payment uses Payment + 32-byte memo via `FxrpDirectMintPayment`
 4. Results dispatched as `Action::XrplServerInfo`, `Action::XrplDunl` (XRPL Foundation UNL from `https://unl.xrplf.org`), `Action::XrplFee`, `Action::XrplBookOffers`, `Action::XrplPathFind`, `Action::XrplOraclePrices`, `Action::FlareOraclePrices`, etc.
 5. `App::drain_and_dispatch_actions()` routes to active components via `update()`
 

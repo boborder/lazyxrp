@@ -73,9 +73,15 @@ enum ComposerPhase {
         issuer: String,
         limit: String,
     },
+    /// Pay Core Vault with 32-byte Direct Mint memo (C2).
+    FxrpDirectMint {
+        row: usize,
+        flare_recipient: String,
+        amount_xrp: String,
+    },
 }
 
-const COMPOSER_KIND_COUNT: usize = 5;
+const COMPOSER_KIND_COUNT: usize = 6;
 
 #[path = "wallet_composer.rs"]
 mod composer;
@@ -106,6 +112,8 @@ pub struct WalletPanel {
     tick_size: String,
     transfer_rate: String,
     submit_flash: Option<SubmitFlash>,
+    /// Last AssetManager C1 snapshot (Core Vault address for Direct Mint).
+    fxrp_direct_mint: Option<crate::xrpl::FxrpDirectMintInfo>,
     /// Key generation result overlay (WalletProposeOk → show, Esc to dismiss).
     keygen_result: Option<WalletProposeResult>,
 }
@@ -132,6 +140,7 @@ impl Default for WalletPanel {
             tick_size: String::new(),
             transfer_rate: String::new(),
             submit_flash: None,
+            fxrp_direct_mint: None,
             keygen_result: None,
         }
     }
@@ -251,6 +260,22 @@ impl Component for WalletPanel {
             Action::TrustSetSubmitErr(msg) => {
                 self.set_submit_flash(SubmitFlash::Error(format!("TrustSet · {msg}")));
             }
+            Action::FxrpDirectMintInfo(info) => {
+                self.fxrp_direct_mint = Some((**info).clone());
+            }
+            Action::FxrpDirectMintPaymentSubmitOk(hash) => {
+                self.set_submit_flash(SubmitFlash::Success(format!(
+                    "FXRP Direct Mint Payment · {hash}"
+                )));
+                if matches!(&self.composer, Some(ComposerPhase::FxrpDirectMint { .. })) {
+                    self.composer = None;
+                    self.is_form_editing = false;
+                    return Ok(Some(Action::SetKeymapSuppression(false)));
+                }
+            }
+            Action::FxrpDirectMintPaymentSubmitErr(msg) => {
+                self.set_submit_flash(SubmitFlash::Error(format!("FXRP Mint · {msg}")));
+            }
             Action::WalletProposeOk(result) => {
                 self.keygen_result = Some(result.clone());
             }
@@ -303,6 +328,10 @@ impl Component for WalletPanel {
                 }
                 Some(ComposerPhase::TrustSet { .. }) => {
                     self.composer = Some(ComposerPhase::PickKind { selected: 4 });
+                    None
+                }
+                Some(ComposerPhase::FxrpDirectMint { .. }) => {
+                    self.composer = Some(ComposerPhase::PickKind { selected: 5 });
                     None
                 }
             });
@@ -370,6 +399,13 @@ impl Component for WalletPanel {
             return Ok(Some(self.queue_submit_trust_set()));
         }
 
+        if matches!(&self.composer, Some(ComposerPhase::FxrpDirectMint { .. }))
+            && matches!(key.code, KeyCode::Char('s') | KeyCode::Char('S'))
+            && (key.modifiers.contains(KeyModifiers::CONTROL) || !self.is_form_editing)
+        {
+            return Ok(Some(self.queue_submit_fxrp_direct_mint()));
+        }
+
         if let Some(ComposerPhase::TrustSet {
             row,
             ref mut currency,
@@ -382,6 +418,31 @@ impl Component for WalletPanel {
                 0 => currency,
                 1 => issuer,
                 _ => limit,
+            };
+            match key.code {
+                KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    target.push(c);
+                    return Ok(None);
+                }
+                KeyCode::Backspace => {
+                    target.pop();
+                    return Ok(None);
+                }
+                _ => {}
+            }
+        }
+
+        if let Some(ComposerPhase::FxrpDirectMint {
+            row,
+            ref mut flare_recipient,
+            ref mut amount_xrp,
+        }) = self.composer
+            && self.is_form_editing
+        {
+            let target = if row == 0 {
+                flare_recipient
+            } else {
+                amount_xrp
             };
             match key.code {
                 KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -492,6 +553,7 @@ impl Component for WalletPanel {
                         2 => self.open_set_regular_key_composer(),
                         3 => self.open_offer_create_composer(),
                         4 => self.open_trust_set_composer(),
+                        5 => self.open_fxrp_direct_mint_composer(),
                         _ => {}
                     },
                     KeyCode::Char('1') => self.open_payment_composer(),
@@ -499,6 +561,7 @@ impl Component for WalletPanel {
                     KeyCode::Char('3') => self.open_set_regular_key_composer(),
                     KeyCode::Char('4') => self.open_offer_create_composer(),
                     KeyCode::Char('5') => self.open_trust_set_composer(),
+                    KeyCode::Char('6') => self.open_fxrp_direct_mint_composer(),
                     _ => {}
                 }
                 return Ok(None);
@@ -584,6 +647,35 @@ impl Component for WalletPanel {
             }
             Some(ComposerPhase::TrustSet { row, .. }) => {
                 const ROWS: usize = 3;
+                match key.code {
+                    KeyCode::Char('e') | KeyCode::Char('E')
+                        if !key.modifiers.contains(KeyModifiers::CONTROL) =>
+                    {
+                        self.is_form_editing = !self.is_form_editing;
+                        if self.is_form_editing {
+                            return Ok(Some(Action::SetKeymapSuppression(true)));
+                        }
+                    }
+                    KeyCode::Enter => {
+                        if self.is_form_editing {
+                            *row = (*row + 1) % ROWS;
+                        } else {
+                            self.is_form_editing = true;
+                            return Ok(Some(Action::SetKeymapSuppression(true)));
+                        }
+                    }
+                    KeyCode::Char('[') | KeyCode::BackTab => {
+                        *row = (*row + ROWS - 1) % ROWS;
+                    }
+                    KeyCode::Char(']') | KeyCode::Tab => {
+                        *row = (*row + 1) % ROWS;
+                    }
+                    _ => {}
+                }
+                return Ok(None);
+            }
+            Some(ComposerPhase::FxrpDirectMint { row, .. }) => {
+                const ROWS: usize = 2;
                 match key.code {
                     KeyCode::Char('e') | KeyCode::Char('E')
                         if !key.modifiers.contains(KeyModifiers::CONTROL) =>

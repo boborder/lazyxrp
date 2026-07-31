@@ -166,6 +166,44 @@ pub fn prompt_mainnet_confirmation(operation: &str, network: &Network, skip_prom
     matches!(input.trim().to_lowercase().as_str(), "y" | "yes")
 }
 
+
+/// Direct Mint memo prefix (`DIRECT_MINTING`) — 8 bytes as lowercase hex.
+pub const DIRECT_MINT_MEMO_PREFIX: &str = "4642505266410018";
+
+/// Normalize a Flare/EVM address to 40 lowercase hex chars (no `0x`).
+pub fn normalize_eth_address_hex(addr: &str) -> color_eyre::Result<String> {
+    let s = addr.trim();
+    let s = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")).unwrap_or(s);
+    if s.len() != 40 {
+        color_eyre::eyre::bail!(
+            "Flare recipient must be 20 bytes (40 hex chars), got {}",
+            s.len()
+        );
+    }
+    if !s.chars().all(|c| c.is_ascii_hexdigit()) {
+        color_eyre::eyre::bail!("Flare recipient must be hex");
+    }
+    Ok(s.to_ascii_lowercase())
+}
+
+/// Build 32-byte Direct Mint `MemoData` hex (no `0x`): prefix + 4 zero bytes + recipient.
+pub fn build_direct_mint_memo_data(recipient_eth: &str) -> color_eyre::Result<String> {
+    let recipient = normalize_eth_address_hex(recipient_eth)?;
+    Ok(format!("{DIRECT_MINT_MEMO_PREFIX}00000000{recipient}"))
+}
+
+fn payment_memos_from_memo_data(
+    memo_data: Option<&str>,
+) -> Option<Vec<xrpl::models::transactions::Memo>> {
+    memo_data.map(|data| {
+        vec![xrpl::models::transactions::Memo {
+            memo_data: Some(data.to_string()),
+            memo_format: None,
+            memo_type: None,
+        }]
+    })
+}
+
 /// Create, sign, and encode a Payment transaction as a submit-ready blob.
 ///
 /// Phase 3: Transaction signing implementation for XRP transfers
@@ -181,6 +219,7 @@ pub fn create_and_sign_payment(
     iou_currency: Option<&str>,
     iou_issuer: Option<&str>,
     destination_tag: Option<u32>,
+    memo_data: Option<&str>,
     sequence: u32,
     fee_drops: u32,
     last_ledger_sequence: u32,
@@ -215,12 +254,16 @@ pub fn create_and_sign_payment(
         }
     };
 
+    let mut common = CommonFields::from_account(account.to_string())
+        .with_transaction_type(TransactionType::Payment)
+        .with_sequence(sequence)
+        .with_fee(XRPAmount::from(fee_drops.to_string()))
+        .with_last_ledger_sequence(last_ledger_sequence);
+    if let Some(memos) = payment_memos_from_memo_data(memo_data) {
+        common = common.with_memos(memos);
+    }
     let mut payment = Payment {
-        common_fields: CommonFields::from_account(account.to_string())
-            .with_transaction_type(TransactionType::Payment)
-            .with_sequence(sequence)
-            .with_fee(XRPAmount::from(fee_drops.to_string()))
-            .with_last_ledger_sequence(last_ledger_sequence),
+        common_fields: common,
         amount,
         destination: destination.to_string().into(),
         destination_tag,
@@ -234,6 +277,7 @@ pub fn create_and_sign_payment(
 }
 
 /// Unsigned Payment JSON for `simulate` (XRP or IOU).
+#[allow(clippy::too_many_arguments)]
 pub fn build_payment_tx_json_for_simulate(
     account: &str,
     destination: &str,
@@ -241,6 +285,7 @@ pub fn build_payment_tx_json_for_simulate(
     iou_currency: Option<&str>,
     iou_issuer: Option<&str>,
     destination_tag: Option<u32>,
+    memo_data: Option<&str>,
     sequence: u32,
 ) -> color_eyre::Result<Value> {
     use xrpl::models::transactions::payment::Payment;
@@ -267,10 +312,14 @@ pub fn build_payment_tx_json_for_simulate(
         }
     };
 
+    let mut common = CommonFields::from_account(account.to_string())
+        .with_transaction_type(TransactionType::Payment)
+        .with_sequence(sequence);
+    if let Some(memos) = payment_memos_from_memo_data(memo_data) {
+        common = common.with_memos(memos);
+    }
     let payment = Payment {
-        common_fields: CommonFields::from_account(account.to_string())
-            .with_transaction_type(TransactionType::Payment)
-            .with_sequence(sequence),
+        common_fields: common,
         amount,
         destination: destination.to_string().into(),
         destination_tag,
@@ -817,7 +866,7 @@ mod tests {
 
     #[test]
     fn build_payment_tx_json_for_simulate_xrp() {
-        let v = build_payment_tx_json_for_simulate("rSender", "rDest", "1", None, None, None, 7)
+        let v = build_payment_tx_json_for_simulate("rSender", "rDest", "1", None, None, None, None, 7)
             .expect("payment json");
         assert_eq!(v["TransactionType"], "Payment");
         assert_eq!(v["Sequence"], 7);
@@ -835,6 +884,7 @@ mod tests {
             Some("USD"),
             Some("rIssuer"),
             None,
+            None,
             9,
         )
         .expect("iou payment json");
@@ -850,7 +900,7 @@ mod tests {
     #[test]
     fn build_payment_tx_json_for_simulate_includes_destination_tag() {
         let v =
-            build_payment_tx_json_for_simulate("rSender", "rDest", "1", None, None, Some(12345), 3)
+            build_payment_tx_json_for_simulate("rSender", "rDest", "1", None, None, Some(12345), None, 3)
                 .expect("tagged payment json");
         assert_eq!(v["DestinationTag"], 12345);
     }
@@ -858,9 +908,45 @@ mod tests {
     #[test]
     fn build_payment_tx_json_rejects_partial_iou() {
         let err =
-            build_payment_tx_json_for_simulate("rSender", "rDest", "1", Some("USD"), None, None, 1)
+            build_payment_tx_json_for_simulate("rSender", "rDest", "1", Some("USD"), None, None, None, 1)
                 .expect_err("partial iou");
         assert!(format!("{err}").contains("both currency and issuer"));
+    }
+
+    #[test]
+    fn build_direct_mint_memo_data_recipient_only() {
+        let memo = build_direct_mint_memo_data("0xAbCDEF0123456789AbCDEF0123456789aBcDEF01").unwrap();
+        assert_eq!(memo.len(), 64);
+        assert!(memo.starts_with(DIRECT_MINT_MEMO_PREFIX));
+        assert_eq!(&memo[16..24], "00000000");
+        assert_eq!(&memo[24..], "abcdef0123456789abcdef0123456789abcdef01");
+    }
+
+    #[test]
+    fn build_direct_mint_memo_data_rejects_bad_addr() {
+        assert!(build_direct_mint_memo_data("0xabc").is_err());
+        assert!(build_direct_mint_memo_data(
+            "not-hex-zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz"
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn build_payment_tx_json_for_simulate_includes_memo() {
+        let memo = build_direct_mint_memo_data("0xabcdef0123456789abcdef0123456789abcdef01").unwrap();
+        let v = build_payment_tx_json_for_simulate(
+            "rSender",
+            "rDest",
+            "1",
+            None,
+            None,
+            None,
+            Some(memo.as_str()),
+            9,
+        )
+        .unwrap();
+        let data = v["Memos"][0]["Memo"]["MemoData"].as_str().unwrap();
+        assert_eq!(data, memo);
     }
 
     #[test]
