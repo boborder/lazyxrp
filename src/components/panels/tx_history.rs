@@ -185,12 +185,18 @@ impl Component for TxHistoryPanel {
         }
         let row_count = self.row_count();
         if row_count == 0 {
-            let msg = if self.filter_input.is_empty() {
+            let empty_history_label = if self.filter_input.is_empty() {
                 "None"
             } else {
                 "no matches"
             };
-            render_empty(frame, area, "Tx History", msg, self.is_focused);
+            render_empty(
+                frame,
+                area,
+                "Tx History",
+                empty_history_label,
+                self.is_focused,
+            );
             return Ok(());
         }
         let title = if self.filter_input.is_empty() {

@@ -80,7 +80,7 @@
 - **UA-1** (resolved): Tab/panel length is asserted in `app.rs` (`debug_assert_eq!`) and covered by a unit test. Keep both `TAB_TITLES` and `panels` updates in the same change.
 - **UA-2** (medium risk): `ArcValue` sharing relies on convention — nothing prevents a component from calling `Arc::make_mut` and mutating shared JSON.
 - **UA-3** (low risk): `CancellationToken` cancellation is fire-and-forget. No guarantee that WS/poll tasks observe cancellation before `Tui::exit()`.
-- **UA-4** (low risk): `Action` channel is `unbounded`. If the consumer (`App::process_actions`) blocks or lags, memory grows without bound.
+- **UA-4** (low risk): `Action` channel is `unbounded`. If the consumer (`App::drain_and_dispatch_actions`) blocks or lags, memory grows without bound.
 - **UA-5** (low risk): `poll_trigger_tx` uses `unbounded` channel — WS task could flood poll task with trigger messages on rapid ledger closes.
 
 ## Risk Notes

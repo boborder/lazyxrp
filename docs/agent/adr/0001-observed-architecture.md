@@ -38,7 +38,7 @@ The codebase follows **Elm-like TEA (The Elm Architecture)** with unidirectional
 ### Positive
 - **Clear message routing**: All state changes flow through `Action`, making behavior easy to trace.
 - **Loose coupling**: Components don't know about network I/O; background tasks don't know about UI.
-- **Testable**: `App::process_actions()` and individual components can be tested with synthetic `Action` messages.
+- **Testable**: `App::drain_and_dispatch_actions()` and individual components can be tested with synthetic `Action` messages.
 - **Graceful shutdown**: `CancellationToken` + `Tui::drop()` ensure terminal cleanup even on errors.
 
 ### Negative

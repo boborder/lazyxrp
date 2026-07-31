@@ -29,8 +29,8 @@ pub fn init() -> color_eyre::Result<()> {
                 .expect("human-panic: printing error message to console failed");
             eprintln!("{}", panic_hook.panic_report(panic_info)); // prints color-eyre stack trace to stderr
         }
-        let msg = format!("{}", panic_hook.panic_report(panic_info));
-        error!("Error: {}", strip_ansi_escapes::strip_str(msg));
+        let panic_report = format!("{}", panic_hook.panic_report(panic_info));
+        error!("Error: {}", strip_ansi_escapes::strip_str(panic_report));
 
         #[cfg(debug_assertions)]
         {

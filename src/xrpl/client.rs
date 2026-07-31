@@ -613,12 +613,12 @@ fn parse_wallet_propose(value: &Value) -> color_eyre::Result<WalletProposeResult
 }
 
 fn parse_server_info_value(value: &Value) -> ServerInfoSummary {
-    let info = value.get("result").and_then(|v| v.get("info"));
-    let quorum = info
+    let info_json = value.get("result").and_then(|v| v.get("info"));
+    let quorum = info_json
         .and_then(|i| i.get("validation_quorum"))
         .and_then(Value::as_u64)
         .map(|v| v.min(u32::MAX as u64) as u32);
-    let validator_list = info
+    let validator_list = info_json
         .and_then(|i| i.get("validator_list"))
         .and_then(parse_node_validator_list);
     ServerInfoSummary {

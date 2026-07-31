@@ -156,7 +156,7 @@ impl Component for PathFindPanel {
         }
 
         if self.rows.is_empty() {
-            let msg = if self.dest_summary.is_empty() {
+            let empty_routes_message = if self.dest_summary.is_empty() {
                 "No payment routes found for this pair.".to_string()
             } else {
                 format!(
@@ -164,7 +164,13 @@ impl Component for PathFindPanel {
                     self.dest_summary
                 )
             };
-            render_empty(frame, area, "Path-Find", &msg, self.is_focused);
+            render_empty(
+                frame,
+                area,
+                "Path-Find",
+                &empty_routes_message,
+                self.is_focused,
+            );
             return Ok(());
         }
 

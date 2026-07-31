@@ -248,12 +248,12 @@ impl Config {
             );
         }
 
-        let mut cfg: Self = builder.build()?.try_deserialize()?;
+        let mut config: Self = builder.build()?.try_deserialize()?;
 
         // Security (S-003): if a signing seed is present in config, warn about file permissions
         // BEFORE we move it out of the plain-text field.
-        let resolved_cfg_dir = cfg.resolved_config_dir();
-        if cfg.xrpl.signing.seed.is_some() {
+        let resolved_cfg_dir = config.resolved_config_dir();
+        if config.xrpl.signing.seed.is_some() {
             for (file, _) in &config_files {
                 let path = resolved_cfg_dir.join(file);
                 if path.exists() {
@@ -265,38 +265,38 @@ impl Config {
         // Security: promote any plain-text seed (from config file) into secret_seed
         // and wipe the field so Arc<Config> never carries an unmasked credential.
         // Must happen BEFORE the env-var merge so env (XRPL_SEED) can override file.
-        if let Some(plain) = cfg.xrpl.signing.seed.take() {
-            cfg.xrpl.signing.secret_seed = Some(secrecy::SecretString::from(plain));
+        if let Some(plain) = config.xrpl.signing.seed.take() {
+            config.xrpl.signing.secret_seed = Some(secrecy::SecretString::from(plain));
         }
 
         // Merge XRPL_SEED env var into signing config (env var takes priority over file)
         if let Ok(env_seed) = env::var(crate::signing::SEED_ENV) {
             let t = crate::signing::trim_family_seed(&env_seed);
             if !t.is_empty() {
-                cfg.xrpl.signing.secret_seed = Some(secrecy::SecretString::from(t.to_string()));
+                config.xrpl.signing.secret_seed = Some(secrecy::SecretString::from(t.to_string()));
             }
         }
 
         if let Ok(v) = env::var(XRPL_NETWORK_ENV)
             && let Ok(n) = v.parse::<Network>()
         {
-            cfg.xrpl.network = n;
+            config.xrpl.network = n;
         }
         if let Ok(v) = env::var(XRPL_RPC_SERVER_ENV) {
             let t = v.trim();
             if !t.is_empty() {
-                cfg.xrpl.rpc_server = Some(t.to_string());
+                config.xrpl.rpc_server = Some(t.to_string());
             }
         }
         if let Ok(v) = env::var(XRPL_WS_SERVER_ENV) {
             let t = v.trim();
             if !t.is_empty() {
-                cfg.xrpl.ws_server = Some(t.to_string());
+                config.xrpl.ws_server = Some(t.to_string());
             }
         }
 
         for (mode, default_bindings) in default_config.keybindings.0.iter() {
-            let user_bindings = cfg.keybindings.0.entry(*mode).or_default();
+            let user_bindings = config.keybindings.0.entry(*mode).or_default();
             for (key, cmd) in default_bindings.iter() {
                 user_bindings
                     .entry(key.clone())
@@ -304,13 +304,13 @@ impl Config {
             }
         }
         for (mode, default_styles) in default_config.styles.0.iter() {
-            let user_styles = cfg.styles.0.entry(*mode).or_default();
+            let user_styles = config.styles.0.entry(*mode).or_default();
             for (style_key, style) in default_styles.iter() {
                 user_styles.entry(style_key.clone()).or_insert(*style);
             }
         }
 
-        Ok(cfg)
+        Ok(config)
     }
 }
 

@@ -55,9 +55,9 @@ pub async fn execute_cli_command(
         }
         Cmd::Summary { account } => {
             let account = account.unwrap_or_default();
-            let info = rpc.server_info().await?;
+            let server_info = rpc.server_info().await?;
             let fee = rpc.fee().await?;
-            println!("LedgerIndex: {}", info.ledger_index);
+            println!("LedgerIndex: {}", server_info.ledger_index);
             println!("OpenLedgerFee: {}", fee.open_ledger_fee_drops);
             if !account.is_empty() {
                 println!(

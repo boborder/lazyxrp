@@ -48,10 +48,10 @@ main.rs
 
 | Channel | Type | Producer(s) | Consumer(s) |
 |---------|------|-------------|-------------|
-| `action_tx/rx` | `UnboundedSender<Action>` | Tui events, WS task, poll task, components | `App::process_actions()` |
+| `action_tx/rx` | `UnboundedSender<Action>` | Tui events, WS task, poll task, components | `App::drain_and_dispatch_actions()` |
 | `poll_tx/rx` | `UnboundedSender<PollCommand>` | `App` (on user action), WS task (on ledger close) | `run_poll_loop()` |
 | `poll_trigger_tx/rx` | `UnboundedSender<()>` | WS task (on ledger close) | `run_poll_loop()` (triggers immediate poll) |
-| `net_tx` | `watch::Sender<Network>` | `App::process_actions()` (`Action::NetworkChange`) | PollContext (cloned for poll task) |
+| `net_tx` | `watch::Sender<Network>` | `App::drain_and_dispatch_actions()` (`Action::NetworkChange`) | PollContext (cloned for poll task) |
 | `cancel` | `CancellationToken` | `App::run()` (on quit) | WS task, poll task |
 
 ## Dependency Direction
@@ -90,7 +90,7 @@ main ──► app ──► components ──► (none, leaf nodes)
 2. Fires `tokio::join!` on: `server_info`, `fee`, `account_info`, `book_offers` (parallel), then `account_nfts`, `account_lines`, `account_tx` (sequential after 500ms sleep)
 3. Oracle refresh path: XRPL `get_aggregate_price` + Flare FTSOv2 (`crate::flare::fetch_ftso_prices`) are polled and normalized
 4. Results dispatched as `Action::XrplServerInfo`, `Action::XrplDunl` (XRPL Foundation UNL from `https://unl.xrplf.org`), `Action::XrplFee`, `Action::XrplBookOffers`, `Action::XrplPathFind`, `Action::XrplOraclePrices`, `Action::FlareOraclePrices`, etc.
-5. `App::process_actions()` routes to active components via `update()`
+5. `App::drain_and_dispatch_actions()` routes to active components via `update()`
 
 ### Flow 3: WebSocket Ledger Close → Poll Trigger
 1. WS receives `ledgerClosed` event
@@ -105,7 +105,7 @@ main ──► app ──► components ──► (none, leaf nodes)
 
 ### Flow 5: Domain Verification (xrp-ledger.toml)
 1. User selects a validator in `ServerPanel` → `Action::RequestXrplToml { domain, expected_pubkey }`
-2. `App::process_actions()` spawns an async `fetch_xrpl_toml` call (10s timeout)
+2. `App::drain_and_dispatch_actions()` spawns an async `fetch_xrpl_toml` call (10s timeout)
 3. Result dispatched as `Action::XrplTomlFetched { domain, result }` back to `ServerPanel`
 
 ### Flow 6: CLI Command

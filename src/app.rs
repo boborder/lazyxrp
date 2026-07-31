@@ -308,7 +308,7 @@ impl App {
 
         loop {
             self.forward_tui_events(&mut tui).await?;
-            self.process_actions(Some(&mut tui))?;
+            self.drain_and_dispatch_actions(Some(&mut tui))?;
             if self.should_suspend {
                 tui.suspend()?;
                 action_tx.send(Action::Resume)?;
@@ -412,7 +412,7 @@ impl App {
     }
 
     /// Send a poll command only if at least `min` duration has passed since the last one.
-    fn try_debounced(
+    fn send_debounced_poll(
         last: &mut Option<Instant>,
         tx: &mpsc::UnboundedSender<PollCommand>,
         cmd: PollCommand,
@@ -427,7 +427,7 @@ impl App {
         }
     }
 
-    fn process_actions(&mut self, mut tui: Option<&mut Tui>) -> color_eyre::Result<()> {
+    fn drain_and_dispatch_actions(&mut self, mut tui: Option<&mut Tui>) -> color_eyre::Result<()> {
         while let Ok(action) = self.action_rx.try_recv() {
             if action != Action::Tick && action != Action::Render {
                 debug!("{action:?}");
@@ -518,14 +518,14 @@ impl App {
                     });
                 }
                 Action::RefreshAccount => {
-                    Self::try_debounced(
+                    Self::send_debounced_poll(
                         &mut self.last_refresh_account,
                         &self.poll_tx,
                         PollCommand::Account,
                     );
                 }
                 Action::RefreshBook => {
-                    Self::try_debounced(
+                    Self::send_debounced_poll(
                         &mut self.last_refresh_book,
                         &self.poll_tx,
                         PollCommand::Book,
@@ -555,7 +555,7 @@ impl App {
                     }
                 }
                 Action::RefreshLedgerObjects => {
-                    Self::try_debounced(
+                    Self::send_debounced_poll(
                         &mut self.last_refresh_ledger_objects,
                         &self.poll_tx,
                         PollCommand::LedgerObjects,
@@ -782,7 +782,7 @@ mod tests {
     async fn quit_action_sets_should_quit() -> color_eyre::Result<()> {
         let mut app = test_app()?;
         app.action_tx.send(Action::Quit)?;
-        app.process_actions(None)?;
+        app.drain_and_dispatch_actions(None)?;
         assert!(app.should_quit);
         Ok(())
     }
@@ -792,7 +792,7 @@ mod tests {
     async fn refresh_account_sends_poll_command() -> color_eyre::Result<()> {
         let mut app = test_app()?;
         app.action_tx.send(Action::RefreshAccount)?;
-        app.process_actions(None)?;
+        app.drain_and_dispatch_actions(None)?;
         let cmd = app
             .test_poll_rx
             .as_mut()
@@ -808,7 +808,7 @@ mod tests {
     async fn refresh_book_sends_poll_command() -> color_eyre::Result<()> {
         let mut app = test_app()?;
         app.action_tx.send(Action::RefreshBook)?;
-        app.process_actions(None)?;
+        app.drain_and_dispatch_actions(None)?;
         let cmd = app
             .test_poll_rx
             .as_mut()
@@ -826,15 +826,15 @@ mod tests {
         assert_eq!(app.active_tab, 0);
         for i in 1..=TAB_TITLES.len() {
             app.action_tx.send(Action::TabNext)?;
-            app.process_actions(None)?;
+            app.drain_and_dispatch_actions(None)?;
             assert_eq!(app.active_tab, i % TAB_TITLES.len());
         }
         assert_eq!(app.active_tab, 0);
         app.action_tx.send(Action::TabPrev)?;
-        app.process_actions(None)?;
+        app.drain_and_dispatch_actions(None)?;
         assert_eq!(app.active_tab, TAB_TITLES.len() - 1);
         app.action_tx.send(Action::TabPrev)?;
-        app.process_actions(None)?;
+        app.drain_and_dispatch_actions(None)?;
         assert_eq!(app.active_tab, TAB_TITLES.len() - 2);
         Ok(())
     }
@@ -845,10 +845,10 @@ mod tests {
         let mut app = test_app()?;
         assert!(!app.show_help);
         app.action_tx.send(Action::Help)?;
-        app.process_actions(None)?;
+        app.drain_and_dispatch_actions(None)?;
         assert!(app.show_help);
         app.action_tx.send(Action::Help)?;
-        app.process_actions(None)?;
+        app.drain_and_dispatch_actions(None)?;
         assert!(!app.show_help);
         Ok(())
     }
@@ -860,7 +860,7 @@ mod tests {
         app.show_help = true;
         let esc = KeyEvent::new(KeyCode::Esc, KeyModifiers::empty());
         app.on_key_event(esc)?;
-        app.process_actions(None)?;
+        app.drain_and_dispatch_actions(None)?;
         assert!(!app.show_help);
         Ok(())
     }
@@ -871,7 +871,7 @@ mod tests {
         let mut app = test_app()?;
         let q = KeyEvent::new(KeyCode::Char('?'), KeyModifiers::empty());
         app.on_key_event(q)?;
-        app.process_actions(None)?;
+        app.drain_and_dispatch_actions(None)?;
         assert!(app.show_help);
         Ok(())
     }

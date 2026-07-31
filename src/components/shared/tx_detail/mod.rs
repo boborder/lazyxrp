@@ -244,14 +244,14 @@ fn detail_lines_for<'a>(tx: &'a Value, meta: &'a Value) -> Vec<Line<'a>> {
         "Data",
     ];
 
-    let obj = match tx {
+    let tx_object = match tx {
         Value::Object(o) => o,
         _ => return lines,
     };
 
     if !typed_shown {
         for key in known.iter() {
-            if let Some(value) = obj.get(*key) {
+            if let Some(value) = tx_object.get(*key) {
                 if value.is_null() {
                     continue;
                 }
@@ -266,7 +266,7 @@ fn detail_lines_for<'a>(tx: &'a Value, meta: &'a Value) -> Vec<Line<'a>> {
     }
 
     let mut has_remaining = false;
-    for (key, value) in obj.iter() {
+    for (key, value) in tx_object.iter() {
         if known.contains(&key.as_str())
             || key == "hash"
             || key == "ledger_index"

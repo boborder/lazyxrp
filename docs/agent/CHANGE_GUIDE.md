@@ -24,7 +24,7 @@
 
 ## How to Trace Data Flow
 
-1. **Inbound data**: WS or RPC response → `Action::Xrpl*` variant → `action_tx` → `App::process_actions()` → component `update(&action)` → internal state mutation → `draw()`.
+1. **Inbound data**: WS or RPC response → `Action::Xrpl*` variant → `action_tx` → `App::drain_and_dispatch_actions()` → component `update(&action)` → internal state mutation → `draw()`.
 2. **Outbound (submit)**: UI form → `Action::*Submit(params)` → `App` forwards to `poll_tx` as `PollCommand` → poll task validates → `simulate_tx` → `sign` → `submit` → `Action::*SubmitOk/Err` → UI displays result.
 3. **Refresh triggers**: User keystroke → `Action::Refresh*` → `App` sends `PollCommand` via `poll_tx` → poll task executes RPC → dispatches `Action::Xrpl*`.
 
@@ -40,7 +40,7 @@
 ### New Action variant
 1. Add to `src/action.rs` enum (maintain alphabetic-ish order)
 2. If XRPL data: update `poll.rs` or `ws.rs` to emit it
-3. If navigation: handle in `app.rs:process_actions()`
+3. If navigation: handle in `app.rs:drain_and_dispatch_actions()`
 4. If UI: handle in appropriate component `update()`
 5. If keybindable: add to `config.json5` keybinding defaults
 

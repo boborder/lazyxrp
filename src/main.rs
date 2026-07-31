@@ -125,11 +125,11 @@ mod network_resolve_tests {
         let _env = TestEnvGuard::new(&["LAZYXRP_CONFIG", "LAZYXRP_DATA", config::XRPL_NETWORK_ENV]);
         _env.remove("LAZYXRP_CONFIG");
         _env.remove("LAZYXRP_DATA");
-        let cfg = Config::new()?;
+        let config = Config::new()?;
         let cli = Cli::try_parse_from(["lazyxrp", "--network", "devnet"])
             .map_err(|e| color_eyre::eyre::eyre!("{e}"))?;
         _env.set(config::XRPL_NETWORK_ENV, "testnet");
-        let n = resolve_network(&cli, &cfg);
+        let n = resolve_network(&cli, &config);
         assert_eq!(n, Network::Devnet);
         Ok(())
     }
@@ -164,11 +164,11 @@ network = "mainnet"
         _env.remove(config::XRPL_RPC_SERVER_ENV);
         _env.remove(config::XRPL_WS_SERVER_ENV);
         _env.set("LAZYXRP_CONFIG", root.to_str().unwrap());
-        let cfg = Config::new()?;
+        let config = Config::new()?;
         let cli =
             Cli::try_parse_from(["lazyxrp", "info"]).map_err(|e| color_eyre::eyre::eyre!("{e}"))?;
-        let network = resolve_network(&cli, &cfg);
-        let url = resolve_rpc_url(&cli, &cfg, &network);
+        let network = resolve_network(&cli, &config);
+        let url = resolve_rpc_url(&cli, &config, &network);
         assert_eq!(url, "https://xrplcluster.com");
         std::fs::remove_dir_all(&root).ok();
         Ok(())
@@ -192,11 +192,11 @@ network = "mainnet"
         _env.remove(config::XRPL_RPC_SERVER_ENV);
         _env.set(config::XRPL_WS_SERVER_ENV, "wss://custom");
         _env.set("LAZYXRP_CONFIG", root.to_str().unwrap());
-        let cfg = Config::new()?;
+        let config = Config::new()?;
         let cli = Cli::try_parse_from(["lazyxrp", "--ws-server", "wss://cli", "info"])
             .map_err(|e| color_eyre::eyre::eyre!("{e}"))?;
-        let network = resolve_network(&cli, &cfg);
-        let url = resolve_ws_url(&cli, &cfg, &network);
+        let network = resolve_network(&cli, &config);
+        let url = resolve_ws_url(&cli, &config, &network);
         assert_eq!(url, "wss://cli");
         std::fs::remove_dir_all(&root).ok();
         Ok(())

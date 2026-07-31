@@ -26,7 +26,7 @@
 ## Issue 4: Unbounded channels for high-frequency events
 
 **Severity**: Low
-**Evidence**: `action_tx`, `poll_tx`, `poll_trigger_tx` all use `UnboundedSender`. If the consumer lags (e.g., slow `process_actions` or poll task blocked on RPC), memory grows.
+**Evidence**: `action_tx`, `poll_tx`, `poll_trigger_tx` all use `UnboundedSender`. If the consumer lags (e.g., slow `drain_and_dispatch_actions` or poll task blocked on RPC), memory grows.
 **Impact**: In extreme cases (rapid ledger closes on busy network, slow RPC), unbounded queue could cause memory pressure.
 **Recommendation**: Monitor. Add bounded channels with backpressure if observed in production.
 

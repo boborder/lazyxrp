@@ -98,7 +98,7 @@ PollCommand ::=
 ## Data Lifecycle
 
 1. **Startup**: `Config::new()` loads from built-in defaults → user `config.toml` → env vars. Seed is extracted from file and cleared; `SecretString` takes over.
-2. **Watch mode**: `Action` messages flow from WS/poll tasks → `action_rx` → `App::process_actions()` → component `update()` calls → internal state mutation → `draw()`.
+2. **Watch mode**: `Action` messages flow from WS/poll tasks → `action_rx` → `App::drain_and_dispatch_actions()` → component `update()` calls → internal state mutation → `draw()`.
 3. **CLI mode**: Direct async RPC calls → formatted stdout output → exit. No message channels.
 4. **Submit**: User form → `Action::*Submit(params)` → `PollCommand::*Submit` → poll task validates → `simulate_tx` → `sign` → `submit` → `Action::*SubmitOk/Err` → component display.
 5. **Shutdown**: `CancellationToken` cancels WS/poll tasks. `Tui::exit()` restores terminal.

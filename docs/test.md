@@ -841,8 +841,8 @@ CI（`.github/workflows/ci.yml`）は各ジョブで `cargo … --locked`（例:
 - **Type**: Integration
 - **Size**: L
 - **Status**: [x] Done
-- **Target**: `src/app.rs` -> `Action::Quit` → `process_actions`
-- **Preconditions**: None (calls `process_actions(None)` — no TTY required on CI)
+- **Target**: `src/app.rs` -> `Action::Quit` → `drain_and_dispatch_actions`
+- **Preconditions**: None (calls `drain_and_dispatch_actions(None)` — no TTY required on CI)
 - **Input**: `Action::Quit` on action channel
 - **Expected Output**: `should_quit == true` (mirrors `run()` cancel path)
 - **Test File**: `src/app.rs` (inline)
@@ -1299,5 +1299,5 @@ CI（`.github/workflows/ci.yml`）は各ジョブで `cargo … --locked`（例:
 - **`xrpl::tests::integration_live_network`** hits `https://xrplcluster.com` (90s timeout per case) and serializes calls with a test-local mutex to reduce public-node rate limiting. Offline / blocked CI: non-ignored live tests fail; prefer runners with outbound HTTPS or mark live tests ignored in CI if needed.
 - **`tokio::spawn` lifetime issue** (rust-lang/rust#100013) was previously tracked for watch startup; current `start_poll_task` / `start_ws_task` paths compile with direct `tokio::spawn` and should remain covered by `cargo check`.
 - **macOS linking warnings** from upstream deps are non-fatal; do not treat as test failures.
-- **TUI tests** (`TC-060`–`TC-065`) run under `#[tokio::test]`; `TC-061`–`TC-065` exercise `process_actions(None)` so they pass on headless CI without `Tui::new()`. Live RPC CLI tests remain `#[ignore]` when network/seed-dependent.
+- **TUI tests** (`TC-060`–`TC-065`) run under `#[tokio::test]`; `TC-061`–`TC-065` exercise `drain_and_dispatch_actions(None)` so they pass on headless CI without `Tui::new()`. Live RPC CLI tests remain `#[ignore]` when network/seed-dependent.
 - **TC-ID note**: TC-079 = TxHistory empty filter. Path-find parsers = TC-080–084; `wallet_propose` = TC-095; oracle aggregate = TC-096/097. CLI live helpers = TC-066/067.
