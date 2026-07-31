@@ -189,13 +189,10 @@ mod tests {
     }
 
     #[test]
-    fn group_u64_matches_str() {
+    fn group_digits_u64_known_values() {
         assert_eq!(group_digits_u64(0), "0");
         assert_eq!(group_digits_u64(1234), "1,234");
         assert_eq!(group_digits_u64(1_234_567), "1,234,567");
-        assert_eq!(
-            group_digits_u64(u64::MAX),
-            group_digits(&u64::MAX.to_string())
-        );
+        assert_eq!(group_digits_u64(u64::MAX), "18,446,744,073,709,551,615");
     }
 }

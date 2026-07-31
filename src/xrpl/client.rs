@@ -1762,9 +1762,8 @@ mod tests {
 
     #[test]
     fn format_ripple_time_utc_known_value() {
-        let s = format_ripple_time_utc(838_204_893);
-        assert!(s.starts_with("2026-07-24"));
-        assert!(s.ends_with("UTC"));
+        // Ripple epoch 946684800 + 838204893 = unix 1784889693 → 2026-07-24 10:41 UTC
+        assert_eq!(format_ripple_time_utc(838_204_893), "2026-07-24 10:41 UTC");
     }
 
     /// TC-001
@@ -1835,7 +1834,8 @@ mod tests {
                 "engine_result_message": "Destination does not exist."
             }
         });
-        assert!(parse_submit_success(&failed).is_err());
+        let err = parse_submit_success(&failed).expect_err("tec must fail");
+        assert!(format!("{err}").contains("tecNO_DST_INSUF_XRP"));
     }
 
     #[test]
@@ -1857,7 +1857,10 @@ mod tests {
         let sim = parse_simulate_result(&value).expect("simulate should parse");
         assert_eq!(sim.engine_result, "tesSUCCESS");
         assert_eq!(sim.ledger_index, 3);
-        assert!(sim.meta.is_some());
+        assert_eq!(
+            sim.meta.as_ref().and_then(|m| m.get("TransactionResult")),
+            Some(&json!("tesSUCCESS"))
+        );
         assert_eq!(sim.tx_json["Fee"], "10");
         assert_eq!(sim.tx_json["Sequence"], 360);
     }
@@ -2085,17 +2088,16 @@ mod tests {
             {"currency": "USD", "issuer": "rIssuer1", "type": 48},
             {"currency": "USD", "issuer": "rIssuer2", "type": 48}
         ]]);
-        let s = summarize_paths_computed(&paths);
-        assert!(s.contains('→'));
-        assert!(s.contains("USD"));
+        assert_eq!(
+            summarize_paths_computed(&paths),
+            "XRP → USD@rIssuer1 → USD@rIssuer2"
+        );
     }
 
     #[test]
     fn summarize_paths_computed_string_account_step() {
         let paths = json!([["rN7n67967NcFqXSBYfSouqMDPMaFmMgfe"]]);
-        let s = summarize_paths_computed(&paths);
-        assert!(s.contains('r'));
-        assert!(s.contains('…'));
+        assert_eq!(summarize_paths_computed(&paths), "rN7n…Mgfe");
     }
 
     #[test]
@@ -2103,9 +2105,7 @@ mod tests {
         let paths = json!([[
             {"currency": "524C555344000000000000000000000000000000", "issuer": "rIssuer1", "type": 48}
         ]]);
-        let s = summarize_paths_computed(&paths);
-        assert!(s.contains("RLUSD"));
-        assert!(!s.contains("524C555344"));
+        assert_eq!(summarize_paths_computed(&paths), "RLUSD@rIssuer1");
     }
 
     #[test]

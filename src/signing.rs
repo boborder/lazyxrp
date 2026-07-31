@@ -721,7 +721,10 @@ mod tests {
         let _env = TestEnvGuard::new(&[SEED_ENV]);
         _env.remove(SEED_ENV);
         let signing_config = SigningConfig::prime_seed_source(Some("sTest1234".to_string()));
-        assert!(signing_config.has_seed());
+        assert_eq!(
+            signing_config.seed.as_ref().unwrap().expose_secret(),
+            "sTest1234"
+        );
     }
 
     #[test]
@@ -789,12 +792,11 @@ mod tests {
     }
 
     #[test]
-    fn secp256k1_family_seed_wallet_unchanged() {
-        use xrpl::wallet::Wallet;
+    fn secp256k1_family_seed_known_address() {
         let seed = "sn259rEFXrQrWyx3Q7XneWcwV6dfL";
-        let a = wallet_from_family_seed(seed, 0).expect("wallet");
-        let b = Wallet::new(seed, 0).expect("direct");
-        assert_eq!(a.classic_address, b.classic_address);
+        let wallet = wallet_from_family_seed(seed, 0).expect("wallet");
+        // Known classic address for this fixture seed (not a Wallet::new mirror).
+        assert_eq!(wallet.classic_address, "rJrRMgiRgrU6hDF4pgu5DXQdWyPbY35ErN");
     }
 
     /// TC-049

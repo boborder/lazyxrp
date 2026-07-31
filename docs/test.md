@@ -36,6 +36,7 @@
 - **FAssets executor helpers**（`.agents/skills/flare-fassets/scripts/`）だけ Vitest + `npm test`。CI の主系は引き続き `cargo test`。
 - Use `pretty_assertions` for readable diffs.
 - Map cases to this list by `TC-XXX`.
+- **Catalog policy**: this file is an **important-case roster**, not a 1:1 index of every `#[test]`. Unannotated helper/unit tests are allowed; add a TC only when the case is cross-module contract, regression-prone, or user-visible.
 - Reference the ID in commit messages (e.g., `test(xrpl): add NFT parse case (TC-013)`).
 - For tests that touch `env::var`, mark `unsafe` block and single-threaded constraint.
 
@@ -961,7 +962,7 @@ CI（`.github/workflows/ci.yml`）は各ジョブで `cargo … --locked`（例:
 - **Input**: Registry table
 - **Expected Output**: Contains required TransactionType names; no duplicate names (avoids magic `len() == 29` drift)
 - **Test File**: `src/components/shared/tx_detail/parsers.rs` (inline)
-- **Notes**: Replaces the old count-only registry assert. Benchmark `bench_detail_lines_payment_current` remains `#[ignore]` (not a TC).
+- **Notes**: Replaces the old count-only registry assert. Noise microbench `bench_detail_lines_payment_current` was removed (not a TC).
 
 #### TC-095: wallet_propose — ed25519 seed/address
 

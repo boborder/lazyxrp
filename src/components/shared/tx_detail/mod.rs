@@ -524,38 +524,19 @@ mod tests {
         // Cache should be None after open (invalidated)
         assert!(state.cached_lines.is_none());
 
-        // Simulate render: populate cache
+        // Populate cache as draw path would, then reopen to prove invalidation.
         let lines = detail_lines_for(&state.tx_json.0, &state.meta_json.0);
         state.cached_lines = Some(to_static_lines(lines));
-        assert!(state.cached_lines.is_some());
+        assert!(
+            state
+                .cached_lines
+                .as_ref()
+                .is_some_and(|lines| !lines.is_empty())
+        );
 
-        // Re-opening with different tx should invalidate
         let tx2 = json!({"TransactionType":"AccountSet","Account":"rB","SetFlag":8});
         let meta2 = json!({});
         state.open(arc(tx2), arc(meta2));
         assert!(state.cached_lines.is_none());
-    }
-
-    #[test]
-    #[ignore = "benchmark only"]
-    fn bench_detail_lines_payment_current() {
-        use std::time::Instant;
-        let tx = json!({
-            "TransactionType":"Payment",
-            "Account":"rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
-            "Destination":"rf1BiGeXwwQoi8Z2ueFYTEXSwuJYfV2Jpn",
-            "Amount":"1000000",
-            "Sequence":1,
-            "Fee":"12"
-        });
-        let meta = json!({});
-        let start = Instant::now();
-        for _ in 0..1000 {
-            let _ = detail_lines_for(&tx, &meta);
-        }
-        println!(
-            "1000 iterations (current with clone): {:?}",
-            start.elapsed()
-        );
     }
 }
