@@ -33,7 +33,10 @@ lazyxrp/
 │   │   ├── backoff.rs
 │   │   ├── client.rs
 │   │   ├── cli_exec.rs
+│   │   ├── dunl.rs
+│   │   ├── format.rs
 │   │   ├── json_util.rs
+│   │   ├── parse.rs
 │   │   ├── poll.rs
 │   │   ├── toml.rs
 │   │   ├── types.rs
@@ -121,7 +124,7 @@ lazyxrp/
 - `main.rs`: 起動エントリーポイント。`watch` と CLI モードの分岐、ネットワーク/エンドポイント/シードの優先順位解決を担当。`--self-uninstall` はロギング初期化前に処理。
 - `uninstall.rs`: `lazyxrp --self-uninstall` — 実行中バイナリ・同階層の `{name}.bak`、`Config` で解決した config/data ディレクトリの削除（`cargo uninstall` は呼ばない）。
 - `app.rs`: TUI アプリ本体。イベントループ、コンポーネント管理、バックグラウンド処理起動を担当。
-- `xrpl/`: XRPL 連携一式。`mod.rs` は再エクスポートのみ。`address.rs`（classic/X-Address 解決・ネットワーク一致検査）、`client.rs`（`RpcClient`・JSON-RPC・レスポンスパース・`xrp_to_drops`）、`json_util.rs`（JSON パスヘルパ）、`types.rs`（行データ型・`BookPair`・`PollContext` / `PollCommand`）、`poll.rs`（定期ポーリング・ウォレット送信パス）、`ws.rs`（WebSocket）、`cli_exec.rs`（非 TUI の `execute_cli_command`）、`toml.rs`（`xrp-ledger.toml` パーサ）、`backoff.rs`（再接続間隔）。
+- `xrpl/`: XRPL 連携一式。`mod.rs` は再エクスポートのみ。`address.rs`（classic/X-Address 解決・ネットワーク一致検査）、`client.rs`（`RpcClient` façade・JSON-RPC / HTTPS dUNL fetch）、`dunl.rs`（XRPLF dUNL JSON・manifest ST）、`format.rs`（金額・path・ripple time 整形、`xrp_to_drops` / `path_find_*`）、`parse.rs`（JSON-RPC レスポンスパーサ・book helper）、`json_util.rs`（JSON パスヘルパ）、`types.rs`（行データ型・`BookPair`・`PollContext` / `PollCommand`）、`poll.rs`（定期ポーリング・ウォレット送信パス）、`ws.rs`（WebSocket）、`cli_exec.rs`（非 TUI の `execute_cli_command`）、`toml.rs`（`xrp-ledger.toml` パーサ）、`backoff.rs`（再接続間隔）。
 - `cli.rs`: コマンドライン引数とサブコマンド定義。
 - `action.rs`: アプリ内部で流す `Action` 定義。
 - `config.rs`: 既定値 + 設定ファイルのロードとマージ、`XRPL_*` 環境変数（シード・RPC/WS・ネットワーク）の反映。

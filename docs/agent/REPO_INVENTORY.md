@@ -1,6 +1,6 @@
 # Repository Inventory
 
-> **Scope**: full repository. **Confidence**: high. **Updated**: 2026-07-31 (v0.1.22 quality-pass sync).
+> **Scope**: full repository. **Confidence**: high. **Updated**: 2026-07-31 (v0.1.23 post-ship sync).
 
 ## Project Summary
 
@@ -10,7 +10,7 @@
 - **MSRV**: 1.91
 - **License**: MIT
 - **Repo**: `github.com/boborder/lazyxrp`
-- **Version**: 0.1.22
+- **Version**: 0.1.23
 
 ## Build / Test / Validate Commands
 
@@ -54,7 +54,10 @@ src/
 ├── xrpl/                XRPL integration
 │   ├── mod.rs           Re-exports
 │   ├── address.rs       Classic / X-Address resolve + network match checks
-│   ├── client.rs        RpcClient (JSON-RPC, response parse, xrp_to_drops, dUNL manifest)
+│   ├── client.rs        RpcClient façade (JSON-RPC + HTTPS dUNL fetch)
+│   ├── dunl.rs          XRPLF dUNL JSON + validator manifest ST decode
+│   ├── format.rs        Amount / path / ripple-time formatters (`xrp_to_drops`, path_find helpers)
+│   ├── parse.rs         JSON-RPC response parsers + book helpers
 │   ├── ws.rs            WebSocket subscription task
 │   ├── poll.rs          Polling task (periodic + on-demand RPC, submit flows)
 │   ├── cli_exec.rs      CLI command execution
@@ -112,7 +115,5 @@ docs/
 
 ## Next Recommended Analysis Targets
 
-1. `src/xrpl/client.rs` — flatten-extract format / dunl / parse siblings (~2259 LOC blob; quality-pass Should)
-2. `src/components/panels/server_dunl.rs` — finish drawing extraction from `server.rs` facade
-3. `src/components/panels/wallet.rs` — remove thin `seed_to_address` re-export (call `signing` directly)
-4. Row-cache / visible-window for `tx_history` — Later; only if measured FPS pain
+1. `src/xrpl/client.rs` — RpcClient façade (~472 LOC after `format`/`dunl`/`parse` extract); Later: tx_history row cache if FPS pain
+2. Row-cache / visible-window for `tx_history` — Later; only if measured FPS pain
