@@ -277,7 +277,7 @@ impl App {
             .signing
             .secret_seed
             .as_ref()
-            .map(|s| crate::components::panels::wallet::seed_to_address(s.expose_secret()))
+            .map(|s| crate::signing::seed_to_address(s.expose_secret()))
             .and_then(Result::ok);
         let flare_rpc_url = resolve_flare_rpc_url();
         let flare_feeds = resolve_flare_feeds();

@@ -101,6 +101,13 @@ pub fn wallet_from_family_seed(
     }
 }
 
+/// Derive classic address from a family seed (UI / poll seed-address lookup).
+pub fn seed_to_address(seed: &str) -> Result<String, String> {
+    wallet_from_family_seed(trim_family_seed(seed), 0)
+        .map(|w| w.classic_address.clone())
+        .map_err(|e| format!("{e}"))
+}
+
 /// Resolved signing credentials. Seed is memory-masked via `secrecy`.
 ///
 /// Used for write paths that need a seed (e.g. CLI `Send` via `XRPL_SEED` or

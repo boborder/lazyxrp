@@ -62,9 +62,7 @@ enum ComposerPhase {
 
 /// Derive XRPL address from a family seed.
 pub fn seed_to_address(seed: &str) -> Result<String, String> {
-    crate::signing::wallet_from_family_seed(crate::signing::trim_family_seed(seed), 0)
-        .map(|w| w.classic_address.clone())
-        .map_err(|e| format!("{e}"))
+    crate::signing::seed_to_address(seed)
 }
 
 #[path = "wallet_composer.rs"]
