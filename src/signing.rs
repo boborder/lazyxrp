@@ -354,6 +354,32 @@ pub fn create_unsigned_payment_json(
     Ok(tx_json)
 }
 
+/// Unsigned SetRegularKey JSON for `simulate`.
+/// Pass `regular_key` as `None` (or empty) to clear the existing regular key.
+#[allow(dead_code)] // wired in ticket 05 poll/UI
+pub fn build_set_regular_key_tx_json_for_simulate(
+    account: &str,
+    regular_key: Option<&str>,
+    sequence: u32,
+) -> color_eyre::Result<Value> {
+    use xrpl::models::transactions::set_regular_key::SetRegularKey;
+    use xrpl::models::transactions::{CommonFields, TransactionType};
+
+    let key = regular_key.map(str::trim).filter(|s| !s.is_empty());
+    if let Some(k) = key {
+        require_classic_address_shape("regular_key", k)?;
+    }
+
+    let tx = SetRegularKey {
+        common_fields: CommonFields::from_account(account.to_string())
+            .with_transaction_type(TransactionType::SetRegularKey)
+            .with_sequence(sequence),
+        regular_key: key.map(|k| k.to_string().into()),
+    };
+
+    serde_json::to_value(&tx).map_err(|e| color_eyre::eyre::eyre!("set_regular_key tx_json: {e}"))
+}
+
 /// Create, sign, and encode a SetRegularKey transaction as a submit-ready blob.
 ///
 /// Pass `regular_key` as `None` to clear (remove) the existing regular key.
@@ -433,6 +459,32 @@ pub fn create_and_sign_escrow_create(
     encode(&tx).map_err(|e| color_eyre::eyre::eyre!("encode error: {:?}", e))
 }
 
+/// Shared field helper: trim and require non-empty (composer / TrustSet / Offer fields).
+#[allow(dead_code)] // used by A0 builders; composer wiring in 05–07
+pub(crate) fn require_nonempty_field<'a>(
+    label: &str,
+    value: &'a str,
+) -> color_eyre::Result<&'a str> {
+    let t = value.trim();
+    if t.is_empty() {
+        color_eyre::eyre::bail!("{label}: required");
+    }
+    Ok(t)
+}
+
+/// Shared field helper: classic address shape (`r…`, length band) — not full checksum.
+#[allow(dead_code)] // used by A0 builders; composer wiring in 05–07
+pub(crate) fn require_classic_address_shape<'a>(
+    label: &str,
+    value: &'a str,
+) -> color_eyre::Result<&'a str> {
+    let t = require_nonempty_field(label, value)?;
+    if !t.starts_with('r') || t.len() < 25 || t.len() > 35 {
+        color_eyre::eyre::bail!("{label}: expected classic address (r…)");
+    }
+    Ok(t)
+}
+
 enum OfferAmountSpec<'a> {
     Xrp(&'a str),
     Iou {
@@ -463,7 +515,6 @@ fn parse_offer_amount_spec(spec: &str) -> color_eyre::Result<OfferAmountSpec<'_>
 /// Build an `Amount` from a compact spec string.
 /// `"XRP:100000000"` → XRP amount in drops.
 /// `"USD:rIssuer:100.5"` → issued currency amount.
-#[allow(dead_code)]
 fn parse_offer_amount(spec: &str) -> color_eyre::Result<xrpl::models::Amount<'static>> {
     use xrpl::models::{Amount, IssuedCurrencyAmount, XRPAmount};
 
@@ -500,6 +551,33 @@ pub(crate) fn offer_spec_to_json_value(spec: &str) -> color_eyre::Result<serde_j
             "value": value
         })),
     }
+}
+
+/// Unsigned OfferCreate JSON for `simulate`.
+/// `taker_gets` / `taker_pays` use compact specs: `XRP:drops` or `CUR:issuer:value`.
+#[allow(dead_code)] // wired in ticket 06 poll/UI
+pub fn build_offer_create_tx_json_for_simulate(
+    account: &str,
+    taker_gets_spec: &str,
+    taker_pays_spec: &str,
+    sequence: u32,
+) -> color_eyre::Result<Value> {
+    use xrpl::models::transactions::offer_create::OfferCreate;
+    use xrpl::models::transactions::{CommonFields, TransactionType};
+
+    let taker_gets = parse_offer_amount(taker_gets_spec)?;
+    let taker_pays = parse_offer_amount(taker_pays_spec)?;
+
+    let tx = OfferCreate {
+        common_fields: CommonFields::from_account(account.to_string())
+            .with_transaction_type(TransactionType::OfferCreate)
+            .with_sequence(sequence),
+        taker_gets,
+        taker_pays,
+        ..Default::default()
+    };
+
+    serde_json::to_value(&tx).map_err(|e| color_eyre::eyre::eyre!("offer_create tx_json: {e}"))
 }
 
 /// Create and sign an `OfferCreate` transaction, returning the tx_blob hex.
@@ -541,6 +619,38 @@ pub fn create_and_sign_offer_create(
     sign(&mut tx, &wallet, false).map_err(|e| color_eyre::eyre::eyre!("sign error: {:?}", e))?;
 
     encode(&tx).map_err(|e| color_eyre::eyre::eyre!("encode error: {:?}", e))
+}
+
+/// Unsigned TrustSet JSON for `simulate` (v1: Limit + Currency + Issuer only).
+#[allow(dead_code)] // wired in ticket 07 poll/UI
+pub fn build_trust_set_tx_json_for_simulate(
+    account: &str,
+    currency: &str,
+    issuer: &str,
+    limit: &str,
+    sequence: u32,
+) -> color_eyre::Result<Value> {
+    use xrpl::models::IssuedCurrencyAmount;
+    use xrpl::models::transactions::trust_set::TrustSet;
+    use xrpl::models::transactions::{CommonFields, TransactionType};
+
+    let currency = require_nonempty_field("currency", currency)?;
+    let issuer = require_classic_address_shape("issuer", issuer)?;
+    let limit = require_nonempty_field("limit", limit)?;
+
+    let tx = TrustSet {
+        common_fields: CommonFields::from_account(account.to_string())
+            .with_transaction_type(TransactionType::TrustSet)
+            .with_sequence(sequence),
+        limit_amount: IssuedCurrencyAmount {
+            currency: currency.to_string().into(),
+            issuer: issuer.to_string().into(),
+            value: limit.to_string().into(),
+        },
+        ..Default::default()
+    };
+
+    serde_json::to_value(&tx).map_err(|e| color_eyre::eyre::eyre!("trust_set tx_json: {e}"))
 }
 
 /// Lowercase ASCII domain → hex string for `AccountSet.domain`.
@@ -797,6 +907,98 @@ mod tests {
         let wallet = wallet_from_family_seed(seed, 0).expect("wallet");
         // Known classic address for this fixture seed (not a Wallet::new mirror).
         assert_eq!(wallet.classic_address, "rJrRMgiRgrU6hDF4pgu5DXQdWyPbY35ErN");
+    }
+
+    #[test]
+    fn build_set_regular_key_tx_json_for_simulate_sets_key() {
+        let v = build_set_regular_key_tx_json_for_simulate(
+            "rSenderxxxxxxxxxxxxxxxxxxxxxxxXX",
+            Some("rRegularxxxxxxxxxxxxxxxxxxxxxxxXX"),
+            11,
+        )
+        .expect("set regular key json");
+        assert_eq!(v["TransactionType"], "SetRegularKey");
+        assert_eq!(v["Sequence"], 11);
+        assert_eq!(v["Account"], "rSenderxxxxxxxxxxxxxxxxxxxxxxxXX");
+        assert_eq!(v["RegularKey"], "rRegularxxxxxxxxxxxxxxxxxxxxxxxXX");
+    }
+
+    #[test]
+    fn build_set_regular_key_tx_json_for_simulate_clear_omits_regular_key() {
+        let v =
+            build_set_regular_key_tx_json_for_simulate("rSenderxxxxxxxxxxxxxxxxxxxxxxxXX", None, 2)
+                .expect("clear regular key");
+        assert_eq!(v["TransactionType"], "SetRegularKey");
+        assert!(v.get("RegularKey").is_none() || v["RegularKey"].is_null());
+    }
+
+    #[test]
+    fn build_set_regular_key_rejects_bad_regular_key_shape() {
+        let err = build_set_regular_key_tx_json_for_simulate(
+            "rSenderxxxxxxxxxxxxxxxxxxxxxxxXX",
+            Some("not-an-address"),
+            1,
+        )
+        .expect_err("bad key");
+        assert!(format!("{err}").contains("classic address"));
+    }
+
+    #[test]
+    fn build_offer_create_tx_json_for_simulate_xrp_iou() {
+        let v = build_offer_create_tx_json_for_simulate(
+            "rSenderxxxxxxxxxxxxxxxxxxxxxxxXX",
+            "XRP:1000000",
+            "USD:rIssuerxxxxxxxxxxxxxxxxxxxxxxxXX:10",
+            5,
+        )
+        .expect("offer create json");
+        assert_eq!(v["TransactionType"], "OfferCreate");
+        assert_eq!(v["Sequence"], 5);
+        assert_eq!(v["TakerGets"], "1000000");
+        assert_eq!(v["TakerPays"]["currency"], "USD");
+        assert_eq!(v["TakerPays"]["issuer"], "rIssuerxxxxxxxxxxxxxxxxxxxxxxxXX");
+        assert_eq!(v["TakerPays"]["value"], "10");
+    }
+
+    #[test]
+    fn build_trust_set_tx_json_for_simulate_limit_only() {
+        let v = build_trust_set_tx_json_for_simulate(
+            "rSenderxxxxxxxxxxxxxxxxxxxxxxxXX",
+            "USD",
+            "rIssuerxxxxxxxxxxxxxxxxxxxxxxxXX",
+            "1000",
+            8,
+        )
+        .expect("trust set json");
+        assert_eq!(v["TransactionType"], "TrustSet");
+        assert_eq!(v["Sequence"], 8);
+        assert_eq!(v["LimitAmount"]["currency"], "USD");
+        assert_eq!(
+            v["LimitAmount"]["issuer"],
+            "rIssuerxxxxxxxxxxxxxxxxxxxxxxxXX"
+        );
+        assert_eq!(v["LimitAmount"]["value"], "1000");
+        assert!(v.get("Flags").is_none() || v["Flags"] == 0);
+    }
+
+    #[test]
+    fn build_trust_set_rejects_empty_currency() {
+        let err = build_trust_set_tx_json_for_simulate(
+            "rSenderxxxxxxxxxxxxxxxxxxxxxxxXX",
+            "  ",
+            "rIssuerxxxxxxxxxxxxxxxxxxxxxxxXX",
+            "1",
+            1,
+        )
+        .expect_err("empty currency");
+        assert!(format!("{err}").contains("currency"));
+    }
+
+    #[test]
+    fn require_classic_address_shape_accepts_r_prefix() {
+        let a = require_classic_address_shape("acct", "rN7n7otQDd6FczFgLdSqtcsAUxDkw6fzRH")
+            .expect("ok");
+        assert!(a.starts_with('r'));
     }
 
     /// TC-049

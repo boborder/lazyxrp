@@ -1004,6 +1004,9 @@ async fn drive_poll_loop(
                             }
                         }
                     }
+                    // SetRegularKey / OfferCreate / EscrowCreate / TrustSet: wire via
+                    // `.scratch/v024-next/assets/04-poll-handler-template.md` (tickets 05–07).
+                    // Do not silently drop new submit commands here.
                     _ => {}
                 }
             }
