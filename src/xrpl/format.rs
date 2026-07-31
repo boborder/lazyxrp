@@ -3,8 +3,7 @@
 use serde_json::Value;
 
 use super::types::{
-    ArcValue, PathAlternative, PathFindRow, PathFindSnapshot, RipplePathFindResult,
-    asset_display_name,
+    ArcValue, PathFindRow, PathFindSnapshot, RipplePathFindResult, asset_display_name,
 };
 
 /// Ripple epoch seconds (2000-01-01 UTC) → `YYYY-MM-DD HH:MM UTC`.
@@ -255,6 +254,7 @@ pub fn format_amount(value: Option<&Value>) -> String {
 
 #[cfg(test)]
 mod tests {
+    use super::super::types::PathAlternative;
     use super::*;
     use serde_json::json;
 
