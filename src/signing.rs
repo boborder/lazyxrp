@@ -356,7 +356,6 @@ pub fn create_unsigned_payment_json(
 
 /// Unsigned SetRegularKey JSON for `simulate`.
 /// Pass `regular_key` as `None` (or empty) to clear the existing regular key.
-#[allow(dead_code)] // wired in ticket 05 poll/UI
 pub fn build_set_regular_key_tx_json_for_simulate(
     account: &str,
     regular_key: Option<&str>,
@@ -383,7 +382,6 @@ pub fn build_set_regular_key_tx_json_for_simulate(
 /// Create, sign, and encode a SetRegularKey transaction as a submit-ready blob.
 ///
 /// Pass `regular_key` as `None` to clear (remove) the existing regular key.
-#[allow(dead_code)]
 pub fn create_and_sign_set_regular_key(
     seed: &SecretString,
     account: &str,
@@ -460,7 +458,6 @@ pub fn create_and_sign_escrow_create(
 }
 
 /// Shared field helper: trim and require non-empty (composer / TrustSet / Offer fields).
-#[allow(dead_code)] // used by A0 builders; composer wiring in 05–07
 pub(crate) fn require_nonempty_field<'a>(
     label: &str,
     value: &'a str,
@@ -473,7 +470,6 @@ pub(crate) fn require_nonempty_field<'a>(
 }
 
 /// Shared field helper: classic address shape (`r…`, length band) — not full checksum.
-#[allow(dead_code)] // used by A0 builders; composer wiring in 05–07
 pub(crate) fn require_classic_address_shape<'a>(
     label: &str,
     value: &'a str,

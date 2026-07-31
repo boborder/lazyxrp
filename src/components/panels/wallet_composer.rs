@@ -11,7 +11,7 @@ use super::{ComposerPhase, SubmitFlash, WalletPanel};
 use crate::{
     action::Action,
     components::shared::theme,
-    xrpl::{AccountSetSubmitParams, PaymentSubmitParams},
+    xrpl::{AccountSetSubmitParams, PaymentSubmitParams, SetRegularKeySubmitParams},
 };
 
 impl WalletPanel {
@@ -42,6 +42,25 @@ impl WalletPanel {
             is_iou: false,
         });
         self.is_form_editing = false;
+    }
+
+    pub(super) fn open_set_regular_key_composer(&mut self) {
+        self.composer = Some(ComposerPhase::SetRegularKey {
+            regular_key: String::new(),
+        });
+        self.is_form_editing = false;
+    }
+
+    pub(super) fn queue_submit_set_regular_key(&self) -> Action {
+        let regular_key = match &self.composer {
+            Some(ComposerPhase::SetRegularKey { regular_key }) => regular_key.clone(),
+            _ => String::new(),
+        };
+        Action::SetRegularKeySubmit(SetRegularKeySubmitParams {
+            regular_key,
+            skip_mainnet_prompt: self.skip_mainnet_prompt,
+            config_seed: self.config_seed(),
+        })
     }
 
     pub(super) fn queue_submit_account_set(&mut self) -> Option<Action> {
@@ -259,7 +278,7 @@ impl WalletPanel {
 
         let popup_w = area.width.clamp(54, 74);
         let popup_h = match phase {
-            ComposerPhase::PickKind { .. } => 12u16,
+            ComposerPhase::PickKind { .. } => 14u16,
             ComposerPhase::AccountSet => 21u16,
             ComposerPhase::Payment { is_iou, .. } => {
                 if *is_iou {
@@ -268,6 +287,7 @@ impl WalletPanel {
                     16u16
                 }
             }
+            ComposerPhase::SetRegularKey { .. } => 14u16,
         }
         .min(area.height.saturating_sub(2))
         .max(8);
@@ -287,6 +307,7 @@ impl WalletPanel {
                     "Payment (XRP)"
                 }
             }
+            ComposerPhase::SetRegularKey { .. } => "SetRegularKey",
         };
         let block = theme::panel_block(inner_title, true);
         let inner = block.inner(popup);
@@ -308,6 +329,11 @@ impl WalletPanel {
                 } else {
                     label_style
                 };
+                let hi2 = if *selected == 2 {
+                    highlight_style
+                } else {
+                    label_style
+                };
                 Paragraph::new(vec![
                     Line::from(""),
                     Line::from(vec![
@@ -320,6 +346,13 @@ impl WalletPanel {
                     Line::from(vec![
                         Span::raw(if *selected == 1 { "⟩ " } else { "  " }),
                         Span::styled("Payment — XRP to classic `r…` or X-address", hi1),
+                    ]),
+                    Line::from(vec![
+                        Span::raw(if *selected == 2 { "⟩ " } else { "  " }),
+                        Span::styled(
+                            "SetRegularKey — assign or CLEAR regular key (dangerous)",
+                            hi2,
+                        ),
                     ]),
                     Line::from(""),
                     Line::from(Span::styled(
@@ -478,6 +511,34 @@ impl WalletPanel {
                     theme::secondary_style(),
                 )));
                 Paragraph::new(lines)
+            }
+            ComposerPhase::SetRegularKey { regular_key } => {
+                let net_note = if self.network.is_mainnet() && !self.skip_mainnet_prompt {
+                    " · mainnet writes need --yes"
+                } else {
+                    ""
+                };
+                let key_disp = if regular_key.is_empty() {
+                    "(empty = CLEAR regular key)"
+                } else {
+                    regular_key.as_str()
+                };
+                Paragraph::new(vec![
+                    Line::from(Span::styled(
+                        format!("WARNING: empty field CLEARS the regular key{net_note}"),
+                        theme::error_style(),
+                    )),
+                    Line::from(""),
+                    Line::from(vec![
+                        Span::styled("RegularKey ", label_style),
+                        Span::styled(key_disp, value_style),
+                    ]),
+                    Line::from(""),
+                    Line::from(Span::styled(
+                        "e edit · Ctrl+S / S submit · Esc back",
+                        theme::secondary_style(),
+                    )),
+                ])
             }
         };
         frame.render_widget(body, inner);

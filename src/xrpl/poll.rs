@@ -17,7 +17,7 @@ use super::client::{
 };
 use super::types::{
     AccountSetSubmitParams, BookPair, OracleId, PaymentSubmitParams, PollCommand, PollContext,
-    SimulateResult,
+    SetRegularKeySubmitParams, SimulateResult,
 };
 use serde_json::Value;
 
@@ -589,6 +589,100 @@ async fn submit_account_set_transaction(
     .await;
 }
 
+async fn submit_set_regular_key_transaction(
+    rpc: &RpcClient,
+    network: &Network,
+    params: SetRegularKeySubmitParams,
+    action_tx: &UnboundedSender<Action>,
+) {
+    let submit_err = Action::SetRegularKeySubmitErr;
+    let regular_key_trim = params.regular_key.trim();
+    let regular_key = if regular_key_trim.is_empty() {
+        None
+    } else {
+        match signing::require_classic_address_shape("regular_key", regular_key_trim) {
+            Ok(k) => Some(k.to_string()),
+            Err(e) => {
+                send_action(action_tx, submit_err(format!("{e}")));
+                return;
+            }
+        }
+    };
+
+    let Some((seed, wallet)) = resolve_submit_wallet(
+        network,
+        params.skip_mainnet_prompt,
+        params.config_seed.clone(),
+        "mainnet: restart lazyxrp with --yes to allow SetRegularKey writes",
+        submit_err,
+        action_tx,
+    ) else {
+        return;
+    };
+    let account = wallet.classic_address.clone();
+    if let Some(ref key) = regular_key
+        && key == &account
+    {
+        send_action(
+            action_tx,
+            submit_err("regular_key must not match the account master address".into()),
+        );
+        return;
+    }
+
+    let Some(account_info) =
+        fetch_account_summary_for_submit(rpc, &account, submit_err, action_tx).await
+    else {
+        return;
+    };
+
+    let tx_json = match signing::build_set_regular_key_tx_json_for_simulate(
+        &account,
+        regular_key.as_deref(),
+        account_info.sequence,
+    ) {
+        Ok(j) => j,
+        Err(e) => {
+            send_action(action_tx, submit_err(format!("tx_json: {e}")));
+            return;
+        }
+    };
+
+    let sim = match simulate_tx_requiring_tes_success(rpc, tx_json).await {
+        Ok(s) => s,
+        Err(e) => {
+            send_action(action_tx, submit_err(e));
+            return;
+        }
+    };
+
+    finalize_simulate_sign_submit(
+        rpc,
+        action_tx,
+        sim,
+        |sequence, fee_drops, last_ledger_sequence| {
+            signing::create_and_sign_set_regular_key(
+                &seed,
+                &account,
+                regular_key.as_deref(),
+                sequence,
+                fee_drops,
+                last_ledger_sequence,
+                network,
+            )
+        },
+        submit_err,
+        |hash| {
+            vec![
+                Action::SetRegularKeySubmitOk(hash),
+                Action::RefreshAccount,
+                Action::RefreshTxHistory,
+            ]
+        },
+    )
+    .await;
+}
+
 async fn submit_payment_transaction(
     rpc: &RpcClient,
     network: &Network,
@@ -988,6 +1082,11 @@ async fn drive_poll_loop(
                         let network = *network_watch.borrow();
                         submit_payment_transaction(&rpc, &network, params, &action_tx).await;
                     }
+                    PollCommand::SetRegularKeySubmit(params) => {
+                        let network = *network_watch.borrow();
+                        submit_set_regular_key_transaction(&rpc, &network, params, &action_tx)
+                            .await;
+                    }
                     PollCommand::WalletPropose(key_type) => {
                         match crate::signing::propose_wallet_local(&key_type) {
                             Ok(result) => {
@@ -1004,8 +1103,8 @@ async fn drive_poll_loop(
                             }
                         }
                     }
-                    // SetRegularKey / OfferCreate / EscrowCreate / TrustSet: wire via
-                    // `.scratch/v024-next/assets/04-poll-handler-template.md` (tickets 05–07).
+                    // OfferCreate / EscrowCreate / TrustSet: wire via
+                    // `.scratch/v024-next/assets/04-poll-handler-template.md` (tickets 06–07).
                     // Do not silently drop new submit commands here.
                     _ => {}
                 }
@@ -1025,7 +1124,7 @@ mod tests {
     use crate::network::Network;
     use crate::signing::SEED_ENV;
     use crate::xrpl::client::RpcClient;
-    use crate::xrpl::types::PaymentSubmitParams;
+    use crate::xrpl::types::{PaymentSubmitParams, SetRegularKeySubmitParams};
 
     /// TC-087: poll trigger burst drain
     #[test]
@@ -1156,6 +1255,59 @@ mod tests {
                 );
             }
             other => panic!("expected PaymentSubmitErr after guard skip, got {other:?}"),
+        }
+    }
+
+    /// TC-088 style: mainnet SetRegularKey without `--yes` is rejected before RPC/signing
+    #[tokio::test]
+    async fn set_regular_key_submit_mainnet_without_yes_is_rejected() {
+        let (action_tx, mut action_rx) = mpsc::unbounded_channel();
+        let rpc = RpcClient::connect("http://127.0.0.1:1").expect("rpc client");
+        let params = SetRegularKeySubmitParams {
+            regular_key: "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh".into(),
+            skip_mainnet_prompt: false,
+            config_seed: None,
+        };
+        submit_set_regular_key_transaction(&rpc, &Network::Mainnet, params, &action_tx).await;
+        let action = action_rx.recv().await.expect("action");
+        match action {
+            Action::SetRegularKeySubmitErr(msg) => {
+                assert!(msg.contains("mainnet"));
+                assert!(msg.contains("--yes"));
+            }
+            other => panic!("expected SetRegularKeySubmitErr, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn set_regular_key_submit_mainnet_with_yes_skips_mainnet_guard() {
+        let _env = {
+            let _g = env_lock();
+            let env = TestEnvGuard::new(&[SEED_ENV]);
+            env.remove(SEED_ENV);
+            env
+        };
+        let (action_tx, mut action_rx) = mpsc::unbounded_channel();
+        let rpc = RpcClient::connect("http://127.0.0.1:1").expect("rpc client");
+        let params = SetRegularKeySubmitParams {
+            regular_key: String::new(), // clear
+            skip_mainnet_prompt: true,
+            config_seed: None,
+        };
+        submit_set_regular_key_transaction(&rpc, &Network::Mainnet, params, &action_tx).await;
+        let action = action_rx.recv().await.expect("action");
+        match action {
+            Action::SetRegularKeySubmitErr(msg) => {
+                assert!(
+                    !msg.contains("restart lazyxrp with --yes"),
+                    "mainnet guard should be skipped when --yes is set: {msg}"
+                );
+                assert!(
+                    msg.contains("no signing seed"),
+                    "expected seed error after guard skip, got: {msg}"
+                );
+            }
+            other => panic!("expected SetRegularKeySubmitErr after guard skip, got {other:?}"),
         }
     }
 
