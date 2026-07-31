@@ -21,7 +21,7 @@ pub fn start_ws_task(
     poll_trigger_tx: UnboundedSender<()>,
     cancel: CancellationToken,
 ) -> tokio::task::JoinHandle<()> {
-    tokio::spawn(run_ws_loop(
+    tokio::spawn(drive_ws_reconnect_loop(
         ws_url,
         watch_address,
         action_tx,
@@ -30,7 +30,7 @@ pub fn start_ws_task(
     ))
 }
 
-async fn run_ws_loop(
+async fn drive_ws_reconnect_loop(
     ws_url: String,
     watch_address: Option<String>,
     action_tx: UnboundedSender<Action>,

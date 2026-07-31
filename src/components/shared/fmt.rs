@@ -88,11 +88,11 @@ pub fn truncate_middle(s: &str, max_chars: usize) -> String {
 }
 
 /// Middle-ellipsis for long hex strings (e.g. validator pubkeys).
-pub fn short_hex(s: &str, head: usize, tail: usize) -> String {
-    if s.len() <= head + tail + 1 {
-        return s.to_string();
+pub fn short_hex(hex: &str, head: usize, tail: usize) -> String {
+    if hex.len() <= head + tail + 1 {
+        return hex.to_string();
     }
-    format!("{}…{}", &s[..head], &s[s.len() - tail..])
+    format!("{}…{}", &hex[..head], &hex[hex.len() - tail..])
 }
 
 #[cfg(unix)]

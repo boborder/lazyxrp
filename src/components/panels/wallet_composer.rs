@@ -225,15 +225,15 @@ impl WalletPanel {
         labels
     }
 
-    pub(super) fn shorten_display(s: &str, max: usize) -> String {
-        let t = s.trim();
-        if t.len() <= max {
-            return t.to_string();
+    pub(super) fn shorten_display(text: &str, max: usize) -> String {
+        let trimmed = text.trim();
+        if trimmed.len() <= max {
+            return trimmed.to_string();
         }
         let keep = max.saturating_sub(1).max(8);
         let head = keep * 2 / 3;
         let tail = keep - head;
-        format!("{}…{}", &t[..head], &t[t.len() - tail..])
+        format!("{}…{}", &trimmed[..head], &trimmed[trimmed.len() - tail..])
     }
 
     /// Decode `AccountRoot.domain` hex → ASCII string, or None if invalid.

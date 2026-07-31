@@ -15,7 +15,7 @@ fn backup_candidate(binary: &Path) -> Option<PathBuf> {
 }
 
 /// Paths match `./install.sh --uninstall-help` (effective config/data dirs from `Config`).
-pub(crate) fn run_self_uninstall(config: &Config, assume_yes: bool) -> color_eyre::Result<()> {
+pub(crate) fn perform_self_uninstall(config: &Config, assume_yes: bool) -> color_eyre::Result<()> {
     let exe = std::env::current_exe()?;
     let backup = backup_candidate(&exe);
     let resolved_cfg = config.resolved_config_dir();

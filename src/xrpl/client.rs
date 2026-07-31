@@ -1257,9 +1257,9 @@ pub fn summarize_paths_computed(paths_computed: &Value) -> String {
     }
     let mut parts = Vec::with_capacity(first_path.len());
     for step in first_path {
-        let label = path_step_label(step);
-        if parts.last() != Some(&label) {
-            parts.push(label);
+        let step_label = path_step_label(step);
+        if parts.last() != Some(&step_label) {
+            parts.push(step_label);
         }
     }
     if parts.is_empty() {
@@ -1280,11 +1280,11 @@ fn path_step_label(step: &Value) -> String {
     if currency.eq_ignore_ascii_case("XRP") {
         return "XRP".into();
     }
-    let label = asset_display_name(currency);
+    let asset_label = asset_display_name(currency);
     if let Some(issuer) = step.get("issuer").and_then(Value::as_str) {
-        format!("{label}@{}", shorten_r_address(issuer))
+        format!("{asset_label}@{}", shorten_r_address(issuer))
     } else {
-        label
+        asset_label
     }
 }
 

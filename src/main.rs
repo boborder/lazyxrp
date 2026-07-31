@@ -55,7 +55,7 @@ async fn main() -> color_eyre::Result<()> {
             color_eyre::eyre::bail!("`--self-uninstall` cannot be combined with a subcommand");
         }
         let config = Config::new()?;
-        return uninstall::run_self_uninstall(&config, args.yes);
+        return uninstall::perform_self_uninstall(&config, args.yes);
     }
 
     let mut config = Config::new()?;

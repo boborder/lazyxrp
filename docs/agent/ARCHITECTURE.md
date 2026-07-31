@@ -49,8 +49,8 @@ main.rs
 | Channel | Type | Producer(s) | Consumer(s) |
 |---------|------|-------------|-------------|
 | `action_tx/rx` | `UnboundedSender<Action>` | Tui events, WS task, poll task, components | `App::drain_and_dispatch_actions()` |
-| `poll_tx/rx` | `UnboundedSender<PollCommand>` | `App` (on user action), WS task (on ledger close) | `run_poll_loop()` |
-| `poll_trigger_tx/rx` | `UnboundedSender<()>` | WS task (on ledger close) | `run_poll_loop()` (triggers immediate poll) |
+| `poll_tx/rx` | `UnboundedSender<PollCommand>` | `App` (on user action), WS task (on ledger close) | `drive_poll_loop()` |
+| `poll_trigger_tx/rx` | `UnboundedSender<()>` | WS task (on ledger close) | `drive_poll_loop()` (triggers immediate poll) |
 | `net_tx` | `watch::Sender<Network>` | `App::drain_and_dispatch_actions()` (`Action::NetworkChange`) | PollContext (cloned for poll task) |
 | `cancel` | `CancellationToken` | `App::run()` (on quit) | WS task, poll task |
 

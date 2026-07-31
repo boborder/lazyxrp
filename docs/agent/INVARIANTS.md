@@ -31,7 +31,7 @@
 
 ### I-6: Poll interval minimum
 **Rule**: Periodic poll must not fire faster than `MIN_POLL_INTERVAL` (10s).
-**Enforcement**: `poll.rs` — `run_poll_loop()` uses `tokio::time::interval(ctx.poll_interval).max(MIN_POLL_INTERVAL)`.
+**Enforcement**: `poll.rs` — `drive_poll_loop()` uses `tokio::time::interval(ctx.poll_interval).max(MIN_POLL_INTERVAL)`.
 **Confidence**: high.
 
 ### I-7: Not-found is not an error
@@ -68,7 +68,7 @@
 | I-3 | `poll.rs` submit functions | Sequential simulate→sign→submit |
 | I-4 | `main.rs` + `signing.rs` | Startup ordering |
 | I-5 | `main.rs` resolve_* functions | Precedence chain |
-| I-6 | `poll.rs:run_poll_loop()` | `.max(MIN_POLL_INTERVAL)` |
+| I-6 | `poll.rs:drive_poll_loop()` | `.max(MIN_POLL_INTERVAL)` |
 | I-7 | `poll.rs:poll_batch()` | `is_not_found_error()` guard |
 | I-8 | `tui.rs:Drop` | Error-caught exit |
 | I-9 | `app.rs` | `debug_assert_eq!` + unit test (currently 4) |

@@ -28,7 +28,7 @@ pub fn start_poll_task(
     action_tx: UnboundedSender<Action>,
     cancel: CancellationToken,
 ) -> tokio::task::JoinHandle<()> {
-    tokio::spawn(run_poll_loop(
+    tokio::spawn(drive_poll_loop(
         ctx,
         refresh_rx,
         poll_trigger_rx,
@@ -102,28 +102,28 @@ fn resolve_submit_wallet<E>(
     skip_mainnet_prompt: bool,
     config_seed: Option<String>,
     mainnet_err: &str,
-    err: E,
+    submit_err: E,
     action_tx: &UnboundedSender<Action>,
 ) -> Option<(secrecy::SecretString, xrpl::wallet::Wallet)>
 where
     E: Fn(String) -> Action,
 {
     if mainnet_write_guard_blocks(network, skip_mainnet_prompt) {
-        send_action(action_tx, err(mainnet_err.into()));
+        send_action(action_tx, submit_err(mainnet_err.into()));
         return None;
     }
     let signing_config = SigningConfig::prime_seed_source(config_seed);
     let Some(seed) = signing_config.seed else {
         send_action(
             action_tx,
-            err("no signing seed — set XRPL_SEED or config [xrpl.signing] seed".into()),
+            submit_err("no signing seed — set XRPL_SEED or config [xrpl.signing] seed".into()),
         );
         return None;
     };
     match signing::wallet_from_family_seed(seed.expose_secret(), 0) {
         Ok(wallet) => Some((seed, wallet)),
         Err(e) => {
-            send_action(action_tx, err(format!("wallet: {e:?}")));
+            send_action(action_tx, submit_err(format!("wallet: {e:?}")));
             None
         }
     }
@@ -138,7 +138,7 @@ fn send_action(action_tx: &UnboundedSender<Action>, action: Action) {
 async fn fetch_account_summary_for_submit<E>(
     rpc: &RpcClient,
     account: &str,
-    err: E,
+    submit_err: E,
     action_tx: &UnboundedSender<Action>,
 ) -> Option<crate::xrpl::types::AccountSummary>
 where
@@ -147,11 +147,11 @@ where
     match tokio::time::timeout(RPC_TIMEOUT, rpc.account_info(account)).await {
         Ok(Ok(summary)) => Some(summary),
         Ok(Err(e)) => {
-            send_action(action_tx, err(format!("account_info: {e}")));
+            send_action(action_tx, submit_err(format!("account_info: {e}")));
             None
         }
         Err(_) => {
-            send_action(action_tx, err("account_info: timeout".into()));
+            send_action(action_tx, submit_err("account_info: timeout".into()));
             None
         }
     }
@@ -162,7 +162,7 @@ async fn finalize_simulate_sign_submit<E, FO, FS>(
     action_tx: &UnboundedSender<Action>,
     sim: SimulateResult,
     sign_blob: FS,
-    err: E,
+    submit_err: E,
     on_ok: FO,
 ) where
     E: Fn(String) -> Action,
@@ -173,7 +173,7 @@ async fn finalize_simulate_sign_submit<E, FO, FS>(
         match signing::sequence_fee_ledger_from_simulate(&sim.tx_json) {
             Ok(v) => v,
             Err(e) => {
-                send_action(action_tx, err(format!("{e}")));
+                send_action(action_tx, submit_err(format!("{e}")));
                 return;
             }
         };
@@ -181,7 +181,7 @@ async fn finalize_simulate_sign_submit<E, FO, FS>(
     let blob = match sign_blob(sequence, fee_drops, last_ledger_sequence) {
         Ok(b) => b,
         Err(e) => {
-            send_action(action_tx, err(format!("sign: {e}")));
+            send_action(action_tx, submit_err(format!("sign: {e}")));
             return;
         }
     };
@@ -192,8 +192,8 @@ async fn finalize_simulate_sign_submit<E, FO, FS>(
                 send_action(action_tx, action);
             }
         }
-        Ok(Err(e)) => send_action(action_tx, err(format!("submit: {e}"))),
-        Err(_) => send_action(action_tx, err("submit: timeout".into())),
+        Ok(Err(e)) => send_action(action_tx, submit_err(format!("submit: {e}"))),
+        Err(_) => send_action(action_tx, submit_err("submit: timeout".into())),
     }
 }
 
@@ -466,11 +466,11 @@ async fn submit_account_set_transaction(
     params: AccountSetSubmitParams,
     action_tx: &UnboundedSender<Action>,
 ) {
-    let err = Action::AccountSetSubmitErr;
+    let submit_err = Action::AccountSetSubmitErr;
     if !account_set_params_nonempty(&params) {
         send_action(
             action_tx,
-            err(
+            submit_err(
                 "nothing to change — pick a flag and/or fill domain, tick size, transfer rate"
                     .into(),
             ),
@@ -482,7 +482,7 @@ async fn submit_account_set_transaction(
         params.skip_mainnet_prompt,
         params.config_seed.clone(),
         "mainnet: restart lazyxrp with --yes to allow AccountSet writes",
-        err,
+        submit_err,
         action_tx,
     ) else {
         return;
@@ -497,7 +497,7 @@ async fn submit_account_set_transaction(
             Err(_) => {
                 send_action(
                     action_tx,
-                    err("tick size: invalid number (use 0 or 3–15)".into()),
+                    submit_err("tick size: invalid number (use 0 or 3–15)".into()),
                 );
                 return;
             }
@@ -510,7 +510,10 @@ async fn submit_account_set_transaction(
         match params.transfer_rate.trim().parse::<u32>() {
             Ok(n) => Some(n),
             Err(_) => {
-                send_action(action_tx, err("transfer rate: invalid number".into()));
+                send_action(
+                    action_tx,
+                    submit_err("transfer rate: invalid number".into()),
+                );
                 return;
             }
         }
@@ -526,7 +529,8 @@ async fn submit_account_set_transaction(
     let set_flag = signing::parse_account_set_flag_choice(params.set_flag.as_deref());
     let clear_flag = signing::parse_account_set_flag_choice(params.clear_flag.as_deref());
 
-    let Some(account_info) = fetch_account_summary_for_submit(rpc, &account, err, action_tx).await
+    let Some(account_info) =
+        fetch_account_summary_for_submit(rpc, &account, submit_err, action_tx).await
     else {
         return;
     };
@@ -542,7 +546,7 @@ async fn submit_account_set_transaction(
     ) {
         Ok(j) => j,
         Err(e) => {
-            send_action(action_tx, err(format!("tx_json: {e}")));
+            send_action(action_tx, submit_err(format!("tx_json: {e}")));
             return;
         }
     };
@@ -550,7 +554,7 @@ async fn submit_account_set_transaction(
     let sim = match simulate_tx_requiring_tes_success(rpc, tx_json).await {
         Ok(s) => s,
         Err(e) => {
-            send_action(action_tx, err(e));
+            send_action(action_tx, submit_err(e));
             return;
         }
     };
@@ -573,7 +577,7 @@ async fn submit_account_set_transaction(
                 transfer_rate,
             )
         },
-        err,
+        submit_err,
         |hash| {
             vec![
                 Action::AccountSetSubmitOk(hash),
@@ -591,11 +595,11 @@ async fn submit_payment_transaction(
     params: PaymentSubmitParams,
     action_tx: &UnboundedSender<Action>,
 ) {
-    let err = Action::PaymentSubmitErr;
+    let submit_err = Action::PaymentSubmitErr;
     if params.amount.trim().is_empty() {
         send_action(
             action_tx,
-            err("amount is empty — enter an amount to send".into()),
+            submit_err("amount is empty — enter an amount to send".into()),
         );
         return;
     }
@@ -603,11 +607,14 @@ async fn submit_payment_transaction(
     // XRP payments debit `amount` drops; IOU payments only need XRP for the fee.
     let amount_drops = if is_iou {
         let Ok(v) = params.amount.trim().parse::<f64>() else {
-            send_action(action_tx, err("amount must be a number".into()));
+            send_action(action_tx, submit_err("amount must be a number".into()));
             return;
         };
         if v <= 0.0 {
-            send_action(action_tx, err("amount must be greater than zero".into()));
+            send_action(
+                action_tx,
+                submit_err("amount must be greater than zero".into()),
+            );
             return;
         }
         0
@@ -615,24 +622,27 @@ async fn submit_payment_transaction(
         match xrp_to_drops(params.amount.trim()) {
             Ok(d) => d,
             Err(e) => {
-                send_action(action_tx, err(format!("amount: {e}")));
+                send_action(action_tx, submit_err(format!("amount: {e}")));
                 return;
             }
         }
     };
     if !is_iou && amount_drops == 0 {
-        send_action(action_tx, err("amount must be greater than zero".into()));
+        send_action(
+            action_tx,
+            submit_err("amount must be greater than zero".into()),
+        );
         return;
     }
     let destination = match resolve_payment_destination(params.destination.trim()) {
         Ok(d) => d,
         Err(e) => {
-            send_action(action_tx, err(format!("{e}")));
+            send_action(action_tx, submit_err(format!("{e}")));
             return;
         }
     };
     if let Err(e) = ensure_xaddress_matches_network(&destination, network) {
-        send_action(action_tx, err(format!("{e}")));
+        send_action(action_tx, submit_err(format!("{e}")));
         return;
     }
     let destination_resolved = destination.classic;
@@ -642,18 +652,22 @@ async fn submit_payment_transaction(
         params.skip_mainnet_prompt,
         params.config_seed.clone(),
         "mainnet: restart lazyxrp with --yes to allow Payment writes",
-        err,
+        submit_err,
         action_tx,
     ) else {
         return;
     };
     let account = wallet.classic_address.clone();
     if account == destination_resolved {
-        send_action(action_tx, err("destination matches source account".into()));
+        send_action(
+            action_tx,
+            submit_err("destination matches source account".into()),
+        );
         return;
     }
 
-    let Some(account_info) = fetch_account_summary_for_submit(rpc, &account, err, action_tx).await
+    let Some(account_info) =
+        fetch_account_summary_for_submit(rpc, &account, submit_err, action_tx).await
     else {
         return;
     };
@@ -669,7 +683,7 @@ async fn submit_payment_transaction(
     ) {
         Ok(j) => j,
         Err(e) => {
-            send_action(action_tx, err(format!("tx_json: {e}")));
+            send_action(action_tx, submit_err(format!("tx_json: {e}")));
             return;
         }
     };
@@ -677,7 +691,7 @@ async fn submit_payment_transaction(
     let sim = match simulate_tx_requiring_tes_success(rpc, tx_json).await {
         Ok(s) => s,
         Err(e) => {
-            send_action(action_tx, err(e));
+            send_action(action_tx, submit_err(e));
             return;
         }
     };
@@ -685,7 +699,7 @@ async fn submit_payment_transaction(
     let fee_drops = match signing::sequence_fee_ledger_from_simulate(&sim.tx_json) {
         Ok((_, fee, _)) => fee,
         Err(e) => {
-            send_action(action_tx, err(format!("{e}")));
+            send_action(action_tx, submit_err(format!("{e}")));
             return;
         }
     };
@@ -695,7 +709,7 @@ async fn submit_payment_transaction(
     if balance_drops < total_need {
         send_action(
             action_tx,
-            err(if is_iou {
+            submit_err(if is_iou {
                 format!(
                     "insufficient XRP for fee: have {balance_drops} drops, need {fee_drops} fee"
                 )
@@ -727,7 +741,7 @@ async fn submit_payment_transaction(
                 network,
             )
         },
-        err,
+        submit_err,
         |hash| {
             vec![
                 Action::PaymentSubmitOk(hash),
@@ -766,7 +780,7 @@ fn dispatch_timed<T, F>(
     }
 }
 
-async fn run_scheduled_poll(
+async fn execute_scheduled_poll(
     rpc: &RpcClient,
     inputs: PollBatchInputs<'_>,
     seed_address: Option<&str>,
@@ -799,7 +813,7 @@ fn send_account_tx_action(action_tx: &UnboundedSender<Action>, action: Action) {
     }
 }
 
-async fn run_poll_loop(
+async fn drive_poll_loop(
     ctx: PollContext,
     mut refresh_rx: UnboundedReceiver<PollCommand>,
     mut poll_trigger_rx: UnboundedReceiver<()>,
@@ -840,7 +854,7 @@ async fn run_poll_loop(
                     continue;
                 }
                 last_poll = Some(
-                    run_scheduled_poll(
+                    execute_scheduled_poll(
                         &rpc,
                         PollBatchInputs {
                             rpc: &rpc,
@@ -869,7 +883,7 @@ async fn run_poll_loop(
                     continue;
                 }
                 last_poll = Some(
-                    run_scheduled_poll(
+                    execute_scheduled_poll(
                         &rpc,
                         PollBatchInputs {
                             rpc: &rpc,

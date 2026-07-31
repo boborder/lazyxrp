@@ -18,6 +18,39 @@ use crate::{
     xrpl::XrplRlusdPrice,
 };
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ConnectionState {
+    Online,
+    Offline,
+    Connecting,
+}
+
+impl ConnectionState {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Online => "ONLINE",
+            Self::Offline => "OFFLINE",
+            Self::Connecting => "CONNECTING",
+        }
+    }
+
+    fn icon(self) -> &'static str {
+        match self {
+            Self::Online => "●",
+            Self::Offline => "✖",
+            Self::Connecting => "○",
+        }
+    }
+
+    fn color(self) -> ratatui::style::Color {
+        match self {
+            Self::Online => theme::SUCCESS,
+            Self::Offline => theme::ERROR,
+            Self::Connecting => theme::WARNING,
+        }
+    }
+}
+
 pub struct StatusBar {
     account_short: String,
     network: Network,
@@ -98,13 +131,13 @@ impl StatusBar {
         }
     }
 
-    fn connection_state(&self) -> &'static str {
+    fn connection_state(&self) -> ConnectionState {
         if self.last_server_update.is_some() {
-            "ONLINE"
+            ConnectionState::Online
         } else if self.last_error.is_some() {
-            "OFFLINE"
+            ConnectionState::Offline
         } else {
-            "CONNECTING"
+            ConnectionState::Connecting
         }
     }
 }
@@ -170,24 +203,14 @@ impl Component for StatusBar {
 
     fn draw(&mut self, frame: &mut Frame, area: Rect) -> color_eyre::Result<()> {
         let state = self.connection_state();
-        let state_color = match state {
-            "ONLINE" => theme::SUCCESS,
-            "OFFLINE" => theme::ERROR,
-            _ => theme::WARNING,
-        };
         let state_style = Style::new()
-            .fg(state_color)
+            .fg(state.color())
             .add_modifier(Modifier::BOLD | Modifier::REVERSED);
         let label_style = theme::dim_style();
-        let state_icon = match state {
-            "ONLINE" => "●",
-            "OFFLINE" => "✖",
-            _ => "○",
-        };
         // Cache state display string
         let state_display = self
             .cached_state_display
-            .get_or_insert_with(|| format!(" {state_icon} {state} "));
+            .get_or_insert_with(|| format!(" {} {} ", state.icon(), state.label()));
         let mut spans = vec![
             Span::styled(state_display.clone(), state_style),
             Span::raw(" "),
