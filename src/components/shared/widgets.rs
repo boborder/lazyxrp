@@ -139,9 +139,9 @@ pub fn centered_popup_rect(area: Rect, min_w: u16, min_h: u16) -> Rect {
     let min_h = min_h.min(max_h);
     let popup_w = ((area.width * 4 / 5).max(1)).clamp(min_w, max_w);
     let popup_h = ((area.height * 4 / 5).max(1)).clamp(min_h, max_h);
-    let x = area.x + (area.width.saturating_sub(popup_w)) / 2;
-    let y = area.y + (area.height.saturating_sub(popup_h)) / 2;
-    Rect::new(x, y, popup_w, popup_h)
+    let popup_x = area.x + (area.width.saturating_sub(popup_w)) / 2;
+    let popup_y = area.y + (area.height.saturating_sub(popup_h)) / 2;
+    Rect::new(popup_x, popup_y, popup_w, popup_h)
 }
 
 #[cfg(test)]

@@ -132,7 +132,7 @@ main ──► app ──► components ──► (none, leaf nodes)
 
 - **Observed** (medium confidence): Config merge order in `Config::new()` is complex (~1000 lines). The exact precedence (built-in → file → env → CLI) is spread across `config.rs` and `main.rs`. This could lead to confusion about what value is "final."
 - **Observed** (medium confidence): `poll.rs` contains both data-fetching logic AND transaction-signing/submit logic. The submit flows (~800 lines) are interleaved with polling — could be separated into `submit.rs`.
-- **Observed** (low confidence): The `Component` trait has optional methods with default no-op implementations. Some components override `handle_events`, others strictly use `update`. Not all panels use the same pattern.
+- **Observed** (low confidence): The `Component` trait has optional methods with default no-op implementations. Some components override `on_event` / `on_key_event`, others strictly use `update`. Not all panels use the same pattern.
 
 ## Confidence Notes
 

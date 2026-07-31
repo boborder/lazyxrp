@@ -66,10 +66,10 @@ pub trait Component {
     /// # Returns
     ///
     /// * [`color_eyre::Result<Option<Action>>`] - An action to be processed or none.
-    fn handle_events(&mut self, event: Option<&Event>) -> color_eyre::Result<Option<Action>> {
+    fn on_event(&mut self, event: Option<&Event>) -> color_eyre::Result<Option<Action>> {
         let action = match event {
-            Some(Event::Key(key_event)) => self.handle_key_event(*key_event)?,
-            Some(Event::Mouse(mouse_event)) => self.handle_mouse_event(*mouse_event)?,
+            Some(Event::Key(key_event)) => self.on_key_event(*key_event)?,
+            Some(Event::Mouse(mouse_event)) => self.on_mouse_event(*mouse_event)?,
             _ => None,
         };
         Ok(action)
@@ -83,7 +83,7 @@ pub trait Component {
     /// # Returns
     ///
     /// * [`color_eyre::Result<Option<Action>>`] - An action to be processed or none.
-    fn handle_key_event(&mut self, key: KeyEvent) -> color_eyre::Result<Option<Action>> {
+    fn on_key_event(&mut self, key: KeyEvent) -> color_eyre::Result<Option<Action>> {
         let _ = key; // to appease clippy
         Ok(None)
     }
@@ -96,7 +96,7 @@ pub trait Component {
     /// # Returns
     ///
     /// * [`color_eyre::Result<Option<Action>>`] - An action to be processed or none.
-    fn handle_mouse_event(&mut self, mouse: MouseEvent) -> color_eyre::Result<Option<Action>> {
+    fn on_mouse_event(&mut self, mouse: MouseEvent) -> color_eyre::Result<Option<Action>> {
         let _ = mouse; // to appease clippy
         Ok(None)
     }

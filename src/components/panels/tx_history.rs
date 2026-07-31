@@ -132,7 +132,7 @@ impl Component for TxHistoryPanel {
         Ok(None)
     }
 
-    fn handle_key_event(&mut self, key: KeyEvent) -> color_eyre::Result<Option<Action>> {
+    fn on_key_event(&mut self, key: KeyEvent) -> color_eyre::Result<Option<Action>> {
         if !self.is_focused || self.detail.visible {
             return Ok(None);
         }

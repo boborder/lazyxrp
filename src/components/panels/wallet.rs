@@ -216,7 +216,7 @@ impl Component for WalletPanel {
         Ok(None)
     }
 
-    fn handle_key_event(&mut self, key: KeyEvent) -> color_eyre::Result<Option<Action>> {
+    fn on_key_event(&mut self, key: KeyEvent) -> color_eyre::Result<Option<Action>> {
         if !self.is_focused {
             return Ok(None);
         }
@@ -349,7 +349,7 @@ impl Component for WalletPanel {
                 return Ok(None);
             }
             Some(ComposerPhase::AccountSet) => {
-                return Ok(self.handle_account_set_modal_keys(key));
+                return Ok(self.account_set_modal_key_to_action(key));
             }
             Some(ComposerPhase::Payment { row, is_iou, .. }) => {
                 let row_count: usize = if *is_iou { 4 } else { 2 };
@@ -639,7 +639,7 @@ mod tests {
         let mut panel = WalletPanel::new(false);
         panel.is_focused = true;
         panel.open_payment_composer();
-        panel.handle_key_event(key('i')).expect("toggle to iou");
+        panel.on_key_event(key('i')).expect("toggle to iou");
         match &panel.composer {
             Some(ComposerPhase::Payment { is_iou, .. }) => assert!(*is_iou),
             _ => panic!("expected payment composer"),
@@ -654,7 +654,7 @@ mod tests {
             *iou_currency = "usd".into();
             *iou_issuer = "rIssuer".into();
         }
-        panel.handle_key_event(key('i')).expect("toggle to xrp");
+        panel.on_key_event(key('i')).expect("toggle to xrp");
         match &panel.composer {
             Some(ComposerPhase::Payment {
                 is_iou,
@@ -676,9 +676,7 @@ mod tests {
         panel.is_focused = true;
         panel.open_payment_composer();
         panel.is_form_editing = true;
-        panel
-            .handle_key_event(key('i'))
-            .expect("type i while editing");
+        panel.on_key_event(key('i')).expect("type i while editing");
         match &panel.composer {
             Some(ComposerPhase::Payment {
                 is_iou,
@@ -741,7 +739,7 @@ mod tests {
             *is_iou = false;
         }
         let action = panel
-            .handle_key_event(key('s'))
+            .on_key_event(key('s'))
             .expect("submit")
             .expect("PaymentSubmit action");
         match action {

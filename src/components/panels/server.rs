@@ -240,11 +240,11 @@ impl Component for ServerPanel {
         .areas(inner);
 
         let label = theme::dim_style();
-        let info = self.server_info.as_ref();
-        let ledger = info
+        let server_info = self.server_info.as_ref();
+        let ledger = server_info
             .map(|s| fmt::group_digits_u64(u64::from(s.ledger_index)))
             .unwrap_or_else(|| "-".to_string());
-        let host = info
+        let host = server_info
             .map(|s| s.hostid.clone())
             .unwrap_or_else(|| "-".to_string());
         let fee = self
@@ -255,7 +255,7 @@ impl Component for ServerPanel {
             .reserve_base
             .map(|v| fmt::fmt_xrp(v as f64 / 1_000_000.0))
             .unwrap_or_else(|| "-".to_string());
-        let quorum = info
+        let quorum = server_info
             .and_then(|s| s.validation_quorum)
             .map(|q| q.to_string())
             .unwrap_or_else(|| "-".to_string());
@@ -308,8 +308,9 @@ impl Component for ServerPanel {
             ]),
         ];
 
-        if let Some(vl) = info.and_then(|s| s.validator_list.as_ref()) {
-            let match_note = quorum_match_tag(info.and_then(|s| s.validation_quorum), vl.count);
+        if let Some(vl) = server_info.and_then(|s| s.validator_list.as_ref()) {
+            let match_note =
+                quorum_match_tag(server_info.and_then(|s| s.validation_quorum), vl.count);
             let mut spans = vec![
                 Span::styled("Node UNL:", label),
                 Span::raw(" "),

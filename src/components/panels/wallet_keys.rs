@@ -95,7 +95,7 @@ impl WalletPanel {
         }
     }
 
-    pub(super) fn handle_account_set_modal_keys(&mut self, key: KeyEvent) -> Option<Action> {
+    pub(super) fn account_set_modal_key_to_action(&mut self, key: KeyEvent) -> Option<Action> {
         if self.account_set_edit_keys(&key) {
             return None;
         }

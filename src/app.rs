@@ -307,7 +307,7 @@ impl App {
         }
 
         loop {
-            self.handle_events(&mut tui).await?;
+            self.forward_tui_events(&mut tui).await?;
             self.process_actions(Some(&mut tui))?;
             if self.should_suspend {
                 tui.suspend()?;
@@ -324,7 +324,7 @@ impl App {
         Ok(())
     }
 
-    async fn handle_events(&mut self, tui: &mut Tui) -> color_eyre::Result<()> {
+    async fn forward_tui_events(&mut self, tui: &mut Tui) -> color_eyre::Result<()> {
         let Some(event) = tui.next_event().await else {
             return Ok(());
         };
@@ -338,7 +338,7 @@ impl App {
             _ => {}
         }
         for panel in self.panels.iter_mut() {
-            if let Some(action) = panel.handle_events(Some(&event))? {
+            if let Some(action) = panel.on_event(Some(&event))? {
                 action_tx.send(action)?;
             }
         }

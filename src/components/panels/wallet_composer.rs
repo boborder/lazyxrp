@@ -272,9 +272,9 @@ impl WalletPanel {
         .min(area.height.saturating_sub(2))
         .max(8);
 
-        let x = area.x + (area.width.saturating_sub(popup_w)) / 2;
-        let y = area.y + (area.height.saturating_sub(popup_h)) / 2;
-        let popup = Rect::new(x, y, popup_w, popup_h);
+        let popup_x = area.x + (area.width.saturating_sub(popup_w)) / 2;
+        let popup_y = area.y + (area.height.saturating_sub(popup_h)) / 2;
+        let popup = Rect::new(popup_x, popup_y, popup_w, popup_h);
 
         frame.render_widget(Clear, popup);
         let inner_title = match phase {

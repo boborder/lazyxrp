@@ -112,10 +112,10 @@ impl Component for AccountWalletTab {
         Ok(())
     }
 
-    fn handle_events(&mut self, event: Option<&Event>) -> color_eyre::Result<Option<Action>> {
+    fn on_event(&mut self, event: Option<&Event>) -> color_eyre::Result<Option<Action>> {
         match event {
             Some(Event::Key(key)) if self.has_wallet && self.wallet.is_focused => {
-                self.wallet.handle_key_event(*key)
+                self.wallet.on_key_event(*key)
             }
             _ => Ok(None),
         }

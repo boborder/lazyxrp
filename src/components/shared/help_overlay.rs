@@ -44,9 +44,9 @@ impl Component for HelpOverlay {
     fn draw(&mut self, frame: &mut Frame, area: Rect) -> color_eyre::Result<()> {
         let popup_w = 58u16.min(area.width.saturating_sub(4));
         let popup_h = (BINDINGS.len() as u16 + 4).min(area.height.saturating_sub(2));
-        let x = area.x + (area.width.saturating_sub(popup_w)) / 2;
-        let y = area.y + (area.height.saturating_sub(popup_h)) / 2;
-        let popup_area = Rect::new(x, y, popup_w, popup_h);
+        let popup_x = area.x + (area.width.saturating_sub(popup_w)) / 2;
+        let popup_y = area.y + (area.height.saturating_sub(popup_h)) / 2;
+        let popup_area = Rect::new(popup_x, popup_y, popup_w, popup_h);
 
         frame.render_widget(Clear, popup_area);
 
