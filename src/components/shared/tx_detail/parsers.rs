@@ -2,10 +2,7 @@ use crate::components::shared::theme;
 use crate::components::shared::tx_detail::format::{
     fmt_xrpl_amount_from_value, push_common_lines_from_value,
 };
-use ratatui::{
-    style::Style,
-    text::{Line, Span},
-};
+use ratatui::text::{Line, Span};
 use serde_json::Value;
 
 /// Payment detail lines parsed directly from Value (no clone).
@@ -14,7 +11,6 @@ pub(crate) fn payment_detail_lines<'a>(_tx: &'a Value) -> Option<Vec<Line<'a>>> 
         return None;
     }
     let mut lines = Vec::new();
-    let val = Style::new().fg(theme::ACCENT);
 
     push_common_lines_from_value(&mut lines, _tx);
 
@@ -22,7 +18,7 @@ pub(crate) fn payment_detail_lines<'a>(_tx: &'a Value) -> Option<Vec<Line<'a>>> 
         lines.push(Line::from(vec![
             Span::styled("Destination", theme::accent_style()),
             Span::raw(": "),
-            Span::styled(dest.to_string(), val),
+            Span::styled(dest.to_string(), theme::accent_style()),
         ]));
     }
 
@@ -30,7 +26,7 @@ pub(crate) fn payment_detail_lines<'a>(_tx: &'a Value) -> Option<Vec<Line<'a>>> 
         lines.push(Line::from(vec![
             Span::styled("Amount", theme::accent_style()),
             Span::raw(": "),
-            Span::styled(fmt_xrpl_amount_from_value(amount), val),
+            Span::styled(fmt_xrpl_amount_from_value(amount), theme::accent_style()),
         ]));
     }
 
@@ -38,7 +34,7 @@ pub(crate) fn payment_detail_lines<'a>(_tx: &'a Value) -> Option<Vec<Line<'a>>> 
         lines.push(Line::from(vec![
             Span::styled("DestinationTag", theme::accent_style()),
             Span::raw(": "),
-            Span::styled(tag.to_string(), val),
+            Span::styled(tag.to_string(), theme::accent_style()),
         ]));
     }
 
@@ -51,7 +47,6 @@ pub(crate) fn account_set_detail_lines<'a>(_tx: &'a Value) -> Option<Vec<Line<'a
         return None;
     }
     let mut lines = Vec::new();
-    let val = Style::new().fg(theme::ACCENT);
 
     push_common_lines_from_value(&mut lines, _tx);
 
@@ -59,35 +54,35 @@ pub(crate) fn account_set_detail_lines<'a>(_tx: &'a Value) -> Option<Vec<Line<'a
         lines.push(Line::from(vec![
             Span::styled("SetFlag", theme::accent_style()),
             Span::raw(": "),
-            Span::styled(set.to_string(), val),
+            Span::styled(set.to_string(), theme::accent_style()),
         ]));
     }
     if let Some(clear) = _tx.get("ClearFlag").and_then(Value::as_u64) {
         lines.push(Line::from(vec![
             Span::styled("ClearFlag", theme::accent_style()),
             Span::raw(": "),
-            Span::styled(clear.to_string(), val),
+            Span::styled(clear.to_string(), theme::accent_style()),
         ]));
     }
     if let Some(domain) = _tx.get("Domain").and_then(Value::as_str) {
         lines.push(Line::from(vec![
             Span::styled("Domain", theme::accent_style()),
             Span::raw(": "),
-            Span::styled(domain.to_string(), val),
+            Span::styled(domain.to_string(), theme::accent_style()),
         ]));
     }
     if let Some(tick) = _tx.get("TickSize").and_then(Value::as_u64) {
         lines.push(Line::from(vec![
             Span::styled("TickSize", theme::accent_style()),
             Span::raw(": "),
-            Span::styled(tick.to_string(), val),
+            Span::styled(tick.to_string(), theme::accent_style()),
         ]));
     }
     if let Some(rate) = _tx.get("TransferRate").and_then(Value::as_u64) {
         lines.push(Line::from(vec![
             Span::styled("TransferRate", theme::accent_style()),
             Span::raw(": "),
-            Span::styled(rate.to_string(), val),
+            Span::styled(rate.to_string(), theme::accent_style()),
         ]));
     }
 
@@ -100,7 +95,6 @@ pub(crate) fn trust_set_detail_lines<'a>(_tx: &'a Value) -> Option<Vec<Line<'a>>
         return None;
     }
     let mut lines = Vec::new();
-    let val = Style::new().fg(theme::ACCENT);
 
     push_common_lines_from_value(&mut lines, _tx);
 
@@ -108,7 +102,7 @@ pub(crate) fn trust_set_detail_lines<'a>(_tx: &'a Value) -> Option<Vec<Line<'a>>
         lines.push(Line::from(vec![
             Span::styled("LimitAmount", theme::accent_style()),
             Span::raw(": "),
-            Span::styled(fmt_xrpl_amount_from_value(limit), val),
+            Span::styled(fmt_xrpl_amount_from_value(limit), theme::accent_style()),
         ]));
     }
 
@@ -116,14 +110,14 @@ pub(crate) fn trust_set_detail_lines<'a>(_tx: &'a Value) -> Option<Vec<Line<'a>>
         lines.push(Line::from(vec![
             Span::styled("QualityIn", theme::accent_style()),
             Span::raw(": "),
-            Span::styled(q_in.to_string(), val),
+            Span::styled(q_in.to_string(), theme::accent_style()),
         ]));
     }
     if let Some(q_out) = _tx.get("QualityOut").and_then(Value::as_u64) {
         lines.push(Line::from(vec![
             Span::styled("QualityOut", theme::accent_style()),
             Span::raw(": "),
-            Span::styled(q_out.to_string(), val),
+            Span::styled(q_out.to_string(), theme::accent_style()),
         ]));
     }
 
@@ -136,7 +130,6 @@ pub(crate) fn offer_create_detail_lines<'a>(_tx: &'a Value) -> Option<Vec<Line<'
         return None;
     }
     let mut lines = Vec::new();
-    let val = Style::new().fg(theme::ACCENT);
 
     push_common_lines_from_value(&mut lines, _tx);
 
@@ -144,14 +137,14 @@ pub(crate) fn offer_create_detail_lines<'a>(_tx: &'a Value) -> Option<Vec<Line<'
         lines.push(Line::from(vec![
             Span::styled("TakerGets", theme::accent_style()),
             Span::raw(": "),
-            Span::styled(fmt_xrpl_amount_from_value(gets), val),
+            Span::styled(fmt_xrpl_amount_from_value(gets), theme::accent_style()),
         ]));
     }
     if let Some(pays) = _tx.get("TakerPays") {
         lines.push(Line::from(vec![
             Span::styled("TakerPays", theme::accent_style()),
             Span::raw(": "),
-            Span::styled(fmt_xrpl_amount_from_value(pays), val),
+            Span::styled(fmt_xrpl_amount_from_value(pays), theme::accent_style()),
         ]));
     }
 
@@ -161,14 +154,14 @@ pub(crate) fn offer_create_detail_lines<'a>(_tx: &'a Value) -> Option<Vec<Line<'
         lines.push(Line::from(vec![
             Span::styled("Expiration", theme::accent_style()),
             Span::raw(": "),
-            Span::styled(ts, val),
+            Span::styled(ts, theme::accent_style()),
         ]));
     }
     if let Some(seq) = _tx.get("OfferSequence").and_then(Value::as_u64) {
         lines.push(Line::from(vec![
             Span::styled("OfferSequence", theme::accent_style()),
             Span::raw(": "),
-            Span::styled(seq.to_string(), val),
+            Span::styled(seq.to_string(), theme::accent_style()),
         ]));
     }
 
@@ -181,7 +174,6 @@ pub(crate) fn nftoken_mint_detail_lines<'a>(_tx: &'a Value) -> Option<Vec<Line<'
         return None;
     }
     let mut lines = Vec::new();
-    let val = Style::new().fg(theme::ACCENT);
 
     push_common_lines_from_value(&mut lines, _tx);
 
@@ -189,7 +181,7 @@ pub(crate) fn nftoken_mint_detail_lines<'a>(_tx: &'a Value) -> Option<Vec<Line<'
         lines.push(Line::from(vec![
             Span::styled("NFTokenTaxon", theme::accent_style()),
             Span::raw(": "),
-            Span::styled(taxon.to_string(), val),
+            Span::styled(taxon.to_string(), theme::accent_style()),
         ]));
     }
 
@@ -197,21 +189,24 @@ pub(crate) fn nftoken_mint_detail_lines<'a>(_tx: &'a Value) -> Option<Vec<Line<'
         lines.push(Line::from(vec![
             Span::styled("Issuer", theme::accent_style()),
             Span::raw(": "),
-            Span::styled(issuer.to_string(), val),
+            Span::styled(issuer.to_string(), theme::accent_style()),
         ]));
     }
     if let Some(fee) = _tx.get("TransferFee").and_then(Value::as_u64) {
         lines.push(Line::from(vec![
             Span::styled("TransferFee", theme::accent_style()),
             Span::raw(": "),
-            Span::styled(format!("{:.3}%", fee as f64 / 1000.0), val),
+            Span::styled(
+                format!("{:.3}%", fee as f64 / 1000.0),
+                theme::accent_style(),
+            ),
         ]));
     }
     if let Some(uri) = _tx.get("URI").and_then(Value::as_str) {
         lines.push(Line::from(vec![
             Span::styled("URI", theme::accent_style()),
             Span::raw(": "),
-            Span::styled(uri.to_string(), val),
+            Span::styled(uri.to_string(), theme::accent_style()),
         ]));
     }
 
@@ -224,7 +219,6 @@ pub(crate) fn offer_cancel_detail_lines<'a>(_tx: &'a Value) -> Option<Vec<Line<'
         return None;
     }
     let mut lines = Vec::new();
-    let val = Style::new().fg(theme::ACCENT);
 
     push_common_lines_from_value(&mut lines, _tx);
 
@@ -232,7 +226,7 @@ pub(crate) fn offer_cancel_detail_lines<'a>(_tx: &'a Value) -> Option<Vec<Line<'
         lines.push(Line::from(vec![
             Span::styled("OfferSequence", theme::accent_style()),
             Span::raw(": "),
-            Span::styled(seq.to_string(), val),
+            Span::styled(seq.to_string(), theme::accent_style()),
         ]));
     }
 
@@ -245,7 +239,6 @@ pub(crate) fn check_create_detail_lines<'a>(_tx: &'a Value) -> Option<Vec<Line<'
         return None;
     }
     let mut lines = Vec::new();
-    let val = Style::new().fg(theme::ACCENT);
 
     push_common_lines_from_value(&mut lines, _tx);
 
@@ -253,14 +246,14 @@ pub(crate) fn check_create_detail_lines<'a>(_tx: &'a Value) -> Option<Vec<Line<'
         lines.push(Line::from(vec![
             Span::styled("Destination", theme::accent_style()),
             Span::raw(": "),
-            Span::styled(dest.to_string(), val),
+            Span::styled(dest.to_string(), theme::accent_style()),
         ]));
     }
     if let Some(send_max) = _tx.get("SendMax") {
         lines.push(Line::from(vec![
             Span::styled("SendMax", theme::accent_style()),
             Span::raw(": "),
-            Span::styled(fmt_xrpl_amount_from_value(send_max), val),
+            Span::styled(fmt_xrpl_amount_from_value(send_max), theme::accent_style()),
         ]));
     }
 
@@ -268,7 +261,7 @@ pub(crate) fn check_create_detail_lines<'a>(_tx: &'a Value) -> Option<Vec<Line<'
         lines.push(Line::from(vec![
             Span::styled("DestinationTag", theme::accent_style()),
             Span::raw(": "),
-            Span::styled(tag.to_string(), val),
+            Span::styled(tag.to_string(), theme::accent_style()),
         ]));
     }
     if let Some(exp) = _tx.get("Expiration").and_then(Value::as_u64) {
@@ -277,7 +270,7 @@ pub(crate) fn check_create_detail_lines<'a>(_tx: &'a Value) -> Option<Vec<Line<'
         lines.push(Line::from(vec![
             Span::styled("Expiration", theme::accent_style()),
             Span::raw(": "),
-            Span::styled(ts, val),
+            Span::styled(ts, theme::accent_style()),
         ]));
     }
 
@@ -290,7 +283,6 @@ pub(crate) fn signer_list_set_detail_lines<'a>(_tx: &'a Value) -> Option<Vec<Lin
         return None;
     }
     let mut lines = Vec::new();
-    let val = Style::new().fg(theme::ACCENT);
 
     push_common_lines_from_value(&mut lines, _tx);
 
@@ -298,7 +290,7 @@ pub(crate) fn signer_list_set_detail_lines<'a>(_tx: &'a Value) -> Option<Vec<Lin
         lines.push(Line::from(vec![
             Span::styled("SignerQuorum", theme::accent_style()),
             Span::raw(": "),
-            Span::styled(quorum.to_string(), val),
+            Span::styled(quorum.to_string(), theme::accent_style()),
         ]));
     }
 
@@ -317,7 +309,10 @@ pub(crate) fn signer_list_set_detail_lines<'a>(_tx: &'a Value) -> Option<Vec<Lin
             lines.push(Line::from(vec![
                 Span::styled(format!("Signer {}", i + 1), theme::accent_style()),
                 Span::raw(": "),
-                Span::styled(format!("{} (weight: {})", account, weight), val),
+                Span::styled(
+                    format!("{} (weight: {})", account, weight),
+                    theme::accent_style(),
+                ),
             ]));
         }
     }
@@ -331,7 +326,6 @@ pub(crate) fn escrow_create_detail_lines<'a>(_tx: &'a Value) -> Option<Vec<Line<
         return None;
     }
     let mut lines = Vec::new();
-    let val = Style::new().fg(theme::ACCENT);
 
     push_common_lines_from_value(&mut lines, _tx);
 
@@ -339,14 +333,14 @@ pub(crate) fn escrow_create_detail_lines<'a>(_tx: &'a Value) -> Option<Vec<Line<
         lines.push(Line::from(vec![
             Span::styled("Destination", theme::accent_style()),
             Span::raw(": "),
-            Span::styled(dest.to_string(), val),
+            Span::styled(dest.to_string(), theme::accent_style()),
         ]));
     }
     if let Some(amount) = _tx.get("Amount") {
         lines.push(Line::from(vec![
             Span::styled("Amount", theme::accent_style()),
             Span::raw(": "),
-            Span::styled(fmt_xrpl_amount_from_value(amount), val),
+            Span::styled(fmt_xrpl_amount_from_value(amount), theme::accent_style()),
         ]));
     }
 
@@ -354,7 +348,7 @@ pub(crate) fn escrow_create_detail_lines<'a>(_tx: &'a Value) -> Option<Vec<Line<
         lines.push(Line::from(vec![
             Span::styled("DestinationTag", theme::accent_style()),
             Span::raw(": "),
-            Span::styled(tag.to_string(), val),
+            Span::styled(tag.to_string(), theme::accent_style()),
         ]));
     }
     if let Some(finish) = _tx.get("FinishAfter").and_then(Value::as_u64) {
@@ -363,7 +357,7 @@ pub(crate) fn escrow_create_detail_lines<'a>(_tx: &'a Value) -> Option<Vec<Line<
         lines.push(Line::from(vec![
             Span::styled("FinishAfter", theme::accent_style()),
             Span::raw(": "),
-            Span::styled(ts, val),
+            Span::styled(ts, theme::accent_style()),
         ]));
     }
     if let Some(cancel) = _tx.get("CancelAfter").and_then(Value::as_u64) {
@@ -372,14 +366,14 @@ pub(crate) fn escrow_create_detail_lines<'a>(_tx: &'a Value) -> Option<Vec<Line<
         lines.push(Line::from(vec![
             Span::styled("CancelAfter", theme::accent_style()),
             Span::raw(": "),
-            Span::styled(ts, val),
+            Span::styled(ts, theme::accent_style()),
         ]));
     }
     if let Some(cond) = _tx.get("Condition").and_then(Value::as_str) {
         lines.push(Line::from(vec![
             Span::styled("Condition", theme::accent_style()),
             Span::raw(": "),
-            Span::styled(cond.to_string(), val),
+            Span::styled(cond.to_string(), theme::accent_style()),
         ]));
     }
 
@@ -392,7 +386,6 @@ pub(crate) fn escrow_finish_detail_lines<'a>(_tx: &'a Value) -> Option<Vec<Line<
         return None;
     }
     let mut lines = Vec::new();
-    let val = Style::new().fg(theme::ACCENT);
 
     push_common_lines_from_value(&mut lines, _tx);
 
@@ -400,14 +393,14 @@ pub(crate) fn escrow_finish_detail_lines<'a>(_tx: &'a Value) -> Option<Vec<Line<
         lines.push(Line::from(vec![
             Span::styled("Owner", theme::accent_style()),
             Span::raw(": "),
-            Span::styled(owner.to_string(), val),
+            Span::styled(owner.to_string(), theme::accent_style()),
         ]));
     }
     if let Some(seq) = _tx.get("OfferSequence").and_then(Value::as_u64) {
         lines.push(Line::from(vec![
             Span::styled("OfferSequence", theme::accent_style()),
             Span::raw(": "),
-            Span::styled(seq.to_string(), val),
+            Span::styled(seq.to_string(), theme::accent_style()),
         ]));
     }
 
@@ -415,14 +408,14 @@ pub(crate) fn escrow_finish_detail_lines<'a>(_tx: &'a Value) -> Option<Vec<Line<
         lines.push(Line::from(vec![
             Span::styled("Condition", theme::accent_style()),
             Span::raw(": "),
-            Span::styled(cond.to_string(), val),
+            Span::styled(cond.to_string(), theme::accent_style()),
         ]));
     }
     if let Some(ful) = _tx.get("Fulfillment").and_then(Value::as_str) {
         lines.push(Line::from(vec![
             Span::styled("Fulfillment", theme::accent_style()),
             Span::raw(": "),
-            Span::styled(ful.to_string(), val),
+            Span::styled(ful.to_string(), theme::accent_style()),
         ]));
     }
 
@@ -435,7 +428,6 @@ pub(crate) fn escrow_cancel_detail_lines<'a>(_tx: &'a Value) -> Option<Vec<Line<
         return None;
     }
     let mut lines = Vec::new();
-    let val = Style::new().fg(theme::ACCENT);
 
     push_common_lines_from_value(&mut lines, _tx);
 
@@ -443,14 +435,14 @@ pub(crate) fn escrow_cancel_detail_lines<'a>(_tx: &'a Value) -> Option<Vec<Line<
         lines.push(Line::from(vec![
             Span::styled("Owner", theme::accent_style()),
             Span::raw(": "),
-            Span::styled(owner.to_string(), val),
+            Span::styled(owner.to_string(), theme::accent_style()),
         ]));
     }
     if let Some(seq) = _tx.get("OfferSequence").and_then(Value::as_u64) {
         lines.push(Line::from(vec![
             Span::styled("OfferSequence", theme::accent_style()),
             Span::raw(": "),
-            Span::styled(seq.to_string(), val),
+            Span::styled(seq.to_string(), theme::accent_style()),
         ]));
     }
 
@@ -463,7 +455,6 @@ pub(crate) fn payment_channel_create_detail_lines<'a>(_tx: &'a Value) -> Option<
         return None;
     }
     let mut lines = Vec::new();
-    let val = Style::new().fg(theme::ACCENT);
 
     push_common_lines_from_value(&mut lines, _tx);
 
@@ -471,28 +462,28 @@ pub(crate) fn payment_channel_create_detail_lines<'a>(_tx: &'a Value) -> Option<
         lines.push(Line::from(vec![
             Span::styled("Destination", theme::accent_style()),
             Span::raw(": "),
-            Span::styled(dest.to_string(), val),
+            Span::styled(dest.to_string(), theme::accent_style()),
         ]));
     }
     if let Some(amount) = _tx.get("Amount") {
         lines.push(Line::from(vec![
             Span::styled("Amount", theme::accent_style()),
             Span::raw(": "),
-            Span::styled(fmt_xrpl_amount_from_value(amount), val),
+            Span::styled(fmt_xrpl_amount_from_value(amount), theme::accent_style()),
         ]));
     }
     if let Some(delay) = _tx.get("SettleDelay").and_then(Value::as_u64) {
         lines.push(Line::from(vec![
             Span::styled("SettleDelay", theme::accent_style()),
             Span::raw(": "),
-            Span::styled(format!("{}s", delay), val),
+            Span::styled(format!("{}s", delay), theme::accent_style()),
         ]));
     }
     if let Some(pk) = _tx.get("PublicKey").and_then(Value::as_str) {
         lines.push(Line::from(vec![
             Span::styled("PublicKey", theme::accent_style()),
             Span::raw(": "),
-            Span::styled(pk.to_string(), val),
+            Span::styled(pk.to_string(), theme::accent_style()),
         ]));
     }
 
@@ -500,7 +491,7 @@ pub(crate) fn payment_channel_create_detail_lines<'a>(_tx: &'a Value) -> Option<
         lines.push(Line::from(vec![
             Span::styled("DestinationTag", theme::accent_style()),
             Span::raw(": "),
-            Span::styled(tag.to_string(), val),
+            Span::styled(tag.to_string(), theme::accent_style()),
         ]));
     }
     if let Some(cancel) = _tx.get("CancelAfter").and_then(Value::as_u64) {
@@ -509,7 +500,7 @@ pub(crate) fn payment_channel_create_detail_lines<'a>(_tx: &'a Value) -> Option<
         lines.push(Line::from(vec![
             Span::styled("CancelAfter", theme::accent_style()),
             Span::raw(": "),
-            Span::styled(ts, val),
+            Span::styled(ts, theme::accent_style()),
         ]));
     }
 
@@ -522,7 +513,6 @@ pub(crate) fn payment_channel_fund_detail_lines<'a>(_tx: &'a Value) -> Option<Ve
         return None;
     }
     let mut lines = Vec::new();
-    let val = Style::new().fg(theme::ACCENT);
 
     push_common_lines_from_value(&mut lines, _tx);
 
@@ -530,14 +520,14 @@ pub(crate) fn payment_channel_fund_detail_lines<'a>(_tx: &'a Value) -> Option<Ve
         lines.push(Line::from(vec![
             Span::styled("Channel", theme::accent_style()),
             Span::raw(": "),
-            Span::styled(channel.to_string(), val),
+            Span::styled(channel.to_string(), theme::accent_style()),
         ]));
     }
     if let Some(amount) = _tx.get("Amount") {
         lines.push(Line::from(vec![
             Span::styled("Amount", theme::accent_style()),
             Span::raw(": "),
-            Span::styled(fmt_xrpl_amount_from_value(amount), val),
+            Span::styled(fmt_xrpl_amount_from_value(amount), theme::accent_style()),
         ]));
     }
 
@@ -547,7 +537,7 @@ pub(crate) fn payment_channel_fund_detail_lines<'a>(_tx: &'a Value) -> Option<Ve
         lines.push(Line::from(vec![
             Span::styled("Expiration", theme::accent_style()),
             Span::raw(": "),
-            Span::styled(ts, val),
+            Span::styled(ts, theme::accent_style()),
         ]));
     }
 
@@ -560,7 +550,6 @@ pub(crate) fn payment_channel_claim_detail_lines<'a>(_tx: &'a Value) -> Option<V
         return None;
     }
     let mut lines = Vec::new();
-    let val = Style::new().fg(theme::ACCENT);
 
     push_common_lines_from_value(&mut lines, _tx);
 
@@ -568,7 +557,7 @@ pub(crate) fn payment_channel_claim_detail_lines<'a>(_tx: &'a Value) -> Option<V
         lines.push(Line::from(vec![
             Span::styled("Channel", theme::accent_style()),
             Span::raw(": "),
-            Span::styled(channel.to_string(), val),
+            Span::styled(channel.to_string(), theme::accent_style()),
         ]));
     }
 
@@ -576,28 +565,28 @@ pub(crate) fn payment_channel_claim_detail_lines<'a>(_tx: &'a Value) -> Option<V
         lines.push(Line::from(vec![
             Span::styled("Balance", theme::accent_style()),
             Span::raw(": "),
-            Span::styled(fmt_xrpl_amount_from_value(balance), val),
+            Span::styled(fmt_xrpl_amount_from_value(balance), theme::accent_style()),
         ]));
     }
     if let Some(amount) = _tx.get("Amount") {
         lines.push(Line::from(vec![
             Span::styled("Amount", theme::accent_style()),
             Span::raw(": "),
-            Span::styled(fmt_xrpl_amount_from_value(amount), val),
+            Span::styled(fmt_xrpl_amount_from_value(amount), theme::accent_style()),
         ]));
     }
     if let Some(sig) = _tx.get("Signature").and_then(Value::as_str) {
         lines.push(Line::from(vec![
             Span::styled("Signature", theme::accent_style()),
             Span::raw(": "),
-            Span::styled(sig.to_string(), val),
+            Span::styled(sig.to_string(), theme::accent_style()),
         ]));
     }
     if let Some(pk) = _tx.get("PublicKey").and_then(Value::as_str) {
         lines.push(Line::from(vec![
             Span::styled("PublicKey", theme::accent_style()),
             Span::raw(": "),
-            Span::styled(pk.to_string(), val),
+            Span::styled(pk.to_string(), theme::accent_style()),
         ]));
     }
 
@@ -610,7 +599,6 @@ pub(crate) fn check_cash_detail_lines<'a>(_tx: &'a Value) -> Option<Vec<Line<'a>
         return None;
     }
     let mut lines = Vec::new();
-    let val = Style::new().fg(theme::ACCENT);
 
     push_common_lines_from_value(&mut lines, _tx);
 
@@ -618,7 +606,7 @@ pub(crate) fn check_cash_detail_lines<'a>(_tx: &'a Value) -> Option<Vec<Line<'a>
         lines.push(Line::from(vec![
             Span::styled("CheckID", theme::accent_style()),
             Span::raw(": "),
-            Span::styled(check_id.to_string(), val),
+            Span::styled(check_id.to_string(), theme::accent_style()),
         ]));
     }
 
@@ -626,14 +614,14 @@ pub(crate) fn check_cash_detail_lines<'a>(_tx: &'a Value) -> Option<Vec<Line<'a>
         lines.push(Line::from(vec![
             Span::styled("Amount", theme::accent_style()),
             Span::raw(": "),
-            Span::styled(fmt_xrpl_amount_from_value(amount), val),
+            Span::styled(fmt_xrpl_amount_from_value(amount), theme::accent_style()),
         ]));
     }
     if let Some(min) = _tx.get("DeliverMin") {
         lines.push(Line::from(vec![
             Span::styled("DeliverMin", theme::accent_style()),
             Span::raw(": "),
-            Span::styled(fmt_xrpl_amount_from_value(min), val),
+            Span::styled(fmt_xrpl_amount_from_value(min), theme::accent_style()),
         ]));
     }
 
@@ -646,7 +634,6 @@ pub(crate) fn check_cancel_detail_lines<'a>(_tx: &'a Value) -> Option<Vec<Line<'
         return None;
     }
     let mut lines = Vec::new();
-    let val = Style::new().fg(theme::ACCENT);
 
     push_common_lines_from_value(&mut lines, _tx);
 
@@ -654,7 +641,7 @@ pub(crate) fn check_cancel_detail_lines<'a>(_tx: &'a Value) -> Option<Vec<Line<'
         lines.push(Line::from(vec![
             Span::styled("CheckID", theme::accent_style()),
             Span::raw(": "),
-            Span::styled(check_id.to_string(), val),
+            Span::styled(check_id.to_string(), theme::accent_style()),
         ]));
     }
 
@@ -667,7 +654,6 @@ pub(crate) fn deposit_preauth_detail_lines<'a>(_tx: &'a Value) -> Option<Vec<Lin
         return None;
     }
     let mut lines = Vec::new();
-    let val = Style::new().fg(theme::ACCENT);
 
     push_common_lines_from_value(&mut lines, _tx);
 
@@ -675,14 +661,14 @@ pub(crate) fn deposit_preauth_detail_lines<'a>(_tx: &'a Value) -> Option<Vec<Lin
         lines.push(Line::from(vec![
             Span::styled("Authorize", theme::accent_style()),
             Span::raw(": "),
-            Span::styled(auth.to_string(), val),
+            Span::styled(auth.to_string(), theme::accent_style()),
         ]));
     }
     if let Some(unauth) = _tx.get("Unauthorize").and_then(Value::as_str) {
         lines.push(Line::from(vec![
             Span::styled("Unauthorize", theme::accent_style()),
             Span::raw(": "),
-            Span::styled(unauth.to_string(), val),
+            Span::styled(unauth.to_string(), theme::accent_style()),
         ]));
     }
 
@@ -695,7 +681,6 @@ pub(crate) fn set_regular_key_detail_lines<'a>(_tx: &'a Value) -> Option<Vec<Lin
         return None;
     }
     let mut lines = Vec::new();
-    let val = Style::new().fg(theme::ACCENT);
 
     push_common_lines_from_value(&mut lines, _tx);
 
@@ -703,7 +688,7 @@ pub(crate) fn set_regular_key_detail_lines<'a>(_tx: &'a Value) -> Option<Vec<Lin
         lines.push(Line::from(vec![
             Span::styled("RegularKey", theme::accent_style()),
             Span::raw(": "),
-            Span::styled(key.to_string(), val),
+            Span::styled(key.to_string(), theme::accent_style()),
         ]));
     } else {
         lines.push(Line::from(vec![
@@ -722,7 +707,6 @@ pub(crate) fn nftoken_burn_detail_lines<'a>(_tx: &'a Value) -> Option<Vec<Line<'
         return None;
     }
     let mut lines = Vec::new();
-    let val = Style::new().fg(theme::ACCENT);
 
     push_common_lines_from_value(&mut lines, _tx);
 
@@ -730,7 +714,7 @@ pub(crate) fn nftoken_burn_detail_lines<'a>(_tx: &'a Value) -> Option<Vec<Line<'
         lines.push(Line::from(vec![
             Span::styled("NFTokenID", theme::accent_style()),
             Span::raw(": "),
-            Span::styled(id.to_string(), val),
+            Span::styled(id.to_string(), theme::accent_style()),
         ]));
     }
 
@@ -738,7 +722,7 @@ pub(crate) fn nftoken_burn_detail_lines<'a>(_tx: &'a Value) -> Option<Vec<Line<'
         lines.push(Line::from(vec![
             Span::styled("Owner", theme::accent_style()),
             Span::raw(": "),
-            Span::styled(owner.to_string(), val),
+            Span::styled(owner.to_string(), theme::accent_style()),
         ]));
     }
 
@@ -751,7 +735,6 @@ pub(crate) fn nftoken_create_offer_detail_lines<'a>(_tx: &'a Value) -> Option<Ve
         return None;
     }
     let mut lines = Vec::new();
-    let val = Style::new().fg(theme::ACCENT);
 
     push_common_lines_from_value(&mut lines, _tx);
 
@@ -759,14 +742,14 @@ pub(crate) fn nftoken_create_offer_detail_lines<'a>(_tx: &'a Value) -> Option<Ve
         lines.push(Line::from(vec![
             Span::styled("NFTokenID", theme::accent_style()),
             Span::raw(": "),
-            Span::styled(id.to_string(), val),
+            Span::styled(id.to_string(), theme::accent_style()),
         ]));
     }
     if let Some(amount) = _tx.get("Amount") {
         lines.push(Line::from(vec![
             Span::styled("Amount", theme::accent_style()),
             Span::raw(": "),
-            Span::styled(fmt_xrpl_amount_from_value(amount), val),
+            Span::styled(fmt_xrpl_amount_from_value(amount), theme::accent_style()),
         ]));
     }
 
@@ -774,7 +757,7 @@ pub(crate) fn nftoken_create_offer_detail_lines<'a>(_tx: &'a Value) -> Option<Ve
         lines.push(Line::from(vec![
             Span::styled("Owner", theme::accent_style()),
             Span::raw(": "),
-            Span::styled(owner.to_string(), val),
+            Span::styled(owner.to_string(), theme::accent_style()),
         ]));
     }
     if let Some(exp) = _tx.get("Expiration").and_then(Value::as_u64) {
@@ -783,14 +766,14 @@ pub(crate) fn nftoken_create_offer_detail_lines<'a>(_tx: &'a Value) -> Option<Ve
         lines.push(Line::from(vec![
             Span::styled("Expiration", theme::accent_style()),
             Span::raw(": "),
-            Span::styled(ts, val),
+            Span::styled(ts, theme::accent_style()),
         ]));
     }
     if let Some(dest) = _tx.get("Destination").and_then(Value::as_str) {
         lines.push(Line::from(vec![
             Span::styled("Destination", theme::accent_style()),
             Span::raw(": "),
-            Span::styled(dest.to_string(), val),
+            Span::styled(dest.to_string(), theme::accent_style()),
         ]));
     }
 
@@ -803,7 +786,6 @@ pub(crate) fn nftoken_accept_offer_detail_lines<'a>(_tx: &'a Value) -> Option<Ve
         return None;
     }
     let mut lines = Vec::new();
-    let val = Style::new().fg(theme::ACCENT);
 
     push_common_lines_from_value(&mut lines, _tx);
 
@@ -811,21 +793,21 @@ pub(crate) fn nftoken_accept_offer_detail_lines<'a>(_tx: &'a Value) -> Option<Ve
         lines.push(Line::from(vec![
             Span::styled("NFTokenSellOffer", theme::accent_style()),
             Span::raw(": "),
-            Span::styled(sell.to_string(), val),
+            Span::styled(sell.to_string(), theme::accent_style()),
         ]));
     }
     if let Some(buy) = _tx.get("NFTokenBuyOffer").and_then(Value::as_str) {
         lines.push(Line::from(vec![
             Span::styled("NFTokenBuyOffer", theme::accent_style()),
             Span::raw(": "),
-            Span::styled(buy.to_string(), val),
+            Span::styled(buy.to_string(), theme::accent_style()),
         ]));
     }
     if let Some(fee) = _tx.get("NFTokenBrokerFee") {
         lines.push(Line::from(vec![
             Span::styled("NFTokenBrokerFee", theme::accent_style()),
             Span::raw(": "),
-            Span::styled(fmt_xrpl_amount_from_value(fee), val),
+            Span::styled(fmt_xrpl_amount_from_value(fee), theme::accent_style()),
         ]));
     }
 
@@ -838,7 +820,6 @@ pub(crate) fn nftoken_cancel_offer_detail_lines<'a>(_tx: &'a Value) -> Option<Ve
         return None;
     }
     let mut lines = Vec::new();
-    let val = Style::new().fg(theme::ACCENT);
 
     push_common_lines_from_value(&mut lines, _tx);
 
@@ -848,7 +829,7 @@ pub(crate) fn nftoken_cancel_offer_detail_lines<'a>(_tx: &'a Value) -> Option<Ve
             lines.push(Line::from(vec![
                 Span::styled(format!("Offer {}", i + 1), theme::accent_style()),
                 Span::raw(": "),
-                Span::styled(val_str.to_string(), val),
+                Span::styled(val_str.to_string(), theme::accent_style()),
             ]));
         }
     }
@@ -862,7 +843,6 @@ pub(crate) fn ticket_create_detail_lines<'a>(_tx: &'a Value) -> Option<Vec<Line<
         return None;
     }
     let mut lines = Vec::new();
-    let val = Style::new().fg(theme::ACCENT);
 
     push_common_lines_from_value(&mut lines, _tx);
 
@@ -870,7 +850,7 @@ pub(crate) fn ticket_create_detail_lines<'a>(_tx: &'a Value) -> Option<Vec<Line<
         lines.push(Line::from(vec![
             Span::styled("TicketCount", theme::accent_style()),
             Span::raw(": "),
-            Span::styled(count.to_string(), val),
+            Span::styled(count.to_string(), theme::accent_style()),
         ]));
     }
 
@@ -883,7 +863,6 @@ pub(crate) fn amm_create_detail_lines<'a>(_tx: &'a Value) -> Option<Vec<Line<'a>
         return None;
     }
     let mut lines = Vec::new();
-    let val = Style::new().fg(theme::ACCENT);
 
     push_common_lines_from_value(&mut lines, _tx);
 
@@ -891,21 +870,24 @@ pub(crate) fn amm_create_detail_lines<'a>(_tx: &'a Value) -> Option<Vec<Line<'a>
         lines.push(Line::from(vec![
             Span::styled("Amount", theme::accent_style()),
             Span::raw(": "),
-            Span::styled(fmt_xrpl_amount_from_value(amount), val),
+            Span::styled(fmt_xrpl_amount_from_value(amount), theme::accent_style()),
         ]));
     }
     if let Some(amount2) = _tx.get("Amount2") {
         lines.push(Line::from(vec![
             Span::styled("Amount2", theme::accent_style()),
             Span::raw(": "),
-            Span::styled(fmt_xrpl_amount_from_value(amount2), val),
+            Span::styled(fmt_xrpl_amount_from_value(amount2), theme::accent_style()),
         ]));
     }
     if let Some(fee) = _tx.get("TradingFee").and_then(Value::as_u64) {
         lines.push(Line::from(vec![
             Span::styled("TradingFee", theme::accent_style()),
             Span::raw(": "),
-            Span::styled(format!("{:.3}%", fee as f64 / 1000.0), val),
+            Span::styled(
+                format!("{:.3}%", fee as f64 / 1000.0),
+                theme::accent_style(),
+            ),
         ]));
     }
 
@@ -918,7 +900,6 @@ pub(crate) fn amm_deposit_detail_lines<'a>(_tx: &'a Value) -> Option<Vec<Line<'a
         return None;
     }
     let mut lines = Vec::new();
-    let val = Style::new().fg(theme::ACCENT);
 
     push_common_lines_from_value(&mut lines, _tx);
 
@@ -926,14 +907,14 @@ pub(crate) fn amm_deposit_detail_lines<'a>(_tx: &'a Value) -> Option<Vec<Line<'a
         lines.push(Line::from(vec![
             Span::styled("Asset", theme::accent_style()),
             Span::raw(": "),
-            Span::styled(fmt_xrpl_amount_from_value(asset), val),
+            Span::styled(fmt_xrpl_amount_from_value(asset), theme::accent_style()),
         ]));
     }
     if let Some(asset2) = _tx.get("Asset2") {
         lines.push(Line::from(vec![
             Span::styled("Asset2", theme::accent_style()),
             Span::raw(": "),
-            Span::styled(fmt_xrpl_amount_from_value(asset2), val),
+            Span::styled(fmt_xrpl_amount_from_value(asset2), theme::accent_style()),
         ]));
     }
 
@@ -941,28 +922,28 @@ pub(crate) fn amm_deposit_detail_lines<'a>(_tx: &'a Value) -> Option<Vec<Line<'a
         lines.push(Line::from(vec![
             Span::styled("Amount", theme::accent_style()),
             Span::raw(": "),
-            Span::styled(fmt_xrpl_amount_from_value(amount), val),
+            Span::styled(fmt_xrpl_amount_from_value(amount), theme::accent_style()),
         ]));
     }
     if let Some(amount2) = _tx.get("Amount2") {
         lines.push(Line::from(vec![
             Span::styled("Amount2", theme::accent_style()),
             Span::raw(": "),
-            Span::styled(fmt_xrpl_amount_from_value(amount2), val),
+            Span::styled(fmt_xrpl_amount_from_value(amount2), theme::accent_style()),
         ]));
     }
     if let Some(price) = _tx.get("EPrice") {
         lines.push(Line::from(vec![
             Span::styled("EPrice", theme::accent_style()),
             Span::raw(": "),
-            Span::styled(fmt_xrpl_amount_from_value(price), val),
+            Span::styled(fmt_xrpl_amount_from_value(price), theme::accent_style()),
         ]));
     }
     if let Some(lp) = _tx.get("LPTokenOut") {
         lines.push(Line::from(vec![
             Span::styled("LPTokenOut", theme::accent_style()),
             Span::raw(": "),
-            Span::styled(fmt_xrpl_amount_from_value(lp), val),
+            Span::styled(fmt_xrpl_amount_from_value(lp), theme::accent_style()),
         ]));
     }
 
@@ -975,7 +956,6 @@ pub(crate) fn amm_withdraw_detail_lines<'a>(_tx: &'a Value) -> Option<Vec<Line<'
         return None;
     }
     let mut lines = Vec::new();
-    let val = Style::new().fg(theme::ACCENT);
 
     push_common_lines_from_value(&mut lines, _tx);
 
@@ -983,14 +963,14 @@ pub(crate) fn amm_withdraw_detail_lines<'a>(_tx: &'a Value) -> Option<Vec<Line<'
         lines.push(Line::from(vec![
             Span::styled("Asset", theme::accent_style()),
             Span::raw(": "),
-            Span::styled(fmt_xrpl_amount_from_value(asset), val),
+            Span::styled(fmt_xrpl_amount_from_value(asset), theme::accent_style()),
         ]));
     }
     if let Some(asset2) = _tx.get("Asset2") {
         lines.push(Line::from(vec![
             Span::styled("Asset2", theme::accent_style()),
             Span::raw(": "),
-            Span::styled(fmt_xrpl_amount_from_value(asset2), val),
+            Span::styled(fmt_xrpl_amount_from_value(asset2), theme::accent_style()),
         ]));
     }
 
@@ -998,28 +978,28 @@ pub(crate) fn amm_withdraw_detail_lines<'a>(_tx: &'a Value) -> Option<Vec<Line<'
         lines.push(Line::from(vec![
             Span::styled("Amount", theme::accent_style()),
             Span::raw(": "),
-            Span::styled(fmt_xrpl_amount_from_value(amount), val),
+            Span::styled(fmt_xrpl_amount_from_value(amount), theme::accent_style()),
         ]));
     }
     if let Some(amount2) = _tx.get("Amount2") {
         lines.push(Line::from(vec![
             Span::styled("Amount2", theme::accent_style()),
             Span::raw(": "),
-            Span::styled(fmt_xrpl_amount_from_value(amount2), val),
+            Span::styled(fmt_xrpl_amount_from_value(amount2), theme::accent_style()),
         ]));
     }
     if let Some(price) = _tx.get("EPrice") {
         lines.push(Line::from(vec![
             Span::styled("EPrice", theme::accent_style()),
             Span::raw(": "),
-            Span::styled(fmt_xrpl_amount_from_value(price), val),
+            Span::styled(fmt_xrpl_amount_from_value(price), theme::accent_style()),
         ]));
     }
     if let Some(lp) = _tx.get("LPTokenIn") {
         lines.push(Line::from(vec![
             Span::styled("LPTokenIn", theme::accent_style()),
             Span::raw(": "),
-            Span::styled(fmt_xrpl_amount_from_value(lp), val),
+            Span::styled(fmt_xrpl_amount_from_value(lp), theme::accent_style()),
         ]));
     }
 
@@ -1032,7 +1012,6 @@ pub(crate) fn amm_vote_detail_lines<'a>(_tx: &'a Value) -> Option<Vec<Line<'a>>>
         return None;
     }
     let mut lines = Vec::new();
-    let val = Style::new().fg(theme::ACCENT);
 
     push_common_lines_from_value(&mut lines, _tx);
 
@@ -1040,14 +1019,14 @@ pub(crate) fn amm_vote_detail_lines<'a>(_tx: &'a Value) -> Option<Vec<Line<'a>>>
         lines.push(Line::from(vec![
             Span::styled("Asset", theme::accent_style()),
             Span::raw(": "),
-            Span::styled(fmt_xrpl_amount_from_value(asset), val),
+            Span::styled(fmt_xrpl_amount_from_value(asset), theme::accent_style()),
         ]));
     }
     if let Some(asset2) = _tx.get("Asset2") {
         lines.push(Line::from(vec![
             Span::styled("Asset2", theme::accent_style()),
             Span::raw(": "),
-            Span::styled(fmt_xrpl_amount_from_value(asset2), val),
+            Span::styled(fmt_xrpl_amount_from_value(asset2), theme::accent_style()),
         ]));
     }
 
@@ -1055,7 +1034,10 @@ pub(crate) fn amm_vote_detail_lines<'a>(_tx: &'a Value) -> Option<Vec<Line<'a>>>
         lines.push(Line::from(vec![
             Span::styled("TradingFee", theme::accent_style()),
             Span::raw(": "),
-            Span::styled(format!("{:.3}%", fee as f64 / 1000.0), val),
+            Span::styled(
+                format!("{:.3}%", fee as f64 / 1000.0),
+                theme::accent_style(),
+            ),
         ]));
     }
 
@@ -1068,7 +1050,6 @@ pub(crate) fn amm_bid_detail_lines<'a>(_tx: &'a Value) -> Option<Vec<Line<'a>>> 
         return None;
     }
     let mut lines = Vec::new();
-    let val = Style::new().fg(theme::ACCENT);
 
     push_common_lines_from_value(&mut lines, _tx);
 
@@ -1076,14 +1057,14 @@ pub(crate) fn amm_bid_detail_lines<'a>(_tx: &'a Value) -> Option<Vec<Line<'a>>> 
         lines.push(Line::from(vec![
             Span::styled("Asset", theme::accent_style()),
             Span::raw(": "),
-            Span::styled(fmt_xrpl_amount_from_value(asset), val),
+            Span::styled(fmt_xrpl_amount_from_value(asset), theme::accent_style()),
         ]));
     }
     if let Some(asset2) = _tx.get("Asset2") {
         lines.push(Line::from(vec![
             Span::styled("Asset2", theme::accent_style()),
             Span::raw(": "),
-            Span::styled(fmt_xrpl_amount_from_value(asset2), val),
+            Span::styled(fmt_xrpl_amount_from_value(asset2), theme::accent_style()),
         ]));
     }
 
@@ -1091,14 +1072,14 @@ pub(crate) fn amm_bid_detail_lines<'a>(_tx: &'a Value) -> Option<Vec<Line<'a>>> 
         lines.push(Line::from(vec![
             Span::styled("BidMin", theme::accent_style()),
             Span::raw(": "),
-            Span::styled(fmt_xrpl_amount_from_value(min), val),
+            Span::styled(fmt_xrpl_amount_from_value(min), theme::accent_style()),
         ]));
     }
     if let Some(max) = _tx.get("BidMax") {
         lines.push(Line::from(vec![
             Span::styled("BidMax", theme::accent_style()),
             Span::raw(": "),
-            Span::styled(fmt_xrpl_amount_from_value(max), val),
+            Span::styled(fmt_xrpl_amount_from_value(max), theme::accent_style()),
         ]));
     }
 
@@ -1111,7 +1092,6 @@ pub(crate) fn amm_delete_detail_lines<'a>(_tx: &'a Value) -> Option<Vec<Line<'a>
         return None;
     }
     let mut lines = Vec::new();
-    let val = Style::new().fg(theme::ACCENT);
 
     push_common_lines_from_value(&mut lines, _tx);
 
@@ -1119,14 +1099,14 @@ pub(crate) fn amm_delete_detail_lines<'a>(_tx: &'a Value) -> Option<Vec<Line<'a>
         lines.push(Line::from(vec![
             Span::styled("Asset", theme::accent_style()),
             Span::raw(": "),
-            Span::styled(fmt_xrpl_amount_from_value(asset), val),
+            Span::styled(fmt_xrpl_amount_from_value(asset), theme::accent_style()),
         ]));
     }
     if let Some(asset2) = _tx.get("Asset2") {
         lines.push(Line::from(vec![
             Span::styled("Asset2", theme::accent_style()),
             Span::raw(": "),
-            Span::styled(fmt_xrpl_amount_from_value(asset2), val),
+            Span::styled(fmt_xrpl_amount_from_value(asset2), theme::accent_style()),
         ]));
     }
 

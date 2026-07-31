@@ -53,7 +53,7 @@ pub(crate) fn is_backoff_active(backoff_until: Option<Instant>) -> bool {
     backoff_until.is_some_and(|until| Instant::now() < until)
 }
 
-pub(crate) fn account_tx_poll_action(
+pub(crate) fn action_from_account_tx_result(
     result: Result<crate::xrpl::types::AccountTxPage, color_eyre::Report>,
     append: bool,
 ) -> Action {
@@ -96,8 +96,8 @@ fn mainnet_write_guard_blocks(network: &Network, skip_mainnet_prompt: bool) -> b
     network.is_mainnet() && !skip_mainnet_prompt
 }
 
-/// Shared mainnet guard + seed/wallet load for write submits (AccountSet / Payment).
-fn prepare_write_wallet<E>(
+/// Mainnet guard, then load seed + wallet for AccountSet / Payment submit.
+fn resolve_submit_wallet<E>(
     network: &Network,
     skip_mainnet_prompt: bool,
     config_seed: Option<String>,
@@ -237,7 +237,17 @@ async fn poll_batch(inputs: PollBatchInputs<'_>, action_tx: &UnboundedSender<Act
         skip_account_tx,
     } = inputs;
     let dest_amount = book_pair.path_find_destination_amount_preview();
-    let (r_srv, r_dunl, r_fee, r_acc, r_book, r_path, r_nfts, r_lines, r_tx) = tokio::join!(
+    let (
+        server_info_result,
+        dunl_result,
+        fee_result,
+        account_info_result,
+        book_offers_result,
+        path_find_result,
+        account_nfts_result,
+        trust_lines_result,
+        account_tx_result,
+    ) = tokio::join!(
         tokio::time::timeout(RPC_TIMEOUT, rpc.server_info()),
         tokio::time::timeout(RPC_TIMEOUT, rpc.fetch_xrplf_dunl()),
         tokio::time::timeout(RPC_TIMEOUT, rpc.fee()),
@@ -260,12 +270,12 @@ async fn poll_batch(inputs: PollBatchInputs<'_>, action_tx: &UnboundedSender<Act
         tokio::time::timeout(RPC_TIMEOUT, rpc.account_lines(watch_address)),
         maybe_account_tx(rpc, watch_address, skip_account_tx),
     );
-    let mut any_ok = false;
-    macro_rules! dispatch {
+    let mut any_rpc_succeeded = false;
+    macro_rules! send_rpc_outcome {
         ($result:expr, $ok_action:expr, $label:literal) => {
             match $result {
                 Ok(Ok(v)) => {
-                    any_ok = true;
+                    any_rpc_succeeded = true;
                     if let Err(e) = action_tx.send($ok_action(v)) {
                         warn!(?e, "action channel closed ({})", $label);
                     }
@@ -285,18 +295,22 @@ async fn poll_batch(inputs: PollBatchInputs<'_>, action_tx: &UnboundedSender<Act
             }
         };
     }
-    dispatch!(
-        r_srv,
+    send_rpc_outcome!(
+        server_info_result,
         |v| Action::XrplServerInfo(Box::new(v)),
         "server_info"
     );
-    dispatch!(r_dunl, Action::XrplDunl, "dUNL");
-    dispatch!(r_fee, Action::XrplFee, "fee");
-    dispatch!(r_acc, |v| Action::XrplAccount(Box::new(v)), "account_info");
-    dispatch!(r_book, Action::XrplBookOffers, "book_offers");
-    match r_path {
+    send_rpc_outcome!(dunl_result, Action::XrplDunl, "dUNL");
+    send_rpc_outcome!(fee_result, Action::XrplFee, "fee");
+    send_rpc_outcome!(
+        account_info_result,
+        |v| Action::XrplAccount(Box::new(v)),
+        "account_info"
+    );
+    send_rpc_outcome!(book_offers_result, Action::XrplBookOffers, "book_offers");
+    match path_find_result {
         Ok(Ok(v)) => {
-            any_ok = true;
+            any_rpc_succeeded = true;
             let snap = path_find_snapshot(&v, &book_pair.quote);
             if let Err(e) = action_tx.send(Action::XrplPathFind(snap)) {
                 warn!(?e, "action channel closed (ripple_path_find)");
@@ -313,17 +327,17 @@ async fn poll_batch(inputs: PollBatchInputs<'_>, action_tx: &UnboundedSender<Act
             }
         }
     }
-    dispatch!(r_nfts, Action::XrplAccountNfts, "account_nfts");
-    dispatch!(r_lines, Action::XrplTrustLines, "account_lines");
-    if let Some(r_tx) = r_tx {
-        match r_tx {
+    send_rpc_outcome!(account_nfts_result, Action::XrplAccountNfts, "account_nfts");
+    send_rpc_outcome!(trust_lines_result, Action::XrplTrustLines, "account_lines");
+    if let Some(account_tx_result) = account_tx_result {
+        match account_tx_result {
             Ok(result) => {
-                let action = account_tx_poll_action(result, false);
+                let action = action_from_account_tx_result(result, false);
                 if matches!(
                     action,
                     Action::XrplTxHistory(_, _) | Action::XrplTxHistoryAppend(_, _)
                 ) {
-                    any_ok = true;
+                    any_rpc_succeeded = true;
                 }
                 if let Err(e) = action_tx.send(action) {
                     warn!(?e, "action channel closed");
@@ -358,7 +372,7 @@ async fn poll_batch(inputs: PollBatchInputs<'_>, action_tx: &UnboundedSender<Act
             );
             match result {
                 Ok(Ok(price)) => {
-                    any_ok = true;
+                    any_rpc_succeeded = true;
                     prices.push(price);
                 }
                 Ok(Err(e)) => {
@@ -389,7 +403,7 @@ async fn poll_batch(inputs: PollBatchInputs<'_>, action_tx: &UnboundedSender<Act
         .await
         {
             Ok(Ok(prices)) if !prices.is_empty() => {
-                any_ok = true;
+                any_rpc_succeeded = true;
                 if let Err(e) = action_tx.send(Action::FlareOraclePrices(prices)) {
                     warn!(?e, "action channel closed (flare ftso)");
                 }
@@ -400,7 +414,7 @@ async fn poll_batch(inputs: PollBatchInputs<'_>, action_tx: &UnboundedSender<Act
         }
     }
 
-    any_ok
+    any_rpc_succeeded
 }
 
 async fn poll_wallet_overview(
@@ -411,7 +425,7 @@ async fn poll_wallet_overview(
     match tokio::time::timeout(RPC_TIMEOUT, rpc.account_overview(seed_address)).await {
         Ok(Ok((acc, txs, marker))) => {
             let page = crate::xrpl::types::AccountTxPage { rows: txs, marker };
-            let tx_action = account_tx_poll_action(Ok(page), false);
+            let tx_action = action_from_account_tx_result(Ok(page), false);
             if let Err(e) = action_tx.send(Action::XrplWalletOverview(acc)) {
                 warn!(?e, "action channel closed");
             }
@@ -463,7 +477,7 @@ async fn submit_account_set_transaction(
         );
         return;
     }
-    let Some((seed, wallet)) = prepare_write_wallet(
+    let Some((seed, wallet)) = resolve_submit_wallet(
         network,
         params.skip_mainnet_prompt,
         params.config_seed.clone(),
@@ -623,7 +637,7 @@ async fn submit_payment_transaction(
     }
     let destination_resolved = destination.classic;
     let destination_tag = params.destination_tag.or(destination.destination_tag);
-    let Some((seed, wallet)) = prepare_write_wallet(
+    let Some((seed, wallet)) = resolve_submit_wallet(
         network,
         params.skip_mainnet_prompt,
         params.config_seed.clone(),
@@ -767,8 +781,9 @@ async fn run_scheduled_poll(
             None => false,
         }
     };
-    let (batch_ok, wallet_ok) = tokio::join!(poll_batch(inputs, action_tx), wallet_fut);
-    if batch_ok || wallet_ok {
+    let (batch_succeeded, wallet_overview_succeeded) =
+        tokio::join!(poll_batch(inputs, action_tx), wallet_fut);
+    if batch_succeeded || wallet_overview_succeeded {
         *backoff_secs = 0;
         *backoff_until = None;
     } else {
@@ -924,7 +939,7 @@ async fn run_poll_loop(
                     .await
                     {
                         Ok(result) => {
-                            send_account_tx_action(&action_tx, account_tx_poll_action(result, false));
+                            send_account_tx_action(&action_tx, action_from_account_tx_result(result, false));
                         }
                         Err(_) => send_account_tx_action(
                             &action_tx,
@@ -938,7 +953,7 @@ async fn run_poll_loop(
                     .await
                     {
                         Ok(result) => {
-                            send_account_tx_action(&action_tx, account_tx_poll_action(result, true));
+                            send_account_tx_action(&action_tx, action_from_account_tx_result(result, true));
                         }
                         Err(_) => send_account_tx_action(
                             &action_tx,
@@ -1039,9 +1054,9 @@ mod tests {
 
     /// TC-089 (I-7): account_tx not-found in poll batch → empty history, not error
     #[test]
-    fn account_tx_poll_action_not_found_returns_empty_history() {
+    fn action_from_account_tx_result_not_found_returns_empty_history() {
         let err = color_eyre::eyre::eyre!("actNotFound");
-        match account_tx_poll_action(Err(err), false) {
+        match action_from_account_tx_result(Err(err), false) {
             Action::XrplTxHistory(rows, marker) => {
                 assert!(rows.is_empty());
                 assert!(marker.is_none());
@@ -1051,9 +1066,9 @@ mod tests {
     }
 
     #[test]
-    fn account_tx_poll_action_other_error_is_xrpl_error() {
+    fn action_from_account_tx_result_other_error_is_xrpl_error() {
         let err = color_eyre::eyre::eyre!("timeout");
-        match account_tx_poll_action(Err(err), false) {
+        match action_from_account_tx_result(Err(err), false) {
             Action::XrplError(msg) => assert!(msg.contains("account_tx")),
             other => panic!("expected XrplError, got {other:?}"),
         }

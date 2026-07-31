@@ -693,13 +693,14 @@ pub(crate) struct ValidatorManifestMeta {
 ///
 /// Results are memoized by raw base64 (dUNL entries rarely change between polls).
 pub fn parse_validator_manifest_b64(b64: &str) -> Option<ValidatorManifestMeta> {
-    fn cache() -> &'static Mutex<HashMap<String, Option<ValidatorManifestMeta>>> {
-        static CACHE: OnceLock<Mutex<HashMap<String, Option<ValidatorManifestMeta>>>> =
-            OnceLock::new();
-        CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+    fn manifest_decode_cache() -> &'static Mutex<HashMap<String, Option<ValidatorManifestMeta>>> {
+        static MANIFEST_DECODE_CACHE: OnceLock<
+            Mutex<HashMap<String, Option<ValidatorManifestMeta>>>,
+        > = OnceLock::new();
+        MANIFEST_DECODE_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
     }
 
-    if let Ok(guard) = cache().lock()
+    if let Ok(guard) = manifest_decode_cache().lock()
         && let Some(hit) = guard.get(b64)
     {
         return hit.clone();
@@ -709,7 +710,7 @@ pub fn parse_validator_manifest_b64(b64: &str) -> Option<ValidatorManifestMeta> 
         .ok()
         .and_then(|bytes| parse_validator_manifest_bytes(&bytes));
 
-    if let Ok(mut guard) = cache().lock() {
+    if let Ok(mut guard) = manifest_decode_cache().lock() {
         // Bound memory if publisher churns keys; rare in practice.
         if guard.len() >= 512 {
             guard.clear();
@@ -720,31 +721,31 @@ pub fn parse_validator_manifest_b64(b64: &str) -> Option<ValidatorManifestMeta> 
 }
 
 fn parse_validator_manifest_bytes(data: &[u8]) -> Option<ValidatorManifestMeta> {
-    let mut off = 0usize;
+    let mut byte_offset = 0usize;
     let mut sequence = None;
     let mut domain = None;
     let mut master_public_key = None;
 
-    while off < data.len() {
-        if data[off] == 0xE1 {
+    while byte_offset < data.len() {
+        if data[byte_offset] == 0xE1 {
             break;
         }
-        let (field_type, field_code, next) = read_st_field_header(data, off)?;
-        off = next;
+        let (field_type, field_code, next) = read_st_field_header(data, byte_offset)?;
+        byte_offset = next;
         match field_type {
             2 => {
-                if off + 4 > data.len() {
+                if byte_offset + 4 > data.len() {
                     return None;
                 }
-                let value = u32::from_be_bytes(data[off..off + 4].try_into().ok()?);
-                off += 4;
+                let value = u32::from_be_bytes(data[byte_offset..byte_offset + 4].try_into().ok()?);
+                byte_offset += 4;
                 if field_code == 4 {
                     sequence = Some(value);
                 }
             }
             7 => {
-                let (blob, next) = read_st_vl(data, off)?;
-                off = next;
+                let (blob, next) = read_st_vl(data, byte_offset)?;
+                byte_offset = next;
                 match field_code {
                     1 => master_public_key = Some(validator_key_bytes_to_hex(&blob)),
                     7 => {

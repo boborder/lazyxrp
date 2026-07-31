@@ -1,32 +1,28 @@
 use crate::components::shared::theme;
-use ratatui::{
-    style::Style,
-    text::{Line, Span},
-};
+use ratatui::text::{Line, Span};
 use serde_json::Value;
 
 /// Format an xrpl Currency for display.
 /// Push Account, Sequence, Fee directly from a serde_json::Value without cloning.
 pub(crate) fn push_common_lines_from_value(lines: &mut Vec<Line>, tx: &Value) {
-    let hi = theme::accent_style();
-    let val = Style::new().fg(theme::ACCENT);
+    let accent = theme::accent_style();
     if let Some(account) = tx.get("Account").and_then(Value::as_str) {
         lines.push(Line::from(vec![
-            Span::styled("Account", hi),
+            Span::styled("Account", accent),
             Span::raw(": "),
-            Span::styled(account.to_string(), val),
+            Span::styled(account.to_string(), accent),
         ]));
     }
     if let Some(seq) = tx.get("Sequence").and_then(Value::as_u64) {
         lines.push(Line::from(vec![
-            Span::styled("Sequence", hi),
+            Span::styled("Sequence", accent),
             Span::raw(": "),
-            Span::styled(seq.to_string(), val),
+            Span::styled(seq.to_string(), accent),
         ]));
     }
     if let Some(fee) = tx.get("Fee").and_then(Value::as_str) {
         lines.push(Line::from(vec![
-            Span::styled("Fee", hi),
+            Span::styled("Fee", accent),
             Span::raw(": "),
             Span::styled(crate::xrpl::drops_to_xrp(fee), theme::dim_style()),
         ]));
@@ -39,11 +35,11 @@ pub(crate) fn fmt_xrpl_amount_from_value(value: &Value) -> String {
         crate::xrpl::drops_to_xrp(s)
     } else if let Some(obj) = value.as_object() {
         let currency = obj.get("currency").and_then(Value::as_str).unwrap_or("?");
-        let val = obj.get("value").and_then(Value::as_str).unwrap_or("0");
+        let amount_value = obj.get("value").and_then(Value::as_str).unwrap_or("0");
         if let Some(issuer) = obj.get("issuer").and_then(Value::as_str) {
-            format!("{val} {currency} (issuer: {issuer})")
+            format!("{amount_value} {currency} (issuer: {issuer})")
         } else {
-            format!("{val} {currency}")
+            format!("{amount_value} {currency}")
         }
     } else {
         value.to_string()
@@ -72,11 +68,11 @@ pub(crate) fn format_value(key: &str, value: &Value) -> String {
             && obj.contains_key("value")
         {
             let currency = obj.get("currency").and_then(Value::as_str).unwrap_or("?");
-            let val = obj.get("value").and_then(Value::as_str).unwrap_or("0");
+            let amount_value = obj.get("value").and_then(Value::as_str).unwrap_or("0");
             if let Some(issuer) = obj.get("issuer").and_then(Value::as_str) {
-                return format!("{val} {currency} (issuer: {issuer})");
+                return format!("{amount_value} {currency} (issuer: {issuer})");
             }
-            return format!("{val} {currency}");
+            return format!("{amount_value} {currency}");
         }
     }
 
@@ -90,8 +86,8 @@ pub(crate) fn format_value(key: &str, value: &Value) -> String {
         Value::Object(o) => {
             if o.contains_key("currency") && o.contains_key("value") {
                 let currency = o.get("currency").and_then(Value::as_str).unwrap_or("?");
-                let val = o.get("value").and_then(Value::as_str).unwrap_or("0");
-                return format!("{val} {currency}");
+                let amount_value = o.get("value").and_then(Value::as_str).unwrap_or("0");
+                return format!("{amount_value} {currency}");
             }
             let s = value.to_string();
             if s.len() > 80 {
@@ -245,7 +241,7 @@ mod tests {
 
     #[test]
     fn format_value_short_object_not_truncated() {
-        let v = json!({"a":"hi"});
+        let v = json!({"a":"accent"});
         let result = format_value("Foo", &v);
         assert!(!result.ends_with('…'));
     }
