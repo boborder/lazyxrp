@@ -566,6 +566,16 @@ pub struct OfferCreateSubmitParams {
     pub config_seed: Option<String>,
 }
 
+/// TrustSet from the Wallet form (v1: Limit + Currency + Issuer only).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TrustSetSubmitParams {
+    pub currency: String,
+    pub issuer: String,
+    pub limit: String,
+    pub skip_mainnet_prompt: bool,
+    pub config_seed: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PollCommand {
     Account,
@@ -586,6 +596,8 @@ pub enum PollCommand {
     /// Sign and submit EscrowCreate (wallet form).
     EscrowCreateSubmit(EscrowCreateSubmitParams),
     OfferCreateSubmit(OfferCreateSubmitParams),
+    /// Sign and submit TrustSet (wallet form).
+    TrustSetSubmit(TrustSetSubmitParams),
     /// Generate a new key pair via wallet_propose ("ed25519" or "secp256k1").
     WalletPropose(String),
 }

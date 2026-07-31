@@ -604,6 +604,14 @@ impl App {
                         warn!(?err, "poll command channel closed");
                     }
                 }
+                Action::TrustSetSubmit(params) => {
+                    if let Err(err) = self
+                        .poll_tx
+                        .send(PollCommand::TrustSetSubmit(params.clone()))
+                    {
+                        warn!(?err, "poll command channel closed");
+                    }
+                }
                 Action::WalletPropose => {
                     if let Err(err) = self
                         .poll_tx

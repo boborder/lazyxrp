@@ -615,8 +615,52 @@ pub fn create_and_sign_offer_create(
     encode(&tx).map_err(|e| color_eyre::eyre::eyre!("encode error: {:?}", e))
 }
 
+/// Create and sign a TrustSet transaction, returning the tx_blob hex (v1: limit only).
+#[allow(clippy::too_many_arguments)]
+pub fn create_and_sign_trust_set(
+    seed: &SecretString,
+    account: &str,
+    currency: &str,
+    issuer: &str,
+    limit: &str,
+    sequence: u32,
+    fee_drops: u32,
+    last_ledger_sequence: u32,
+    _network: &Network,
+) -> color_eyre::Result<String> {
+    use xrpl::core::binarycodec::encode;
+    use xrpl::models::IssuedCurrencyAmount;
+    use xrpl::models::XRPAmount;
+    use xrpl::models::transactions::trust_set::TrustSet;
+    use xrpl::models::transactions::{CommonFields, TransactionType};
+    use xrpl::transaction::sign;
+
+    let wallet =
+        wallet_from_family_seed(seed.expose_secret(), 0).map_err(|e| color_eyre::eyre::eyre!(e))?;
+
+    let currency = require_nonempty_field("currency", currency)?;
+    let issuer = require_classic_address_shape("issuer", issuer)?;
+    let limit = require_nonempty_field("limit", limit)?;
+
+    let mut tx = TrustSet {
+        common_fields: CommonFields::from_account(account.to_string())
+            .with_transaction_type(TransactionType::TrustSet)
+            .with_sequence(sequence)
+            .with_fee(XRPAmount::from(fee_drops.to_string()))
+            .with_last_ledger_sequence(last_ledger_sequence),
+        limit_amount: IssuedCurrencyAmount {
+            currency: currency.to_string().into(),
+            issuer: issuer.to_string().into(),
+            value: limit.to_string().into(),
+        },
+        ..Default::default()
+    };
+
+    sign(&mut tx, &wallet, false).map_err(|e| color_eyre::eyre::eyre!("sign error: {:?}", e))?;
+    encode(&tx).map_err(|e| color_eyre::eyre::eyre!("encode error: {:?}", e))
+}
+
 /// Unsigned TrustSet JSON for `simulate` (v1: Limit + Currency + Issuer only).
-#[allow(dead_code)] // wired in ticket 07 poll/UI
 pub fn build_trust_set_tx_json_for_simulate(
     account: &str,
     currency: &str,

@@ -67,9 +67,15 @@ enum ComposerPhase {
         taker_gets: String,
         taker_pays: String,
     },
+    TrustSet {
+        row: usize,
+        currency: String,
+        issuer: String,
+        limit: String,
+    },
 }
 
-const COMPOSER_KIND_COUNT: usize = 4;
+const COMPOSER_KIND_COUNT: usize = 5;
 
 #[path = "wallet_composer.rs"]
 mod composer;
@@ -234,6 +240,17 @@ impl Component for WalletPanel {
             Action::OfferCreateSubmitErr(msg) => {
                 self.set_submit_flash(SubmitFlash::Error(format!("OfferCreate · {msg}")));
             }
+            Action::TrustSetSubmitOk(hash) => {
+                self.set_submit_flash(SubmitFlash::Success(format!("TrustSet submitted · {hash}")));
+                if matches!(&self.composer, Some(ComposerPhase::TrustSet { .. })) {
+                    self.composer = None;
+                    self.is_form_editing = false;
+                    return Ok(Some(Action::SetKeymapSuppression(false)));
+                }
+            }
+            Action::TrustSetSubmitErr(msg) => {
+                self.set_submit_flash(SubmitFlash::Error(format!("TrustSet · {msg}")));
+            }
             Action::WalletProposeOk(result) => {
                 self.keygen_result = Some(result.clone());
             }
@@ -282,6 +299,10 @@ impl Component for WalletPanel {
                 }
                 Some(ComposerPhase::OfferCreate { .. }) => {
                     self.composer = Some(ComposerPhase::PickKind { selected: 3 });
+                    None
+                }
+                Some(ComposerPhase::TrustSet { .. }) => {
+                    self.composer = Some(ComposerPhase::PickKind { selected: 4 });
                     None
                 }
             });
@@ -340,6 +361,39 @@ impl Component for WalletPanel {
             && (key.modifiers.contains(KeyModifiers::CONTROL) || !self.is_form_editing)
         {
             return Ok(Some(self.queue_submit_offer_create()));
+        }
+
+        if matches!(&self.composer, Some(ComposerPhase::TrustSet { .. }))
+            && matches!(key.code, KeyCode::Char('s') | KeyCode::Char('S'))
+            && (key.modifiers.contains(KeyModifiers::CONTROL) || !self.is_form_editing)
+        {
+            return Ok(Some(self.queue_submit_trust_set()));
+        }
+
+        if let Some(ComposerPhase::TrustSet {
+            row,
+            ref mut currency,
+            ref mut issuer,
+            ref mut limit,
+        }) = self.composer
+            && self.is_form_editing
+        {
+            let target = match row {
+                0 => currency,
+                1 => issuer,
+                _ => limit,
+            };
+            match key.code {
+                KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    target.push(c);
+                    return Ok(None);
+                }
+                KeyCode::Backspace => {
+                    target.pop();
+                    return Ok(None);
+                }
+                _ => {}
+            }
         }
 
         if let Some(ComposerPhase::OfferCreate {
@@ -437,6 +491,7 @@ impl Component for WalletPanel {
                         1 => self.open_payment_composer(),
                         2 => self.open_set_regular_key_composer(),
                         3 => self.open_offer_create_composer(),
+                        4 => self.open_trust_set_composer(),
                         _ => {}
                     },
                     _ => {}
@@ -495,6 +550,35 @@ impl Component for WalletPanel {
             }
             Some(ComposerPhase::OfferCreate { row, .. }) => {
                 const ROWS: usize = 2;
+                match key.code {
+                    KeyCode::Char('e') | KeyCode::Char('E')
+                        if !key.modifiers.contains(KeyModifiers::CONTROL) =>
+                    {
+                        self.is_form_editing = !self.is_form_editing;
+                        if self.is_form_editing {
+                            return Ok(Some(Action::SetKeymapSuppression(true)));
+                        }
+                    }
+                    KeyCode::Enter => {
+                        if self.is_form_editing {
+                            *row = (*row + 1) % ROWS;
+                        } else {
+                            self.is_form_editing = true;
+                            return Ok(Some(Action::SetKeymapSuppression(true)));
+                        }
+                    }
+                    KeyCode::Char('[') | KeyCode::BackTab => {
+                        *row = (*row + ROWS - 1) % ROWS;
+                    }
+                    KeyCode::Char(']') | KeyCode::Tab => {
+                        *row = (*row + 1) % ROWS;
+                    }
+                    _ => {}
+                }
+                return Ok(None);
+            }
+            Some(ComposerPhase::TrustSet { row, .. }) => {
+                const ROWS: usize = 3;
                 match key.code {
                     KeyCode::Char('e') | KeyCode::Char('E')
                         if !key.modifiers.contains(KeyModifiers::CONTROL) =>
@@ -910,6 +994,33 @@ mod tests {
         );
         assert!(iou.contains("Pay 10 USD"), "{iou}");
         assert!(iou.contains("issued by"), "{iou}");
+    }
+
+    #[test]
+    fn open_trust_set_composer_and_queue_submit() {
+        let mut panel = WalletPanel::new(true);
+        panel.open_trust_set_composer();
+        match &panel.composer {
+            Some(ComposerPhase::TrustSet {
+                currency,
+                issuer,
+                limit,
+                ..
+            }) => {
+                assert_eq!(currency, "USD");
+                assert!(!issuer.is_empty());
+                assert_eq!(limit, "1000");
+            }
+            other => panic!("expected TrustSet, got {other:?}"),
+        }
+        match panel.queue_submit_trust_set() {
+            Action::TrustSetSubmit(p) => {
+                assert_eq!(p.currency, "USD");
+                assert_eq!(p.limit, "1000");
+                assert!(p.skip_mainnet_prompt);
+            }
+            other => panic!("expected TrustSetSubmit, got {other:?}"),
+        }
     }
 
     #[test]

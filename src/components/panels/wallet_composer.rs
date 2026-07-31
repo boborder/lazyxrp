@@ -13,7 +13,7 @@ use crate::{
     components::shared::theme,
     xrpl::{
         AccountSetSubmitParams, OfferCreateSubmitParams, PaymentSubmitParams,
-        SetRegularKeySubmitParams,
+        SetRegularKeySubmitParams, TrustSetSubmitParams,
     },
 };
 
@@ -87,6 +87,35 @@ impl WalletPanel {
         Action::OfferCreateSubmit(OfferCreateSubmitParams {
             taker_gets,
             taker_pays,
+            skip_mainnet_prompt: self.skip_mainnet_prompt,
+            config_seed: self.config_seed(),
+        })
+    }
+
+    pub(super) fn open_trust_set_composer(&mut self) {
+        self.composer = Some(ComposerPhase::TrustSet {
+            row: 0,
+            currency: "USD".to_string(),
+            issuer: "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh".to_string(),
+            limit: "1000".to_string(),
+        });
+        self.is_form_editing = false;
+    }
+
+    pub(super) fn queue_submit_trust_set(&self) -> Action {
+        let (currency, issuer, limit) = match &self.composer {
+            Some(ComposerPhase::TrustSet {
+                currency,
+                issuer,
+                limit,
+                ..
+            }) => (currency.clone(), issuer.clone(), limit.clone()),
+            _ => (String::new(), String::new(), String::new()),
+        };
+        Action::TrustSetSubmit(TrustSetSubmitParams {
+            currency: currency.to_uppercase(),
+            issuer,
+            limit,
             skip_mainnet_prompt: self.skip_mainnet_prompt,
             config_seed: self.config_seed(),
         })
@@ -307,7 +336,7 @@ impl WalletPanel {
 
         let popup_w = area.width.clamp(54, 74);
         let popup_h = match phase {
-            ComposerPhase::PickKind { .. } => 16u16,
+            ComposerPhase::PickKind { .. } => 18u16,
             ComposerPhase::AccountSet => 21u16,
             ComposerPhase::Payment { is_iou, .. } => {
                 if *is_iou {
@@ -318,6 +347,7 @@ impl WalletPanel {
             }
             ComposerPhase::SetRegularKey { .. } => 14u16,
             ComposerPhase::OfferCreate { .. } => 14u16,
+            ComposerPhase::TrustSet { .. } => 16u16,
         }
         .min(area.height.saturating_sub(2))
         .max(8);
@@ -339,6 +369,7 @@ impl WalletPanel {
             }
             ComposerPhase::SetRegularKey { .. } => "SetRegularKey",
             ComposerPhase::OfferCreate { .. } => "OfferCreate",
+            ComposerPhase::TrustSet { .. } => "TrustSet",
         };
         let block = theme::panel_block(inner_title, true);
         let inner = block.inner(popup);
@@ -370,6 +401,11 @@ impl WalletPanel {
                 } else {
                     label_style
                 };
+                let hi4 = if *selected == 4 {
+                    highlight_style
+                } else {
+                    label_style
+                };
                 Paragraph::new(vec![
                     Line::from(""),
                     Line::from(vec![
@@ -395,6 +431,13 @@ impl WalletPanel {
                         Span::styled(
                             "OfferCreate — TakerGets/Pays (XRP:drops or CUR:issuer:value)",
                             hi3,
+                        ),
+                    ]),
+                    Line::from(vec![
+                        Span::raw(if *selected == 4 { "⟩ " } else { "  " }),
+                        Span::styled(
+                            "TrustSet — Limit + Currency + Issuer (no rippling flags)",
+                            hi4,
                         ),
                     ]),
                     Line::from(""),
@@ -620,6 +663,63 @@ impl WalletPanel {
                             },
                         ),
                         Span::styled(taker_pays.clone(), value_style),
+                    ]),
+                    Line::from(""),
+                    Line::from(Span::styled(
+                        "e edit · Tab rows · Ctrl+S / S submit · Esc back",
+                        theme::secondary_style(),
+                    )),
+                ])
+            }
+            ComposerPhase::TrustSet {
+                row,
+                currency,
+                issuer,
+                limit,
+            } => {
+                let net_note = if self.network.is_mainnet() && !self.skip_mainnet_prompt {
+                    " · mainnet writes need --yes"
+                } else {
+                    ""
+                };
+                Paragraph::new(vec![
+                    Line::from(Span::styled(
+                        format!("v1: LimitAmount only (no rippling flags){net_note}"),
+                        theme::secondary_style(),
+                    )),
+                    Line::from(""),
+                    Line::from(vec![
+                        Span::styled(
+                            format!("Currency [{}] ", if *row == 0 { "*" } else { " " }),
+                            if *row == 0 {
+                                highlight_style
+                            } else {
+                                label_style
+                            },
+                        ),
+                        Span::styled(currency.clone(), value_style),
+                    ]),
+                    Line::from(vec![
+                        Span::styled(
+                            format!("Issuer   [{}] ", if *row == 1 { "*" } else { " " }),
+                            if *row == 1 {
+                                highlight_style
+                            } else {
+                                label_style
+                            },
+                        ),
+                        Span::styled(issuer.clone(), value_style),
+                    ]),
+                    Line::from(vec![
+                        Span::styled(
+                            format!("Limit    [{}] ", if *row == 2 { "*" } else { " " }),
+                            if *row == 2 {
+                                highlight_style
+                            } else {
+                                label_style
+                            },
+                        ),
+                        Span::styled(limit.clone(), value_style),
                     ]),
                     Line::from(""),
                     Line::from(Span::styled(

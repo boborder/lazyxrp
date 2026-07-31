@@ -7,8 +7,8 @@ use crate::{
         AccountSetSubmitParams, AccountSummary, AggregatePrice, AmmSummary, DunlSummary,
         EscrowCreateSubmitParams, FeeSummary, FlareFeedPrice, LedgerObjectRow, NftRow,
         OfferCreateSubmitParams, OfferRow, PathFindSnapshot, PaymentSubmitParams,
-        ServerInfoSummary, SetRegularKeySubmitParams, TrustLineRow, TxRow, TxSummary,
-        WalletProposeResult, XrplRlusdPrice, XrplTomlData,
+        ServerInfoSummary, SetRegularKeySubmitParams, TrustLineRow, TrustSetSubmitParams, TxRow,
+        TxSummary, WalletProposeResult, XrplRlusdPrice, XrplTomlData,
     },
 };
 
@@ -115,6 +115,10 @@ pub enum Action {
     OfferCreateSubmit(OfferCreateSubmitParams),
     OfferCreateSubmitOk(String),
     OfferCreateSubmitErr(String),
+    /// Queue TrustSet sign+submit from Wallet form (poll task).
+    TrustSetSubmit(TrustSetSubmitParams),
+    TrustSetSubmitOk(String),
+    TrustSetSubmitErr(String),
     /// Request local key generation (Wallet tab, `g`).
     WalletPropose,
     WalletProposeOk(WalletProposeResult),

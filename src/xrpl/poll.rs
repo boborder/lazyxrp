@@ -17,7 +17,7 @@ use super::client::{
 };
 use super::types::{
     AccountSetSubmitParams, BookPair, OfferCreateSubmitParams, OracleId, PaymentSubmitParams,
-    PollCommand, PollContext, SetRegularKeySubmitParams, SimulateResult,
+    PollCommand, PollContext, SetRegularKeySubmitParams, SimulateResult, TrustSetSubmitParams,
 };
 use serde_json::Value;
 
@@ -582,6 +582,105 @@ async fn submit_account_set_transaction(
             vec![
                 Action::AccountSetSubmitOk(hash),
                 Action::RefreshAccount,
+                Action::RefreshTxHistory,
+            ]
+        },
+    )
+    .await;
+}
+
+async fn submit_trust_set_transaction(
+    rpc: &RpcClient,
+    network: &Network,
+    params: TrustSetSubmitParams,
+    action_tx: &UnboundedSender<Action>,
+) {
+    let submit_err = Action::TrustSetSubmitErr;
+    let currency = match signing::require_nonempty_field("currency", &params.currency) {
+        Ok(s) => s.to_string(),
+        Err(e) => {
+            send_action(action_tx, submit_err(format!("{e}")));
+            return;
+        }
+    };
+    let issuer = match signing::require_classic_address_shape("issuer", &params.issuer) {
+        Ok(s) => s.to_string(),
+        Err(e) => {
+            send_action(action_tx, submit_err(format!("{e}")));
+            return;
+        }
+    };
+    let limit = match signing::require_nonempty_field("limit", &params.limit) {
+        Ok(s) => s.to_string(),
+        Err(e) => {
+            send_action(action_tx, submit_err(format!("{e}")));
+            return;
+        }
+    };
+
+    let Some((seed, wallet)) = resolve_submit_wallet(
+        network,
+        params.skip_mainnet_prompt,
+        params.config_seed.clone(),
+        "mainnet: restart lazyxrp with --yes to allow TrustSet writes",
+        submit_err,
+        action_tx,
+    ) else {
+        return;
+    };
+    let account = wallet.classic_address.clone();
+
+    let Some(account_info) =
+        fetch_account_summary_for_submit(rpc, &account, submit_err, action_tx).await
+    else {
+        return;
+    };
+
+    let tx_json = match signing::build_trust_set_tx_json_for_simulate(
+        &account,
+        &currency,
+        &issuer,
+        &limit,
+        account_info.sequence,
+    ) {
+        Ok(j) => j,
+        Err(e) => {
+            send_action(action_tx, submit_err(format!("tx_json: {e}")));
+            return;
+        }
+    };
+
+    let sim = match simulate_tx_requiring_tes_success(rpc, tx_json).await {
+        Ok(s) => s,
+        Err(e) => {
+            send_action(action_tx, submit_err(e));
+            return;
+        }
+    };
+
+    finalize_simulate_sign_submit(
+        rpc,
+        action_tx,
+        sim,
+        |sequence, fee_drops, last_ledger_sequence| {
+            signing::create_and_sign_trust_set(
+                &seed,
+                &account,
+                &currency,
+                &issuer,
+                &limit,
+                sequence,
+                fee_drops,
+                last_ledger_sequence,
+                network,
+            )
+        },
+        submit_err,
+        |hash| {
+            vec![
+                Action::TrustSetSubmitOk(hash),
+                Action::RefreshAccount,
+                Action::RefreshLines,
                 Action::RefreshTxHistory,
             ]
         },
@@ -1180,6 +1279,10 @@ async fn drive_poll_loop(
                         let network = *network_watch.borrow();
                         submit_offer_create_transaction(&rpc, &network, params, &action_tx).await;
                     }
+                    PollCommand::TrustSetSubmit(params) => {
+                        let network = *network_watch.borrow();
+                        submit_trust_set_transaction(&rpc, &network, params, &action_tx).await;
+                    }
                     PollCommand::WalletPropose(key_type) => {
                         match crate::signing::propose_wallet_local(&key_type) {
                             Ok(result) => {
@@ -1196,8 +1299,7 @@ async fn drive_poll_loop(
                             }
                         }
                     }
-                    // EscrowCreate / TrustSet: wire via
-                    // `.scratch/v024-next/assets/04-poll-handler-template.md` (ticket 07+).
+                    // EscrowCreate remains deferred: see map out-of-scope.
                     // Do not silently drop new submit commands here.
                     _ => {}
                 }
@@ -1403,6 +1505,28 @@ mod tests {
                 );
             }
             other => panic!("expected SetRegularKeySubmitErr after guard skip, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn trust_set_submit_mainnet_without_yes_is_rejected() {
+        let (action_tx, mut action_rx) = mpsc::unbounded_channel();
+        let rpc = RpcClient::connect("http://127.0.0.1:1").expect("rpc client");
+        let params = TrustSetSubmitParams {
+            currency: "USD".into(),
+            issuer: "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh".into(),
+            limit: "1000".into(),
+            skip_mainnet_prompt: false,
+            config_seed: None,
+        };
+        submit_trust_set_transaction(&rpc, &Network::Mainnet, params, &action_tx).await;
+        let action = action_rx.recv().await.expect("action");
+        match action {
+            Action::TrustSetSubmitErr(msg) => {
+                assert!(msg.contains("mainnet"));
+                assert!(msg.contains("--yes"));
+            }
+            other => panic!("expected TrustSetSubmitErr, got {other:?}"),
         }
     }
 
