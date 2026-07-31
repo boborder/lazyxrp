@@ -52,14 +52,16 @@ When a push to `main` bumps `Cargo.toml` `version` and CI (`test`, `rustfmt`, `c
 
 `src/`, `Cargo.lock`, docs, and workflow changes are all allowed — the gate is **version string change only** (plus CI green / tag not already present).
 
+**Note:** A tag push made with the default `GITHUB_TOKEN` does **not** start other workflows. `auto-tag` therefore also `workflow_dispatch`es `CD` on `v<version>` after pushing the tag.
+
 Typical flow:
 
 1. Bump `version` in `Cargo.toml` (and sync docs / lockfile as needed).
 2. Merge / push to `main`.
-3. CI runs, then `auto-tag` pushes `v<version>`.
-4. CD runs on the new tag.
+3. CI runs, then `auto-tag` pushes `v<version>` and dispatches CD.
+4. CD builds binaries + publishes GitHub Release / crates.io.
 
-Fallback if CI is red or you need to retag carefully: `mise run tag-push` (reads `Cargo.toml`, creates and pushes that single tag).
+Fallback if CI is red or you need to retag carefully: `mise run tag-push` (reads `Cargo.toml`, creates and pushes that single tag with **your** credentials so the natural `push.tags` CD trigger fires).
 
 ## Post-release
 
