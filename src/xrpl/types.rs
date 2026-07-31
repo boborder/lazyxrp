@@ -610,6 +610,8 @@ pub struct PollContext {
     pub poll_interval: Duration,
     pub seed_address: Option<String>,
     pub network_watch: watch::Receiver<Network>,
+    /// Active UI tab index (0 Overview …) for optional heavy-RPC skips.
+    pub tab_watch: watch::Receiver<usize>,
     /// Oracle identifiers for `get_aggregate_price`.
     pub oracles: Vec<OracleId>,
     /// Price pairs to query via `get_aggregate_price`.

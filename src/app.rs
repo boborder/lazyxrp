@@ -93,6 +93,9 @@ pub struct App {
     last_refresh_account: Option<Instant>,
     last_refresh_book: Option<Instant>,
     last_refresh_ledger_objects: Option<Instant>,
+    last_refresh_nfts: Option<Instant>,
+    last_refresh_lines: Option<Instant>,
+    last_refresh_tx_history: Option<Instant>,
     should_quit: bool,
     should_suspend: bool,
     mode: Mode,
@@ -107,6 +110,7 @@ pub struct App {
     watch_account: String,
     /// Watch sender — future: dynamic network switching from the UI
     net_tx: watch::Sender<Network>,
+    tab_tx: watch::Sender<usize>,
     needs_draw: bool,
 }
 
@@ -170,6 +174,7 @@ impl App {
             None
         };
         let (net_tx, _net_rx) = watch::channel(network);
+        let (tab_tx, _tab_rx) = watch::channel(0usize);
         if let Some(cli_seed) = seed {
             let trimmed_seed = crate::signing::trim_family_seed(&cli_seed);
             config.xrpl.signing.seed = None;
@@ -209,6 +214,9 @@ impl App {
             last_refresh_account: None,
             last_refresh_book: None,
             last_refresh_ledger_objects: None,
+            last_refresh_nfts: None,
+            last_refresh_lines: None,
+            last_refresh_tx_history: None,
             should_quit: false,
             should_suspend: false,
             config: Arc::new(config),
@@ -222,6 +230,7 @@ impl App {
             ws_server,
             watch_account,
             net_tx,
+            tab_tx,
             needs_draw: true,
         })
     }
@@ -289,6 +298,7 @@ impl App {
                 poll_interval: Duration::from_millis(self.config.xrpl.poll_interval_ms),
                 seed_address,
                 network_watch: self.net_tx.subscribe(),
+                tab_watch: self.tab_tx.subscribe(),
                 oracles: self.config.xrpl.oracles.clone(),
                 oracle_pairs: self.config.xrpl.oracle_pairs.clone(),
                 flare_rpc_url: flare_rpc_url.clone(),
@@ -473,6 +483,7 @@ impl App {
                 Action::Render => {}
                 Action::TabNext => {
                     self.active_tab = (self.active_tab + 1) % TAB_TITLES.len();
+                    let _ = self.tab_tx.send(self.active_tab);
                 }
                 Action::TabPrev => {
                     self.active_tab = if self.active_tab == 0 {
@@ -480,9 +491,11 @@ impl App {
                     } else {
                         self.active_tab - 1
                     };
+                    let _ = self.tab_tx.send(self.active_tab);
                 }
                 Action::TabJump(i) if *i < TAB_TITLES.len() => {
                     self.active_tab = *i;
+                    let _ = self.tab_tx.send(self.active_tab);
                 }
                 Action::NetworkChange(net) => {
                     if let Err(err) = self.net_tx.send(*net) {
@@ -532,19 +545,25 @@ impl App {
                     );
                 }
                 Action::RefreshNfts => {
-                    if let Err(err) = self.poll_tx.send(PollCommand::Nfts) {
-                        warn!(?err, "poll command channel closed");
-                    }
+                    Self::send_debounced_poll(
+                        &mut self.last_refresh_nfts,
+                        &self.poll_tx,
+                        PollCommand::Nfts,
+                    );
                 }
                 Action::RefreshLines => {
-                    if let Err(err) = self.poll_tx.send(PollCommand::Lines) {
-                        warn!(?err, "poll command channel closed");
-                    }
+                    Self::send_debounced_poll(
+                        &mut self.last_refresh_lines,
+                        &self.poll_tx,
+                        PollCommand::Lines,
+                    );
                 }
                 Action::RefreshTxHistory => {
-                    if let Err(err) = self.poll_tx.send(PollCommand::TxHistory) {
-                        warn!(?err, "poll command channel closed");
-                    }
+                    Self::send_debounced_poll(
+                        &mut self.last_refresh_tx_history,
+                        &self.poll_tx,
+                        PollCommand::TxHistory,
+                    );
                 }
                 Action::RefreshTxHistoryMore(marker) => {
                     if let Err(err) = self

@@ -22,7 +22,7 @@ const BINDINGS: &[(&str, &str)] = &[
     ),
     (
         "t / e / s (wallet modal)",
-        "Overview: `t` → AccountSet or Payment; Tab/[] rows, Enter, `e` type, `s` send; ok closes modal",
+        "Overview: `t` → AccountSet / Payment / SetRegularKey / OfferCreate / TrustSet; Tab/[] rows, Enter, `e` edit, `s` send; Esc back",
     ),
     ("Enter", "Transaction detail (all table panels)"),
     (

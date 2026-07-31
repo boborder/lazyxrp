@@ -39,6 +39,20 @@ pub fn start_poll_task(
 
 const MIN_POLL_INTERVAL: Duration = Duration::from_secs(10);
 
+/// Tab indices mirrored from `app::TAB_TITLES` (Overview, Account, Market, Assets).
+pub(crate) const TAB_MARKET: usize = 2;
+pub(crate) const TAB_ASSETS: usize = 3;
+
+#[must_use]
+pub(crate) fn should_poll_market_book(active_tab: usize) -> bool {
+    active_tab == TAB_MARKET
+}
+
+#[must_use]
+pub(crate) fn should_poll_asset_panels(active_tab: usize) -> bool {
+    active_tab == TAB_ASSETS
+}
+
 pub(crate) fn drain_poll_trigger_burst(rx: &mut UnboundedReceiver<()>) {
     while rx.try_recv().is_ok() {}
 }
@@ -207,6 +221,7 @@ struct PollBatchInputs<'a> {
     flare_feeds: &'a [String],
     /// When a signing seed is configured, `poll_wallet_overview` fetches `account_tx` once.
     skip_account_tx: bool,
+    active_tab: usize,
 }
 
 async fn maybe_account_tx(
@@ -235,8 +250,11 @@ async fn poll_batch(inputs: PollBatchInputs<'_>, action_tx: &UnboundedSender<Act
         flare_rpc_url,
         flare_feeds,
         skip_account_tx,
+        active_tab,
     } = inputs;
     let dest_amount = book_pair.path_find_destination_amount_preview();
+    let skip_market = !should_poll_market_book(active_tab);
+    let skip_assets = !should_poll_asset_panels(active_tab);
     let (
         server_info_result,
         dunl_result,
@@ -252,22 +270,52 @@ async fn poll_batch(inputs: PollBatchInputs<'_>, action_tx: &UnboundedSender<Act
         tokio::time::timeout(RPC_TIMEOUT, rpc.fetch_xrplf_dunl()),
         tokio::time::timeout(RPC_TIMEOUT, rpc.fee()),
         tokio::time::timeout(RPC_TIMEOUT, rpc.account_info(watch_address)),
-        tokio::time::timeout(
-            RPC_TIMEOUT,
-            rpc.book_offers(
-                book_pair.gets_currency(),
-                book_pair.gets_issuer(),
-                book_pair.pays_currency(),
-                book_pair.pays_issuer(),
-                book_pair.limit
-            )
-        ),
-        tokio::time::timeout(
-            RPC_TIMEOUT,
-            rpc.ripple_path_find(watch_address, watch_address, &dest_amount),
-        ),
-        tokio::time::timeout(RPC_TIMEOUT, rpc.account_nfts(watch_address)),
-        tokio::time::timeout(RPC_TIMEOUT, rpc.account_lines(watch_address)),
+        async {
+            if skip_market {
+                None
+            } else {
+                Some(
+                    tokio::time::timeout(
+                        RPC_TIMEOUT,
+                        rpc.book_offers(
+                            book_pair.gets_currency(),
+                            book_pair.gets_issuer(),
+                            book_pair.pays_currency(),
+                            book_pair.pays_issuer(),
+                            book_pair.limit,
+                        ),
+                    )
+                    .await,
+                )
+            }
+        },
+        async {
+            if skip_market {
+                None
+            } else {
+                Some(
+                    tokio::time::timeout(
+                        RPC_TIMEOUT,
+                        rpc.ripple_path_find(watch_address, watch_address, &dest_amount),
+                    )
+                    .await,
+                )
+            }
+        },
+        async {
+            if skip_assets {
+                None
+            } else {
+                Some(tokio::time::timeout(RPC_TIMEOUT, rpc.account_nfts(watch_address)).await)
+            }
+        },
+        async {
+            if skip_assets {
+                None
+            } else {
+                Some(tokio::time::timeout(RPC_TIMEOUT, rpc.account_lines(watch_address)).await)
+            }
+        },
         maybe_account_tx(rpc, watch_address, skip_account_tx),
     );
     let mut any_rpc_succeeded = false;
@@ -307,28 +355,39 @@ async fn poll_batch(inputs: PollBatchInputs<'_>, action_tx: &UnboundedSender<Act
         |v| Action::XrplAccount(Box::new(v)),
         "account_info"
     );
-    send_rpc_outcome!(book_offers_result, Action::XrplBookOffers, "book_offers");
-    match path_find_result {
-        Ok(Ok(v)) => {
-            any_rpc_succeeded = true;
-            let snap = path_find_snapshot(&v, &book_pair.quote);
-            if let Err(e) = action_tx.send(Action::XrplPathFind(snap)) {
-                warn!(?e, "action channel closed (ripple_path_find)");
+    if let Some(book_offers_result) = book_offers_result {
+        send_rpc_outcome!(book_offers_result, Action::XrplBookOffers, "book_offers");
+    }
+    if let Some(path_find_result) = path_find_result {
+        match path_find_result {
+            Ok(Ok(v)) => {
+                any_rpc_succeeded = true;
+                let snap = path_find_snapshot(&v, &book_pair.quote);
+                if let Err(e) = action_tx.send(Action::XrplPathFind(snap)) {
+                    warn!(?e, "action channel closed (ripple_path_find)");
+                }
             }
-        }
-        Ok(Err(e)) => {
-            if let Err(e2) = action_tx.send(Action::XrplError(format!("ripple_path_find: {e}"))) {
-                warn!(?e2, "action channel closed (ripple_path_find)");
+            Ok(Err(e)) => {
+                if let Err(e2) = action_tx.send(Action::XrplError(format!("ripple_path_find: {e}")))
+                {
+                    warn!(?e2, "action channel closed (ripple_path_find)");
+                }
             }
-        }
-        Err(_) => {
-            if let Err(e) = action_tx.send(Action::XrplError("ripple_path_find: timeout".into())) {
-                warn!(?e, "action channel closed (ripple_path_find)");
+            Err(_) => {
+                if let Err(e) =
+                    action_tx.send(Action::XrplError("ripple_path_find: timeout".into()))
+                {
+                    warn!(?e, "action channel closed (ripple_path_find)");
+                }
             }
         }
     }
-    send_rpc_outcome!(account_nfts_result, Action::XrplAccountNfts, "account_nfts");
-    send_rpc_outcome!(trust_lines_result, Action::XrplTrustLines, "account_lines");
+    if let Some(account_nfts_result) = account_nfts_result {
+        send_rpc_outcome!(account_nfts_result, Action::XrplAccountNfts, "account_nfts");
+    }
+    if let Some(trust_lines_result) = trust_lines_result {
+        send_rpc_outcome!(trust_lines_result, Action::XrplTrustLines, "account_lines");
+    }
     if let Some(account_tx_result) = account_tx_result {
         match account_tx_result {
             Ok(result) => {
@@ -395,7 +454,10 @@ async fn poll_batch(inputs: PollBatchInputs<'_>, action_tx: &UnboundedSender<Act
         }
     }
 
-    if let Some(flare_rpc) = flare_rpc_url {
+    // FTSO is shown on Overview; skip when another tab is focused.
+    if active_tab == 0
+        && let Some(flare_rpc) = flare_rpc_url
+    {
         match tokio::time::timeout(
             RPC_TIMEOUT,
             crate::flare::fetch_ftso_prices(flare_rpc, flare_feeds),
@@ -1113,6 +1175,7 @@ async fn drive_poll_loop(
         oracle_pairs,
         flare_rpc_url,
         flare_feeds,
+        tab_watch,
     } = ctx;
     let rpc = match RpcClient::connect(&rpc_url) {
         Ok(rpc) => rpc,
@@ -1135,6 +1198,7 @@ async fn drive_poll_loop(
                 if is_backoff_active(backoff_until) {
                     continue;
                 }
+                let active_tab = *tab_watch.borrow();
                 last_poll = Some(
                     execute_scheduled_poll(
                         &rpc,
@@ -1147,6 +1211,7 @@ async fn drive_poll_loop(
                             flare_rpc_url: flare_rpc_url.as_deref(),
                             flare_feeds: &flare_feeds,
                             skip_account_tx: seed_address.is_some(),
+                            active_tab,
                         },
                         seed_address.as_deref(),
                         &action_tx,
@@ -1164,6 +1229,7 @@ async fn drive_poll_loop(
                 if should_skip_poll_trigger(last_poll) {
                     continue;
                 }
+                let active_tab = *tab_watch.borrow();
                 last_poll = Some(
                     execute_scheduled_poll(
                         &rpc,
@@ -1176,6 +1242,7 @@ async fn drive_poll_loop(
                             flare_rpc_url: flare_rpc_url.as_deref(),
                             flare_feeds: &flare_feeds,
                             skip_account_tx: seed_address.is_some(),
+                            active_tab,
                         },
                         seed_address.as_deref(),
                         &action_tx,
@@ -1333,6 +1400,21 @@ mod tests {
         assert!(rx.try_recv().is_ok());
         drain_poll_trigger_burst(&mut rx);
         assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn should_poll_market_book_only_on_market_tab() {
+        assert!(!should_poll_market_book(0));
+        assert!(!should_poll_market_book(1));
+        assert!(should_poll_market_book(TAB_MARKET));
+        assert!(!should_poll_market_book(TAB_ASSETS));
+    }
+
+    #[test]
+    fn should_poll_asset_panels_only_on_assets_tab() {
+        assert!(!should_poll_asset_panels(0));
+        assert!(should_poll_asset_panels(TAB_ASSETS));
+        assert!(!should_poll_asset_panels(TAB_MARKET));
     }
 
     #[test]
