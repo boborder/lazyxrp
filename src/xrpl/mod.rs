@@ -7,6 +7,7 @@ mod client;
 mod dunl;
 mod format;
 mod json_util;
+mod parse;
 mod poll;
 pub mod toml;
 mod types;
