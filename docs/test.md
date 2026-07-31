@@ -1,10 +1,10 @@
 # Test Strategy & Case List
 
-> Last Updated: 2026-07-30
+> Last Updated: 2026-07-31
 > Target: lazyxrp (Rust TUI for XRPL)
-> Total Test Cases: 87 (P0: 10, P1: 45, P2: 31, P3: 1) — 85 Rust + 2 Vitest（FAssets スキル）
-> Implemented: 87 / 87 (100%)
-> Estimated Effort (full catalog): 42h
+> Total Test Cases: 97 (P0: 10, P1: 46, P2: 40, P3: 1) — 95 Rust + 2 Vitest（FAssets スキル）
+> Implemented: 97 / 97 (100%)
+> Estimated Effort (full catalog): 44.5h
 
 ---
 
@@ -12,13 +12,13 @@
 
 | Category          | Test Count | P0 | P1 | P2 | P3 | Est. Effort | Implemented |
 | ----------------- | ---------- | -- | -- | -- | -- | ----------- | ----------- |
-| XRPL Core         | 24         | 4  | 17 | 3  | 0  | 11h         | 24/24       |
+| XRPL Core         | 32         | 4  | 17 | 11 | 0  | 13h         | 32/32       |
 | Config & Keybinds | 19         | 1  | 9  | 8  | 0  | 8h          | 19/19       |
 | Network & Signing | 13         | 4  | 7  | 2  | 0  | 5h          | 13/13       |
-| CLI Integration   | 11         | 1  | 7  | 3  | 0  | 11h         | 11/11       |
+| CLI Integration   | 13         | 1  | 8  | 4  | 0  | 12h         | 13/13       |
 | Watch & TUI       | 18         | 0  | 5  | 12 | 1  | 6h          | 18/18       |
 | FAssets skill scripts (Vitest) | 2 | 0  | 0  | 2  | 0  | 0.5h        | 2/2         |
-| **Total**         | **87**     | **10** | **45** | **31** | **1** | **42h** | **87/87** |
+| **Total**         | **97**     | **10** | **46** | **40** | **1** | **44.5h** | **97/97** |
 
 ---
 
@@ -893,6 +893,30 @@ CI（`.github/workflows/ci.yml`）は各ジョブで `cargo … --locked`（例:
 - **Test File**: `src/app.rs` (inline)
 - **Notes**: Extra tests: `question_opens_help_overlay`, `esc_while_help_sends_help_action`.
 
+#### TC-066: CLI — `account-status` against live RPC
+
+- **Priority**: P1
+- **Type**: Integration
+- **Size**: M
+- **Status**: [x] Done
+- **Target**: `src/xrpl/cli_exec.rs` → `Cmd::AccountStatus`
+- **Input**: Genesis account address on configured RPC
+- **Expected Output**: Command completes (`Ok`) with account status printed
+- **Test File**: `src/xrpl/cli_exec.rs` (inline, `#[tokio::test]`)
+- **Notes**: Live RPC; may be environment-sensitive in CI.
+
+#### TC-067: CLI — `send` simulation with seed
+
+- **Priority**: P2
+- **Type**: Integration
+- **Size**: M
+- **Status**: [x] Done
+- **Target**: `src/xrpl/cli_exec.rs` → `Cmd::Send`
+- **Input**: Destination + small amount; requires `XRPL_SEED`
+- **Expected Output**: Simulation path succeeds
+- **Test File**: `src/xrpl/cli_exec.rs` (inline, `#[ignore]` without seed)
+- **Notes**: Ignored when `XRPL_SEED` is unset.
+
 #### TC-068: XRPL RPC error — not found is not silently swallowed
 
 - **Priority**: P1
@@ -938,6 +962,41 @@ CI（`.github/workflows/ci.yml`）は各ジョブで `cargo … --locked`（例:
 - **Expected Output**: Contains required TransactionType names; no duplicate names (avoids magic `len() == 29` drift)
 - **Test File**: `src/components/shared/tx_detail/parsers.rs` (inline)
 - **Notes**: Replaces the old count-only registry assert. Benchmark `bench_detail_lines_payment_current` remains `#[ignore]` (not a TC).
+
+#### TC-095: wallet_propose — ed25519 seed/address
+
+- **Priority**: P2
+- **Type**: Unit
+- **Size**: S
+- **Status**: [x] Done
+- **Target**: `src/xrpl/client.rs` wallet_propose parsing
+- **Input**: ed25519 propose fixture
+- **Expected Output**: Seed/address fields parsed
+- **Test File**: `src/xrpl/client.rs` (inline)
+
+#### TC-096: get_aggregate_price — full response
+
+- **Priority**: P2
+- **Type**: Unit
+- **Size**: S
+- **Status**: [x] Done
+- **Target**: `src/xrpl/client.rs` oracle aggregate parser
+- **Input**: Full aggregate price JSON
+- **Expected Output**: Price + stats fields
+- **Test File**: `src/xrpl/client.rs` (inline)
+
+#### TC-097: get_aggregate_price — trimmed_set omitted
+
+- **Priority**: P2
+- **Type**: Unit
+- **Size**: S
+- **Status**: [x] Done
+- **Target**: `src/xrpl/client.rs` oracle aggregate parser
+- **Input**: Response without `trimmed_set`
+- **Expected Output**: Still parses (defaults / empty trim set)
+- **Test File**: `src/xrpl/client.rs` (inline)
+
+
 
 #### TC-087: Poll trigger — coalesces rapid bursts
 
@@ -1001,10 +1060,65 @@ CI（`.github/workflows/ci.yml`）は各ジョブで `cargo … --locked`（例:
 - **Size**: S
 - **Status**: [x] Done
 - **Target**: `src/components/panels/tx_history.rs` -> `reapply_filter()`
-- **Input**: `filter_input` by tx type / hash
-- **Expected Output**: Filtered tx list matches criteria
-- **Test File**: `src/components/panels/tx_history.rs` (inline)
-- **Notes**: Wallet panel no longer embeds a tx table; Account tab lower pane owns history UI and filtering.
+- **Input**: empty `filter_input`
+- **Expected Output**: All rows shown (`filtered` cleared / full list)
+- **Test File**: `src/components/panels/tx_history.rs` (inline) — `filter_empty_shows_all`
+- **Notes**: Complements TC-077/078. Account tab lower pane owns history UI and filtering.
+
+#### TC-080: ripple_path_find — parse alternatives
+
+- **Priority**: P2
+- **Type**: Unit
+- **Size**: S
+- **Status**: [x] Done
+- **Target**: `src/xrpl/client.rs` path-find parsers
+- **Input**: Fixture JSON with path alternatives
+- **Expected Output**: Parsed path rows / amounts
+- **Test File**: `src/xrpl/client.rs` (inline)
+
+#### TC-081: ripple_path_find — empty alternatives
+
+- **Priority**: P2
+- **Type**: Unit
+- **Size**: S
+- **Status**: [x] Done
+- **Target**: `src/xrpl/client.rs`
+- **Input**: Response with empty `alternatives`
+- **Expected Output**: Empty path list (not error)
+- **Test File**: `src/xrpl/client.rs` (inline)
+
+#### TC-082: ripple_path_find — `source_amount` as XRP drops string
+
+- **Priority**: P2
+- **Type**: Unit
+- **Size**: S
+- **Status**: [x] Done
+- **Target**: `src/xrpl/client.rs`
+- **Input**: `source_amount` string (drops)
+- **Expected Output**: Parsed amount display
+- **Test File**: `src/xrpl/client.rs` (inline)
+
+#### TC-083: summarize_paths_computed — hop chain abbreviation
+
+- **Priority**: P2
+- **Type**: Unit
+- **Size**: S
+- **Status**: [x] Done
+- **Target**: `src/xrpl/client.rs` → `summarize_paths_computed`
+- **Input**: Multi-hop path
+- **Expected Output**: Abbreviated hop label
+- **Test File**: `src/xrpl/client.rs` (inline)
+
+#### TC-084: path_find_rows_from — display rows
+
+- **Priority**: P2
+- **Type**: Unit
+- **Size**: S
+- **Status**: [x] Done
+- **Target**: `src/xrpl/client.rs` → `path_find_rows_from`
+- **Input**: Parsed path alternatives
+- **Expected Output**: UI row structs
+- **Test File**: `src/xrpl/client.rs` (inline)
 
 #### TC-085: asset_display_name — known hex codes
 
@@ -1119,7 +1233,17 @@ CI（`.github/workflows/ci.yml`）は各ジョブで `cargo … --locked`（例:
 | 39    | TC-076 | `--self-uninstall` parse + `.bak` path    | S    | [x]    | 2026-05-12 |
 | 40    | TC-077 | TxHistoryPanel filter by tx_type          | S    | [x]    | 2026-05-14 |
 | 41    | TC-078 | TxHistoryPanel filter by hash partial     | S    | [x]    | 2026-05-14 |
-| 42    | TC-079 | TxHistoryPanel filter                     | S    | [x]    | 2026-05-14 |
+| 42    | TC-079 | TxHistoryPanel empty filter               | S    | [x]    | 2026-05-14 |
+| 42a   | TC-066 | CLI account-status live RPC               | M    | [x]    | 2026-07-31 |
+| 42b   | TC-067 | CLI send simulation (seed)                | M    | [x]    | 2026-07-31 |
+| 42c   | TC-080 | ripple_path_find parse                    | S    | [x]    | 2026-07-31 |
+| 42d   | TC-081 | ripple_path_find empty alternatives       | S    | [x]    | 2026-07-31 |
+| 42e   | TC-082 | ripple_path_find source_amount string     | S    | [x]    | 2026-07-31 |
+| 42f   | TC-083 | summarize_paths_computed                  | S    | [x]    | 2026-07-31 |
+| 42g   | TC-084 | path_find_rows_from                       | S    | [x]    | 2026-07-31 |
+| 42h   | TC-095 | wallet_propose ed25519                    | S    | [x]    | 2026-07-31 |
+| 42i   | TC-096 | get_aggregate_price full                  | S    | [x]    | 2026-07-31 |
+| 42j   | TC-097 | get_aggregate_price trimmed omitted       | S    | [x]    | 2026-07-31 |
 | 43    | TC-087 | Poll trigger burst coalesce               | S    | [x]    | 2026-05-16 |
 | 44    | TC-088 | Mainnet Payment guard (R-006)             | S    | [x]    | 2026-05-16 |
 | 45    | TC-089 | account_tx not-found → empty (I-7)        | S    | [x]    | 2026-05-16 |
@@ -1132,8 +1256,8 @@ CI（`.github/workflows/ci.yml`）は各ジョブで `cargo … --locked`（例:
 
 ### Overall
 
-- **Total Cases**: 87（うち TC-090/091 は Vitest・スキル配下; TC-092〜094 は 2026-07-30 に重複 ID 解消 / 弱い assert 置換で付番）
-- **Implemented**: 87
+- **Total Cases**: 97（うち TC-090/091 は Vitest・スキル配下; TC-066/067・080–084・095–097 は 2026-07-31 にカタログ欠落/ID衝突を解消）
+- **Implemented**: 97
 - **Passing**: `cargo test --locked` green after 2026-07-30 cleanup + Vitest 11（`cd .agents/skills/flare-fassets/scripts && npm test`）
 - **Failing**: 0
 - **Ignored**: 5 (live RPC / benchmark / flare; see case notes)
@@ -1176,4 +1300,4 @@ CI（`.github/workflows/ci.yml`）は各ジョブで `cargo … --locked`（例:
 - **`tokio::spawn` lifetime issue** (rust-lang/rust#100013) was previously tracked for watch startup; current `start_poll_task` / `start_ws_task` paths compile with direct `tokio::spawn` and should remain covered by `cargo check`.
 - **macOS linking warnings** from upstream deps are non-fatal; do not treat as test failures.
 - **TUI tests** (`TC-060`–`TC-065`) run under `#[tokio::test]`; `TC-061`–`TC-065` exercise `process_actions(None)` so they pass on headless CI without `Tui::new()`. Live RPC CLI tests remain `#[ignore]` when network/seed-dependent.
-- **TC-ID note**: `client.rs` uses TC-079–TC-084 for ripple_path_find / oracle parsers; catalog TC-079 is reserved for WalletPanel filters (see case body above).
+- **TC-ID note**: TC-079 = TxHistory empty filter. Path-find parsers = TC-080–084; `wallet_propose` = TC-095; oracle aggregate = TC-096/097. CLI live helpers = TC-066/067.

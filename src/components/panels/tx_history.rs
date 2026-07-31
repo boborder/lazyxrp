@@ -300,6 +300,7 @@ mod tests {
     }
 
     #[test]
+    /// TC-079
     fn filter_empty_shows_all() {
         let mut panel = TxHistoryPanel::new();
         panel.txs = vec![

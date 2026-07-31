@@ -17,66 +17,80 @@ lazyxrp/
 ├── src/
 │   ├── main.rs
 │   ├── app.rs
+│   ├── action.rs
+│   ├── cli.rs
+│   ├── config.rs
+│   ├── network.rs
+│   ├── signing.rs
+│   ├── flare.rs
+│   ├── tui.rs
+│   ├── uninstall.rs
+│   ├── logging.rs
+│   ├── errors.rs
 │   ├── xrpl/
 │   │   ├── mod.rs
+│   │   ├── address.rs
 │   │   ├── backoff.rs
 │   │   ├── client.rs
 │   │   ├── cli_exec.rs
 │   │   ├── json_util.rs
 │   │   ├── poll.rs
+│   │   ├── toml.rs
 │   │   ├── types.rs
 │   │   └── ws.rs
-│   ├── cli.rs
-│   ├── action.rs
-│   ├── config.rs
-│   ├── network.rs
-│   ├── signing.rs
-│   ├── components/
-│   │   ├── mod.rs
-│   │   ├── panels/
-│   │   │   ├── mod.rs
-│   │   │   ├── account.rs
-│   │   │   ├── amm.rs
-│   │   │   ├── book.rs
-│   │   │   ├── combined_oracle.rs
-│   │   │   ├── flare_ftso.rs
-│   │   │   ├── ledger_objects.rs
-│   │   │   ├── oracle.rs
-│   │   │   ├── path_find.rs
-│   │   │   ├── server.rs
-│   │   │   ├── trust_lines.rs
-│   │   │   ├── tx_history.rs
-│   │   │   └── wallet.rs
-│   ├── flare.rs
-│   │   ├── tabs/
-│   │   │   ├── mod.rs
-│   │   │   ├── overview.rs          # Tab 0: Server + Oracle/FTSO
-│   │   │   ├── account_wallet.rs    # Tab 1: Wallet/Account + TxHistory
-│   │   │   ├── market_oracle.rs     # Tab 2: Book / Lines / AMM / FTSO
-│   │   │   ├── assets.rs            # Tab 3: NFT + ledger objects
-│   │   │   └── nft.rs               # used by AssetsTab
-│   │   └── shared/
-│   │       ├── mod.rs
-│   │       ├── fmt.rs
-│   │       ├── fps.rs
-│   │       ├── help_overlay.rs
-│   │       ├── selectable_table.rs
-│   │       ├── splash.rs
-│   │       ├── status_bar.rs
-│   │       ├── theme.rs
-│   │       └── widgets.rs
-│   ├── tui.rs
-│   ├── uninstall.rs
-│   ├── logging.rs
-│   └── errors.rs
+│   └── components/
+│       ├── mod.rs
+│       ├── panels/
+│       │   ├── mod.rs
+│       │   ├── account.rs
+│       │   ├── amm.rs
+│       │   ├── book.rs
+│       │   ├── combined_oracle.rs
+│       │   ├── flare_ftso.rs
+│       │   ├── ledger_objects.rs
+│       │   ├── oracle.rs
+│       │   ├── path_find.rs
+│       │   ├── server.rs
+│       │   ├── server_detail.rs
+│       │   ├── server_dunl.rs
+│       │   ├── server_metrics.rs
+│       │   ├── trust_lines.rs
+│       │   ├── tx_history.rs
+│       │   ├── wallet.rs
+│       │   ├── wallet_composer.rs
+│       │   ├── wallet_keygen.rs
+│       │   └── wallet_keys.rs
+│       ├── tabs/
+│       │   ├── mod.rs
+│       │   ├── overview.rs          # Tab 0: Server + Oracle/FTSO
+│       │   ├── account_wallet.rs    # Tab 1: Wallet/Account + TxHistory
+│       │   ├── market_oracle.rs     # Tab 2: Book / Lines / AMM / FTSO
+│       │   ├── assets.rs            # Tab 3: NFT + ledger objects
+│       │   └── nft.rs               # used by AssetsTab
+│       └── shared/
+│           ├── mod.rs
+│           ├── fmt.rs
+│           ├── fps.rs
+│           ├── help_overlay.rs
+│           ├── selectable_table.rs
+│           ├── splash.rs
+│           ├── status_bar.rs
+│           ├── theme.rs
+│           ├── widgets.rs
+│           └── tx_detail/
+│               ├── mod.rs
+│               ├── format.rs
+│               └── parsers.rs
 └── docs/
     ├── README.md          # ドキュメント導線と一覧
     ├── tx-detail.md       # TX 詳細オーバーレイ
     ├── graphify.md        # graphify ナレッジグラフの使い方
+    ├── RELEASE.md         # リリース / auto-tag
     ├── external/          # 外部システムのスナップショット（FAssets 等）
     ├── architecture/
     │   ├── c4-context.md
     │   └── c4-containers.md
+    ├── agent/             # AGENTS.md からリンクする運用規約
     ├── requirements.md
     ├── design.md
     ├── tech.md

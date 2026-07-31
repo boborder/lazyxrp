@@ -10,7 +10,7 @@ Watch mode uses **four top-level tabs** (jump with number keys `1`–`4`):
 
 | Tab | Content |
 |-----|---------|
-| **Overview** | Server summary (left) + XRPL oracle aggregate prices (right) |
+| **Overview** | Server summary (left) + XRPL oracle + Flare FTSOv2 (right, combined) |
 | **Account** | Wallet composer + account summary + recent transaction history |
 | **Market** | DEX book + Path-Find routes + AMM + trust lines + XRPL oracle + Flare FTSOv2 |
 | **Assets** | NFT + account_objects (Objects / Pay channels / Escrows) |
@@ -109,12 +109,16 @@ Default bindings ship in the embedded repo-root `config.json5` and merge with yo
 | `1`–`4` | Jump to tab by index |
 | `h` / `l` or `←` / `→` | Move focus between panels in the current tab |
 | `j` / `k` or `↑` / `↓` | Move selection in the focused panel |
+| `Enter` | Open detail overlay (tables / dUNL row) |
+| `t` | Account tab: open Payment / AccountSet composer |
+| `g` | Account tab: local keygen overlay |
+| `f` | Account tab (tx history): filter mode |
 | `r` | Refresh account |
 | `b` | Refresh order book |
 | `o` | Refresh ledger objects (`account_objects` — Checks / MPT / DID / PayChan / Escrow, etc.) |
 | `?` | Toggle help overlay |
 | `q` / `Ctrl-c` / `Ctrl-d` | Quit |
-| `Ctrl-z` | Suspend（端末が SIGTSTP を扱う場合） |
+| `Ctrl-z` | Suspend (when the terminal handles SIGTSTP) |
 
 ## Network Selection
 
@@ -150,7 +154,7 @@ cp .config/lazyxrp/config.toml "${XDG_CONFIG_HOME:-$HOME/.config}/lazyxrp/config
 | `XRPL_WS_SERVER` | Custom WS endpoint (overrides network preset) |
 | `XRPL_SEED` | Signing seed (write TX — prefer over config file) |
 | `FLARE_RPC_URL` | Flare FTSOv2 RPC (default: Flare mainnet) |
-| `FLARE_FEEDS` | Oracle tab Flare feed list (comma-separated, e.g. `FXRP/USD,FLR/USD`) |
+| `FLARE_FEEDS` | Flare feed list for Overview / Market (comma-separated, e.g. `FXRP/USD,FLR/USD`) |
 | `FLARE_FEED` | Backward-compatible single feed override (legacy) |
 | `LAZYXRP_CONFIG` | Override config directory (`..` rejected) |
 | `LAZYXRP_DATA` | Override data directory |
@@ -169,7 +173,7 @@ cargo test
 cargo run --bin lazyxrp -- watch --account <r-address>
 cargo run --bin lazyxrp -- --network testnet info
 
-# Optional Flare Oracle overrides (Oracle tab only)
+# Optional Flare FTSOv2 overrides (Overview / Market panels)
 # Default feeds: FXRP/USD,FLR/USD,BTC/USD,ETH/USD
 # FLARE_FEEDS=FXRP/USD,FLR/USD,BTC/USD,ETH/USD
 # FLARE_RPC_URL=https://flare-api.flare.network/ext/C/rpc
@@ -177,21 +181,24 @@ cargo run --bin lazyxrp -- --network testnet info
 
 ## Contributing
 
-Start with [`AGENTS.md`](./AGENTS.md) — minimal bar is `cargo fmt` / `cargo check`, and keep `docs/` aligned when you change behavior or documented workflows.
+Start with [`AGENTS.md`](./AGENTS.md) — minimal bar is `cargo fmt` / `cargo check`, and keep `docs/` aligned when you change behavior or documented workflows. Agent-oriented invariants and change rules live under [`docs/agent/`](./docs/agent/).
 
 ## Documentation
 
-- `docs/requirements.md` — functional & non-functional requirements
-- `docs/design.md` — architecture & data flow
-- `docs/tech.md` — tech stack & versions
-- `docs/test.md` — testing notes & expectations
-- `docs/tasks.md` — task status
-- `docs/directory.md` — directory structure
-- `docs/references.md` — supplementary reference
-- `docs/problems.md` — known issues
-- `docs/security.md` — threat model & hardening notes
-- `docs/architecture/` — C4 context & containers
-- `docs/RELEASE.md` — pre-publish checklist
+Index: [`docs/README.md`](./docs/README.md).
+
+- [`docs/requirements.md`](./docs/requirements.md) — functional & non-functional requirements
+- [`docs/design.md`](./docs/design.md) — architecture & data flow
+- [`docs/tech.md`](./docs/tech.md) — tech stack & versions
+- [`docs/test.md`](./docs/test.md) — testing notes & expectations
+- [`docs/tasks.md`](./docs/tasks.md) — task status
+- [`docs/directory.md`](./docs/directory.md) — directory structure
+- [`docs/tx-detail.md`](./docs/tx-detail.md) — transaction detail overlay
+- [`docs/references.md`](./docs/references.md) — supplementary reference
+- [`docs/problems.md`](./docs/problems.md) — known issues
+- [`docs/security.md`](./docs/security.md) — threat model & hardening notes
+- [`docs/architecture/`](./docs/architecture/) — C4 context & containers
+- [`docs/RELEASE.md`](./docs/RELEASE.md) — release / auto-tag checklist
 
 ## References
 
@@ -200,4 +207,4 @@ Start with [`AGENTS.md`](./AGENTS.md) — minimal bar is `cargo fmt` / `cargo ch
 
 ## License
 
-MIT — see `LICENSE` in this repository.
+MIT — see [`LICENSE`](./LICENSE) in this repository.
