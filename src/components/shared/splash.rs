@@ -3,7 +3,7 @@ use std::sync::Arc;
 use ratatui::{
     Frame,
     layout::{Alignment, Constraint, Layout, Rect},
-    style::{Modifier, Style},
+    style::Style,
     text::{Line, Span},
     widgets::Paragraph,
 };
@@ -87,8 +87,8 @@ fn splash_ascii_lines_for_height(tick: usize, max_lines: usize) -> Vec<Line<'sta
         .map(|(i, text)| {
             let ring_dist = (vn + i - head) % vn;
             let style = match ring_dist {
-                0 => theme::accent_style().add_modifier(Modifier::BOLD),
-                1 => Style::new().fg(theme::TITLE).add_modifier(Modifier::BOLD),
+                0 => theme::accent_style().bold(),
+                1 => Style::new().fg(theme::TITLE).bold(),
                 2 => theme::accent_style(),
                 _ => theme::dim_style(),
             };
@@ -188,9 +188,7 @@ impl Component for SplashScreen {
             Span::styled(" Connecting to ", dim),
             Span::styled(
                 server.as_deref().unwrap_or("xrplcluster.com"),
-                Style::new()
-                    .fg(theme::ACCENT)
-                    .add_modifier(Modifier::ITALIC),
+                Style::new().fg(theme::ACCENT).italic(),
             ),
             Span::styled(trailing_dots(self.tick), dim),
         ]);

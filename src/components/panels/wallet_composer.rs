@@ -2,7 +2,7 @@
 use ratatui::{
     Frame,
     layout::Rect,
-    style::{Modifier, Style},
+    style::Style,
     text::{Line, Span},
     widgets::{Clear, Paragraph},
 };
@@ -294,7 +294,7 @@ impl WalletPanel {
 
         let label_style = theme::dim_style();
         let value_style = theme::accent_style();
-        let highlight_style = Style::new().add_modifier(Modifier::BOLD | Modifier::UNDERLINED);
+        let highlight_style = Style::new().bold().underlined();
 
         let body = match phase {
             ComposerPhase::PickKind { selected } => {

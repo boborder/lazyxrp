@@ -1,7 +1,6 @@
 use ratatui::{
     Frame,
     layout::{Alignment, Constraint, Layout, Rect},
-    style::Modifier,
     text::{Line, Span},
     widgets::{Clear, Paragraph, Row, Table},
 };
@@ -70,7 +69,7 @@ impl Component for HelpOverlay {
 
         let rows = BINDINGS.iter().map(|(k, v)| {
             Row::new(vec![
-                Span::styled(*k, theme::accent_style().add_modifier(Modifier::BOLD)),
+                Span::styled(*k, theme::accent_style().bold()),
                 Span::raw(*v),
             ])
         });
@@ -79,7 +78,7 @@ impl Component for HelpOverlay {
 
         let footer = Paragraph::new("press ? or Esc to close")
             .alignment(Alignment::Center)
-            .style(theme::dim_style().add_modifier(Modifier::DIM));
+            .style(theme::dim_style().dim());
         frame.render_widget(footer, footer_area);
 
         Ok(())

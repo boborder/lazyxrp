@@ -3,7 +3,7 @@ use std::time::{Instant, SystemTime};
 use ratatui::{
     Frame,
     layout::{Constraint, Flex, Layout, Rect},
-    style::{Modifier, Style},
+    style::Style,
     text::{Line, Span},
     widgets::Paragraph,
 };
@@ -203,9 +203,7 @@ impl Component for StatusBar {
 
     fn draw(&mut self, frame: &mut Frame, area: Rect) -> color_eyre::Result<()> {
         let state = self.connection_state();
-        let state_style = Style::new()
-            .fg(state.color())
-            .add_modifier(Modifier::BOLD | Modifier::REVERSED);
+        let state_style = Style::new().fg(state.color()).bold().reversed();
         let label_style = theme::dim_style();
         // Cache state display string
         let state_display = self
@@ -267,9 +265,7 @@ impl Component for StatusBar {
         } else {
             theme::WARNING
         };
-        let net_style = Style::new()
-            .fg(net_color)
-            .add_modifier(Modifier::BOLD | Modifier::REVERSED);
+        let net_style = Style::new().fg(net_color).bold().reversed();
         let badge_len = self.network_badge.len() as u16;
         let [left_area, right_area] =
             Layout::horizontal([Constraint::Fill(1), Constraint::Length(badge_len)])

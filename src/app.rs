@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
     layout::{Constraint, Layout, Rect},
-    style::{Modifier, Style},
+    style::Style,
     text::{Line, Span},
     widgets::{Block, Paragraph, Tabs},
 };
@@ -41,7 +41,7 @@ use crate::{
 const TAB_TITLES: &[&str] = &["󰖟 Overview", "󰀉 Account", "󰠿 Market", "󰒍 Assets"];
 
 fn footer_line(active_tab: usize) -> Line<'static> {
-    let bold = Style::new().add_modifier(Modifier::BOLD);
+    let bold = Style::new().bold();
     let mut spans: Vec<Span<'static>> = Vec::new();
     let mut hint = |key: &'static str, label: &'static str| {
         spans.push(Span::styled(key, bold));
@@ -688,11 +688,7 @@ impl App {
             let tabs = Tabs::new(titles)
                 .select(active_tab)
                 .divider(Span::styled(" │ ", theme::dim_style()))
-                .highlight_style(
-                    Style::new()
-                        .fg(theme::HIGHLIGHT_BG)
-                        .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
-                )
+                .highlight_style(Style::new().fg(theme::HIGHLIGHT_BG).bold().underlined())
                 .block(Block::default());
             frame.render_widget(tabs, tabs_area);
 

@@ -1,7 +1,7 @@
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
-    style::{Modifier, Style},
+    style::Style,
     text::{Line, Span},
     widgets::{
         Block, BorderType, Clear, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Wrap,
@@ -83,7 +83,7 @@ pub fn render_tx_detail(frame: &mut Frame, area: Rect, state: &mut TxDetailState
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
         .border_style(Style::new().fg(theme::ACCENT))
-        .title_style(Style::new().fg(theme::TITLE).add_modifier(Modifier::BOLD))
+        .title_style(Style::new().fg(theme::TITLE).bold())
         .title(format!(" {tx_type} Detail "));
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
@@ -121,7 +121,7 @@ fn detail_lines_for<'a>(tx: &'a Value, meta: &'a Value) -> Vec<Line<'a>> {
     let mut lines = Vec::new();
     let label_style = theme::dim_style();
     let value_style = theme::accent_style();
-    let hi_style = Style::new().fg(theme::TITLE).add_modifier(Modifier::BOLD);
+    let hi_style = Style::new().fg(theme::TITLE).bold();
 
     // Header
     if let Some(hash) = tx.get("hash").and_then(Value::as_str) {

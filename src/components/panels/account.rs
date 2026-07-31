@@ -1,7 +1,7 @@
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
-    style::{Modifier, Style},
+    style::Style,
     text::{Line, Span},
     widgets::{Gauge, Paragraph},
 };
@@ -169,7 +169,7 @@ impl Component for AccountPanel {
                 Span::styled("Balance:    ", label_style),
                 Span::styled(
                     format!("{} XRP", fmt::fmt_xrp(balance_xrp)),
-                    theme::success_style().add_modifier(Modifier::BOLD),
+                    theme::success_style().bold(),
                 ),
             ]),
             Line::from(vec![
@@ -221,7 +221,7 @@ impl Component for AccountPanel {
             frame.render_widget(
                 Paragraph::new(Span::styled(
                     "(reserve values are defaults until first ledger close)",
-                    theme::dim_style().add_modifier(Modifier::ITALIC),
+                    theme::dim_style().italic(),
                 )),
                 footnote_area,
             );

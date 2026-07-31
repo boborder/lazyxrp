@@ -1,5 +1,5 @@
 use ratatui::{
-    style::{Color, Modifier, Style},
+    style::{Color, Style},
     widgets::{Block, BorderType},
 };
 
@@ -32,24 +32,19 @@ pub fn panel_block_owned(title: String, is_focused: bool) -> Block<'static> {
     Block::bordered()
         .border_type(BorderType::Rounded)
         .border_style(Style::new().fg(border_color))
-        .title_style(Style::new().fg(title_color).add_modifier(Modifier::BOLD))
+        .title_style(Style::new().fg(title_color).bold())
         .title(title)
 }
 
 pub fn header_row_style() -> Style {
-    Style::new()
-        .fg(ACCENT)
-        .add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
+    Style::new().fg(ACCENT).bold().underlined()
 }
 
 pub fn selected_row_style(is_focused: bool) -> Style {
     if is_focused {
-        Style::new()
-            .fg(HIGHLIGHT_FG)
-            .bg(HIGHLIGHT_BG)
-            .add_modifier(Modifier::BOLD)
+        Style::new().fg(HIGHLIGHT_FG).bg(HIGHLIGHT_BG).bold()
     } else {
-        Style::new().fg(MUTED).add_modifier(Modifier::REVERSED)
+        Style::new().fg(MUTED).reversed()
     }
 }
 
@@ -78,7 +73,7 @@ pub fn warning_style() -> Style {
 }
 
 pub fn flag_style() -> Style {
-    Style::new().fg(FLAG).add_modifier(Modifier::BOLD)
+    Style::new().fg(FLAG).bold()
 }
 
 pub fn chart_value_style() -> Style {

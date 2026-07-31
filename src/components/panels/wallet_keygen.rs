@@ -2,7 +2,6 @@
 use ratatui::{
     Frame,
     layout::Rect,
-    style::Modifier,
     text::{Line, Span},
     widgets::{Clear, Paragraph},
 };
@@ -54,7 +53,7 @@ impl WalletPanel {
             Line::from(""),
             Line::from(Span::styled(
                 "⚠ Save the seed offline!  Set XRPL_SEED=<seed>",
-                warning_style.add_modifier(Modifier::BOLD),
+                warning_style.bold(),
             )),
             Line::from(Span::styled(
                 "   to activate · Esc / g to dismiss",
