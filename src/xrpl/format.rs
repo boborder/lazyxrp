@@ -3,7 +3,8 @@
 use serde_json::Value;
 
 use super::types::{
-    ArcValue, PathFindRow, PathFindSnapshot, RipplePathFindResult, asset_display_name,
+    ArcValue, PathAlternative, PathFindRow, PathFindSnapshot, RipplePathFindResult,
+    asset_display_name,
 };
 
 /// Ripple epoch seconds (2000-01-01 UTC) → `YYYY-MM-DD HH:MM UTC`.
