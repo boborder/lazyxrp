@@ -22,6 +22,37 @@ pub struct PathConfig {
     pub config_dir: PathBuf,
 }
 
+fn default_flare_evm_key_env() -> String {
+    "FLARE_EVM_KEY".to_string()
+}
+
+/// `[flare.fassets]` — Direct Mint execute path (C3). Default off: never Flare-writes.
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct FlareFassetsConfig {
+    /// When false (default), `executeDirectMinting` is refused.
+    #[serde(default)]
+    pub execute: bool,
+    /// Env var name holding the Flare executor private key (never XRPL seed).
+    #[serde(default = "default_flare_evm_key_env")]
+    pub evm_key_env: String,
+}
+
+impl Default for FlareFassetsConfig {
+    fn default() -> Self {
+        Self {
+            execute: false,
+            evm_key_env: default_flare_evm_key_env(),
+        }
+    }
+}
+
+/// Top-level `[flare]` config (FTSO RPC stays env-driven; fassets is file-config).
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
+pub struct FlareConfig {
+    #[serde(default)]
+    pub fassets: FlareFassetsConfig,
+}
+
 #[derive(Clone, Debug, Default, Deserialize)]
 pub struct Config {
     #[serde(default, flatten)]
@@ -32,6 +63,8 @@ pub struct Config {
     pub styles: Styles,
     #[serde(default)]
     pub xrpl: LedgerConfig,
+    #[serde(default)]
+    pub flare: FlareConfig,
 }
 
 /// Raw signing config as read from `[xrpl.signing]` in config.toml.

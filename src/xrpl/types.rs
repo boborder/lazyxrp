@@ -565,6 +565,14 @@ pub struct FxrpDirectMintPaymentParams {
     pub config_seed: Option<String>,
 }
 
+/// FXRP C3: paste FDC Payment proof JSON and call `executeDirectMinting` (flagged).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FxrpExecuteDirectMintParams {
+    /// FDC DA proof JSON: `{proof,response}` or `{merkleProof,data}` (hex strings).
+    pub proof_json: String,
+    pub skip_mainnet_prompt: bool,
+}
+
 /// SetRegularKey from the Wallet form.
 /// An empty `regular_key` means clear (remove) the existing regular key.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -621,6 +629,8 @@ pub enum PollCommand {
     /// Sign and submit Payment (wallet modal).
     PaymentSubmit(PaymentSubmitParams),
     FxrpDirectMintPayment(FxrpDirectMintPaymentParams),
+    /// Flare `executeDirectMinting` with pasted FDC proof (C3; gated by config).
+    FxrpExecuteDirectMint(FxrpExecuteDirectMintParams),
     /// Sign and submit SetRegularKey (wallet form).
     SetRegularKeySubmit(SetRegularKeySubmitParams),
     /// Sign and submit EscrowCreate (wallet form).
@@ -650,6 +660,10 @@ pub struct PollContext {
     pub flare_rpc_url: Option<String>,
     /// FTSOv2 feed names (e.g. `FXRP/USD`).
     pub flare_feeds: Vec<String>,
+    /// `[flare.fassets] execute` — when false, C3 execute path is refused.
+    pub flare_fassets_execute: bool,
+    /// Env var name for Flare executor key (`[flare.fassets] evm_key_env`).
+    pub flare_evm_key_env: String,
 }
 
 /// Parsed subset of xrp-ledger.toml relevant to domain verification.

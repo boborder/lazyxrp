@@ -30,6 +30,8 @@ Config
         └── secret_seed: Option<SecretString>  // memory-masked
 ```
 
+**FXRP C3 (ticket 13):** optional sibling `flare: FlareConfig { fassets: FlareFassetsConfig { execute: false, evm_key_env: "FLARE_EVM_KEY" } }` — default install never Flare-writes.
+
 ### Network (`src/network.rs`)
 
 ```

@@ -1,10 +1,13 @@
 use std::collections::HashSet;
 
 use alloy::{
-    primitives::{Address, FixedBytes, U256, address},
+    network::EthereumWallet,
+    primitives::{Address, Bytes, FixedBytes, U256, address},
     providers::ProviderBuilder,
+    signers::local::PrivateKeySigner,
     sol,
 };
+use serde_json::Value;
 
 use crate::xrpl::{FlareFeedPrice, FxrpDirectMintInfo};
 
@@ -25,13 +28,20 @@ sol! {
         function getFeedById(bytes21 _feedId) external view returns (uint256 value, int8 decimals, uint64 timestamp);
     }
 
-    /// Minimal IAssetManager surface for FXRP Direct Mint C1 reads.
+    /// Minimal IAssetManager surface for FXRP Direct Mint (C1 reads + C3 execute).
     #[sol(rpc)]
     interface IAssetManager {
         function directMintingPaymentAddress() external view returns (string memory);
         function getDirectMintingMinimumFeeUBA() external view returns (uint256);
         function getDirectMintingFeeBIPS() external view returns (uint256);
         function getDirectMintingExecutorFeeUBA() external view returns (uint256);
+
+        struct DirectMintingProof {
+            bytes32[] merkleProof;
+            bytes data;
+        }
+
+        function executeDirectMinting(DirectMintingProof _proof) external returns (uint256);
     }
 }
 
@@ -169,6 +179,140 @@ pub async fn fetch_fxrp_direct_mint_info(
     })
 }
 
+/// Refuse Flare writes unless `[flare.fassets] execute = true`.
+pub fn ensure_fassets_execute_enabled(execute: bool) -> color_eyre::Result<()> {
+    if !execute {
+        color_eyre::eyre::bail!(
+            "flare fassets execute is disabled; set [flare.fassets] execute = true to allow executeDirectMinting"
+        );
+    }
+    Ok(())
+}
+
+/// Parsed FDC Payment attestation proof for `executeDirectMinting`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FdcPaymentProof {
+    pub merkle_proof: Vec<FixedBytes<32>>,
+    pub data: Bytes,
+}
+
+fn parse_hex_bytes32(raw: &str) -> color_eyre::Result<FixedBytes<32>> {
+    let parsed: FixedBytes<32> = raw
+        .trim()
+        .parse()
+        .map_err(|e| color_eyre::eyre::eyre!("invalid bytes32 hex `{raw}`: {e}"))?;
+    Ok(parsed)
+}
+
+fn parse_hex_bytes(raw: &str) -> color_eyre::Result<Bytes> {
+    let parsed: Bytes = raw
+        .trim()
+        .parse()
+        .map_err(|e| color_eyre::eyre::eyre!("invalid bytes hex: {e}"))?;
+    Ok(parsed)
+}
+
+fn json_hex_array(value: &Value, field: &str) -> color_eyre::Result<Vec<FixedBytes<32>>> {
+    let arr = value
+        .get(field)
+        .and_then(Value::as_array)
+        .ok_or_else(|| color_eyre::eyre::eyre!("proof JSON missing `{field}` array"))?;
+    if arr.is_empty() {
+        color_eyre::eyre::bail!("proof JSON `{field}` must be a non-empty array");
+    }
+    arr.iter()
+        .map(|v| {
+            let s = v
+                .as_str()
+                .ok_or_else(|| color_eyre::eyre::eyre!("`{field}` entries must be hex strings"))?;
+            parse_hex_bytes32(s)
+        })
+        .collect()
+}
+
+fn json_hex_bytes(value: &Value, field: &str) -> color_eyre::Result<Bytes> {
+    let s = value
+        .get(field)
+        .and_then(Value::as_str)
+        .ok_or_else(|| color_eyre::eyre::eyre!("proof JSON missing `{field}` hex string"))?;
+    parse_hex_bytes(s)
+}
+
+/// Accept FDC DA `{proof,response}` or contract-shaped `{merkleProof,data}`.
+pub fn parse_fdc_payment_proof_json(proof_json: &str) -> color_eyre::Result<FdcPaymentProof> {
+    let value: Value = serde_json::from_str(proof_json.trim())
+        .map_err(|e| color_eyre::eyre::eyre!("invalid FDC proof JSON: {e}"))?;
+    if !value.is_object() {
+        color_eyre::eyre::bail!("FDC proof JSON must be an object");
+    }
+
+    let (merkle_proof, data) = if value.get("merkleProof").is_some() || value.get("data").is_some()
+    {
+        (
+            json_hex_array(&value, "merkleProof")?,
+            json_hex_bytes(&value, "data")?,
+        )
+    } else if value.get("proof").is_some() || value.get("response").is_some() {
+        (
+            json_hex_array(&value, "proof")?,
+            json_hex_bytes(&value, "response")?,
+        )
+    } else {
+        color_eyre::eyre::bail!(
+            "FDC proof JSON needs `merkleProof`+`data` or DA-layer `proof`+`response`"
+        );
+    };
+
+    Ok(FdcPaymentProof { merkle_proof, data })
+}
+
+/// Submit `AssetManagerFXRP.executeDirectMinting` with an alloy wallet.
+///
+/// Returns the Flare transaction hash (`0x…`). Does **not** fetch FDC proofs over HTTP.
+pub async fn execute_direct_minting(
+    rpc_url: &str,
+    private_key_hex: &str,
+    proof_json: &str,
+) -> color_eyre::Result<String> {
+    let proof = parse_fdc_payment_proof_json(proof_json)?;
+    let key = private_key_hex.trim();
+    let key = if key.starts_with("0x") || key.starts_with("0X") {
+        key.to_string()
+    } else {
+        format!("0x{key}")
+    };
+    let signer: PrivateKeySigner = key
+        .parse()
+        .map_err(|e| color_eyre::eyre::eyre!("invalid Flare EVM private key: {e}"))?;
+    let wallet = EthereumWallet::from(signer);
+    let provider = ProviderBuilder::new()
+        .wallet(wallet)
+        .connect_http(rpc_url.parse()?);
+
+    let registry = FlareContractRegistry::new(FLARE_CONTRACT_REGISTRY, provider.clone());
+    let asset_manager_addr = registry
+        .getContractAddressByName(ASSET_MANAGER_FXRP_NAME.to_string())
+        .call()
+        .await?;
+    let am = IAssetManager::new(asset_manager_addr, provider);
+
+    let arg = IAssetManager::DirectMintingProof {
+        merkleProof: proof.merkle_proof,
+        data: proof.data,
+    };
+    let pending = am
+        .executeDirectMinting(arg)
+        .send()
+        .await
+        .map_err(|e| color_eyre::eyre::eyre!("executeDirectMinting send failed: {e}"))?;
+    let tx_hash = *pending.tx_hash();
+    let _receipt = pending
+        .get_receipt()
+        .await
+        .map_err(|e| color_eyre::eyre::eyre!("executeDirectMinting receipt failed: {e}"))?;
+    Ok(format!("{tx_hash:#x}"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -189,6 +333,39 @@ mod tests {
         assert_eq!(bips_to_percent_display(10), "0.10%");
         assert_eq!(bips_to_percent_display(100), "1.00%");
         assert_eq!(bips_to_percent_display(12), "0.12%");
+    }
+
+    #[test]
+    fn ensure_fassets_execute_enabled_gate() {
+        assert!(ensure_fassets_execute_enabled(false).is_err());
+        assert!(ensure_fassets_execute_enabled(true).is_ok());
+    }
+
+    #[test]
+    fn parse_fdc_payment_proof_json_da_shape() {
+        let leaf = format!("0x{}", "ab".repeat(32));
+        let data = format!("0x{}", "cd".repeat(8));
+        let json = format!(r#"{{"proof":["{leaf}"],"response":"{data}"}}"#);
+        let proof = parse_fdc_payment_proof_json(&json).expect("parse da");
+        assert_eq!(proof.merkle_proof.len(), 1);
+        assert_eq!(proof.data.len(), 8);
+    }
+
+    #[test]
+    fn parse_fdc_payment_proof_json_contract_shape() {
+        let leaf = format!("0x{}", "11".repeat(32));
+        let data = format!("0x{}", "22".repeat(4));
+        let json = format!(r#"{{"merkleProof":["{leaf}"],"data":"{data}"}}"#);
+        let proof = parse_fdc_payment_proof_json(&json).expect("parse contract");
+        assert_eq!(proof.merkle_proof.len(), 1);
+        assert_eq!(proof.data.len(), 4);
+    }
+
+    #[test]
+    fn parse_fdc_payment_proof_json_rejects_empty() {
+        assert!(parse_fdc_payment_proof_json("{}").is_err());
+        assert!(parse_fdc_payment_proof_json(r#"{"proof":[],"response":"0x"}"#).is_err());
+        assert!(parse_fdc_payment_proof_json("not-json").is_err());
     }
 
     #[tokio::test]

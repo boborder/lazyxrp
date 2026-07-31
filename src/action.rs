@@ -6,7 +6,8 @@ use crate::{
     xrpl::{
         AccountSetSubmitParams, AccountSummary, AggregatePrice, AmmSummary, DunlSummary,
         EscrowCreateSubmitParams, FeeSummary, FlareFeedPrice, FxrpDirectMintInfo, LedgerObjectRow, NftRow,
-        FxrpDirectMintPaymentParams, OfferCreateSubmitParams, OfferRow, PathFindSnapshot, PaymentSubmitParams,
+        FxrpDirectMintPaymentParams, FxrpExecuteDirectMintParams, OfferCreateSubmitParams, OfferRow,
+        PathFindSnapshot, PaymentSubmitParams,
         ServerInfoSummary, SetRegularKeySubmitParams, TrustLineRow, TrustSetSubmitParams, TxRow,
         TxSummary, WalletProposeResult, XrplRlusdPrice, XrplTomlData,
     },
@@ -109,6 +110,10 @@ pub enum Action {
     FxrpDirectMintPaymentSubmit(FxrpDirectMintPaymentParams),
     FxrpDirectMintPaymentSubmitOk(String),
     FxrpDirectMintPaymentSubmitErr(String),
+    /// Queue Flare `executeDirectMinting` with pasted FDC proof JSON (C3).
+    FxrpExecuteDirectMintSubmit(FxrpExecuteDirectMintParams),
+    FxrpExecuteDirectMintSubmitOk(String),
+    FxrpExecuteDirectMintSubmitErr(String),
     /// Queue SetRegularKey sign+submit from Wallet form (poll task).
     SetRegularKeySubmit(SetRegularKeySubmitParams),
     SetRegularKeySubmitOk(String),

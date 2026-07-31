@@ -12,7 +12,8 @@ use crate::{
     action::Action,
     components::shared::theme,
     xrpl::{
-        AccountSetSubmitParams, FxrpDirectMintPaymentParams, OfferCreateSubmitParams, PaymentSubmitParams,
+        AccountSetSubmitParams, FxrpDirectMintPaymentParams, FxrpExecuteDirectMintParams,
+        OfferCreateSubmitParams, PaymentSubmitParams,
         SetRegularKeySubmitParams, TrustSetSubmitParams,
     },
 };
@@ -162,6 +163,27 @@ impl WalletPanel {
             amount_xrp,
             skip_mainnet_prompt: self.skip_mainnet_prompt,
             config_seed: self.config_seed(),
+        })
+    }
+
+    pub(super) fn open_fxrp_execute_direct_mint_composer(&mut self) {
+        self.composer = Some(ComposerPhase::FxrpExecuteDirectMint {
+            proof_json: String::new(),
+        });
+        self.is_form_editing = false;
+    }
+
+    pub(super) fn queue_submit_fxrp_execute_direct_mint(&mut self) -> Action {
+        let proof_json = match &self.composer {
+            Some(ComposerPhase::FxrpExecuteDirectMint { proof_json }) => proof_json.clone(),
+            _ => String::new(),
+        };
+        if proof_json.trim().is_empty() {
+            return Action::FxrpExecuteDirectMintSubmitErr("proof_json required".into());
+        }
+        Action::FxrpExecuteDirectMintSubmit(FxrpExecuteDirectMintParams {
+            proof_json,
+            skip_mainnet_prompt: self.skip_mainnet_prompt,
         })
     }
 
@@ -380,7 +402,7 @@ impl WalletPanel {
 
         let popup_w = area.width.clamp(54, 74);
         let popup_h = match phase {
-            ComposerPhase::PickKind { .. } => 20u16,
+            ComposerPhase::PickKind { .. } => 22u16,
             ComposerPhase::AccountSet => 21u16,
             ComposerPhase::Payment { is_iou, .. } => {
                 if *is_iou {
@@ -393,6 +415,7 @@ impl WalletPanel {
             ComposerPhase::OfferCreate { .. } => 14u16,
             ComposerPhase::TrustSet { .. } => 16u16,
             ComposerPhase::FxrpDirectMint { .. } => 16u16,
+            ComposerPhase::FxrpExecuteDirectMint { .. } => 16u16,
         }
         .min(area.height.saturating_sub(2))
         .max(8);
@@ -416,6 +439,7 @@ impl WalletPanel {
             ComposerPhase::OfferCreate { .. } => "Create offer",
             ComposerPhase::TrustSet { .. } => "Trust line",
             ComposerPhase::FxrpDirectMint { .. } => "FXRP Direct Mint",
+            ComposerPhase::FxrpExecuteDirectMint { .. } => "FXRP Execute (C3)",
         };
         let block = theme::panel_block(inner_title, true);
         let inner = block.inner(popup);
@@ -453,9 +477,10 @@ impl WalletPanel {
                     row(3, "4", "OfferCreate", "place DEX offer"),
                     row(4, "5", "TrustSet", "open IOU trust line"),
                     row(5, "6", "FXRP Mint", "pay Core Vault + memo"),
+                    row(6, "7", "FXRP Execute", "paste FDC proof → Flare"),
                     Line::from(""),
                     Line::from(Span::styled(
-                        "1–6 jump · j/k move · Enter open · Esc close",
+                        "1–7 jump · j/k move · Enter open · Esc close",
                         theme::secondary_style(),
                     )),
                 ])
@@ -791,6 +816,38 @@ impl WalletPanel {
                     )),
                     Line::from(Span::styled(
                         format!("e edit · Tab rows · s/Ctrl-S send · Esc back{net_note}"),
+                        theme::secondary_style(),
+                    )),
+                ])
+            }
+            ComposerPhase::FxrpExecuteDirectMint { proof_json } => {
+                let net_note = if self.network.is_mainnet() && !self.skip_mainnet_prompt {
+                    " · mainnet writes need --yes"
+                } else {
+                    ""
+                };
+                let preview = if proof_json.len() > 72 {
+                    format!("{}…", &proof_json[..72])
+                } else {
+                    proof_json.clone()
+                };
+                Paragraph::new(vec![
+                    Line::from(Span::styled(
+                        format!("Paste FDC proof JSON (gate: flare.fassets.execute){net_note}"),
+                        theme::secondary_style(),
+                    )),
+                    Line::from(""),
+                    Line::from(vec![
+                        Span::styled("proof_json ", theme::accent_style()),
+                        Span::styled(preview, theme::accent_style()),
+                    ]),
+                    Line::from(""),
+                    Line::from(Span::styled(
+                        "Accepts {proof,response} or {merkleProof,data}",
+                        theme::dim_style(),
+                    )),
+                    Line::from(Span::styled(
+                        format!("e edit · s/Ctrl-S submit · Esc back{net_note}"),
                         theme::secondary_style(),
                     )),
                 ])

@@ -303,6 +303,8 @@ impl App {
                 oracle_pairs: self.config.xrpl.oracle_pairs.clone(),
                 flare_rpc_url: flare_rpc_url.clone(),
                 flare_feeds: flare_feeds.clone(),
+                flare_fassets_execute: self.config.flare.fassets.execute,
+                flare_evm_key_env: self.config.flare.fassets.evm_key_env.clone(),
             },
             poll_rx,
             poll_trigger_rx,
@@ -635,6 +637,14 @@ impl App {
                     if let Err(err) = self
                         .poll_tx
                         .send(PollCommand::FxrpDirectMintPayment(params.clone()))
+                    {
+                        warn!(?err, "poll command channel closed");
+                    }
+                }
+                Action::FxrpExecuteDirectMintSubmit(params) => {
+                    if let Err(err) = self
+                        .poll_tx
+                        .send(PollCommand::FxrpExecuteDirectMint(params.clone()))
                     {
                         warn!(?err, "poll command channel closed");
                     }

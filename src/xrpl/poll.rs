@@ -16,7 +16,7 @@ use super::client::{
     RPC_TIMEOUT, RpcClient, empty_account_tx_page_on_not_found, path_find_snapshot, xrp_to_drops,
 };
 use super::types::{
-    AccountSetSubmitParams, BookPair, FxrpDirectMintPaymentParams, OfferCreateSubmitParams, OracleId, PaymentSubmitParams,
+    AccountSetSubmitParams, BookPair, FxrpDirectMintPaymentParams, FxrpExecuteDirectMintParams, OfferCreateSubmitParams, OracleId, PaymentSubmitParams,
     PollCommand, PollContext, SetRegularKeySubmitParams, SimulateResult, TrustSetSubmitParams,
 };
 use serde_json::Value;
@@ -1290,6 +1290,56 @@ fn dispatch_timed<T, F>(
     }
 }
 
+
+async fn submit_fxrp_execute_direct_mint(
+    flare_rpc_url: Option<&str>,
+    flare_fassets_execute: bool,
+    flare_evm_key_env: &str,
+    network: &Network,
+    params: FxrpExecuteDirectMintParams,
+    action_tx: &UnboundedSender<Action>,
+) {
+    let submit_err = Action::FxrpExecuteDirectMintSubmitErr;
+    if let Err(e) = crate::flare::ensure_fassets_execute_enabled(flare_fassets_execute) {
+        send_action(action_tx, submit_err(format!("{e}")));
+        return;
+    }
+    if mainnet_write_guard_blocks(network, params.skip_mainnet_prompt) {
+        send_action(
+            action_tx,
+            submit_err(
+                "mainnet: restart lazyxrp with --yes to allow Flare executeDirectMinting writes"
+                    .into(),
+            ),
+        );
+        return;
+    }
+    if params.proof_json.trim().is_empty() {
+        send_action(action_tx, submit_err("proof_json required".into()));
+        return;
+    }
+    let Some(rpc) = flare_rpc_url.filter(|u| !u.trim().is_empty()) else {
+        send_action(action_tx, submit_err("flare RPC URL not configured".into()));
+        return;
+    };
+    let key = match std::env::var(flare_evm_key_env) {
+        Ok(k) if !k.trim().is_empty() => k,
+        _ => {
+            send_action(
+                action_tx,
+                submit_err(format!(
+                    "env {flare_evm_key_env} not set (Flare EVM executor key)"
+                )),
+            );
+            return;
+        }
+    };
+    match crate::flare::execute_direct_minting(rpc, key.trim(), &params.proof_json).await {
+        Ok(hash) => send_action(action_tx, Action::FxrpExecuteDirectMintSubmitOk(hash)),
+        Err(e) => send_action(action_tx, submit_err(format!("{e}"))),
+    }
+}
+
 async fn execute_scheduled_poll(
     rpc: &RpcClient,
     inputs: PollBatchInputs<'_>,
@@ -1341,6 +1391,8 @@ async fn drive_poll_loop(
         oracle_pairs,
         flare_rpc_url,
         flare_feeds,
+        flare_fassets_execute,
+        flare_evm_key_env,
         tab_watch,
     } = ctx;
     let rpc = match RpcClient::connect(&rpc_url) {
@@ -1507,6 +1559,18 @@ async fn drive_poll_loop(
                         let network = *network_watch.borrow();
                         submit_fxrp_direct_mint_payment(&rpc, &network, params, &action_tx).await;
                     }
+                    PollCommand::FxrpExecuteDirectMint(params) => {
+                        let network = *network_watch.borrow();
+                        submit_fxrp_execute_direct_mint(
+                            flare_rpc_url.as_deref(),
+                            flare_fassets_execute,
+                            &flare_evm_key_env,
+                            &network,
+                            params,
+                            &action_tx,
+                        )
+                        .await;
+                    }
                     PollCommand::SetRegularKeySubmit(params) => {
                         let network = *network_watch.borrow();
                         submit_set_regular_key_transaction(&rpc, &network, params, &action_tx)
@@ -1557,7 +1621,8 @@ mod tests {
     use crate::signing::SEED_ENV;
     use crate::xrpl::client::RpcClient;
     use crate::xrpl::types::{
-        OfferCreateSubmitParams, PaymentSubmitParams, SetRegularKeySubmitParams,
+        FxrpDirectMintPaymentParams, FxrpExecuteDirectMintParams, OfferCreateSubmitParams,
+        PaymentSubmitParams, SetRegularKeySubmitParams,
     };
 
     /// TC-087: poll trigger burst drain
@@ -1696,6 +1761,33 @@ mod tests {
                 );
             }
             other => panic!("expected FxrpDirectMintPaymentSubmitErr, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn fxrp_execute_direct_mint_refuses_when_execute_disabled() {
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let params = FxrpExecuteDirectMintParams {
+            proof_json: r#"{"proof":["0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],"response":"0xbb"}"#.into(),
+            skip_mainnet_prompt: true,
+        };
+        submit_fxrp_execute_direct_mint(
+            Some("https://flare-api.flare.network/ext/C/rpc"),
+            false,
+            "FLARE_EVM_KEY",
+            &Network::Testnet,
+            params,
+            &tx,
+        )
+        .await;
+        match rx.try_recv() {
+            Ok(Action::FxrpExecuteDirectMintSubmitErr(msg)) => {
+                assert!(
+                    msg.contains("disabled") || msg.contains("execute"),
+                    "unexpected err: {msg}"
+                );
+            }
+            other => panic!("expected FxrpExecuteDirectMintSubmitErr, got {other:?}"),
         }
     }
 
