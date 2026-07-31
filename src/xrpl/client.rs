@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
 use serde_json::{Value, json};
@@ -185,7 +187,7 @@ impl RpcClient {
                 return Err(e);
             }
         };
-        Ok(parse_account_tx_page(&value, watch_address))
+        Ok(parse_account_tx_page(value, watch_address))
     }
 
     pub async fn account_overview(
@@ -688,9 +690,33 @@ pub(crate) struct ValidatorManifestMeta {
 }
 
 /// Decode XRPL validator manifest (base64) for domain / sequence / master key.
+///
+/// Results are memoized by raw base64 (dUNL entries rarely change between polls).
 pub fn parse_validator_manifest_b64(b64: &str) -> Option<ValidatorManifestMeta> {
-    let bytes = base64_decode(b64).ok()?;
-    parse_validator_manifest_bytes(&bytes)
+    fn cache() -> &'static Mutex<HashMap<String, Option<ValidatorManifestMeta>>> {
+        static CACHE: OnceLock<Mutex<HashMap<String, Option<ValidatorManifestMeta>>>> =
+            OnceLock::new();
+        CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+    }
+
+    if let Ok(guard) = cache().lock()
+        && let Some(hit) = guard.get(b64)
+    {
+        return hit.clone();
+    }
+
+    let meta = base64_decode(b64)
+        .ok()
+        .and_then(|bytes| parse_validator_manifest_bytes(&bytes));
+
+    if let Ok(mut guard) = cache().lock() {
+        // Bound memory if publisher churns keys; rare in practice.
+        if guard.len() >= 512 {
+            guard.clear();
+        }
+        guard.insert(b64.to_string(), meta.clone());
+    }
+    meta
 }
 
 fn parse_validator_manifest_bytes(data: &[u8]) -> Option<ValidatorManifestMeta> {
@@ -979,21 +1005,38 @@ fn parse_amm_info_value(value: &Value) -> AmmSummary {
     }
 }
 
-fn parse_account_tx_page(value: &Value, watch_address: &str) -> AccountTxPage {
-    let txns = value
-        .get("result")
-        .and_then(|v| v.get("transactions"))
-        .and_then(Value::as_array)
-        .map(|a| a.as_slice())
-        .unwrap_or(&[]);
+/// Consume the RPC `Value` and move `tx`/`meta` into `ArcValue` (no deep clone).
+fn parse_account_tx_page(mut value: Value, watch_address: &str) -> AccountTxPage {
+    let Some(result) = value.get_mut("result").and_then(Value::as_object_mut) else {
+        return AccountTxPage {
+            rows: vec![],
+            marker: None,
+        };
+    };
+    let marker = result.remove("marker");
+    let txns = match result.remove("transactions") {
+        Some(Value::Array(a)) => a,
+        _ => Vec::new(),
+    };
+
     let rows: Vec<TxRow> = txns
-        .iter()
-        .map(|t| {
-            let tx = t
-                .get("tx")
-                .or_else(|| t.get("tx_json"))
-                .unwrap_or(&Value::Null);
-            let meta = t.get("meta").unwrap_or(&Value::Null);
+        .into_iter()
+        .map(|mut entry| {
+            let hash_outer = entry
+                .get("hash")
+                .and_then(Value::as_str)
+                .map(str::to_string);
+            let ledger_outer = entry.get("ledger_index").and_then(Value::as_u64);
+
+            let tx = entry
+                .as_object_mut()
+                .and_then(|o| o.remove("tx").or_else(|| o.remove("tx_json")))
+                .unwrap_or(Value::Null);
+            let meta = entry
+                .as_object_mut()
+                .and_then(|o| o.remove("meta"))
+                .unwrap_or(Value::Null);
+
             let account = tx.get("Account").and_then(Value::as_str).unwrap_or("");
             let destination = tx.get("Destination").and_then(Value::as_str);
             let direction = if account.eq_ignore_ascii_case(watch_address) {
@@ -1008,40 +1051,39 @@ fn parse_account_tx_page(value: &Value, watch_address: &str) -> AccountTxPage {
                 "·"
             }
             .to_string();
+
+            let hash = hash_outer
+                .or_else(|| tx.get("hash").and_then(Value::as_str).map(str::to_string))
+                .unwrap_or_else(|| "-".into());
+            let ledger_index = ledger_outer
+                .or_else(|| tx.get("ledger_index").and_then(Value::as_u64))
+                .unwrap_or(0) as u32;
+
             TxRow {
-                hash: t
-                    .get("hash")
-                    .and_then(Value::as_str)
-                    .or_else(|| tx.get("hash").and_then(Value::as_str))
-                    .unwrap_or("-")
-                    .to_string(),
+                hash,
                 tx_type: tx
                     .get("TransactionType")
                     .and_then(Value::as_str)
                     .unwrap_or("-")
                     .to_string(),
-                ledger_index: t
-                    .get("ledger_index")
-                    .and_then(Value::as_u64)
-                    .or_else(|| tx.get("ledger_index").and_then(Value::as_u64))
-                    .unwrap_or(0) as u32,
+                ledger_index,
                 result: meta
                     .get("TransactionResult")
                     .and_then(Value::as_str)
                     .unwrap_or("-")
                     .to_string(),
                 direction,
-                tx_json: crate::xrpl::types::ArcValue(std::sync::Arc::new(tx.clone())),
-                meta_json: crate::xrpl::types::ArcValue(std::sync::Arc::new(meta.clone())),
+                tx_json: ArcValue::new(tx),
+                meta_json: ArcValue::new(meta),
             }
         })
         .collect();
-    let marker = value.get("result").and_then(|v| v.get("marker")).cloned();
+
     AccountTxPage { rows, marker }
 }
 
 #[cfg(test)]
-fn parse_account_tx_value(value: &Value, watch_address: &str) -> Vec<TxRow> {
+fn parse_account_tx_value(value: Value, watch_address: &str) -> Vec<TxRow> {
     parse_account_tx_page(value, watch_address).rows
 }
 
@@ -1604,7 +1646,7 @@ mod tests {
                 ]
             }
         });
-        let rows = parse_account_tx_value(&v, "rWatch");
+        let rows = parse_account_tx_value(v, "rWatch");
         assert_eq!(rows.len(), 3);
         assert_eq!(rows[0].hash, "ABC123");
         assert_eq!(rows[0].tx_type, "Payment");
@@ -1961,7 +2003,7 @@ mod tests {
         assert_eq!(xrp_to_drops("0").unwrap(), 0);
     }
 
-    /// TC-079 ripple_path_find parse
+    /// TC-080 ripple_path_find parse
     #[test]
     fn parse_ripple_path_find_with_alternatives() {
         let value = json!({
@@ -2002,7 +2044,7 @@ mod tests {
         assert_eq!(alt.source_amount["value"], "105.5");
     }
 
-    /// TC-080 ripple_path_find empty alternatives
+    /// TC-081 ripple_path_find empty alternatives
     #[test]
     fn parse_ripple_path_find_no_alternatives() {
         let value = json!({
@@ -2017,7 +2059,7 @@ mod tests {
         assert!(paths.alternatives.is_empty());
     }
 
-    /// TC-082a summarize_paths_computed abbreviates hop chain
+    /// TC-083 summarize_paths_computed abbreviates hop chain
     #[test]
     fn summarize_paths_computed_multi_hop() {
         let paths = json!([[
@@ -2058,7 +2100,7 @@ mod tests {
         assert_eq!(format_path_source_amount(&amount), "1.05 RLUSD");
     }
 
-    /// TC-082b path_find_rows_from builds display rows
+    /// TC-084 path_find_rows_from builds display rows
     #[test]
     fn path_find_rows_from_alternatives() {
         let result = RipplePathFindResult {
@@ -2099,7 +2141,7 @@ mod tests {
         assert_eq!(rows[1].send, "2.000000 XRP");
     }
 
-    /// TC-081 ripple_path_find source_amount as string (XRP drops)
+    /// TC-082 ripple_path_find source_amount as string (XRP drops)
     #[test]
     fn parse_ripple_path_find_source_amount_string() {
         let value = json!({
@@ -2121,7 +2163,7 @@ mod tests {
         assert_eq!(paths.alternatives[0].source_amount, json!("256987"));
     }
 
-    /// TC-082 wallet_propose ed25519
+    /// TC-095 wallet_propose ed25519
     #[test]
     fn parse_wallet_propose_ed25519() {
         let value = json!({
@@ -2151,7 +2193,7 @@ mod tests {
         );
     }
 
-    /// TC-083: get_aggregate_price parser — full response
+    /// TC-096: get_aggregate_price parser — full response
     #[test]
     fn parse_aggregate_price_full() {
         let value = json!({
@@ -2178,7 +2220,7 @@ mod tests {
         assert_eq!(price.time, 1715779200);
     }
 
-    /// TC-084: get_aggregate_price parser — trimmed_set omitted
+    /// TC-097: get_aggregate_price parser — trimmed_set omitted
     #[test]
     fn parse_aggregate_price_no_trim() {
         let value = json!({
