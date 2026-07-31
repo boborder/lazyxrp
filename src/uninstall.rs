@@ -14,10 +14,16 @@ fn backup_candidate(binary: &Path) -> Option<PathBuf> {
     Some(binary.with_file_name(format!("{name}.bak")))
 }
 
+/// `install.sh` creates `rp` → `lazyxrp` next to the binary.
+fn sibling_rp_alias(binary: &Path) -> Option<PathBuf> {
+    Some(binary.with_file_name("rp"))
+}
+
 /// Paths match `./install.sh --uninstall-help` (effective config/data dirs from `Config`).
 pub(crate) fn perform_self_uninstall(config: &Config, assume_yes: bool) -> color_eyre::Result<()> {
     let exe = std::env::current_exe()?;
     let backup = backup_candidate(&exe);
+    let rp_alias = sibling_rp_alias(&exe);
     let resolved_cfg = config.resolved_config_dir();
     let resolved_data = config.resolved_data_dir();
 
@@ -29,6 +35,9 @@ pub(crate) fn perform_self_uninstall(config: &Config, assume_yes: bool) -> color
     eprintln!("  binary: {}", exe.display());
     if let Some(ref b) = backup {
         eprintln!("  backup: {} (if present)", b.display());
+    }
+    if let Some(ref a) = rp_alias {
+        eprintln!("  alias:  {} (if present)", a.display());
     }
     for d in &dirs {
         eprintln!("  directory: {}", d.display());
@@ -65,6 +74,13 @@ pub(crate) fn perform_self_uninstall(config: &Config, assume_yes: bool) -> color
         && let Err(e) = fs::remove_file(b)
     {
         errors.push(format!("remove_file {} — {e}", b.display()));
+    }
+
+    if let Some(ref a) = rp_alias
+        && a.exists()
+        && let Err(e) = fs::remove_file(a)
+    {
+        errors.push(format!("remove_file {} — {e}", a.display()));
     }
 
     if exe.exists()

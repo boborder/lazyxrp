@@ -42,6 +42,44 @@ pub struct Cli {
     pub command: Option<Cmd>,
 }
 
+/// Short-command CLI when argv0 is `rp` (symlink to lazyxrp).
+#[derive(Parser, Debug)]
+#[command(
+    name = "rp",
+    about = "Quick XRPL lookup — transaction hash or account address"
+)]
+pub struct RpCli {
+    /// Network to connect to (overrides config and env)
+    #[arg(long, value_enum)]
+    pub network: Option<Network>,
+
+    #[arg(long)]
+    pub server: Option<String>,
+
+    /// Target: 64-char tx hash or classic/X address
+    #[arg(short = 't', long = "target", value_name = "TXID_OR_ADDRESS")]
+    pub target: Option<String>,
+
+    /// Positional alternative to `-t` / `--target`
+    #[arg(value_name = "TXID_OR_ADDRESS")]
+    pub query: Option<String>,
+}
+
+impl RpCli {
+    pub fn resolved_target(&self) -> color_eyre::Result<&str> {
+        self.target
+            .as_deref()
+            .or(self.query.as_deref())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| {
+                color_eyre::eyre::eyre!(
+                    "rp: pass `-t <txid|address>` or a positional `<txid|address>`"
+                )
+            })
+    }
+}
+
 #[derive(Subcommand, Debug, Clone)]
 pub enum Cmd {
     Watch {
@@ -136,7 +174,7 @@ Data directory: {data_dir_path}"
 mod tests {
     use clap::Parser;
 
-    use super::Cli;
+    use super::{Cli, RpCli};
 
     /// TC-058
     #[test]
@@ -157,5 +195,19 @@ mod tests {
         let c = Cli::try_parse_from(["lazyxrp", "--self-uninstall", "info"]).unwrap();
         assert!(c.self_uninstall);
         assert!(matches!(c.command, Some(super::Cmd::Info)));
+    }
+
+    #[test]
+    fn rp_cli_accepts_flag_and_positional() {
+        let flag = RpCli::try_parse_from(["rp", "-t", "abcd"]).expect("flag");
+        assert_eq!(flag.resolved_target().unwrap(), "abcd");
+        let pos = RpCli::try_parse_from(["rp", "ef01"]).expect("pos");
+        assert_eq!(pos.resolved_target().unwrap(), "ef01");
+        assert!(
+            RpCli::try_parse_from(["rp"])
+                .unwrap()
+                .resolved_target()
+                .is_err()
+        );
     }
 }

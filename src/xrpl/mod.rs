@@ -13,7 +13,7 @@ pub mod toml;
 mod types;
 mod ws;
 
-pub use cli_exec::execute_cli_command;
+pub use cli_exec::{execute_cli_command, execute_rp_lookup};
 #[allow(unused_imports)]
 pub use client::RpcClient;
 pub use format::{drops_to_xrp, xrp_to_drops};

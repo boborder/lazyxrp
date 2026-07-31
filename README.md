@@ -57,7 +57,7 @@ That removes the current binary, `{name}.bak`, and the resolved config/data dire
 Manual alternatives:
 
 ```bash
-rm -f ~/.local/bin/lazyxrp ~/.local/bin/lazyxrp.bak
+rm -f ~/.local/bin/lazyxrp ~/.local/bin/lazyxrp.bak ~/.local/bin/rp
 cargo uninstall lazyxrp --root "$HOME/.local"   # install.sh → ~/.local
 cargo uninstall lazyxrp                         # default cargo prefix / --path .
 
@@ -93,6 +93,18 @@ lazyxrp amm --asset1 XRP --asset2 USD --issuer2 <r-issuer>      # AMM pool info
 lazyxrp txhistory <r-address> --limit 20                        # tx history
 lazyxrp send <r-destination> --amount 10                        # decimal string amount; requires XRPL_SEED
 ```
+
+### Short command: `rp`
+
+`rp` is a second binary (same crate). `cargo install lazyxrp`, release archives, and `install.sh` all provide it. Lookup-only CLI (not the TUI):
+
+```bash
+rp -t <txid|r-address>
+rp <txid|r-address>
+rp --network testnet -t <txid|r-address>
+```
+
+`install.sh` falls back to a `rp` → `lazyxrp` symlink if an older archive has no `rp` binary. When `INSTALL_DIR` is missing from `PATH`, the installer can append it to your shell profile (interactive prompt; auto under `CI=1` / `-q`).
 
 ## Key Bindings
 

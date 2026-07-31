@@ -15,7 +15,10 @@ lazyxrp/
 ├── .mise.toml
 ├── AGENTS.md
 ├── src/
-│   ├── main.rs
+│   ├── lib.rs                 # shared library (lazyxrp + rp binaries)
+│   ├── main.rs                # thin `lazyxrp` binary entry
+│   ├── bin/
+│   │   └── rp.rs              # thin `rp` lookup binary entry
 │   ├── app.rs
 │   ├── action.rs
 │   ├── cli.rs
@@ -116,17 +119,19 @@ lazyxrp/
 - `build.rs`: ビルド時の補助処理。
 - `README.md`: 利用者向けの概要と起動手順。
 - `.env.example`: `XRPL_*` 環境変数の例（任意。一覧は `docs/tech.md` と実装を参照）。
-- `install.sh`: インタラクティブインストーラ（必須は `curl` のみ）。プロンプトとメッセージは英語。`--help` で CLI 一覧（`--method cargo|binary`、`--install-rust` / `--no-install-rust`、`--install-mise` / `--no-install-mise`、`-q`）。**手動アンインストール**手順のみの表示は `--uninstall-help`（`lazyxrp --self-uninstall` の案内や、任意で OS 別の設定・データ `rm` の例、`LAZYXRP_CONFIG` / `LAZYXRP_DATA` 等の注意あり）。TTY 時はアニメ付き対話で、cargo / mise 未導入ならインストールを提案；非 TTY / `-q` は既定の自動応答。
-- `.mise.toml`: [mise](https://mise.jdx.dev/) タスク（例: `install`、`tags`（一覧）、`tag-push`（緊急時の手動タグフォールバック）、`bench` / `bench-fast`（ベンチマーク））。`main` へ push して CI が緑で、かつ `Cargo.toml` の `version` が前回から上がっていれば [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) の `auto-tag` が `v<version>` を打ち、[`.github/workflows/cd.yml`](../.github/workflows/cd.yml) がリリースする（パス制限なし。通常は手動タグ不要）。
+- `install.sh`: インタラクティブインストーラ（必須は `curl` **または** `wget`）。プロンプトとメッセージは英語。`--help` で CLI 一覧（`--method cargo|binary`、`--install-rust` / `--no-install-rust`、`--install-mise` / `--no-install-mise`、`-q`）。`CI=1` は `-q` 相当。PATH 未設定時は shell profile へ追記可。リリースアーカイブに `rp` があればそれを入れ、無ければ `rp` → `lazyxrp` symlink。**手動アンインストール**は `--uninstall-help`（`lazyxrp --self-uninstall`、`INSTALL_DIR/rp` 削除など）。
+- `.mise.toml`: [mise](https://mise.jdx.dev/) タスク（例: `install`、`tags`（一覧）、`tag-push`（緊急時の手動タグフォールバック）、`bench` / `bench-fast`（ベンチマーク））。`main` へ push して CI が緑で、かつ `Cargo.toml` の `version` が前回から上がっていれば [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) の `auto-tag` が `v<version>` を打ち、[`.github/workflows/cd.yml`](../.github/workflows/cd.yml) がリリースする。CD 成功後に [`.github/workflows/benchmark.yml`](../.github/workflows/benchmark.yml) が連鎖する（手動 `workflow_dispatch` も可）。
 - `AGENTS.md`: プロジェクト運用ルールと実行契約（禁止事項・クイックリファレンスを含む）。graphify の構造情報も参照。
 
 ## 3. `src/` 配下の責務
 
-- `main.rs`: 起動エントリーポイント。`watch` と CLI モードの分岐、ネットワーク/エンドポイント/シードの優先順位解決を担当。`--self-uninstall` はロギング初期化前に処理。
-- `uninstall.rs`: `lazyxrp --self-uninstall` — 実行中バイナリ・同階層の `{name}.bak`、`Config` で解決した config/data ディレクトリの削除（`cargo uninstall` は呼ばない）。
+- `lib.rs`: `lazyxrp` / `rp` 両バイナリが共有するライブラリ。`run()`（TUI+CLI）と `run_rp()`（lookup 専用）。
+- `main.rs`: `lazyxrp` バイナリの薄いエントリ（`lazyxrp::run()`）。
+- `bin/rp.rs`: `rp` バイナリの薄いエントリ（`lazyxrp::run_rp()`）。`cargo install` / リリース tarball で常に付く。
+- `uninstall.rs`: `lazyxrp --self-uninstall` — 実行中バイナリ・同階層の `{name}.bak`・同階層の `rp`（実体/symlink）、`Config` で解決した config/data ディレクトリの削除（`cargo uninstall` は呼ばない）。
 - `app.rs`: TUI アプリ本体。イベントループ、コンポーネント管理、バックグラウンド処理起動を担当。
-- `xrpl/`: XRPL 連携一式。`mod.rs` は再エクスポートのみ。`address.rs`（classic/X-Address 解決・ネットワーク一致検査）、`client.rs`（`RpcClient` façade・JSON-RPC / HTTPS dUNL fetch）、`dunl.rs`（XRPLF dUNL JSON・manifest ST）、`format.rs`（金額・path・ripple time 整形、`xrp_to_drops` / `path_find_*`）、`parse.rs`（JSON-RPC レスポンスパーサ・book helper）、`json_util.rs`（JSON パスヘルパ）、`types.rs`（行データ型・`BookPair`・`PollContext` / `PollCommand`）、`poll.rs`（定期ポーリング・ウォレット送信パス）、`ws.rs`（WebSocket）、`cli_exec.rs`（非 TUI の `execute_cli_command`）、`toml.rs`（`xrp-ledger.toml` パーサ）、`backoff.rs`（再接続間隔）。
-- `cli.rs`: コマンドライン引数とサブコマンド定義。
+- `xrpl/`: XRPL 連携一式。`mod.rs` は再エクスポートのみ。`address.rs`（classic/X-Address 解決・ネットワーク一致検査）、`client.rs`（`RpcClient` façade・JSON-RPC / HTTPS dUNL fetch・`tx` lookup）、`dunl.rs`（XRPLF dUNL JSON・manifest ST）、`format.rs`（金額・path・ripple time 整形、`xrp_to_drops` / `path_find_*`）、`parse.rs`（JSON-RPC レスポンスパーサ・book helper）、`json_util.rs`（JSON パスヘルパ）、`types.rs`（行データ型・`BookPair`・`PollContext` / `PollCommand`）、`poll.rs`（定期ポーリング・ウォレット送信パス）、`ws.rs`（WebSocket）、`cli_exec.rs`（非 TUI の `execute_cli_command` / `execute_rp_lookup`）、`toml.rs`（`xrp-ledger.toml` パーサ）、`backoff.rs`（再接続間隔）。
+- `cli.rs`: コマンドライン引数とサブコマンド定義（`Cli`）および `rp` 用 `RpCli`。
 - `action.rs`: アプリ内部で流す `Action` 定義。
 - `config.rs`: 既定値 + 設定ファイルのロードとマージ、`XRPL_*` 環境変数（シード・RPC/WS・ネットワーク）の反映。
 - `components/mod.rs`: UI コンポーネント共通トレイトとサブモジュール統合。

@@ -43,8 +43,11 @@ Index: [`docs/README.md`](README.md).
 ## Distribution
 
 - [ ] `install.sh` tested on a clean machine or CI artifact
+- [ ] Release tarball includes both `lazyxrp` and `rp` (CD packaging)
+- [ ] `cargo install lazyxrp` installs both binaries (`~/.cargo/bin/rp` present)
 - [ ] Version bumped in `Cargo.toml` before tag
 - [ ] GitHub Release notes mention breaking changes and mainnet `--yes` requirement
+- [ ] After CD success, Benchmark workflow_run fires (or manual `workflow_dispatch`)
 
 ### Automated release (Cargo.toml version bump)
 

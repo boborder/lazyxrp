@@ -1,16 +1,16 @@
 # Repository Inventory
 
-> **Scope**: full repository. **Confidence**: high. **Updated**: 2026-07-31 (v0.1.23 post-ship sync).
+> **Scope**: full repository. **Confidence**: high. **Updated**: 2026-07-31 (v0.2.0 + rp binary WT).
 
 ## Project Summary
 
-**lazyxrp** — Rust terminal UI (TUI) for the XRP Ledger. Monitor accounts, order books, NFTs, trust lines, and AMM pools. Supports both an interactive `watch` mode (ratatui dashboard) and CLI subcommands (`info`, `account`, `book`, `nfts`, `lines`, `amm`, `tx-history`, `account-status`, `send`). Single Rust binary.
+**lazyxrp** — Rust terminal UI (TUI) for the XRP Ledger. Monitor accounts, order books, NFTs, trust lines, and AMM pools. Supports interactive `watch` mode (ratatui dashboard) and CLI subcommands (`info`, `account`, `book`, `nfts`, `lines`, `amm`, `tx-history`, `account-status`, `send`). Two binaries from one crate: `lazyxrp` (TUI/CLI) and `rp` (tx/account lookup).
 
 - **Language**: Rust 2024 edition
 - **MSRV**: 1.91
 - **License**: MIT
 - **Repo**: `github.com/boborder/lazyxrp`
-- **Version**: 0.1.23
+- **Version**: 0.2.0 (pending 0.2.1 for `rp` ship)
 
 ## Build / Test / Validate Commands
 
@@ -28,10 +28,12 @@
 
 | Entry | File | Description |
 |-------|------|-------------|
-| `main()` | `src/main.rs` | Async runtime start. Routes to `App::run()` (TUI watch) or `execute_cli_command()` (CLI). Resolves network/seed/URL priority chain. |
-| `Cli` struct | `src/cli.rs` | Clap-derived CLI. Subcommands: `Watch`, `Info`, `Account`, `Book`, `Summary`, `Nfts`, `Lines`, `Amm`, `TxHistory`, `AccountStatus`, `Send`. |
+| `main()` | `src/main.rs` | Thin `lazyxrp` binary → `lazyxrp::run()`. |
+| `main()` | `src/bin/rp.rs` | Thin `rp` binary → `lazyxrp::run_rp()` (lookup-only). |
+| `run()` / `run_rp()` | `src/lib.rs` | Shared entry: TUI/CLI vs tx/account lookup. |
+| `Cli` / `RpCli` | `src/cli.rs` | Clap-derived CLIs. `Cmd`: `Watch`, `Info`, `Account`, `Book`, `Summary`, `Nfts`, `Lines`, `Amm`, `TxHistory`, `AccountStatus`, `Send`. |
 | `App::run()` | `src/app.rs` | TUI main loop: event handling → action processing → dirty-flagged render (`needs_draw`). Spawns WS + poll background tasks. |
-| `execute_cli_command()` | `src/xrpl/cli_exec.rs` | Non-TUI CLI command dispatcher. |
+| `execute_cli_command()` / `execute_rp_lookup()` | `src/xrpl/cli_exec.rs` | Non-TUI CLI dispatchers. |
 | `Config::new()` | `src/config.rs` | Config loading: built-in defaults → user config.toml → env vars. |
 | `build.rs` | `build.rs` | Build-time metadata (vergen-gix for commit hash, date). |
 
@@ -39,28 +41,30 @@
 
 ```
 src/
-├── main.rs              Entry point, network/seed URL resolution
+├── lib.rs               Shared library (`run` / `run_rp`)
+├── main.rs              Thin `lazyxrp` binary
+├── bin/rp.rs            Thin `rp` lookup binary
 ├── app.rs               TUI application loop (Elm-like TEA; dirty-render via needs_draw)
 ├── action.rs            Action enum (all internal messages)
-├── cli.rs               CLI argument parsing (clap)
+├── cli.rs               CLI argument parsing (clap) — `Cli` + `RpCli`
 ├── config.rs            Config loading/merging, keybinds, styles (~1000 lines)
 ├── tui.rs               Terminal management (raw mode, event loop, suspend/resume)
 ├── network.rs           Network enum (mainnet/testnet/devnet) + endpoint URLs
 ├── signing.rs           Seed handling, signing helpers, mainnet confirmation prompt
 ├── errors.rs            Error handling init (color-eyre, human-panic, better-panic)
 ├── logging.rs           Tracing/logging initialization
-├── uninstall.rs         --self-uninstall logic
+├── uninstall.rs         --self-uninstall logic (also removes sibling `rp`)
 ├── flare.rs             Flare FTSOv2 + FXRP AssetManager C1 reads + C3 flagged executeDirectMinting
 ├── xrpl/                XRPL integration
 │   ├── mod.rs           Re-exports
 │   ├── address.rs       Classic / X-Address resolve + network match checks
-│   ├── client.rs        RpcClient façade (JSON-RPC + HTTPS dUNL fetch)
+│   ├── client.rs        RpcClient façade (JSON-RPC + HTTPS dUNL fetch + `tx`)
 │   ├── dunl.rs          XRPLF dUNL JSON + validator manifest ST decode
 │   ├── format.rs        Amount / path / ripple-time formatters (`xrp_to_drops`, path_find helpers)
 │   ├── parse.rs         JSON-RPC response parsers + book helpers
 │   ├── ws.rs            WebSocket subscription task
 │   ├── poll.rs          Polling task (periodic + on-demand RPC, submit flows)
-│   ├── cli_exec.rs      CLI command execution
+│   ├── cli_exec.rs      CLI command execution + `execute_rp_lookup`
 │   ├── types.rs         Data types: row structs, BookPair, PollContext/Command
 │   ├── json_util.rs     JSON path helpers (json_str, extract_json_u32)
 │   ├── toml.rs          xrp-ledger.toml fetch/parse

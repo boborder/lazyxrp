@@ -101,8 +101,18 @@ jobs:
             GCC_PREFIX=""
           fi
           "${GCC_PREFIX}strip" $BINARY_NAME || true
+          RP_NAME="rp${{ matrix.binary-postfix }}"
+          if [[ -f "$RP_NAME" ]]; then
+            "${GCC_PREFIX}strip" "$RP_NAME" || true
+          else
+            echo "warning: $RP_NAME missing after build" >&2
+          fi
           RELEASE_NAME=${{ matrix.binary-name }}-${GITHUB_REF_NAME}-${{ matrix.os-name }}-${{ matrix.architecture }}
-          tar czvf $RELEASE_NAME.tar.gz $BINARY_NAME
+          if [[ -f "$RP_NAME" ]]; then
+            tar czvf $RELEASE_NAME.tar.gz $BINARY_NAME "$RP_NAME"
+          else
+            tar czvf $RELEASE_NAME.tar.gz $BINARY_NAME
+          fi
           if [[ ${{ runner.os }} == 'Windows' ]]; then
             certutil -hashfile $RELEASE_NAME.tar.gz sha256 | grep -E [A-Fa-f0-9]{64} > $RELEASE_NAME.sha256
           else

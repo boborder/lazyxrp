@@ -359,6 +359,11 @@ impl RpcClient {
         }
     }
 
+    /// Look up a validated (or open) transaction by hash via the `tx` RPC.
+    pub async fn tx(&self, hash: &str) -> color_eyre::Result<Value> {
+        self.rpc_value("tx", json!({ "transaction": hash })).await
+    }
+
     pub async fn submit_signed_tx(&self, signed_tx_blob: &str) -> color_eyre::Result<TxSummary> {
         let value = self
             .rpc_value("submit", json!({ "tx_blob": signed_tx_blob }))

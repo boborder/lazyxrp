@@ -210,8 +210,82 @@ pub async fn execute_cli_command(
     Ok(())
 }
 
+/// Lookup entry used by the short `rp` argv0 alias.
+pub async fn execute_rp_lookup(rpc_url: &str, raw: &str) -> color_eyre::Result<()> {
+    let rpc = RpcClient::connect(rpc_url)?;
+    match classify_rp_target(raw.trim())? {
+        RpTarget::Account(address) => {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&rpc.account_info(&address).await?)?
+            );
+        }
+        RpTarget::TxHash(hash) => {
+            let value = rpc.tx(&hash).await?;
+            let body = value.get("result").cloned().unwrap_or(value);
+            println!("{}", serde_json::to_string_pretty(&body)?);
+        }
+    }
+    Ok(())
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum RpTarget {
+    Account(String),
+    TxHash(String),
+}
+
+fn looks_like_tx_hash(s: &str) -> bool {
+    let s = s.strip_prefix("0x").unwrap_or(s);
+    s.len() == 64 && s.chars().all(|c| c.is_ascii_hexdigit())
+}
+
+fn classify_rp_target(raw: &str) -> color_eyre::Result<RpTarget> {
+    if raw.is_empty() {
+        return Err(color_eyre::eyre::eyre!("rp: empty target"));
+    }
+    if looks_like_tx_hash(raw) {
+        let hash = raw.strip_prefix("0x").unwrap_or(raw).to_string();
+        return Ok(RpTarget::TxHash(hash));
+    }
+    match super::address::resolve_payment_destination(raw) {
+        Ok(resolved) => Ok(RpTarget::Account(resolved.classic)),
+        Err(_) => Err(color_eyre::eyre::eyre!(
+            "rp: not a tx hash (64 hex) or account address (classic/X): {raw}"
+        )),
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use super::{RpTarget, classify_rp_target, looks_like_tx_hash};
+
+    #[test]
+    fn looks_like_tx_hash_accepts_64_hex_and_0x() {
+        let h = "a".repeat(64);
+        assert!(looks_like_tx_hash(&h));
+        assert!(looks_like_tx_hash(&format!("0x{h}")));
+        assert!(!looks_like_tx_hash(&"a".repeat(63)));
+        assert!(!looks_like_tx_hash("not-hex"));
+    }
+
+    #[test]
+    fn classify_rp_target_splits_hash_and_classic() {
+        let h = "b".repeat(64);
+        assert_eq!(classify_rp_target(&h).unwrap(), RpTarget::TxHash(h.clone()));
+        assert_eq!(
+            classify_rp_target(&format!("0x{h}")).unwrap(),
+            RpTarget::TxHash(h)
+        );
+        let addr = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh";
+        assert_eq!(
+            classify_rp_target(addr).unwrap(),
+            RpTarget::Account(addr.into())
+        );
+        assert!(classify_rp_target("nope").is_err());
+        assert!(classify_rp_target("").is_err());
+    }
+
     /// Live XRPL JSON-RPC (mainnet public cluster). Serialized to avoid connection pile-up.
     mod integration_live_network {
         use std::time::Duration;
