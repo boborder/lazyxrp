@@ -86,7 +86,7 @@ The `cargo_bloat` check writes a text report (`target/bloat-report.txt`) listing
 
 The `.github/workflows/benchmark.yml` workflow runs on:
 
-- After a **successful CD** run (`workflow_run` on `CD # Continuous Deployment`)
+- After a **successful CD** run (`workflow_run` on workflow name `CD`)
 - Manual dispatch via **Actions → Benchmark → Run workflow**
 
 It no longer runs on every `main` push or pull request (those were noisy relative to release signal). CD-chained runs check out the CD head SHA so numbers match the released commit.

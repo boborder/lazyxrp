@@ -3,8 +3,10 @@ name: Benchmark
 on:
   # After a successful CD (tag release / manual CD). Uses the default-branch
   # workflow file; checks out the CD head SHA so results match the release.
+  # NOTE: cd.yml `name: CD # …` — everything after `#` is a YAML comment, so
+  # the workflow's real name is just `CD`.
   workflow_run:
-    workflows: ["CD # Continuous Deployment"]
+    workflows: ["CD"]
     types:
       - completed
   workflow_dispatch:
