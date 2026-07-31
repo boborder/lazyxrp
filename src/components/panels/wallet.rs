@@ -60,11 +60,6 @@ enum ComposerPhase {
     },
 }
 
-/// Derive XRPL address from a family seed.
-pub fn seed_to_address(seed: &str) -> Result<String, String> {
-    crate::signing::seed_to_address(seed)
-}
-
 #[path = "wallet_composer.rs"]
 mod composer;
 #[path = "wallet_keygen.rs"]
@@ -159,7 +154,7 @@ impl Component for WalletPanel {
         self.network = config.xrpl.network;
         self.config = Some(config);
         if let Some(ref s) = self.seed {
-            self.seed_address = Some(seed_to_address(s));
+            self.seed_address = Some(crate::signing::seed_to_address(s));
         }
         Ok(())
     }
