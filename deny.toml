@@ -1,8 +1,12 @@
 # cargo-deny config — keep dependency advisories / licenses under review.
 [advisories]
 yanked = "deny"
+unmaintained = "all"
+unused-ignored-advisory = "allow"
 ignore = [
-  # RUSTSEC-2026-0235 (rkyv 0.7.46, out-of-bounds read on Rc/Arc archives):
+  { id = "RUSTSEC-2023-0089", reason = "atomic-polyfill is transitive through xrpl-rust; no safe upstream upgrade" },
+  { id = "RUSTSEC-2024-0388", reason = "derivative is transitive and unmaintained; no compatible upstream replacement" },
+  { id = "RUSTSEC-2024-0436", reason = "paste is transitive through Alloy; no compatible replacement in current dependency graph" },
   # locked via rust_decimal's optional `rkyv` feature, which no workspace
   # member enables — rkyv never compiles. No patched 0.7.x; upstream fix
   # requires rkyv 0.8, which rust_decimal has not migrated to.
