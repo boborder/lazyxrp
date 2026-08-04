@@ -7,8 +7,36 @@ on:
   workflow_dispatch:
 
 jobs:
+  # Release gate: never build/publish from a commit whose CI is not green.
+  # Tag pushes and workflow_dispatch both land here; the CI workflow run for
+  # the tagged commit (if any) is watched to completion and must succeed.
+  ci-gate:
+    name: CI Gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Wait for and verify CI on tagged commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          SHA="$(git rev-parse HEAD)"
+          echo "Release commit: ${SHA}"
+          RUN_ID="$(gh run list --workflow CI --commit "${SHA}" --limit 1 --json databaseId --jq '.[0].databaseId')"
+          if [ -z "${RUN_ID}" ] || [ "${RUN_ID}" = "null" ]; then
+            echo "::error::No CI workflow run found for commit ${SHA} — refusing to release"
+            exit 1
+          fi
+          echo "Watching CI run ${RUN_ID} for commit ${SHA}"
+          gh run watch "${RUN_ID}" --exit-status --interval 15
+
   build-binaries:
     name: Build ${{ matrix.os-name }} ${{ matrix.architecture }} (${{ matrix.target }})
+    needs: ci-gate
     runs-on: ${{ matrix.os }}
 
     strategy:

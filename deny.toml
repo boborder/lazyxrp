@@ -1,6 +1,13 @@
 # cargo-deny config — keep dependency advisories / licenses under review.
 [advisories]
 yanked = "deny"
+ignore = [
+  # RUSTSEC-2026-0235 (rkyv 0.7.46, out-of-bounds read on Rc/Arc archives):
+  # locked via rust_decimal's optional `rkyv` feature, which no workspace
+  # member enables — rkyv never compiles. No patched 0.7.x; upstream fix
+  # requires rkyv 0.8, which rust_decimal has not migrated to.
+  { id = "RUSTSEC-2026-0235", reason = "rust_decimal optional rkyv feature not enabled; dependency never compiled" },
+]
 
 [licenses]
 allow = [

@@ -51,9 +51,11 @@ Index: [`docs/README.md`](README.md).
 
 ### Automated release (Cargo.toml version bump)
 
-When a push to `main` bumps `Cargo.toml` `version` and CI (`test`, `rustfmt`, `clippy`, `docs`) is green, `auto-tag` creates `v<version>` and [`.github/workflows/cd.yml`](../.github/workflows/cd.yml) builds binaries + publishes GitHub Release / crates.io.
+When a push to `main` bumps `Cargo.toml` `version` and CI (`test`, `rustfmt`, `clippy`, `docs`, `security-advisories`) is green, `auto-tag` creates `v<version>` and [`.github/workflows/cd.yml`](../.github/workflows/cd.yml) builds binaries + publishes GitHub Release / crates.io.
 
 `src/`, `Cargo.lock`, docs, and workflow changes are all allowed — the gate is **version string change only** (plus CI green / tag not already present).
+
+**CD is CI-gated:** `cd.yml` starts with a `ci-gate` job that watches the `CI` workflow run of the tagged commit (`gh run watch --exit-status`) and fails the release if that run is red or missing. This covers `mise run tag-push` and externally pushed tags — not just `auto-tag` — so CD never builds/publishes from a commit whose CI failed.
 
 **Note:** A tag push made with the default `GITHUB_TOKEN` does **not** start other workflows. `auto-tag` therefore also `workflow_dispatch`es `CD` on `v<version>` after pushing the tag.
 

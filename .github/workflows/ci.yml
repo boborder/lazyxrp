@@ -84,7 +84,11 @@ jobs:
           cargo install cargo-audit --locked
           cargo install cargo-deny --locked
       - name: cargo audit
-        run: cargo audit
+        # RUSTSEC-2026-0235 (rkyv 0.7.46): locked via rust_decimal's optional
+        # rkyv feature, which no workspace member enables — rkyv never compiles.
+        # No patched 0.7.x exists; upstream fix needs rkyv 0.8 (rust_decimal
+        # not migrated). See docs/security.md.
+        run: cargo audit --ignore RUSTSEC-2026-0235
       - name: cargo deny
         run: cargo deny check
 
@@ -92,7 +96,7 @@ jobs:
   # Path filter intentionally omitted: real releases always touch src/ and Cargo.lock.
   auto-tag:
     name: Auto Tag Release
-    needs: [test, rustfmt, clippy, docs]
+    needs: [test, rustfmt, clippy, docs, security-advisories]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:

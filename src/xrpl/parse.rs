@@ -418,6 +418,24 @@ pub(crate) fn is_rate_limited_error(msg: &str) -> bool {
         || lower.contains("(429)")
 }
 
+/// Transient XRPL server-side errors: the node is starting up, lagging behind
+/// the network, or overloaded. Retrying (possibly against another node in a
+/// cluster) can succeed, so these should not fail the request immediately.
+pub(crate) fn is_transient_xrpl_error(msg: &str) -> bool {
+    let lower = msg.to_lowercase();
+    [
+        "insufficientnetworkmode",
+        "nonetwork",
+        "noclosed",
+        "nocurrent",
+        "toobusy",
+        "failedtoforward",
+        "amendmentblocked",
+    ]
+    .iter()
+    .any(|k| lower.contains(k))
+}
+
 pub(crate) fn book_offer_best_price(value: &Value, invert: bool) -> Option<f64> {
     let offers = value
         .get("result")
@@ -833,6 +851,19 @@ mod tests {
         assert!(is_rate_limited_error("Error: Too Many Requests"));
         assert!(!is_rate_limited_error("timeout"));
         assert!(!is_rate_limited_error("actNotFound"));
+    }
+
+    #[test]
+    fn is_transient_xrpl_error_matches_node_state_signals() {
+        assert!(is_transient_xrpl_error("[XRPL-17] InsufficientNetworkMode"));
+        assert!(is_transient_xrpl_error("[XRPL-18] noNetwork"));
+        assert!(is_transient_xrpl_error("noClosed"));
+        assert!(is_transient_xrpl_error("noCurrent"));
+        assert!(is_transient_xrpl_error("tooBusy"));
+        assert!(is_transient_xrpl_error("failedToForward"));
+        assert!(!is_transient_xrpl_error("[XRPL-19] actNotFound"));
+        assert!(!is_transient_xrpl_error("[XRPL-5] malformedRequest"));
+        assert!(!is_transient_xrpl_error("timeout"));
     }
 
     #[test]

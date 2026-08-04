@@ -10,10 +10,10 @@ use super::json_util::{extract_json_u32, json_str};
 pub(crate) use super::parse::empty_account_tx_page_on_not_found;
 use super::parse::{
     book_currency, book_offer_best_price, is_not_found_error, is_rate_limited_error,
-    parse_account_lines_value, parse_account_nfts_value, parse_account_objects_value,
-    parse_account_tx_page, parse_aggregate_price_value, parse_amm_info_value,
-    parse_book_offers_value, parse_fee_value, parse_ripple_path_find, parse_server_info_value,
-    parse_simulate_result, parse_submit_success, parse_wallet_propose,
+    is_transient_xrpl_error, parse_account_lines_value, parse_account_nfts_value,
+    parse_account_objects_value, parse_account_tx_page, parse_aggregate_price_value,
+    parse_amm_info_value, parse_book_offers_value, parse_fee_value, parse_ripple_path_find,
+    parse_server_info_value, parse_simulate_result, parse_submit_success, parse_wallet_propose,
 };
 use super::types::{
     AccountSummary, AccountTxPage, AggregatePrice, AmmSummary, DunlSummary, FeeSummary,
@@ -82,25 +82,28 @@ impl RpcClient {
                         "{method} Rate limited (HTTP 429); body={preview:?}"
                     ));
                 }
-                serde_json::from_str::<Value>(&text).map_err(|e| {
+                let value = serde_json::from_str::<Value>(&text).map_err(|e| {
                     let preview: String = text.chars().take(120).collect();
                     color_eyre::eyre::eyre!(
                         "{method} JSON parse error: {e}; status={status}; body={preview:?}"
                     )
-                })
+                })?;
+                ensure_no_xrpl_rpc_error(&value)?;
+                Ok(value)
             }
             .await;
 
             match result {
-                Ok(value) => {
-                    ensure_no_xrpl_rpc_error(&value)?;
-                    return Ok(value);
-                }
-                Err(e) if attempt < 2 => {
+                Ok(value) => return Ok(value),
+                Err(e) if attempt < 2 && is_retryable_rpc_error(&format!("{e}")) => {
                     let message = format!("{e}");
                     last_error = Some(e);
                     let delay = if is_rate_limited_error(&message) {
                         Duration::from_secs(2 * (attempt + 1) as u64)
+                    } else if is_transient_xrpl_error(&message) {
+                        // A node that is lagging or starting up needs seconds,
+                        // not milliseconds, to become servable.
+                        Duration::from_secs((attempt + 1) as u64)
                     } else {
                         Duration::from_millis(100 * (attempt + 1) as u64)
                     };
@@ -466,6 +469,17 @@ impl RpcClient {
         price.base_asset = base_asset.to_string();
         price.quote_asset = quote_asset.to_string();
         Ok(price)
+    }
+}
+
+/// Whether an RPC attempt is worth retrying. Transport/parse/HTTP errors
+/// always retry; XRPL-level errors only when the server signals a transient
+/// node state (lagging, starting up, overloaded).
+fn is_retryable_rpc_error(message: &str) -> bool {
+    if message.starts_with("[XRPL-") {
+        is_transient_xrpl_error(message)
+    } else {
+        true
     }
 }
 

@@ -21,6 +21,12 @@ Risks without a matching S entry (e.g. R-002 submit errors swallowed, R-006 main
 
 ## 未対応・確認事項
 
+### RUSTSEC-2026-0235: rkyv 0.7.46（未コンパイルの optional 依存）
+
+- `Cargo.lock` に `rkyv 0.7.46` が残るのは `rust_decimal` の optional `rkyv` feature 経由。`xrpl-rust` → `rust_decimal` はこの feature を有効化しないため、rkyv はビルド・実行されない（`cargo tree -i rkyv` = 空）。
+- 0.7.x に修正版なし。upstream fix は rkyv 0.8 移行（rust_decimal 未対応）。
+- CI では `cargo audit --ignore RUSTSEC-2026-0235`（`ci.yml`）と `deny.toml` の `ignore` で記録済み。rust_decimal が rkyv 0.8 対応 or feature 削除したら ignore を外す。
+
 ### S-009: `--self-uninstall`（ユーザー主導でバイナリと設定データを削除）
 
 - `std::env::current_exe()` のファイルと `.bak` を削除し、`Config` で解決した config/data ディレクトリを `remove_dir_all` する。
