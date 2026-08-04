@@ -128,17 +128,24 @@ jobs:
             exit 0
           fi
 
-          OLD_VERSION=$(git show "$BEFORE:Cargo.toml" | grep -m1 '^version = ' | sed -E 's/^version = "([^"]+)"/\1/')
           NEW_VERSION=$(grep -m1 '^version = ' Cargo.toml | sed -E 's/^version = "([^"]+)"/\1/')
+          LATEST_TAG=$(git tag --list 'v[0-9]*' --sort=-version:refname | sed -n '1p')
+          LATEST_VERSION="${LATEST_TAG#v}"
 
-          if [ -z "$OLD_VERSION" ] || [ -z "$NEW_VERSION" ]; then
+          if [ -z "$NEW_VERSION" ]; then
             echo "Could not parse Cargo.toml version — skipping"
             exit 0
           fi
 
-          if [ "$OLD_VERSION" = "$NEW_VERSION" ]; then
-            echo "Cargo.toml version unchanged ($NEW_VERSION) — skipping"
+          if [ -n "$LATEST_VERSION" ] && [ "$LATEST_VERSION" = "$NEW_VERSION" ]; then
+            echo "Cargo.toml version already released ($NEW_VERSION) — skipping"
             exit 0
+          fi
+
+          if [ -n "$LATEST_VERSION" ]; then
+            echo "Unreleased version detected: $LATEST_VERSION → $NEW_VERSION"
+          else
+            echo "No previous release tag found; tagging $NEW_VERSION"
           fi
 
           TAG="v${NEW_VERSION}"
@@ -147,7 +154,8 @@ jobs:
             exit 0
           fi
 
-          echo "Version bump detected: $OLD_VERSION → $NEW_VERSION"
+          echo "Version bump detected: ${LATEST_VERSION:-<none>} → $NEW_VERSION"
+
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git tag -a "$TAG" -m "Release $TAG"
