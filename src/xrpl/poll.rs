@@ -252,9 +252,9 @@ async fn poll_batch(inputs: PollBatchInputs<'_>, action_tx: &UnboundedSender<Act
         skip_account_tx,
         active_tab,
     } = inputs;
-    let dest_amount = book_pair.path_find_destination_amount_preview();
     let skip_market = !should_poll_market_book(active_tab);
     let skip_assets = !should_poll_asset_panels(active_tab);
+    let dest_amount = (!skip_market).then(|| book_pair.path_find_destination_amount_preview());
     let (
         server_info_result,
         dunl_result,
@@ -291,16 +291,16 @@ async fn poll_batch(inputs: PollBatchInputs<'_>, action_tx: &UnboundedSender<Act
         },
         async {
             if skip_market {
-                None
-            } else {
-                Some(
-                    tokio::time::timeout(
-                        RPC_TIMEOUT,
-                        rpc.ripple_path_find(watch_address, watch_address, &dest_amount),
-                    )
-                    .await,
-                )
+                return None;
             }
+            let dest_amount = dest_amount.as_ref()?;
+            Some(
+                tokio::time::timeout(
+                    RPC_TIMEOUT,
+                    rpc.ripple_path_find(watch_address, watch_address, dest_amount),
+                )
+                .await,
+            )
         },
         async {
             if skip_assets {

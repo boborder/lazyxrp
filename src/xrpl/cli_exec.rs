@@ -311,12 +311,14 @@ mod tests {
 
         /// TC-050
         #[tokio::test]
+        #[ignore = "live network dependency"]
         async fn cli_info_ok() -> color_eyre::Result<()> {
             run(Cmd::Info).await
         }
 
         /// TC-051
         #[tokio::test]
+        #[ignore = "live network dependency"]
         async fn cli_account_ok() -> color_eyre::Result<()> {
             run(Cmd::Account {
                 address: GENESIS.into(),
@@ -339,6 +341,7 @@ mod tests {
 
         /// TC-053
         #[tokio::test]
+        #[ignore = "live network dependency"]
         async fn cli_summary_ok() -> color_eyre::Result<()> {
             run(Cmd::Summary {
                 account: Some(GENESIS.into()),
@@ -348,6 +351,7 @@ mod tests {
 
         /// TC-054
         #[tokio::test]
+        #[ignore = "live network dependency"]
         async fn cli_nfts_ok() -> color_eyre::Result<()> {
             run(Cmd::Nfts {
                 address: GENESIS.into(),
@@ -357,6 +361,7 @@ mod tests {
 
         /// TC-055
         #[tokio::test]
+        #[ignore = "live network dependency"]
         async fn cli_lines_ok() -> color_eyre::Result<()> {
             run(Cmd::Lines {
                 address: GENESIS.into(),
@@ -379,6 +384,7 @@ mod tests {
 
         /// TC-057
         #[tokio::test]
+        #[ignore = "live network dependency"]
         async fn cli_txhistory_ok() -> color_eyre::Result<()> {
             run(Cmd::TxHistory {
                 address: GENESIS.into(),
@@ -407,6 +413,7 @@ mod tests {
 
         /// TC-066
         #[tokio::test]
+        #[ignore = "live network dependency"]
         async fn cli_account_status_ok() -> color_eyre::Result<()> {
             run(Cmd::AccountStatus {
                 address: GENESIS.into(),

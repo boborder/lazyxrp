@@ -42,7 +42,7 @@ const TAB_TITLES: &[&str] = &["󰖟 Overview", "󰀉 Account", "󰠿 Market", "�
 
 fn footer_line(active_tab: usize) -> Line<'static> {
     let bold = Style::new().bold();
-    let mut spans: Vec<Span<'static>> = Vec::new();
+    let mut spans: Vec<Span<'static>> = Vec::with_capacity(27);
     let mut hint = |key: &'static str, label: &'static str| {
         spans.push(Span::styled(key, bold));
         spans.push(Span::raw(label));
