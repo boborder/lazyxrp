@@ -7,6 +7,7 @@ mod client;
 mod dunl;
 mod format;
 mod json_util;
+mod nft_image;
 mod parse;
 mod poll;
 pub mod toml;
@@ -17,6 +18,7 @@ pub use cli_exec::{execute_cli_command, execute_rp_lookup};
 #[allow(unused_imports)]
 pub use client::RpcClient;
 pub use format::{drops_to_xrp, xrp_to_drops};
+pub(crate) use nft_image::fetch_nft_image;
 pub use poll::start_poll_task;
 pub use toml::fetch_xrpl_toml_with_meta;
 pub use types::*;

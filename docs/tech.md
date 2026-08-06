@@ -17,11 +17,12 @@
 - `strum`（`Cargo.toml` `0.28`、`Cargo.lock` `0.28.0`; `derive` — `Action` 表示など）
 - `signal-hook`（`Cargo.toml` `0.4`、`Cargo.lock` `0.4.4` — `SIGTSTP` 処理）
 - `clap`（`Cargo.toml` `4`、`Cargo.lock` `4.6.1`; `derive`, `cargo`, `wrap_help`, `unicode`, `string`, `unstable-styles`）
+- `ratatui-image`（`Cargo.toml` `11`、`crossterm`, `image-defaults`）— Kitty / Sixel / iTerm2 / halfblocks image preview。
+- `image`（`Cargo.toml` `0.25`、PNG/JPEG/GIF/WebP）— NFT image decode。
 
 ### XRPL / 通信
-
+- `reqwest`（`Cargo.toml` `0.13`、`Cargo.lock` 直接依存 `0.13.3`; `features = ["json", "stream"]` — JSON-RPC と bounded NFT metadata/image streaming）。`xrpl-rust` 経路では **`reqwest 0.12.x` がロックに併存**しうる（解像は `Cargo.lock` を正とする）。
 - `xrpl-rust = 1.1`
-- `reqwest`（`Cargo.toml` `0.13`、`Cargo.lock` 直接依存 `0.13.3`; `features = ["json"]` — `account_tx` 等で JSON-RPC）。`xrpl-rust` 経路では **`reqwest 0.12.x` がロックに併存**しうる（解像は `Cargo.lock` を正とする）。
 - `tokio-tungstenite = (xrpl-rust 経由)`
 - `url = 2`
 - Phase 3 の Payment 署名はクレート公開 API の `wallet::Wallet` + `transaction::sign`（`models::transactions::payment::Payment`）を利用し、送信時は `binarycodec::encode` した `tx_blob` を `submit` に渡す（旧 `xrpl::crypto::Keypair` 系は 1.1 ではない）。

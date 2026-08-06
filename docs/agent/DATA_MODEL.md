@@ -43,10 +43,10 @@ Network ::= Mainnet | Testnet | Devnet
 
 ### Messages (`src/action.rs`)
 
-`Action` — ~70 variants, the universal message type flowing through `action_tx/rx`:
+`Action` is the universal message type flowing through `action_tx/rx`:
 - **Lifecycle**: `Tick`, `Render`, `Resize`, `Quit`, `Suspend`, `Resume`, `ClearScreen`
 - **Navigation**: `TabNext`, `TabPrev`, `TabJump`, `FocusNext`, `FocusPrev`
-- **XRPL data**: `XrplServerInfo`, `XrplFee`, `XrplAccount`, `XrplBookOffers`, `XrplAccountNfts`, `XrplTrustLines`, `XrplAmmInfo`, `XrplTxHistory`, `XrplLedgerClose`, `XrplLedgerObjects`, `XrplWalletOverview`, `XrplRlusdPrice`
+- **XRPL data**: `XrplServerInfo`, `XrplFee`, `XrplAccount`, `XrplBookOffers`, `XrplAccountNfts`, `XrplTrustLines`, `XrplAmmInfo`, `XrplTxHistory`, `XrplLedgerClose`, `XrplLedgerObjects`, `XrplWalletOverview`, `XrplRlusdPrice`, `NftImageLoaded`, `NftImageError`, `NftImageReady`
 - **User triggers**: `RefreshAccount`, `RefreshBook`, `RefreshNfts`, `RefreshLines`, `RefreshTxHistory`, `RefreshTxHistoryMore`, `RefreshLedgerObjects`
 - **Submit flows**: `AccountSetSubmit`, `PaymentSubmit`, `SetRegularKeySubmit`, `EscrowCreateSubmit`, `OfferCreateSubmit` (+ Ok/Err variants)
 - **Wallet**: `WalletPropose`, `WalletProposeOk`, `WalletProposeErr`, `XrplWalletNotConfigured`

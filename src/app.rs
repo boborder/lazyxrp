@@ -451,7 +451,10 @@ impl App {
 
     fn drain_and_dispatch_actions(&mut self, mut tui: Option<&mut Tui>) -> color_eyre::Result<()> {
         while let Ok(action) = self.action_rx.try_recv() {
-            if action != Action::Tick && action != Action::Render {
+            if !matches!(
+                &action,
+                Action::Tick | Action::Render | Action::NftImageLoaded { .. }
+            ) {
                 debug!("{action:?}");
             }
             // Dirty policy (ratatui plan Phase 3):
@@ -513,6 +516,29 @@ impl App {
                     if let Err(err) = self.net_tx.send(*net) {
                         warn!(?err, "network watch channel closed");
                     }
+                }
+                Action::NftImageRequest { nft_id, uri } => {
+                    let action_tx = self.action_tx.clone();
+                    let nft_id = nft_id.clone();
+                    let uri = uri.clone();
+                    tokio::spawn(async move {
+                        match crate::xrpl::fetch_nft_image(&uri).await {
+                            Ok(image) => {
+                                if let Err(err) = action_tx.send(Action::NftImageLoaded {
+                                    nft_id,
+                                    bytes: image.bytes,
+                                }) {
+                                    warn!(?err, "action channel closed (nft image)");
+                                }
+                            }
+                            Err(err) => {
+                                let _ = action_tx.send(Action::NftImageError {
+                                    nft_id,
+                                    message: err.to_string(),
+                                });
+                            }
+                        }
+                    });
                 }
                 Action::RequestXrplToml {
                     domain,

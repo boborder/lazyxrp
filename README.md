@@ -13,7 +13,7 @@ Watch mode uses **four top-level tabs** (jump with `1`–`4`):
 | **Overview** | Server summary (left) + XRPL oracle + Flare FTSOv2 + FXRP Direct Mint read (right) |
 | **Account** | Wallet composer + account summary + recent transaction history |
 | **Market** | DEX book + Path-Find routes + AMM + trust lines + XRPL oracle + Flare FTSOv2 |
-| **Assets** | NFTs + account_objects (Objects / Pay channels / Escrows) |
+| **Assets** | NFTs + selected-NFT image preview + account_objects (Objects / Pay channels / Escrows) |
 
 ## Requirements
 

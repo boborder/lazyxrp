@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use ratatui::{
     Frame,
-    layout::{Constraint, Layout, Rect},
+    layout::{Constraint, Layout, Rect, Size},
 };
 
 use crate::{
@@ -45,6 +45,11 @@ impl AssetsTab {
 }
 
 impl Component for AssetsTab {
+    fn init(&mut self, area: Size) -> color_eyre::Result<()> {
+        self.nft.init(area)?;
+        Ok(())
+    }
+
     fn register_action_handler(
         &mut self,
         action_tx: tokio::sync::mpsc::UnboundedSender<Action>,

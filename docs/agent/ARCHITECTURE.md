@@ -94,6 +94,7 @@ main ──► app ──► components ──► (none, leaf nodes)
 4. Results dispatched as `Action::XrplServerInfo`, `Action::XrplDunl` (XRPL Foundation UNL from `https://unl.xrplf.org`), `Action::XrplFee`, `Action::XrplBookOffers`, `Action::XrplPathFind`, `Action::XrplOraclePrices`, `Action::FlareOraclePrices`, etc.
 5. `App::drain_and_dispatch_actions()` routes to active components via `update()`
 
+
 ### Flow 3: WebSocket Ledger Close → Poll Trigger
 1. WS receives `ledgerClosed` event
 2. Sends `Action::XrplLedgerClose` + `()` to `poll_trigger_tx`
@@ -109,6 +110,11 @@ main ──► app ──► components ──► (none, leaf nodes)
 1. User selects a validator in `ServerPanel` → `Action::RequestXrplToml { domain, expected_pubkey }`
 2. `App::drain_and_dispatch_actions()` spawns an async `fetch_xrpl_toml` call (10s timeout)
 3. Result dispatched as `Action::XrplTomlFetched { domain, result }` back to `ServerPanel`
+
+### NFT Image Preview
+1. `NftTab` emits `Action::NftImageRequest` for the selected NFT URI.
+2. `App` fetches bounded metadata/image bytes through `xrpl::nft_image`.
+3. `NftTab` decodes and encodes the image on a background thread, then renders the cached terminal protocol.
 
 ### Flow 6: CLI Command
 1. `main()` matches `Cmd::*` → calls `execute_cli_command()`

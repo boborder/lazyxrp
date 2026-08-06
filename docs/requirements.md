@@ -74,6 +74,7 @@
 ### FR-08: NFT 情報取得
 
 - `account_nfts` で監視アカウントの NFT 一覧を取得し表示すること。
+- TUI の Assets タブで選択中 NFT の対応画像 URI（HTTP(S) / IPFS / Arweave）を取得し、対応 terminal protocol または halfblocks fallback で preview 表示すること。
 - CLI コマンド `nfts <address>` でも出力できること。
 
 ### FR-09: TrustLine 情報取得

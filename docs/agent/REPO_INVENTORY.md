@@ -1,16 +1,16 @@
 # Repository Inventory
 
-> **Scope**: full repository. **Confidence**: high. **Updated**: 2026-08-01 (v0.2.1).
+> **Scope**: full repository. **Confidence**: high. **Updated**: 2026-08-05 (v0.2.4).
 
 ## Project Summary
 
-**lazyxrp** — Rust terminal UI (TUI) for the XRP Ledger. Monitor accounts, order books, NFTs, trust lines, and AMM pools. Supports interactive `watch` mode (ratatui dashboard) and CLI subcommands (`info`, `account`, `book`, `nfts`, `lines`, `amm`, `tx-history`, `account-status`, `send`). Two binaries from one crate: `lazyxrp` (TUI/CLI) and `rp` (tx/account lookup).
+**lazyxrp** — Rust terminal UI (TUI) for the XRP Ledger. Monitor accounts, order books, NFTs with image previews, trust lines, and AMM pools. Supports interactive `watch` mode (ratatui dashboard) and CLI subcommands (`info`, `account`, `book`, `nfts`, `lines`, `amm`, `tx-history`, `account-status`, `send`). Two binaries from one crate: `lazyxrp` (TUI/CLI) and `rp` (tx/account lookup).
 
 - **Language**: Rust 2024 edition
 - **MSRV**: 1.91
 - **License**: MIT
 - **Repo**: `github.com/boborder/lazyxrp`
-- **Version**: 0.2.1
+- **Version**: 0.2.4
 
 ## Build / Test / Validate Commands
 
@@ -101,8 +101,9 @@ docs/
 - **XRPL Ledger**: JSON-RPC (HTTPS) + WebSocket (WSS) to public endpoints (xrplcluster.com, s1.ripple.com, etc.)
 - **xrpl-rust crate** (v1.1): XRPL SDK for transaction building/signing
 - **ratatui** (v0.30) + **crossterm** (v0.29): Terminal UI framework
+- **ratatui-image** (v11) + **image** (v0.25): NFT image decode and terminal preview
 - **tokio** (v1): Async runtime
-- **reqwest** (v0.13): HTTP client for JSON-RPC
+- **reqwest** (v0.13): HTTP client for JSON-RPC and bounded NFT metadata/image streaming
 - **clap** (v4): CLI argument parsing
 - **config** (v0.15): Config file loading/merging
 - **secrecy** (v0.10): Memory-masked secret storage for signing seeds

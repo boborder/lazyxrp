@@ -40,6 +40,7 @@ lazyxrp/
 │   │   ├── format.rs
 │   │   ├── json_util.rs
 │   │   ├── parse.rs
+│   │   ├── nft_image.rs          # NFT metadata/image fetch and limits
 │   │   ├── poll.rs
 │   │   ├── toml.rs
 │   │   ├── types.rs

@@ -81,6 +81,23 @@ pub enum Action {
     RefreshBook,
     RefreshNfts,
     RefreshLines,
+    /// Request preview image for selected NFT URI.
+    NftImageRequest {
+        nft_id: String,
+        uri: String,
+    },
+    /// Bounded image bytes fetched from an NFT URI or metadata image field.
+    NftImageLoaded {
+        nft_id: String,
+        bytes: Vec<u8>,
+    },
+    NftImageError {
+        nft_id: String,
+        message: String,
+    },
+    NftImageReady {
+        nft_id: String,
+    },
     RefreshTxHistory,
     /// Load next page of tx history (uses current marker).
     RefreshTxHistoryMore(Option<serde_json::Value>),
