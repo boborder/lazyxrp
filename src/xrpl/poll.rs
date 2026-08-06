@@ -143,10 +143,22 @@ where
     }
 }
 
-fn send_action(action_tx: &UnboundedSender<Action>, action: Action) {
-    if let Err(e) = action_tx.send(action) {
-        warn!(?e, "action channel closed");
+fn send_action(action_tx: &UnboundedSender<Action>, action: Action) -> bool {
+    match action_tx.send(action) {
+        Ok(()) => true,
+        Err(e) => {
+            warn!(?e, "action channel closed");
+            false
+        }
     }
+}
+
+fn send_submit_failure<E>(action_tx: &UnboundedSender<Action>, submit_err: E, message: String)
+where
+    E: Fn(String) -> Action,
+{
+    send_action(action_tx, submit_err(message));
+    send_action(action_tx, Action::RefreshAccount);
 }
 
 async fn fetch_account_summary_for_submit<E>(
@@ -206,8 +218,8 @@ async fn finalize_simulate_sign_submit<E, FO, FS>(
                 send_action(action_tx, action);
             }
         }
-        Ok(Err(e)) => send_action(action_tx, submit_err(format!("submit: {e}"))),
-        Err(_) => send_action(action_tx, submit_err("submit: timeout".into())),
+        Ok(Err(e)) => send_submit_failure(action_tx, submit_err, format!("submit: {e}")),
+        Err(_) => send_submit_failure(action_tx, submit_err, "submit: timeout".into()),
     }
 }
 
@@ -1346,7 +1358,7 @@ async fn submit_fxrp_execute_direct_mint(
     match crate::flare::execute_direct_minting(rpc, key.trim(), &params.proof_json).await {
         Ok(hash) => send_action(action_tx, Action::FxrpExecuteDirectMintSubmitOk(hash)),
         Err(e) => send_action(action_tx, submit_err(format!("{e}"))),
-    }
+    };
 }
 
 async fn execute_scheduled_poll(
@@ -1404,6 +1416,7 @@ async fn drive_poll_loop(
         flare_fassets_execute,
         flare_evm_key_env,
         tab_watch,
+        submit_lock,
     } = ctx;
     // Immutable across the loop; the seven submit arms below borrow it.
     let seed = signing_seed.as_ref();
@@ -1484,7 +1497,7 @@ async fn drive_poll_loop(
                             Ok(Ok(p)) => send_action(&action_tx, Action::XrplRlusdPrice(p)),
                             Ok(Err(e)) => send_action(&action_tx, Action::XrplError(format!("price: {e}"))),
                             Err(_) => send_action(&action_tx, Action::XrplError("price: timeout".into())),
-                        }
+                        };
                     }
                     Some(cmd) = refresh_rx.recv() => {
                         let network = *network_watch.borrow();
@@ -1558,12 +1571,15 @@ async fn drive_poll_loop(
                                 Action::XrplLedgerObjects,
                             ),
                             PollCommand::AccountSetSubmit(params) => {
+                                let _guard = submit_lock.lock().await;
                                 submit_account_set_transaction(&rpc, &network, params, &action_tx, seed).await;
                             }
                             PollCommand::PaymentSubmit(params) => {
+                                let _guard = submit_lock.lock().await;
                                 submit_payment_transaction(&rpc, &network, params, &action_tx, seed).await;
                             }
                             PollCommand::FxrpDirectMintPayment(params) => {
+                                let _guard = submit_lock.lock().await;
                                 submit_fxrp_direct_mint_payment(&rpc, &network, params, &action_tx, seed).await;
                             }
                             PollCommand::FxrpExecuteDirectMint(params) => {
@@ -1574,17 +1590,18 @@ async fn drive_poll_loop(
                                     &network,
                                     params,
                                     &action_tx,
-                                )
-                                .await;
+                                ).await;
                             }
                             PollCommand::SetRegularKeySubmit(params) => {
-                                submit_set_regular_key_transaction(&rpc, &network, params, &action_tx, seed)
-                                    .await;
+                                let _guard = submit_lock.lock().await;
+                                submit_set_regular_key_transaction(&rpc, &network, params, &action_tx, seed).await;
                             }
                             PollCommand::OfferCreateSubmit(params) => {
+                                let _guard = submit_lock.lock().await;
                                 submit_offer_create_transaction(&rpc, &network, params, &action_tx, seed).await;
                             }
                             PollCommand::TrustSetSubmit(params) => {
+                                let _guard = submit_lock.lock().await;
                                 submit_trust_set_transaction(&rpc, &network, params, &action_tx, seed).await;
                             }
                             PollCommand::WalletPropose(key_type) => {
@@ -1683,6 +1700,26 @@ mod tests {
         assert!(!is_backoff_active(Some(
             Instant::now() - Duration::from_millis(1)
         )));
+    }
+
+    /// TC-107: closed action channel returns failure without panicking
+    #[test]
+    fn send_action_reports_closed_channel() {
+        let (tx, rx) = mpsc::unbounded_channel();
+        drop(rx);
+        assert!(!send_action(&tx, Action::RefreshAccount));
+    }
+
+    /// TC-106: submit failure emits error and refreshes account sequence state
+    #[test]
+    fn submit_failure_requests_account_resync() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        send_submit_failure(&tx, Action::PaymentSubmitErr, "submit: tefPAST_SEQ".into());
+        assert!(matches!(
+            rx.try_recv().unwrap(),
+            Action::PaymentSubmitErr(message) if message == "submit: tefPAST_SEQ"
+        ));
+        assert!(matches!(rx.try_recv().unwrap(), Action::RefreshAccount));
     }
 
     /// TC-089 (I-7): account_tx not-found in poll batch → empty history, not error

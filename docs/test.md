@@ -1,10 +1,10 @@
 # Test Strategy & Case List
 
-> Last Updated: 2026-07-31
+> Last Updated: 2026-08-06
 > Target: lazyxrp (Rust TUI for XRPL)
-> Total Test Cases: 97 (P0: 10, P1: 46, P2: 40, P3: 1) — 95 Rust + 2 Vitest（FAssets スキル）
-> Implemented: 97 / 97 (100%)
-> Estimated Effort (full catalog): 44.5h
+> Catalog: 97 named contract cases (important-case roster, not total test count)
+> Latest execution: 253 discovered Rust tests; 240 passed, 13 ignored (all live/external-network cases)
+> Coverage note: unit/parser/UI tests are deterministic; fake RPC/WebSocket integration suite is not yet present.
 
 ---
 
@@ -70,6 +70,14 @@ cd .agents/skills/flare-fassets/scripts && npm test
 ```
 
 CI（`.github/workflows/ci.yml`）は各ジョブで `cargo … --locked`（例: `cargo test --locked --all-features --workspace`）。ローカルでもロック整合を合わせたいときは同様に `--locked` を付けられる。Vitest はスキル配下のオプション検証用で、現状ワークスペース CI には含めていない。
+
+## 2026-08-06 全テスト再監査
+
+- `cargo test --all-targets`: **240 passed / 13 ignored / 0 failed**.
+- `cargo test --all-targets -- --list`: **253 discovered tests**. Catalog tracks named contract cases, not every helper/unit test.
+- Ignored cases are live XRPL/Flare network checks. They are supplemental and must not be treated as deterministic CI coverage.
+- New regression coverage: TC-098 through TC-107 cover input validation, NFT limits, insecure signing, RPC 429 retry, ledger dedupe, marker preservation, submit resync, and closed-channel reporting.
+- Remaining boundary gap: local WebSocket session fixture, simulate/submit race fixture, and shutdown durable-result fixture.
 
 ---
 

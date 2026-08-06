@@ -1,8 +1,8 @@
 # Risk Register
 
-> **Read**: `ARCHITECTURE.md`, `DATA_MODEL.md`, `INVARIANTS.md`, `DEPENDENCY_RULES.md`. **Scope**: full repository. **Confidence**: medium. **Generated**: 2026-05-14 (Pass 5).
+> Read: `ARCHITECTURE.md`, `DATA_MODEL.md`, `INVARIANTS.md`, `DEPENDENCY_RULES.md`. Scope: full repository. Confidence: medium. Updated: 2026-08-06.
 
-**SSOT:** Implementation risks **R-001〜R-010** live here. Security audit history **S-001〜S-011** is in [`../security.md`](../security.md) with an S↔R table. Enforced rules **I-1〜I-11** are in [`INVARIANTS.md`](INVARIANTS.md).
+**SSOT:** Implementation risks **R-001〜R-015** live here. Security audit history **S-001〜S-016** is in [`../security.md`](../security.md) with an S↔R table. Enforced rules **I-1〜I-11** are in [`INVARIANTS.md`](INVARIANTS.md).
 
 | R-ID | S-ID (if any) | One-line |
 |------|---------------|----------|
@@ -17,6 +17,10 @@
 | R-009 | — | Submit hash not verified |
 | R-010 | — | Duplicate poll on ledger close |
 | R-011 | — | Poll `RpcClient::connect` “instant death” (**accepted / non-issue**) |
+| R-012 | S-012, S-013 | NFT URI DNS SSRF / metadata recursion (**mitigated**) |
+| R-013 | S-014 | Concurrent wallet submissions (**mitigated in poll task**) |
+| R-014 | S-015 | Insecure RPC with signing seed (**mitigated**) |
+| R-015 | S-016 | Unvalidated issuer and financial numeric inputs (**mitigated**) |
 
 ## R-001: Seed priority chain inconsistency
 
@@ -28,15 +32,14 @@
 - **Suggested test**: Integration test that sets seed via CLI, env, and file simultaneously, asserts correct wallet address derived.
 - **Suggested fix**: Centralize all seed resolution into `SigningConfig::resolve()` that takes Option<cli_seed> and returns the canonical seed source.
 
-## R-002: Submit pipeline error silently swallowed
+## R-002: Submit pipeline error on closed action channel
 
-- **Severity**: High
-- **Confidence**: Medium
-- **Evidence**: Each submit function in `poll.rs` (~5 functions) handles errors locally with `action_tx.send(Action::*SubmitErr(...))`. If the `action_tx` channel is closed (e.g., app quit during submit), the error is silently dropped. The `let _ = action_tx.send(...)` pattern in `dispatch!` macro also loses errors.
-- **Failure scenario**: User submits transaction, app quits, submit completes but result is lost. User doesn't know if TX went through.
-- **Affected files**: `src/xrpl/poll.rs`
-- **Suggested test**: Test that submitting during shutdown produces a logged warning at minimum.
-- **Suggested fix**: Replace `let _ = action_tx.send(...)` with a `warn!` on send failure for critical operations.
+- **Severity**: Medium
+- **Confidence**: High
+- **Status**: Mitigated for submit/poll paths.
+- **Evidence**: `src/xrpl/poll.rs::send_action` logs a `warn!` when `action_tx.send` fails; submit functions route error and success actions through it.
+- **Remaining risk**: The result cannot reach the user after app shutdown. Durable submit-result storage is not implemented.
+- **Suggested test**: Add a tracing-capture test if logging behavior becomes a public operational contract.
 
 ## R-003: ArcValue mutation corrupts shared state
 
@@ -91,15 +94,21 @@
 - **Suggested test**: Per-key merge tests: set each key in built-in, file, env; assert correct final value.
 - **Suggested fix**: Test helper that constructs a `Config` with layer overrides and verifies each field.
 
-## R-008: XRPL RPC 429 rate-limit not handled
+## R-008: XRPL RPC 429 rate-limit
 
 - **Severity**: Medium
-- **Confidence**: Low
-- **Evidence**: `RpcClient` in `client.rs` has no explicit 429 rate-limit handling. `poll.rs` has `next_backoff_secs()` for WS but not for RPC. A busy account with rapid `account_tx` pagination could hit rate limits.
-- **Failure scenario**: User rapidly paginates through tx history → 429 from xrplcluster → error displayed but not retried.
-- **Affected files**: `src/xrpl/client.rs`, `src/xrpl/poll.rs`
-- **Suggested test**: Mock test for 429 response with retry-after header.
-- **Suggested fix**: Add exponential backoff on 429 responses in RPC client.
+- **Confidence**: High
+- **Status**: Mitigated for `RpcClient::rpc_value`.
+- **Evidence**: HTTP 429 is classified as retryable, retried up to three attempts with bounded increasing delay, and logged with attempt/delay metadata. Non-transient XRPL errors are not retried.
+- **Remaining risk**: Local HTTP integration test now exercises two 429 responses followed by success. Local WebSocket protocol fixture remains unimplemented.
+## R-010: Ledger close WS event may arrive after poll completes
+
+- **Severity**: Low
+- **Confidence**: High
+- **Status**: Partially mitigated.
+- **Evidence**: WS session suppresses duplicate nonzero `ledger_index` events; poll loop also coalesces bursts and applies a time floor.
+- **Remaining risk**: Last-ledger state resets after reconnect, so a repeated event after reconnect may still trigger one redundant poll.
+- **Suggested test**: Local WebSocket session fixture covering duplicate ledger events and reconnect.
 
 ## R-009: submit_tx does not verify tx_hash in response
 
@@ -111,15 +120,6 @@
 - **Suggested test**: Mock submit response with mismatched hash.
 - **Suggested fix**: Compute expected hash from signed tx_blob and compare with response hash.
 
-## R-010: Ledger close WS event may arrive after poll completes
-
-- **Severity**: Low
-- **Confidence**: Low
-- **Evidence**: WS `ledgerClosed` triggers poll via `poll_trigger_tx`. If poll is already running when trigger arrives, the trigger queues but may fire an unnecessary second poll for the same ledger.
-- **Failure scenario**: Minor — wasted RPC call (same data returned).
-- **Affected files**: `src/xrpl/ws.rs`, `src/xrpl/poll.rs`
-- **Suggested test**: Check for duplicate poll within one ledger index.
-- **Suggested fix**: Track last polled ledger index, skip if trigger is for same index.
 
 ## R-011: Poll task exits on `RpcClient::connect` failure (accepted)
 
@@ -131,3 +131,12 @@
 - **Affected files**: `src/xrpl/client.rs`, `src/xrpl/poll.rs`
 - **Decision**: **Do not** add a connect-retry loop. Document only; keep backoff for request failures.
 
+
+## R-012〜R-015: 2026-08-06 review mitigations
+
+- **R-012**: `nft_image.rs` resolves every hostname before request, rejects every unsafe address, pins first validated address, manually validates each redirect, and bounds metadata traversal.
+- **R-013**: `PollContext.submit_lock` serializes all XRPL wallet submit commands. Submit transport failure now emits `RefreshAccount` to force sequence re-sync. Sequence reservation across multiple application processes and full simulate/submit race integration remain outside scope.
+- **R-014**: `run()` refuses signing when either RPC or WS endpoint is plaintext. Read-only plaintext use remains available without a signing seed and explicit `--allow-insecure-rpc`.
+- **R-015**: signing helpers now enforce XRPL classic-address checksum and finite positive amount constraints before simulation.
+
+Test boundary remaining: local WebSocket protocol fixture and durable submit-result fixture.

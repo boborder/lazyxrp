@@ -240,6 +240,7 @@ pub fn create_and_sign_payment(
 
     let amount: Amount = match (iou_currency, iou_issuer) {
         (Some(cur), Some(iss)) => {
+            validate_iou_fields(cur, iss, amount_spec)?;
             let ica = xrpl::models::IssuedCurrencyAmount {
                 currency: cur.to_string().into(),
                 issuer: iss.to_string().into(),
@@ -298,6 +299,7 @@ pub fn build_payment_tx_json_for_simulate(
 
     let amount: Amount = match (iou_currency, iou_issuer) {
         (Some(cur), Some(iss)) => {
+            validate_iou_fields(cur, iss, amount_spec)?;
             let ica = IssuedCurrencyAmount {
                 currency: cur.to_string().into(),
                 issuer: iss.to_string().into(),
@@ -522,16 +524,33 @@ pub(crate) fn require_nonempty_field<'a>(
     Ok(t)
 }
 
-/// Shared field helper: classic address shape (`r…`, length band) — not full checksum.
+/// Validate a classic address using XRPL base58 checksum rules.
 pub(crate) fn require_classic_address_shape<'a>(
     label: &str,
     value: &'a str,
 ) -> color_eyre::Result<&'a str> {
     let t = require_nonempty_field(label, value)?;
-    if !t.starts_with('r') || t.len() < 25 || t.len() > 35 {
-        color_eyre::eyre::bail!("{label}: expected classic address (r…)");
+    if !xrpl::core::addresscodec::is_valid_classic_address(t) {
+        color_eyre::eyre::bail!("{label}: expected valid classic address");
     }
     Ok(t)
+}
+
+fn validate_iou_fields(currency: &str, issuer: &str, value: &str) -> color_eyre::Result<()> {
+    let valid_currency = (currency.len() == 3
+        && currency.bytes().all(|b| b.is_ascii_alphanumeric()))
+        || (currency.len() == 40 && currency.bytes().all(|b| b.is_ascii_hexdigit()));
+    if !valid_currency || currency.eq_ignore_ascii_case("XRP") {
+        color_eyre::eyre::bail!("invalid IOU currency code");
+    }
+    require_classic_address_shape("issuer", issuer)?;
+    let value = value
+        .parse::<f64>()
+        .map_err(|_| color_eyre::eyre::eyre!("IOU value must be numeric"))?;
+    if !value.is_finite() || value <= 0.0 {
+        color_eyre::eyre::bail!("IOU value must be finite and greater than zero");
+    }
+    Ok(())
 }
 
 enum OfferAmountSpec<'a> {
@@ -549,16 +568,36 @@ fn parse_offer_amount_spec(spec: &str) -> color_eyre::Result<OfferAmountSpec<'_>
         color_eyre::eyre::bail!("invalid amount spec (use XRP:drops or CUR:issuer:value): {spec}");
     }
     if parts[0] == "XRP" {
-        Ok(OfferAmountSpec::Xrp(parts[1]))
-    } else if parts.len() < 3 {
-        color_eyre::eyre::bail!("IOU amount needs 3 parts (CUR:issuer:value): {spec}");
-    } else {
-        Ok(OfferAmountSpec::Iou {
-            currency: parts[0],
-            issuer: parts[1],
-            value: parts[2],
-        })
+        let drops = parts[1]
+            .parse::<u64>()
+            .map_err(|_| color_eyre::eyre::eyre!("XRP drops must be an integer"))?;
+        if drops == 0 {
+            color_eyre::eyre::bail!("XRP drops must be greater than zero");
+        }
+        return Ok(OfferAmountSpec::Xrp(parts[1]));
     }
+    if parts.len() < 3 {
+        color_eyre::eyre::bail!("IOU amount needs 3 parts (CUR:issuer:value): {spec}");
+    }
+    let currency = parts[0];
+    let valid_currency = (currency.len() == 3
+        && currency.bytes().all(|b| b.is_ascii_alphanumeric()))
+        || (currency.len() == 40 && currency.bytes().all(|b| b.is_ascii_hexdigit()));
+    if !valid_currency || currency.eq_ignore_ascii_case("XRP") {
+        color_eyre::eyre::bail!("invalid IOU currency code");
+    }
+    require_classic_address_shape("issuer", parts[1])?;
+    let value = parts[2]
+        .parse::<f64>()
+        .map_err(|_| color_eyre::eyre::eyre!("IOU value must be numeric"))?;
+    if !value.is_finite() || value <= 0.0 {
+        color_eyre::eyre::bail!("IOU value must be finite and greater than zero");
+    }
+    Ok(OfferAmountSpec::Iou {
+        currency,
+        issuer: parts[1],
+        value: parts[2],
+    })
 }
 
 /// Build an `Amount` from a compact spec string.
@@ -882,12 +921,13 @@ mod tests {
 
     #[test]
     fn build_payment_tx_json_for_simulate_iou() {
+        let issuer = "rJrRMgiRgrU6hDF4pgu5DXQdWyPbY35ErN";
         let v = build_payment_tx_json_for_simulate(
             "rSender",
             "rDest",
             "12.5",
             Some("USD"),
-            Some("rIssuer"),
+            Some(issuer),
             None,
             None,
             9,
@@ -898,7 +938,7 @@ mod tests {
         assert_eq!(v["Account"], "rSender");
         assert_eq!(v["Destination"], "rDest");
         assert_eq!(v["Amount"]["currency"], "USD");
-        assert_eq!(v["Amount"]["issuer"], "rIssuer");
+        assert_eq!(v["Amount"]["issuer"], issuer);
         assert_eq!(v["Amount"]["value"], "12.5");
     }
 
@@ -1055,16 +1095,14 @@ mod tests {
 
     #[test]
     fn build_set_regular_key_tx_json_for_simulate_sets_key() {
-        let v = build_set_regular_key_tx_json_for_simulate(
-            "rSenderxxxxxxxxxxxxxxxxxxxxxxxXX",
-            Some("rRegularxxxxxxxxxxxxxxxxxxxxxxxXX"),
-            11,
-        )
-        .expect("set regular key json");
+        let account = "rU3Cw9Vezt3m3E7EonCnfGN1raFdudq4QQ";
+        let regular_key = "rJrRMgiRgrU6hDF4pgu5DXQdWyPbY35ErN";
+        let v = build_set_regular_key_tx_json_for_simulate(account, Some(regular_key), 11)
+            .expect("set regular key json");
         assert_eq!(v["TransactionType"], "SetRegularKey");
         assert_eq!(v["Sequence"], 11);
-        assert_eq!(v["Account"], "rSenderxxxxxxxxxxxxxxxxxxxxxxxXX");
-        assert_eq!(v["RegularKey"], "rRegularxxxxxxxxxxxxxxxxxxxxxxxXX");
+        assert_eq!(v["Account"], account);
+        assert_eq!(v["RegularKey"], regular_key);
     }
 
     #[test]
@@ -1089,10 +1127,11 @@ mod tests {
 
     #[test]
     fn build_offer_create_tx_json_for_simulate_xrp_iou() {
+        let issuer = "rJrRMgiRgrU6hDF4pgu5DXQdWyPbY35ErN";
         let v = build_offer_create_tx_json_for_simulate(
             "rSenderxxxxxxxxxxxxxxxxxxxxxxxXX",
             "XRP:1000000",
-            "USD:rIssuerxxxxxxxxxxxxxxxxxxxxxxxXX:10",
+            &format!("USD:{issuer}:10"),
             5,
         )
         .expect("offer create json");
@@ -1100,16 +1139,17 @@ mod tests {
         assert_eq!(v["Sequence"], 5);
         assert_eq!(v["TakerGets"], "1000000");
         assert_eq!(v["TakerPays"]["currency"], "USD");
-        assert_eq!(v["TakerPays"]["issuer"], "rIssuerxxxxxxxxxxxxxxxxxxxxxxxXX");
+        assert_eq!(v["TakerPays"]["issuer"], issuer);
         assert_eq!(v["TakerPays"]["value"], "10");
     }
 
     #[test]
     fn build_trust_set_tx_json_for_simulate_limit_only() {
+        let issuer = "rJrRMgiRgrU6hDF4pgu5DXQdWyPbY35ErN";
         let v = build_trust_set_tx_json_for_simulate(
             "rSenderxxxxxxxxxxxxxxxxxxxxxxxXX",
             "USD",
-            "rIssuerxxxxxxxxxxxxxxxxxxxxxxxXX",
+            issuer,
             "1000",
             8,
         )
@@ -1117,10 +1157,7 @@ mod tests {
         assert_eq!(v["TransactionType"], "TrustSet");
         assert_eq!(v["Sequence"], 8);
         assert_eq!(v["LimitAmount"]["currency"], "USD");
-        assert_eq!(
-            v["LimitAmount"]["issuer"],
-            "rIssuerxxxxxxxxxxxxxxxxxxxxxxxXX"
-        );
+        assert_eq!(v["LimitAmount"]["issuer"], issuer);
         assert_eq!(v["LimitAmount"]["value"], "1000");
         assert!(v.get("Flags").is_none() || v["Flags"] == 0);
     }
@@ -1139,10 +1176,27 @@ mod tests {
     }
 
     #[test]
-    fn require_classic_address_shape_accepts_r_prefix() {
+    fn require_classic_address_shape_accepts_valid_classic_address() {
         let a = require_classic_address_shape("acct", "rN7n7otQDd6FczFgLdSqtcsAUxDkw6fzRH")
             .expect("ok");
         assert!(a.starts_with('r'));
+    }
+
+    /// TC-098: IOU issuer checksum and finite positive value validation
+    #[test]
+    fn iou_validation_rejects_invalid_issuer_and_nonfinite_value() {
+        assert!(validate_iou_fields("USD", "rInvalid", "1").is_err());
+        assert!(validate_iou_fields("USD", "rJrRMgiRgrU6hDF4pgu5DXQdWyPbY35ErN", "NaN").is_err());
+        assert!(validate_iou_fields("USD", "rJrRMgiRgrU6hDF4pgu5DXQdWyPbY35ErN", "0").is_err());
+    }
+
+    /// TC-099: IOU currency code validation
+    #[test]
+    fn iou_validation_rejects_invalid_currency_code() {
+        let issuer = "rJrRMgiRgrU6hDF4pgu5DXQdWyPbY35ErN";
+        assert!(validate_iou_fields("XRP", issuer, "1").is_err());
+        assert!(validate_iou_fields("TOOLONG", issuer, "1").is_err());
+        assert!(validate_iou_fields("USD", issuer, "1").is_ok());
     }
 
     /// TC-049

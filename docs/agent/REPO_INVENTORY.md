@@ -1,6 +1,6 @@
 # Repository Inventory
 
-> **Scope**: full repository. **Confidence**: high. **Updated**: 2026-08-05 (v0.2.4).
+> **Scope**: full repository. **Confidence**: high. **Updated**: 2026-08-06 (v0.2.5).
 
 ## Project Summary
 
@@ -10,7 +10,7 @@
 - **MSRV**: 1.91
 - **License**: MIT
 - **Repo**: `github.com/boborder/lazyxrp`
-- **Version**: 0.2.4
+- **Version**: 0.2.5
 
 ## Build / Test / Validate Commands
 

@@ -1,5 +1,6 @@
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::sync::Mutex;
 
 /// Newtype wrapper so `Arc<serde_json::Value>` can derive `Serialize`/`Deserialize`.
 ///
@@ -675,6 +676,8 @@ pub struct PollContext {
     pub flare_fassets_execute: bool,
     /// Env var name for Flare executor key (`[flare.fassets] evm_key_env`).
     pub flare_evm_key_env: String,
+    /// Serializes account_info → simulate → sign → submit for one wallet.
+    pub submit_lock: Arc<Mutex<()>>,
 }
 
 /// Parsed subset of xrp-ledger.toml relevant to domain verification.

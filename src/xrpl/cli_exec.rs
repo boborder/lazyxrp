@@ -395,9 +395,9 @@ mod tests {
 
         /// TC-059
         #[tokio::test]
+        #[ignore = "live network dependency"]
         async fn cli_invalid_account_errors() {
             let _guard = LIVE_RPC_LOCK.lock().await;
-            tokio::time::sleep(Duration::from_millis(250)).await;
             let r = execute_cli_command(
                 Cmd::Account {
                     address: "not-an-address".into(),

@@ -742,6 +742,22 @@ mod tests {
         assert_eq!(rows[2].direction, "·");
     }
 
+    /// TC-104: account_tx marker survives parsing for next-page requests
+    #[test]
+    fn parse_account_tx_page_preserves_marker_for_next_request() {
+        let page = parse_account_tx_page(
+            json!({
+                "result": {
+                    "transactions": [],
+                    "marker": {"ledger": 55, "seq": 2}
+                }
+            }),
+            "rWatch",
+        );
+        assert_eq!(page.rows.len(), 0);
+        assert_eq!(page.marker, Some(json!({"ledger": 55, "seq": 2})));
+    }
+
     /// TC-017
     #[test]
     fn parse_book_offers_fixture() {

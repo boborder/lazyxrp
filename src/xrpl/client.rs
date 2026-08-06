@@ -522,4 +522,52 @@ mod tests {
         let err = ensure_no_xrpl_rpc_error(&value).expect_err("not found must not be swallowed");
         assert!(is_not_found_error(&format!("{err}")));
     }
+
+    /// TC-102: rate-limited RPC errors remain retryable while permanent XRPL errors do not
+    #[test]
+    fn rate_limited_rpc_errors_are_retryable_but_nontransient_xrpl_errors_are_not() {
+        assert!(is_retryable_rpc_error(
+            "account_info Rate limited (HTTP 429)"
+        ));
+        assert!(is_retryable_rpc_error("request error: connection reset"));
+        assert!(!is_retryable_rpc_error("[XRPL-12] malformed transaction"));
+    }
+
+    /// TC-105: local HTTP 429 responses are retried before success
+    #[tokio::test]
+    async fn rpc_value_retries_local_http_429_then_returns_success() {
+        use std::time::Duration;
+
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            for attempt in 0..3 {
+                let (mut stream, _) =
+                    tokio::time::timeout(Duration::from_secs(5), listener.accept())
+                        .await
+                        .unwrap()
+                        .unwrap();
+                let mut request = [0_u8; 1024];
+                let _ = stream.read(&mut request).await.unwrap();
+                let (status, body) = if attempt < 2 {
+                    ("429 Too Many Requests", "{}")
+                } else {
+                    ("200 OK", r#"{"result":{}}"#)
+                };
+                let response = format!(
+                    "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                stream.write_all(response.as_bytes()).await.unwrap();
+            }
+        });
+
+        let rpc = RpcClient::connect(&format!("http://{address}")).unwrap();
+        let value = rpc.rpc_value("server_info", json!({})).await.unwrap();
+        assert_eq!(value, json!({"result": {}}));
+        server.await.unwrap();
+    }
 }

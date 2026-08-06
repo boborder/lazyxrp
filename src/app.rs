@@ -306,6 +306,7 @@ impl App {
                 flare_feeds: flare_feeds.clone(),
                 flare_fassets_execute: self.config.flare.fassets.execute,
                 flare_evm_key_env: self.config.flare.fassets.evm_key_env.clone(),
+                submit_lock: Arc::new(tokio::sync::Mutex::new(())),
             },
             poll_rx,
             poll_trigger_rx,

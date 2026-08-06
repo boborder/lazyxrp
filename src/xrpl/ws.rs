@@ -14,6 +14,11 @@ use super::backoff::next_backoff_secs;
 use super::json_util::extract_json_u32;
 use super::types::TxSummary;
 
+/// Emit one poll trigger per ledger index within a WebSocket session.
+fn should_emit_ledger_trigger(last: Option<u32>, current: u32) -> bool {
+    current > 0 && last != Some(current)
+}
+
 pub fn start_ws_task(
     ws_url: String,
     watch_address: Option<String>,
@@ -104,6 +109,7 @@ async fn connect_and_subscribe(
     ws.xrpl_send(sub.into()).await?;
     *subscribed = true;
 
+    let mut last_ledger_index = None;
     loop {
         tokio::select! {
             _ = cancel.cancelled() => return Ok(()),
@@ -113,8 +119,13 @@ async fn connect_and_subscribe(
                         let value = serde_json::to_value(ws_msg)?;
                         let event_type = value.get("type").and_then(Value::as_str).unwrap_or_default();
                         if event_type == "ledgerClosed" {
+                            let ledger_index = extract_json_u32(&value, &["ledger_index"]);
+                            if !should_emit_ledger_trigger(last_ledger_index, ledger_index) {
+                                continue;
+                            }
+                            last_ledger_index = Some(ledger_index);
                             let _ = action_tx.send(Action::XrplLedgerClose {
-                                ledger_index: extract_json_u32(&value, &["ledger_index"]),
+                                ledger_index,
                                 base_fee: extract_json_u32(&value, &["fee_base"]),
                                 reserve_base: extract_json_u32(&value, &["reserve_base"]),
                                 reserve_inc: extract_json_u32(&value, &["reserve_inc"]),
@@ -139,5 +150,19 @@ async fn connect_and_subscribe(
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_emit_ledger_trigger;
+    /// TC-103: duplicate ledger-close events emit one trigger per ledger index
+
+    #[test]
+    fn ledger_trigger_emits_once_per_nonzero_index() {
+        assert!(!should_emit_ledger_trigger(None, 0));
+        assert!(should_emit_ledger_trigger(None, 100));
+        assert!(!should_emit_ledger_trigger(Some(100), 100));
+        assert!(should_emit_ledger_trigger(Some(100), 101));
     }
 }

@@ -10,9 +10,9 @@ Top 5 risks selected by: severity × confidence × testability × regression lik
 |----------|------|----------|------------|----------------|
 | 1 | R-006: Mainnet write guard bypass | Critical | Low | Catastrophic if triggered; guard is safety-critical |
 | 2 | R-007: Config merge precedence untested | Medium | Medium | Cheap to test; high regression surface (~1000 line config.rs) |
-| 3 | R-002: Submit pipeline error silently swallowed | High | Medium | Affects invariant I-3; observable UX gap |
-| 4 | R-001: Seed priority chain inconsistency | High | Medium | Affects signing correctness; 3-source resolution |
-| 5 | R-003: ArcValue mutation corrupts shared state | Medium | Low | Affects invariant I-10; hard to debug if triggered |
+| 3 | R-002: Submit channel-close observability | Medium | High | Warn is emitted; durable result remains unimplemented |
+| 4 | R-001: Seed priority chain inconsistency | High | Medium | Affects signing correctness |
+| 5 | R-003: ArcValue shared JSON immutability | Medium | Low | Hard to trigger, high debugging cost |
 
 ---
 

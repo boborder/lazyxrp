@@ -15,9 +15,23 @@ Generated: 2026-05-01 | Scope: Full codebase (`src/`, `install.sh`, `docs/`)
 | S-011 | `--seed` visible in `ps` | R-001 | Prefer env/file; README warning |
 | S-006 | `Tui::drop` panic / raw mode | R-005, I-8 | `eprintln!` on `exit()` failure |
 | S-009 | `--self-uninstall` data deletion | — | User-driven; not an R entry |
-| S-004, S-005, S-007, S-008 | Paths, install verify, build-time config, logging | R-007 (merge), — | See table below |
+| S-004, S-005, S-007, S-008 | R-007 (merge), — | See table below |
+| S-012, S-013 | R-012 | NFT DNS resolution and metadata bounds |
+| S-014 | R-013 | Wallet submit serialization |
+| S-015 | R-014 | Plaintext RPC with signing seed |
+| S-016 | R-015 | Issuer and financial input validation |
 
-Risks without a matching S entry (e.g. R-002 submit errors swallowed, R-006 mainnet guard bypass, R-008 RPC 429) are tracked only in [`agent/RISK_REGISTER.md`](agent/RISK_REGISTER.md) and [`test.md`](test.md) / [`agent/RISK_TO_TESTS.md`](agent/RISK_TO_TESTS.md).
+Risks without a matching S entry (e.g. R-006 mainnet guard bypass, R-008 RPC 429) are tracked only in [`agent/RISK_REGISTER.md`](agent/RISK_REGISTER.md) and [`test.md`](test.md) / [`agent/RISK_TO_TESTS.md`](agent/RISK_TO_TESTS.md).
+
+## 2026-08-06 再レビュー対応
+
+- **S-012 NFT外部URIのDNS SSRF**: 修正済み。`src/xrpl/nft_image.rs` は各URIのDNS応答を全件検査し、private/loopback/link-local/unique-local IPを拒否する。自動redirectを無効化し、redirectごとに解決・検査・接続先固定を行う。
+- **S-013 NFT metadata再帰DoS**: 修正済み。metadata探索に深さ32・ノード数10,000の上限を設けた。レスポンス上限4 MiBも維持。
+- **S-014 ウォレット同時送信**: 修正済み。poll task内の `account_info → simulate → sign → submit` を `PollContext.submit_lock` で直列化。blind retryは追加していない。submit失敗後は次操作でaccount_infoを再取得する。
+- **S-015 insecure RPCでの署名**: 修正済み。署名seed保持中に `http://` または `ws://` endpointを使用すると起動を拒否する。読み取り専用利用はseed未設定時に限り許可。
+- **S-016 取引入力のissuer・数値検証**: 修正済み。TrustSet、RegularKey、OfferCreateのclassic address checksum、IOU currency形式、有限かつ正数のIOU値、正のXRP dropsを検証する。
+
+未完了の構造課題（`poll.rs`分割、Actionエラー型移行、fake RPC/WebSocket統合試験、Watch/Operate UI分離）は今回の安全修正の範囲外。次回変更ではlive testを補助扱いにし、ローカルfixtureを追加する。
 
 ## 未対応・確認事項
 

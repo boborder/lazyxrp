@@ -50,6 +50,14 @@ fn ensure_secure_endpoint(
     color_eyre::eyre::bail!("refusing insecure RPC/WS URL '{trimmed}'; expected {expected}")
 }
 
+fn is_insecure_endpoint(url: &str) -> bool {
+    url.starts_with("http://") || url.starts_with("ws://")
+}
+
+fn refuses_insecure_signing(rpc_url: &str, ws_url: &str, has_signing_seed: bool) -> bool {
+    has_signing_seed && (is_insecure_endpoint(rpc_url) || is_insecure_endpoint(ws_url))
+}
+
 fn resolve_ws_url(args: &Cli, config: &Config, network: &Network) -> String {
     args.ws_server
         .clone()
@@ -154,6 +162,11 @@ pub async fn run() -> color_eyre::Result<()> {
         EndpointKind::Ws,
         args.allow_insecure_rpc,
     )?;
+    if refuses_insecure_signing(&rpc_url, &ws_url, config.xrpl.signing.secret_seed.is_some()) {
+        color_eyre::eyre::bail!(
+            "refusing signing operations over insecure RPC/WS; use https:// and wss:// endpoints"
+        );
+    }
     let tick_rate = args.tick_rate;
     let frame_rate = args.frame_rate;
     let yes = args.yes;
@@ -290,5 +303,14 @@ mod endpoint_security_tests {
         assert!(err.to_string().contains("refusing insecure"));
         assert!(ensure_secure_endpoint("wss://example.com", EndpointKind::Ws, false).is_ok());
         assert!(ensure_secure_endpoint("ws://example.com", EndpointKind::Ws, true).is_ok());
+    }
+
+    /// TC-101: signing seed refuses plaintext RPC or WebSocket endpoints
+    #[test]
+    fn insecure_signing_requires_secure_rpc_and_ws() {
+        assert!(refuses_insecure_signing("http://rpc", "wss://ws", true));
+        assert!(refuses_insecure_signing("https://rpc", "ws://ws", true));
+        assert!(!refuses_insecure_signing("http://rpc", "ws://ws", false));
+        assert!(!refuses_insecure_signing("https://rpc", "wss://ws", true));
     }
 }
