@@ -1257,11 +1257,12 @@ CI（`.github/workflows/ci.yml`）は各ジョブで `cargo … --locked`（例:
 
 ### Overall
 
-- **Total Cases**: 97（うち TC-090/091 は Vitest・スキル配下; TC-066/067・080–084・095–097 は 2026-07-31 にカタログ欠落/ID衝突を解消）
-- **Implemented**: 97
-- **Passing**: `cargo test --locked` green after 2026-07-30 cleanup + Vitest 11（`cd .agents/skills/flare-fassets/scripts && npm test`）
+- **Catalog Cases**: 97（重要ケース roster; unannotated helper/unit tests are intentionally outside 1:1 catalog）
+- **Rust Tests Listed**: 243（`cargo test --all-features -- --list`）
+- **Implemented Catalog Cases**: 97
+- **Passing**: 231 (`cargo test --all-features`; excludes ignored live/network cases)
 - **Failing**: 0
-- **Ignored**: 5 (live RPC / benchmark / flare; see case notes)
+- **Ignored**: 12 (live RPC / seed / flare; see case notes)
 - **Todo**: 0
 - **Coverage**: CLI + watch paths exercised; line % not measured here
 

@@ -1,21 +1,15 @@
 /target
-.data/*.log
 
 # Secrets — never commit real seeds or keys
 .env
 .env.*
 !.env.example
 
-/graphify-out
+graphify-out
+.codegraph
 
 # Local agent / harness state (not part of the product)
 .pi/
 .atl/
 .scratch/
-
-# Dependency install dirs (global ignore may cover these; keep repo self-contained)
-/node_modules/
-.agents/skills/flare-fassets/scripts/node_modules/
-
-!skills-lock.json
 ./agents/

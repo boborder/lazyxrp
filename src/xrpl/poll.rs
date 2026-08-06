@@ -1748,11 +1748,8 @@ mod tests {
             skip_mainnet_prompt: false,
         };
         // No RPC: resolve_submit_wallet should reject mainnet without --yes.
-        // Use a dummy client only if connect works — mirror Payment test style.
-        let rpc = match RpcClient::connect("https://example.invalid") {
-            Ok(r) => r,
-            Err(_) => return, // environment without reqwest connect construction
-        };
+        // RPC client construction is local; mainnet guard must be exercised deterministically.
+        let rpc = RpcClient::connect("https://example.invalid").expect("rpc client");
         submit_fxrp_direct_mint_payment(&rpc, &Network::Mainnet, params, &tx, None).await;
         match rx.try_recv() {
             Ok(Action::FxrpDirectMintPaymentSubmitErr(msg)) => {
