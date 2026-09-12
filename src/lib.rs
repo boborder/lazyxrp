@@ -58,6 +58,14 @@ fn refuses_insecure_signing(rpc_url: &str, ws_url: &str, has_signing_seed: bool)
     has_signing_seed && (is_insecure_endpoint(rpc_url) || is_insecure_endpoint(ws_url))
 }
 
+fn sanitize_rate(rate: f64, default: f64) -> f64 {
+    if rate.is_finite() && rate > 0.0 {
+        rate.clamp(0.1, 120.0)
+    } else {
+        default
+    }
+}
+
 fn resolve_ws_url(args: &Cli, config: &Config, network: &Network) -> String {
     args.ws_server
         .clone()
@@ -151,6 +159,22 @@ pub async fn run() -> color_eyre::Result<()> {
             Some(secrecy::SecretString::from(family_seed.to_string()))
         };
     }
+    if let Some(cli_mnemonic) = args.mnemonic.as_ref() {
+        eprintln!(
+            "lazyxrp: warning: --mnemonic exposes the BIP39 phrase in process argv and shell history; prefer XRPL_MNEMONIC or config"
+        );
+        let mnemonic = cli_mnemonic.trim();
+        config.xrpl.signing.mnemonic = None;
+        config.xrpl.signing.secret_mnemonic = if mnemonic.is_empty() {
+            None
+        } else {
+            Some(secrecy::SecretString::from(mnemonic.to_string()))
+        };
+    }
+    let credential = signing::credential_from_secrets(
+        config.xrpl.signing.secret_seed.as_ref(),
+        config.xrpl.signing.secret_mnemonic.as_ref(),
+    )?;
     let network = resolve_network(args.network, &config);
     let rpc_url = ensure_secure_endpoint(
         &resolve_rpc_url(args.server.clone(), &config, &network),
@@ -162,15 +186,15 @@ pub async fn run() -> color_eyre::Result<()> {
         EndpointKind::Ws,
         args.allow_insecure_rpc,
     )?;
-    if refuses_insecure_signing(&rpc_url, &ws_url, config.xrpl.signing.secret_seed.is_some()) {
+    if refuses_insecure_signing(&rpc_url, &ws_url, credential.is_some()) {
         color_eyre::eyre::bail!(
             "refusing signing operations over insecure RPC/WS; use https:// and wss:// endpoints"
         );
     }
-    let tick_rate = args.tick_rate;
-    let frame_rate = args.frame_rate;
+    let tick_rate = sanitize_rate(args.tick_rate, 4.0);
+    let frame_rate = sanitize_rate(args.frame_rate, 60.0);
     let yes = args.yes;
-    let cmd = args.command.unwrap_or(Cmd::Watch { account: None });
+    let cmd = resolve_lazyxrp_command(&args)?;
     match cmd {
         Cmd::Watch { account } => {
             let mut app = app::App::new(
@@ -179,17 +203,46 @@ pub async fn run() -> color_eyre::Result<()> {
             app.run().await?;
         }
         other => {
-            xrpl::execute_cli_command(
-                other,
-                &rpc_url,
-                &network,
-                config.xrpl.signing.secret_seed.clone(),
-                yes,
-            )
-            .await?;
+            xrpl::execute_cli_command(other, &rpc_url, &network, credential, yes).await?;
         }
     }
     Ok(())
+}
+
+fn resolve_lazyxrp_command(args: &Cli) -> color_eyre::Result<Cmd> {
+    if args.exec && args.command.is_none() {
+        color_eyre::eyre::bail!(
+            "`-x` requires a script subcommand (e.g. `lazyxrp -x info`); omit `-x` to launch the TUI"
+        );
+    }
+
+    match args.command.clone() {
+        None => Ok(Cmd::Watch {
+            account: args.account.clone(),
+        }),
+        Some(Cmd::Watch { account }) => {
+            if args.exec {
+                color_eyre::eyre::bail!(
+                    "`-x` is for script CLI only; omit `-x` to launch the TUI (`lazyxrp` or `lazyxrp --account <ADDR>`)"
+                );
+            }
+            eprintln!(
+                "lazyxrp: deprecated: `watch` subcommand; use `lazyxrp` or `lazyxrp --account <ADDR>`"
+            );
+            Ok(Cmd::Watch {
+                account: account.or_else(|| args.account.clone()),
+            })
+        }
+        Some(cli_cmd) => {
+            if !args.exec {
+                let name = cli_cmd.subcommand_name();
+                eprintln!(
+                    "lazyxrp: deprecated: bare `{name}` subcommand; use `lazyxrp -x {name}` or `rc {name}` (alias: rc='lazyxrp -x')"
+                );
+            }
+            Ok(cli_cmd)
+        }
+    }
 }
 
 #[cfg(test)]
@@ -312,5 +365,44 @@ mod endpoint_security_tests {
         assert!(refuses_insecure_signing("https://rpc", "ws://ws", true));
         assert!(!refuses_insecure_signing("http://rpc", "ws://ws", false));
         assert!(!refuses_insecure_signing("https://rpc", "wss://ws", true));
+    }
+}
+
+#[cfg(test)]
+mod command_resolve_tests {
+    use clap::Parser;
+
+    use super::*;
+
+    #[test]
+    fn bare_lazyxrp_resolves_to_watch_with_account() {
+        let args =
+            Cli::try_parse_from(["lazyxrp", "--account", "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"])
+                .unwrap();
+        let cmd = resolve_lazyxrp_command(&args).unwrap();
+        assert!(matches!(
+            cmd,
+            Cmd::Watch {
+                account: Some(ref a)
+            } if a == "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
+        ));
+    }
+
+    #[test]
+    fn exec_without_subcommand_errors() {
+        let args = Cli::try_parse_from(["lazyxrp", "-x"]).unwrap();
+        assert!(resolve_lazyxrp_command(&args).is_err());
+    }
+
+    #[test]
+    fn exec_with_watch_errors() {
+        let args = Cli::try_parse_from(["lazyxrp", "-x", "watch"]).unwrap();
+        assert!(resolve_lazyxrp_command(&args).is_err());
+    }
+
+    #[test]
+    fn exec_with_info_resolves() {
+        let args = Cli::try_parse_from(["lazyxrp", "-x", "info"]).unwrap();
+        assert!(matches!(resolve_lazyxrp_command(&args).unwrap(), Cmd::Info));
     }
 }

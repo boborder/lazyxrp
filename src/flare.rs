@@ -3,13 +3,13 @@ use std::collections::HashSet;
 use alloy::{
     network::EthereumWallet,
     primitives::{Address, Bytes, FixedBytes, U256, address},
-    providers::ProviderBuilder,
+    providers::{Provider, ProviderBuilder},
     signers::local::PrivateKeySigner,
     sol,
 };
 use serde_json::Value;
 
-use crate::xrpl::{FlareFeedPrice, FxrpDirectMintInfo};
+use crate::xrpl::{FlareFeedPrice, FlareWalletSummary, FxrpDirectMintInfo};
 
 pub const DEFAULT_FLARE_RPC: &str = "https://flare-api.flare.network/ext/C/rpc";
 pub const DEFAULT_FLARE_FEED: &str = "FXRP/USD";
@@ -35,6 +35,7 @@ sol! {
         function getDirectMintingMinimumFeeUBA() external view returns (uint256);
         function getDirectMintingFeeBIPS() external view returns (uint256);
         function getDirectMintingExecutorFeeUBA() external view returns (uint256);
+        function fAsset() external view returns (address);
 
         struct DirectMintingProof {
             bytes32[] merkleProof;
@@ -42,6 +43,12 @@ sol! {
         }
 
         function executeDirectMinting(DirectMintingProof _proof) external returns (uint256);
+    }
+
+    #[sol(rpc)]
+    interface IERC20 {
+        function balanceOf(address account) external view returns (uint256);
+        function decimals() external view returns (uint8);
     }
 }
 
@@ -64,6 +71,16 @@ fn format_price(value: U256, decimals: i8) -> String {
     let divisor = 10_f64.powi(decimals as i32);
     let human = value.to::<u128>() as f64 / divisor;
     format!("{human:.6}")
+}
+
+fn format_token_balance(value: U256, decimals: u8) -> String {
+    let divisor = 10_f64.powi(decimals as i32);
+    let human = value.to::<u128>() as f64 / divisor;
+    if decimals <= 6 {
+        format!("{human:.6}")
+    } else {
+        format!("{human:.4}")
+    }
 }
 
 /// Stable UBA → XRP display (6 decimals like drops; trailing zeros trimmed).
@@ -151,6 +168,46 @@ pub async fn fetch_ftso_prices(
     feeds: &[String],
 ) -> color_eyre::Result<Vec<FlareFeedPrice>> {
     fetch_from_rpc(rpc_url, feeds).await
+}
+
+/// Read native FLR + FXRP ERC20 balances for the Overview wallet panel.
+pub async fn fetch_flare_wallet_balance(
+    rpc_url: &str,
+    address: &str,
+    execute_enabled: bool,
+    evm_key_env: &str,
+) -> color_eyre::Result<FlareWalletSummary> {
+    let wallet: Address = address
+        .parse()
+        .map_err(|e| color_eyre::eyre::eyre!("invalid flare wallet address `{address}`: {e}"))?;
+    let provider = ProviderBuilder::new().connect_http(rpc_url.parse()?);
+    let native = provider.get_balance(wallet).await?;
+    let native_balance_display = format_token_balance(native, 18);
+
+    let registry = FlareContractRegistry::new(FLARE_CONTRACT_REGISTRY, provider.clone());
+    let asset_manager_addr = registry
+        .getContractAddressByName(ASSET_MANAGER_FXRP_NAME.to_string())
+        .call()
+        .await?;
+    let am = IAssetManager::new(asset_manager_addr, provider.clone());
+    let fxrp_token = am.fAsset().call().await?;
+    let token = IERC20::new(fxrp_token, provider);
+    let (fxrp_balance, decimals) =
+        tokio::try_join!(async { token.balanceOf(wallet).call().await }, async {
+            token.decimals().call().await
+        },)?;
+
+    let executor_key_configured = std::env::var(evm_key_env)
+        .map(|v| !v.trim().is_empty())
+        .unwrap_or(false);
+
+    Ok(FlareWalletSummary {
+        address: format!("{wallet:#x}"),
+        native_balance_display,
+        fxrp_balance_display: format_token_balance(fxrp_balance, decimals),
+        execute_enabled,
+        executor_key_configured,
+    })
 }
 
 /// Resolve AssetManagerFXRP and read Core Vault + direct-mint fee views (read-only).

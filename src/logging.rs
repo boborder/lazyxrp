@@ -1,16 +1,16 @@
+use std::sync::OnceLock;
+
 use tracing_error::ErrorLayer;
 use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 
 use crate::config;
 
-lazy_static::lazy_static! {
-    pub static ref LOG_ENV: String = format!("{}_LOG_LEVEL", config::PROJECT_NAME.to_uppercase());
-    pub static ref LOG_FILE: String = format!("{}.log", env!("CARGO_PKG_NAME"));
-}
+static LOG_ENV: OnceLock<String> = OnceLock::new();
+const LOG_FILE: &str = concat!(env!("CARGO_PKG_NAME"), ".log");
 
 pub fn init(directory: std::path::PathBuf) -> color_eyre::Result<()> {
     std::fs::create_dir_all(&directory)?;
-    let log_path = directory.join(&*LOG_FILE);
+    let log_path = directory.join(LOG_FILE);
     let log_file = std::fs::File::create(&log_path)?;
     #[cfg(unix)]
     {
@@ -21,9 +21,11 @@ pub fn init(directory: std::path::PathBuf) -> color_eyre::Result<()> {
     // If the `RUST_LOG` environment variable is set, use that as the default, otherwise use the
     // value of the `LOG_ENV` environment variable. If the `LOG_ENV` environment variable contains
     // errors, then this will return an error.
+    let log_env =
+        LOG_ENV.get_or_init(|| format!("{}_LOG_LEVEL", config::PROJECT_NAME.to_uppercase()));
     let env_filter = env_filter
         .try_from_env()
-        .or_else(|_| env_filter.with_env_var(&*LOG_ENV).from_env())?;
+        .or_else(|_| env_filter.with_env_var(log_env).from_env())?;
     let file_subscriber = fmt::layer()
         .with_file(true)
         .with_line_number(true)

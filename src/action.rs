@@ -1,17 +1,24 @@
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 use strum::Display;
 
 use crate::{
     network::Network,
     xrpl::{
         AccountSetSubmitParams, AccountSummary, AggregatePrice, AmmSummary, DunlSummary,
-        EscrowCreateSubmitParams, FeeSummary, FlareFeedPrice, FxrpDirectMintInfo,
-        FxrpDirectMintPaymentParams, FxrpExecuteDirectMintParams, LedgerObjectRow, NftRow,
-        OfferCreateSubmitParams, OfferRow, PathFindSnapshot, PaymentSubmitParams,
-        ServerInfoSummary, SetRegularKeySubmitParams, TrustLineRow, TrustSetSubmitParams, TxRow,
-        TxSummary, WalletProposeResult, XrplRlusdPrice, XrplTomlData,
+        EscrowCreateSubmitParams, FeeSummary, FlareFeedPrice, FlareWalletSummary,
+        FxrpDirectMintInfo, FxrpDirectMintPaymentParams, FxrpExecuteDirectMintParams,
+        LedgerObjectRow, NftRow, OfferCreateSubmitParams, OfferRow, PathFindSnapshot,
+        PaymentSubmitParams, ServerInfoSummary, SetRegularKeySubmitParams, TrustLineRow,
+        TrustSetSubmitParams, TxRow, TxSummary, WalletProposeResult, XrplRlusdPrice, XrplTomlData,
     },
 };
+
+#[derive(Default, Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum Mode {
+    #[default]
+    Splash,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Display, Serialize, Deserialize)]
 pub enum Action {
@@ -56,6 +63,8 @@ pub enum Action {
     FlareOraclePrices(Vec<FlareFeedPrice>),
     /// FXRP Direct Mint Core Vault + fees from AssetManager (read-only).
     FxrpDirectMintInfo(Box<FxrpDirectMintInfo>),
+    /// Flare EVM wallet native + FXRP balances (read-only).
+    FlareWalletBalance(Box<FlareWalletSummary>),
     /// Oracle tab shown but no oracles configured.
     XrplOracleNotConfigured,
     /// `account_objects` snapshot; each tab filters rows by `LedgerEntryType`.
@@ -89,14 +98,11 @@ pub enum Action {
     /// Bounded image bytes fetched from an NFT URI or metadata image field.
     NftImageLoaded {
         nft_id: String,
-        bytes: Vec<u8>,
+        bytes: Arc<Vec<u8>>,
     },
     NftImageError {
         nft_id: String,
         message: String,
-    },
-    NftImageReady {
-        nft_id: String,
     },
     RefreshTxHistory,
     /// Load next page of tx history (uses current marker).
@@ -110,6 +116,8 @@ pub enum Action {
     SelectNext,
     SelectPrev,
     NetworkChange(Network),
+    /// Hotkey: cycle to the next XRPL network (mainnet→testnet→devnet→xahau→xahau-test→…).
+    NetworkSwitchCycle,
     /// Number keys `1`–`6`: switch to tab index (0-based target).
     TabJump(usize),
     /// While `true`, global Splash keybindings (e.g. `h`/`l` focus) are ignored so inline typing works.

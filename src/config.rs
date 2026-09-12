@@ -9,7 +9,10 @@ use directories::ProjectDirs;
 use ratatui::style::{Color, Modifier, Style};
 use serde::{Deserialize, de::Deserializer, de::Error as _};
 
-use crate::{action::Action, app::Mode, network::Network};
+use crate::{
+    action::{Action, Mode},
+    network::Network,
+};
 
 const CONFIG: &str = include_str!("../config.json5");
 const CONFIG_DIR_BASENAME: &str = "lazyxrp";
@@ -20,6 +23,39 @@ pub struct PathConfig {
     pub data_dir: PathBuf,
     #[serde(default)]
     pub config_dir: PathBuf,
+}
+
+/// Flare chain selection. Default: Flare mainnet.
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq, strum::EnumString)]
+#[strum(serialize_all = "lowercase", ascii_case_insensitive)]
+#[serde(rename_all = "lowercase")]
+pub enum FlareNetwork {
+    #[default]
+    Flare,
+    Songbird,
+    Coston2,
+}
+
+impl FlareNetwork {
+    #[must_use]
+    pub fn rpc_url(&self) -> &'static str {
+        match self {
+            Self::Flare => "https://flare-api.flare.network/ext/C/rpc",
+            Self::Songbird => "https://songbird-api.flare.network/ext/C/rpc",
+            Self::Coston2 => "https://coston2-api.flare.network/ext/C/rpc",
+        }
+    }
+}
+
+/// `[flare] display` — panel density on Overview / Market tabs.
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq, strum::EnumString)]
+#[strum(serialize_all = "lowercase", ascii_case_insensitive)]
+#[serde(rename_all = "lowercase")]
+pub enum FlareDisplay {
+    #[default]
+    Full,
+    Compact,
+    Off,
 }
 
 fn default_flare_evm_key_env() -> String {
@@ -46,11 +82,48 @@ impl Default for FlareFassetsConfig {
     }
 }
 
-/// Top-level `[flare]` config (FTSO RPC stays env-driven; fassets is file-config).
+/// `[flare.wallet]` — read-only Flare EVM wallet panel on Overview.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
+pub struct FlareWalletConfig {
+    #[serde(default, deserialize_with = "deserialize_optional_evm_address")]
+    pub address: Option<String>,
+}
+
+#[must_use]
+pub fn normalize_evm_address(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let parsed: alloy::primitives::Address = trimmed.parse().ok()?;
+    Some(format!("{parsed:#x}"))
+}
+
+fn deserialize_optional_evm_address<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let opt = Option::<String>::deserialize(deserializer)?;
+    match opt {
+        None => Ok(None),
+        Some(raw) if raw.trim().is_empty() => Ok(None),
+        Some(raw) => normalize_evm_address(&raw)
+            .ok_or_else(|| D::Error::custom(format!("invalid EVM address: {raw}")))
+            .map(Some),
+    }
+}
+
+/// Top-level `[flare]` config.
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
 pub struct FlareConfig {
     #[serde(default)]
+    pub network: FlareNetwork,
+    #[serde(default)]
+    pub display: FlareDisplay,
+    #[serde(default)]
     pub fassets: FlareFassetsConfig,
+    #[serde(default)]
+    pub wallet: FlareWalletConfig,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -79,6 +152,10 @@ pub struct RawSigningConfig {
     /// Memory-masked seed (set by `Config::new()` from env/file/CLI).
     #[serde(skip)]
     pub secret_seed: Option<secrecy::SecretString>,
+    #[serde(default)]
+    pub mnemonic: Option<String>,
+    #[serde(skip)]
+    pub secret_mnemonic: Option<secrecy::SecretString>,
 }
 
 /// Security: never print the seed value in debug output.
@@ -89,6 +166,11 @@ impl fmt::Debug for RawSigningConfig {
             .field(
                 "secret_seed",
                 &self.secret_seed.as_ref().map(|_| "[REDACTED]"),
+            )
+            .field("mnemonic", &self.mnemonic.as_ref().map(|_| "[REDACTED]"))
+            .field(
+                "secret_mnemonic",
+                &self.secret_mnemonic.as_ref().map(|_| "[REDACTED]"),
             )
             .finish()
     }
@@ -301,6 +383,9 @@ impl Config {
         if let Some(plain) = config.xrpl.signing.seed.take() {
             config.xrpl.signing.secret_seed = Some(secrecy::SecretString::from(plain));
         }
+        if let Some(plain) = config.xrpl.signing.mnemonic.take() {
+            config.xrpl.signing.secret_mnemonic = Some(secrecy::SecretString::from(plain));
+        }
 
         // Merge XRPL_SEED env var into signing config (env var takes priority over file)
         if let Ok(env_seed) = env::var(crate::signing::SEED_ENV) {
@@ -310,6 +395,14 @@ impl Config {
             let t = crate::signing::trim_family_seed(&env_seed);
             if !t.is_empty() {
                 config.xrpl.signing.secret_seed = Some(secrecy::SecretString::from(t.to_string()));
+            }
+        }
+        if let Ok(env_mnemonic) = env::var(crate::signing::MNEMONIC_ENV) {
+            unsafe { env::remove_var(crate::signing::MNEMONIC_ENV) };
+            let t = env_mnemonic.trim();
+            if !t.is_empty() {
+                config.xrpl.signing.secret_mnemonic =
+                    Some(secrecy::SecretString::from(t.to_string()));
             }
         }
 
@@ -795,6 +888,63 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     use super::*;
+
+    /// TC-113: FlareNetwork parses case-insensitively, defaults to Flare
+    #[test]
+    fn flare_network_parse() {
+        assert_eq!(
+            "flare".parse::<FlareNetwork>().unwrap(),
+            FlareNetwork::Flare
+        );
+        assert_eq!(
+            "COSTON2".parse::<FlareNetwork>().unwrap(),
+            FlareNetwork::Coston2
+        );
+        assert_eq!(
+            "Songbird".parse::<FlareNetwork>().unwrap(),
+            FlareNetwork::Songbird
+        );
+        assert_eq!(FlareNetwork::default(), FlareNetwork::Flare);
+        assert_eq!(
+            FlareNetwork::Coston2.rpc_url(),
+            "https://coston2-api.flare.network/ext/C/rpc"
+        );
+    }
+
+    /// TC-114: FlareDisplay parses and defaults to full
+    #[test]
+    fn flare_display_parse() {
+        assert_eq!("off".parse::<FlareDisplay>().unwrap(), FlareDisplay::Off);
+        assert_eq!(
+            "Compact".parse::<FlareDisplay>().unwrap(),
+            FlareDisplay::Compact
+        );
+        assert_eq!(FlareDisplay::default(), FlareDisplay::Full);
+    }
+
+    /// TC-120: `[flare.wallet] address` validates EVM hex and normalizes to `0x…`
+    #[test]
+    fn flare_wallet_address_validation() {
+        assert_eq!(
+            normalize_evm_address("0xAbCdEf0123456789AbCdEf0123456789AbCdEf01"),
+            Some("0xabcdef0123456789abcdef0123456789abcdef01".to_string())
+        );
+        assert!(normalize_evm_address("not-an-address").is_none());
+        let toml = r#"
+            [wallet]
+            address = "0xabcdef0123456789abcdef0123456789abcdef01"
+        "#;
+        let cfg: FlareConfig = toml::from_str(toml).expect("valid wallet address");
+        assert_eq!(
+            cfg.wallet.address.as_deref(),
+            Some("0xabcdef0123456789abcdef0123456789abcdef01")
+        );
+        let bad = r#"
+            [wallet]
+            address = "0xshort"
+        "#;
+        assert!(toml::from_str::<FlareConfig>(bad).is_err());
+    }
 
     #[test]
     fn test_parse_style_default() {

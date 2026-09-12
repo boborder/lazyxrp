@@ -8,6 +8,7 @@
       "<r>": "RefreshAccount",
       "<b>": "RefreshBook",
       "<o>": "RefreshLedgerObjects",
+      "<Ctrl-n>": "NetworkSwitchCycle",
       "<j>": "SelectNext",
       "<k>": "SelectPrev",
       "<down>": "SelectNext",
@@ -20,7 +21,11 @@
       "<?>": "Help"
     },
   },
+  // Signing credentials are intentionally not stored in this example.
+  // Use XRPL_SEED / XRPL_MNEMONIC or [xrpl.signing] seed / mnemonic.
   "xrpl": {
+    // Network: mainnet | testnet | devnet | xahau | xahau-test
+    // Xahau presets (XRPL-compatible): mainnet https://xahau.network, testnet https://xahau-test.net
     "network": "mainnet",
     "account": "r3kmLJN5D28dHuH8vZNUZpMC43pEHpaocV",
     "issuer": "rMxCKbEDwqr76QuheSUMdEGf4B9xJ8m5De",
@@ -41,4 +46,5 @@
       { "base_asset": "5553445400000000000000000000000000000000", "quote_asset": "USD" }
     ]
   }
+  // BIP39 mnemonic uses secp256k1 account index 0.
 }

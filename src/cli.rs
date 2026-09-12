@@ -5,8 +5,19 @@ use crate::{
     network::Network,
 };
 
+const CLI_AFTER_HELP: &str = "\
+Install:   curl -fsSL https://raw.githubusercontent.com/boborder/lazyxrp/main/install.sh | bash\n\
+Uninstall: lazyxrp --self-uninstall [--yes]  (manual: ./install.sh --uninstall-help)\n\
+Docs:      https://github.com/boborder/lazyxrp";
+
 #[derive(Parser, Debug)]
-#[command(name = "lazyxrp", author, version = version(), about)]
+#[command(
+    name = "lazyxrp",
+    author,
+    version = version(),
+    about = "Terminal UI for the XRP Ledger — monitor accounts, order books, NFTs, trust lines, and AMM pools",
+    after_help = CLI_AFTER_HELP
+)]
 pub struct Cli {
     /// Tick rate, i.e. number of ticks per second
     #[arg(short, long, value_name = "FLOAT", default_value_t = 4.0)]
@@ -16,10 +27,12 @@ pub struct Cli {
     #[arg(short, long, value_name = "FLOAT", default_value_t = 60.0)]
     pub frame_rate: f64,
 
-    #[arg(long)]
+    /// Custom JSON-RPC URL (overrides config and env)
+    #[arg(long, value_name = "URL")]
     pub server: Option<String>,
 
-    #[arg(long)]
+    /// Custom WebSocket URL (overrides config and env)
+    #[arg(long, value_name = "URL")]
     pub ws_server: Option<String>,
 
     /// Network to connect to (overrides config and env)
@@ -36,23 +49,44 @@ pub struct Cli {
 
     /// Signing seed (family seed format). Overrides XRPL_SEED env var and config.
     ///
-    /// Deprecated: appears in process argv / shell history. Prefer `XRPL_SEED` or config.
-    #[arg(long)]
+    /// Deprecated: appears in process argv / shell history. Prefer XRPL_SEED or config.
+    #[arg(long, conflicts_with = "mnemonic")]
     pub seed: Option<String>,
+
+    /// BIP39 mnemonic for XRPL secp256k1 account index 0.
+    ///
+    /// Deprecated: appears in process argv / shell history. Prefer XRPL_MNEMONIC or config.
+    #[arg(long, conflicts_with = "seed")]
+    pub mnemonic: Option<String>,
 
     /// Allow `http://` / `ws://` custom RPC/WS endpoints (default: https/wss only).
     #[arg(long, default_value_t = false)]
     pub allow_insecure_rpc: bool,
 
+    /// Watch account for the TUI (overrides config). Prefer over legacy `watch --account`.
+    #[arg(long, global = true)]
+    pub account: Option<String>,
+
+    /// Run a non-interactive script subcommand (e.g. `lazyxrp -x info`). Shell alias: `rc='lazyxrp -x'`.
+    #[arg(short = 'x', long = "exec", conflicts_with = "self_uninstall")]
+    pub exec: bool,
+
     #[command(subcommand)]
     pub command: Option<Cmd>,
 }
+
+const RP_AFTER_HELP: &str = "\
+Examples:\n  \
+rp -t <64-char-tx-hash>\n  \
+rp <classic-or-x-address>\n\n\
+Full TUI: lazyxrp --help";
 
 /// Short-command CLI when argv0 is `rp` (symlink to lazyxrp).
 #[derive(Parser, Debug)]
 #[command(
     name = "rp",
-    about = "Quick XRPL lookup — transaction hash or account address"
+    about = "Quick XRPL lookup — transaction hash or account address",
+    after_help = RP_AFTER_HELP
 )]
 pub struct RpCli {
     /// Network to connect to (overrides config and env)
@@ -92,6 +126,7 @@ impl RpCli {
 
 #[derive(Subcommand, Debug, Clone)]
 pub enum Cmd {
+    /// Launch the TUI (default when no subcommand). Deprecated: use bare `lazyxrp` instead.
     Watch {
         #[arg(long)]
         account: Option<String>,
@@ -153,6 +188,24 @@ pub enum Cmd {
     },
 }
 
+impl Cmd {
+    pub fn subcommand_name(&self) -> &'static str {
+        match self {
+            Cmd::Watch { .. } => "watch",
+            Cmd::Info => "info",
+            Cmd::Account { .. } => "account",
+            Cmd::Book { .. } => "book",
+            Cmd::Summary { .. } => "summary",
+            Cmd::Nfts { .. } => "nfts",
+            Cmd::Lines { .. } => "lines",
+            Cmd::Amm { .. } => "amm",
+            Cmd::TxHistory { .. } => "tx-history",
+            Cmd::AccountStatus { .. } => "account-status",
+            Cmd::Send { .. } => "send",
+        }
+    }
+}
+
 const VERSION_MESSAGE: &str = concat!(
     env!("CARGO_PKG_VERSION"),
     "-",
@@ -165,7 +218,6 @@ const VERSION_MESSAGE: &str = concat!(
 pub fn version() -> String {
     let author = clap::crate_authors!();
 
-    // let current_exe_path = PathBuf::from(clap::crate_name!()).display().to_string();
     let config_dir_path = config_dir().display().to_string();
     let data_dir_path = data_dir().display().to_string();
 
@@ -185,12 +237,47 @@ mod tests {
     use clap::Parser;
 
     use super::{Cli, RpCli};
+    use crate::network::Network;
 
     /// TC-058
     #[test]
     fn book_requires_base_and_quote_arguments() {
+        assert!(Cli::try_parse_from(["lazyxrp", "-x", "book", "--quote", "USD"]).is_err());
+        assert!(Cli::try_parse_from(["lazyxrp", "-x", "book", "--base", "XRP"]).is_err());
+        // Deprecated bare form still parses until removal.
         assert!(Cli::try_parse_from(["lazyxrp", "book", "--quote", "USD"]).is_err());
-        assert!(Cli::try_parse_from(["lazyxrp", "book", "--base", "XRP"]).is_err());
+    }
+
+    #[test]
+    fn exec_flag_parses_with_script_subcommand() {
+        let c = Cli::try_parse_from(["lazyxrp", "-x", "info"]).expect("parses");
+        assert!(c.exec);
+        assert!(matches!(c.command, Some(super::Cmd::Info)));
+    }
+
+    #[test]
+    fn exec_flag_accepts_global_network_before_subcommand() {
+        let c =
+            Cli::try_parse_from(["lazyxrp", "--network", "testnet", "-x", "info"]).expect("parses");
+        assert!(c.exec);
+        assert_eq!(c.network, Some(Network::Testnet));
+    }
+
+    #[test]
+    fn top_level_account_flag_parses_for_tui() {
+        let c = Cli::try_parse_from(["lazyxrp", "--account", "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"])
+            .expect("parses");
+        assert_eq!(
+            c.account.as_deref(),
+            Some("rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh")
+        );
+        assert!(c.command.is_none());
+        assert!(!c.exec);
+    }
+
+    #[test]
+    fn exec_conflicts_with_self_uninstall() {
+        assert!(Cli::try_parse_from(["lazyxrp", "--self-uninstall", "-x", "info"]).is_err());
     }
 
     #[test]
