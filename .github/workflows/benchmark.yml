@@ -1,14 +1,11 @@
 name: Benchmark
 
 on:
-  # After a successful CD (tag release / manual CD). Uses the default-branch
-  # workflow file; checks out the CD head SHA so results match the release.
-  # NOTE: cd.yml `name: CD # …` — everything after `#` is a YAML comment, so
-  # the workflow's real name is just `CD`.
-  workflow_run:
-    workflows: ["CD"]
-    types:
-      - completed
+  # Dispatched by cd.yml after a successful release. GITHUB_TOKEN-dispatched
+  # CD runs do not fire workflow_run listeners reliably (observed: the one
+  # push-tag CD fired once; five GITHUB_TOKEN-dispatched CD successes fired
+  # zero benchmark runs). Dispatch with `--ref <tag>` so results measure the
+  # exact released commit. Manual: gh workflow run benchmark.yml --ref <tag>.
   workflow_dispatch:
     inputs:
       strict:
@@ -23,17 +20,12 @@ on:
 jobs:
   benchmark:
     name: Build & Startup Benchmark
-    # Skip failed/cancelled CD runs; always allow manual dispatch.
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      github.event.workflow_run.conclusion == 'success'
+    # Dispatch path always; inputs.strict selects --ci failure mode.
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
-        with:
-          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@v1

@@ -197,3 +197,18 @@ jobs:
         run: cargo publish --locked
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+  # GITHUB_TOKEN-dispatched CD runs do not fire the Benchmark workflow_run
+  # listener (observed); dispatch it directly on release success.
+  trigger-benchmark:
+    name: Trigger Benchmark
+    needs: [publish-github-release, publish-cargo]
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - name: Dispatch Benchmark on the release tag
+        run: gh workflow run Benchmark --ref "$GITHUB_REF_NAME"
+        env:
+          GH_TOKEN: ${{ github.token }}
