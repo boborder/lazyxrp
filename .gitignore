@@ -8,8 +8,16 @@
 graphify-out
 .codegraph
 
+# OpenSpec — local agent workflow, not published
+/openspec/
+
 # Local agent / harness state (not part of the product)
 .pi/
 .atl/
 .scratch/
 ./agents/
+.config/lazyxrp-test/
+
+# Flare skill scratch scripts (local probes)
+.agents/skills/flare-fassets/scripts/_*.ts
+.agents/skills/flare-fassets/scripts/_*.json
