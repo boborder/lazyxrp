@@ -2,13 +2,31 @@
 
 **lazyxrp** — Rust TUI for XRPL. Elm-style unidirectional flow (`Action` → `App` → panels); network I/O under `xrpl/`, UI under `components/`.
 
+## Progressive disclosure
+
+**Doc map SSOT — do not duplicate this table elsewhere.**
+
+| Doc | Question |
+|-----|----------|
+| [`docs/requirements.md`](docs/requirements.md) | **何をするか** — 要件定義・ゴール設計 |
+| [`docs/architecture.md`](docs/architecture.md) | **どう動くか** — 詳細設計・スキーマ設計 |
+| [`docs/test.md`](docs/test.md) | **どう検証するか** — テスト設計・テストガイド |
+| [`docs/roadmap.md`](docs/roadmap.md) | **いつ・何を・どこまで** — 進捗・目標・バージョン |
+| [`docs/tech.md`](docs/tech.md) | **何で作るか** — 技術選定・依存・API 連携 |
+| [`docs/directory.md`](docs/directory.md) | **どこにあるか** — ディレクトリ構成・命名 |
+| [`docs/security.md`](docs/security.md) | **どう守るか** — セキュリティ・機密管理 |
+| [`docs/problems.md`](docs/problems.md) | **何に注意するか** — 注意点・落とし穴 |
+| [`docs/references.md`](docs/references.md) | **調べる前に見るべき** — 参考文献・サンプル |
+| [`DESIGN.md`](DESIGN.md) | **どう見える・操作するか** — UI/UX |
+| **AGENTS.md** *(here)* | **どう作る/運用するか** — Agent 指示（最小） |
+
 ## Quick reference
 
 | Topic | Command / note |
 |---|---|
 | Rust pin | `rust-toolchain.toml` + `Cargo.toml` `rust-version` (see `docs/tech.md`) |
 | Domain skills | [`.agents/skills/xrpl-rust/`](.agents/skills/xrpl-rust/SKILL.md) · Flare: `flare-general` / `flare-ftso` / `flare-fassets` |
-| Human docs | [`README.md`](README.md) § Documentation — **do not duplicate that index here** |
+| Human docs | Progressive disclosure table above (SSOT) |
 | Verify | `cargo check` (minimum after code changes) |
 | Format | `cargo fmt` |
 | Install | `./install.sh` or `mise run install` (see `.mise.toml`) |

@@ -2,12 +2,7 @@
 
 **SSOT for TUI look & feel:** tabs, layout splits, focus, scrolling, modals, keybindings, colors, loading, and ratatui building blocks.
 
-| Layer | File | Question |
-|-------|------|----------|
-| Requirements | [`docs/requirements.md`](docs/requirements.md) | **What** must the product do? (FR/NFR) |
-| Architecture | [`docs/architecture.md`](docs/architecture.md) | **How** does the system behave? (network, config precedence, data flow, behavioral contracts → [`docs/test.md`](docs/test.md)) |
-| Design (this file) | `DESIGN.md` | **How does it look and feel?** (interaction + visual language) |
-| Roadmap | [`docs/roadmap.md`](docs/roadmap.md) | **What ships when?** (milestones, backlog) |
+Doc map (progressive disclosure): [`AGENTS.md`](AGENTS.md) only — not duplicated here.
 
 Invariants (I-1〜I-11) and review findings: [`docs/security.md`](docs/security.md) — not duplicated here.
 
@@ -148,7 +143,7 @@ Column colors (wallet recent tx): hash `SECONDARY`, direction ▼ red / ▲ gree
 
 ### TX detail overlay (`tx_detail/mod.rs`)
 
-Parser pipeline (29 types, fallback, cache): [`docs/tx-detail.md`](docs/tx-detail.md).
+Parser pipeline (29 types, fallback, cache): [`docs/architecture.md`](docs/architecture.md) §5.2.1.
 
 | Key | Effect |
 |-----|--------|
@@ -299,3 +294,4 @@ Tick-driven spinners use `Action::Tick` counter in panel state.
 | trust_lines, ledger, path_find, nft, book, dUNL, tx_history, oracle, FTSO | `render_selectable_table` |
 | Dirty gating | `App::needs_draw` — user actions + data + tick (splash); actual draw clears dirty and counts FPS |
 
+[Showing lines 1-300 of 302. Use :301 to continue]

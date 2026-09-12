@@ -203,28 +203,9 @@ Agents and contributors: [`AGENTS.md`](./AGENTS.md) (`cargo fmt` / `cargo check`
 
 ## Documentation
 
-Self-contained product docs under [`docs/`](./docs/) — no other repo folders required to read them. Planning: [`docs/roadmap.md`](./docs/roadmap.md).
+Product docs live under [`docs/`](./docs/). **Where to read what:** [`AGENTS.md`](./AGENTS.md) (progressive disclosure — single index).
 
-| Audience | Start here |
-|----------|------------|
-| Product / UX (interaction) | [`DESIGN.md`](./DESIGN.md) |
-| Product / system behavior | [`docs/architecture.md`](./docs/architecture.md) |
-| Security audit | [`docs/security.md`](./docs/security.md) |
-| Planning | [`docs/roadmap.md`](./docs/roadmap.md) |
-
-| Doc | Topic |
-|-----|--------|
-| [`docs/requirements.md`](./docs/requirements.md) | Functional & non-functional requirements (what) |
-| [`docs/architecture.md`](./docs/architecture.md) | System & behavioral design (how) |
-| [`DESIGN.md`](./DESIGN.md) | Keys, layout, theme, modals (look & feel) |
-| [`docs/roadmap.md`](./docs/roadmap.md) | Milestones & backlog |
-| [`docs/tech.md`](./docs/tech.md) | Tech stack & versions |
-| [`docs/test.md`](./docs/test.md) | Test catalog & expectations |
-| [`docs/directory.md`](./docs/directory.md) | Directory structure |
-| [`docs/references.md`](./docs/references.md) | Supplementary reference |
-| [`docs/tx-detail.md`](./docs/tx-detail.md) | TX detail parser pipeline |
-| [`docs/problems.md`](./docs/problems.md) | Known issues |
-| [`docs/security.md`](./docs/security.md) | Threat model & hardening |
+Planning: [`docs/roadmap.md`](./docs/roadmap.md).
 
 ## References
 

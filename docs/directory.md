@@ -92,8 +92,7 @@ lazyxrp/
 │               ├── format.rs
 │               └── parsers.rs
 ├── docs/
-    ├── architecture.md    # システム・行動設計（ネットワーク・設定・データフロー）
-    ├── tx-detail.md       # TX detail パーサー契約（オーバーレイキーは DESIGN.md）
+    ├── architecture.md    # システム・行動設計（TX detail §5.2.1 含む）
     ├── roadmap.md         # マイルストーン・バックログ
     ├── requirements.md    # FR/NFR（何をするか）
     ├── tech.md
@@ -183,7 +182,6 @@ lazyxrp/
 | `requirements.md` | What | FR/NFR ids |
 | `architecture.md` | How (system) | Network, config precedence, data flow, behavioral contracts |
 | `../DESIGN.md` | Look & feel | Keys, layout splits, theme, modals, loading |
-| `tx-detail.md` | How (parser) | TX detail overlay parser registry & pipeline |
 | `test.md` | Verify | TC catalog → traces to requirements + architecture |
 | `roadmap.md` | When | Milestones, cross-cutting backlog |
 | `tech.md` | Stack | Dependencies, versions, dev commands |
@@ -192,7 +190,7 @@ lazyxrp/
 | `security.md` | Audit | S-xxx / R-xxx, threat model |
 | `problems.md` | Debt | P-xxx known issues |
 
-Human doc index: root `README.md` § Documentation. This tree is self-contained for product readers.
+Human doc index: [`AGENTS.md`](../AGENTS.md) progressive disclosure. This tree is self-contained for product readers.
 
 ## 8. Build / test commands and entry points
 

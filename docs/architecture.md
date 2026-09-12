@@ -13,9 +13,10 @@ Extended product design derived from [`requirements.md`](requirements.md). Descr
 | Modules, channels, startup/submit flows | `src/app.rs`, `src/xrpl/poll.rs`, [`directory.md`](directory.md) §3 |
 | Rules I-1〜I-11 | [`security.md`](security.md) (guards in `src/`) |
 | Directory layout | [`directory.md`](directory.md) |
-| TX detail parser registry | [`tx-detail.md`](tx-detail.md), `src/components/shared/tx_detail/` |
+| TX detail parser registry | §5.2.1 below, `src/components/shared/tx_detail/` |
 | Security audit S-xxx / risks R-xxx | [`security.md`](security.md) |
-| Doc index & graphify | [`README.md`](../README.md), [`graphify-out/GRAPH_REPORT.md`](../graphify-out/GRAPH_REPORT.md) |
+| Doc index | [`AGENTS.md`](../AGENTS.md) progressive disclosure |
+| Graphify | [`graphify-out/GRAPH_REPORT.md`](../graphify-out/GRAPH_REPORT.md) |
 
 ## System boundary
 
@@ -120,10 +121,52 @@ Poll skips heavy market fetches when tab inactive (`should_poll_market_book`, `s
 
 ### 5.2 Shared behaviors
 
-- **TX detail:** Any table row with `ArcValue` tx/meta can open unified overlay (`tx_detail::render_tx_detail`). Parser pipeline: [`tx-detail.md`](tx-detail.md). Overlay **keys**: [`DESIGN.md`](../DESIGN.md) § TX detail overlay.
+- **TX detail:** Any table row with `ArcValue` tx/meta can open unified overlay (`tx_detail::render_tx_detail`). Parser contract: §5.2.1. Overlay **keys**: [`DESIGN.md`](../DESIGN.md) § TX detail overlay.
 - **Tx history pagination:** `marker` → `PollCommand::TxHistoryMore` → `XrplTxHistoryAppend`.
 - **Tx history filter:** In-panel filter state; does not change RPC query (client-side).
 - **Path find:** Self-payment preview via `ripple_path_find` using configured book pair amount.
+
+#### 5.2.1 TX detail parser pipeline
+
+| Symbol | File | Role |
+|--------|------|------|
+| `TxDetailState` | `tx_detail/mod.rs` | Overlay visibility, scroll offset, line cache |
+| `render_tx_detail` | `tx_detail/mod.rs` | Draw centered popup |
+| `typed_detail_lines` | `tx_detail/parsers.rs` | Dispatch by `TransactionType` |
+| `detail_lines_for` | `tx_detail/mod.rs` | Fallback for unknown fields |
+| `TX_DETAIL_PARSERS` | `tx_detail/parsers.rs` | Static registry (29 types) |
+
+Any table row carrying `raw_json: ArcValue` (tx + meta) can open the overlay via `Action::TxDetailToggle` when focused.
+
+**Pipeline**
+
+1. **Header** — `Result` always; `hash` / `ledger` / `date` when present in JSON.
+2. **Typed branch** — `typed_detail_lines` looks up `TransactionType` in `TX_DETAIL_PARSERS`; parser returns formatted `Line` list or `None`.
+3. **Fallback** — `detail_lines_for` walks known field names; unlisted keys via `format_value`. `Amount2` is known for AMM typed sections (not duplicated under “Other fields”).
+4. **Cache** — First open per TX builds `cached_lines`; redraw reuses cache; scroll only moves paragraph offset. New TX invalidates cache.
+
+**Overlay guard** (`TxDetailState::handle_action`)
+
+- While **closed**: panels handle `TxDetailToggle` with pre-resolved `(tx, meta)` from selected row.
+- While **open**: consumes `Quit`, data refresh, `Tick`, and navigation actions so background tables do not change selection under the popup.
+- `SelectNext` / `FocusNext` (and prev) scroll detail text with saturating arithmetic.
+
+**Registered types (29)**
+
+`Payment`, `AccountSet`, `TrustSet`, `OfferCreate`, `OfferCancel`, `NFTokenMint`, `NFTokenBurn`, `NFTokenCreateOffer`, `NFTokenAcceptOffer`, `NFTokenCancelOffer`, `CheckCreate`, `CheckCash`, `CheckCancel`, `SignerListSet`, `SetRegularKey`, `DepositPreauth`, `EscrowCreate`, `EscrowFinish`, `EscrowCancel`, `PaymentChannelCreate`, `PaymentChannelFund`, `PaymentChannelClaim`, `AMMCreate`, `AMMDeposit`, `AMMWithdraw`, `AMMVote`, `AMMBid`, `AMMDelete`, `TicketCreate`.
+
+Six AMM variants share `amm_detail_lines` (ordered fields, explicit `null`, `TradingFee` formatting on create/vote).
+
+**Adding a parser**
+
+1. Implement `fn foo_detail_lines(tx: &Value) -> Option<Vec<Line>>` in `parsers.rs` (prefer `typed_detail` helper).
+2. Add one row to `TX_DETAIL_PARSERS`.
+3. Add `/// TC-xxx` test in `parsers.rs` or `registry_tests` when behavior is user-visible or regression-prone.
+4. Update the type list in this section if the registry grows.
+
+No `DESIGN.md` change unless overlay interaction changes.
+
+**Tests:** **TC-094** — registry has no duplicates; required types dispatch. Panel integration — tables open overlay on `Enter` (see `docs/test.md` wallet/history rows).
 
 ### 5.3 Path-Find (Market)
 
