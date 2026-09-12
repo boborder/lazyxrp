@@ -1,18 +1,20 @@
 # security.md
 
+**Role:** セキュリティ設計・機密管理（S-xxx / R-xxx、I-1〜I-11 のレビュー記録）。
+
 Generated: 2026-05-01 | Scope: Full codebase (`src/`, `install.sh`, `docs/`)
 
-**SSOT split:** This file tracks **security review findings (S-xxx)** — what was audited and fixed. **Implementation risks (R-xxx)** and suggested tests live in [`agent/RISK_REGISTER.md`](agent/RISK_REGISTER.md). Invariants (I-1〜I-11) are in [`agent/INVARIANTS.md`](agent/INVARIANTS.md).
+**SSOT split:** This file tracks **security review findings (S-xxx)** and **implementation risks (R-xxx)** (table below). Invariant IDs (I-1〜I-11) are referenced across `docs/` and defined by the code guards they name (simulate-first, mainnet `--yes`, …).
 
 ## S-xxx ↔ R-xxx cross-reference
 
 | S-ID | Topic | Related R-ID | Notes |
 |------|-------|--------------|-------|
-| S-001 | Seed in `Debug` output | R-001 | Plaintext logging; use `secret_seed` only after `Config::new()` |
-| S-002 | `XRPL_SEED` not cleared from env | R-001, I-4 | `prime_seed_source` + `env_lock` |
-| S-003 | Config file seed permissions | R-001 | Unix warn on group/world read |
-| S-010 | Plaintext `seed` retained on `Config` | R-001, I-1 | Cleared in `Config::new()` |
-| S-011 | `--seed` visible in `ps` | R-001 | Prefer env/file; README warning |
+| S-001 | Seed or mnemonic in `Debug` output | R-001 | Plaintext logging; use `secret_seed` / `secret_mnemonic` only after `Config::new()` |
+| S-002 | Signing env var not cleared | R-001, I-4 | `Config::new()` removes `XRPL_SEED` and `XRPL_MNEMONIC` |
+| S-003 | Config file credential permissions | R-001 | Unix warn on group/world read |
+| S-010 | Plaintext credential retained on `Config` | R-001 | Cleared in `Config::new()` |
+| S-011 | CLI credentials visible in `ps` | R-001 | Prefer env/file; startup warning |
 | S-006 | `Tui::drop` panic / raw mode | R-005, I-8 | `eprintln!` on `exit()` failure |
 | S-009 | `--self-uninstall` data deletion | — | User-driven; not an R entry |
 | S-004, S-005, S-007, S-008 | R-007 (merge), — | See table below |
@@ -21,7 +23,27 @@ Generated: 2026-05-01 | Scope: Full codebase (`src/`, `install.sh`, `docs/`)
 | S-015 | R-014 | Plaintext RPC with signing seed |
 | S-016 | R-015 | Issuer and financial input validation |
 
-Risks without a matching S entry (e.g. R-006 mainnet guard bypass, R-008 RPC 429) are tracked only in [`agent/RISK_REGISTER.md`](agent/RISK_REGISTER.md) and [`test.md`](test.md) / [`agent/RISK_TO_TESTS.md`](agent/RISK_TO_TESTS.md).
+Risks without a matching S entry (e.g. R-006 mainnet guard bypass, R-008 RPC 429) are tracked in the R-xxx table below and [`test.md`](test.md).
+
+## R-xxx implementation risks
+
+| R-ID | S-ID (if any) | One-line |
+|------|---------------|----------|
+| R-001 | S-001, S-002, S-010, S-011 | Seed resolution / `secret_seed` vs cleared `seed` |
+| R-002 | — | Submit errors dropped on closed `action_tx` |
+| R-003 | — | `ArcValue` shared JSON mutation |
+| R-004 | — | Unbounded channel growth |
+| R-005 | S-006 | TUI Drop / terminal raw mode |
+| R-006 | — | Mainnet / **Xahau mainnet** `--yes` guard bypass |
+| R-007 | — | Config merge precedence per-key |
+| R-008 | — | RPC 429 / backoff |
+| R-009 | — | Submit hash not verified |
+| R-010 | — | Duplicate poll on ledger close |
+| R-011 | — | Poll `RpcClient::connect` “instant death” (**accepted / non-issue**) |
+| R-012 | S-012, S-013 | NFT URI DNS SSRF / metadata recursion (**mitigated**) |
+| R-013 | S-014 | Concurrent wallet submissions (**mitigated in poll task**) |
+| R-014 | S-015 | Insecure RPC with signing seed (**mitigated**) |
+| R-015 | S-016 | Unvalidated issuer and financial numeric inputs (**mitigated**) |
 
 ## 2026-08-06 再レビュー対応
 

@@ -1,62 +1,54 @@
-# Transaction detail overlay (`tx_detail/`)
+# tx-detail.md — TX detail parser pipeline
 
-Human-oriented guide for the scrollable TX detail popup. Structural rules (ArcValue immutability, component boundaries) live in [`agent/DATA_MODEL.md`](agent/DATA_MODEL.md) and [`agent/INVARIANTS.md`](agent/INVARIANTS.md).
+**Behavioral contract** for the unified transaction-detail overlay. **Overlay keys and scroll UX:** [`DESIGN.md`](../DESIGN.md) § TX detail overlay.
+
+| Concern | SSOT |
+|---------|------|
+| Parser registry, fallback rules | This file + `src/components/shared/tx_detail/` |
+| Open/close keys, scroll while open | [`DESIGN.md`](../DESIGN.md) |
+| `Action::TxDetailToggle` wiring | [`architecture.md`](architecture.md) §5.2, `src/app.rs` |
 
 ## Entry points
 
 | Symbol | File | Role |
 |--------|------|------|
-| `TxDetailState` | `src/components/shared/tx_detail/mod.rs` | Visibility, scroll, line cache |
-| `render_tx_detail` | same | Layout, popup chrome, scrollbar |
-| `detail_lines_for` | same | Build `Vec<Line>` from tx + meta JSON |
-| `TX_DETAIL_PARSERS` / `typed_detail_lines` | `parsers.rs` | Registration table + dispatch (single source) |
-| `*_detail_lines` (×29) | `parsers.rs` | Per-`TransactionType` typed sections |
-| `push_common_lines`, `format_value` | `format.rs` | Shared formatting helpers |
+| `TxDetailState` | `tx_detail/mod.rs` | Overlay visibility, scroll offset, line cache |
+| `render_tx_detail` | `tx_detail/mod.rs` | Draw centered popup |
+| `typed_detail_lines` | `tx_detail/parsers.rs` | Dispatch by `TransactionType` |
+| `detail_lines_for` | `tx_detail/mod.rs` | Fallback for unknown fields |
+| `TX_DETAIL_PARSERS` | `tx_detail/parsers.rs` | Static registry (29 types) |
 
-Panels that open the overlay pass `ArcValue` tx/meta JSON from row types (`TxRow`, `OfferRow`, etc.). See [`design.md`](design.md) § TUI panels.
+Any table row carrying `raw_json: ArcValue` (tx + meta) can open the overlay via `TxDetailToggle` when focused.
 
 ## Pipeline
 
-```mermaid
-flowchart TD
-  A[User Enter on table row] --> B[TxDetailState::open]
-  B --> C{cache hit?}
-  C -->|no| D[detail_lines_for]
-  D --> E[Header: hash, result, ledger, date]
-  E --> F{TransactionType match}
-  F -->|known| G[parsers::*_detail_lines]
-  F -->|unknown| H[build_detail_lines fallback]
-  G --> I[Optional remaining fields]
-  H --> I
-  I --> J[to_static_lines + cache]
-  C -->|yes| K[render_tx_detail]
-  J --> K
-```
+1. **Header** — `Result` always; `hash` / `ledger` / `date` when present in JSON.
+2. **Typed branch** — `typed_detail_lines` looks up `TransactionType` in `TX_DETAIL_PARSERS`; parser returns formatted `Line` list or `None`.
+3. **Fallback** — `detail_lines_for` walks known field names; unlisted keys via `format_value`. `Amount2` is known for AMM typed sections (not duplicated under “Other fields”).
+4. **Cache** — First open per TX builds `cached_lines`; redraw reuses cache; scroll only moves paragraph offset. New TX invalidates cache.
 
-1. **Header** — Always shown from raw JSON (`hash`, `TransactionResult`, `ledger_index`, `date`).
-2. **Typed branch** — `typed_detail_lines` looks up `TransactionType` in `TX_DETAIL_PARSERS` and calls the parser. Returns `None` → skip to fallback.
-3. **Fallback** — `build_detail_lines` walks known field names, then dumps unlisted keys via `format_value`.
-4. **Cache** — First open per TX builds `cached_lines`; scroll only adjusts offset (see [`agent/DESIGN_ISSUES.md`](agent/DESIGN_ISSUES.md) Issue 9 note).
+## Overlay guard (`TxDetailState::handle_action`)
 
-## Supported transaction types (29)
+- While **closed**: panels handle `TxDetailToggle` with pre-resolved `(tx, meta)` from selected row.
+- While **open**: consumes `Quit`, data refresh, `Tick`, and navigation actions so background tables do not change selection under the popup.
+- `SelectNext` / `FocusNext` (and prev) scroll detail text with saturating arithmetic.
 
-Dispatch is via `TX_DETAIL_PARSERS` in `parsers.rs` (one row per type):
+## Registered types (29)
 
 `Payment`, `AccountSet`, `TrustSet`, `OfferCreate`, `OfferCancel`, `NFTokenMint`, `NFTokenBurn`, `NFTokenCreateOffer`, `NFTokenAcceptOffer`, `NFTokenCancelOffer`, `CheckCreate`, `CheckCash`, `CheckCancel`, `SignerListSet`, `SetRegularKey`, `DepositPreauth`, `EscrowCreate`, `EscrowFinish`, `EscrowCancel`, `PaymentChannelCreate`, `PaymentChannelFund`, `PaymentChannelClaim`, `AMMCreate`, `AMMDeposit`, `AMMWithdraw`, `AMMVote`, `AMMBid`, `AMMDelete`, `TicketCreate`.
 
-**Parser count:** 29 — keep in sync with [`agent/DESIGN_ISSUES.md`](agent/DESIGN_ISSUES.md) Issue 9 and the match arm in `mod.rs` when adding types.
+Six AMM variants share `amm_detail_lines` (ordered fields, explicit `null`, `TradingFee` formatting on create/vote).
 
-## Changing this subsystem
+## Adding a parser
 
-| Change | Touch |
-|--------|--------|
-| New `TransactionType` | `parsers.rs` (new `*_detail_lines` + `TX_DETAIL_PARSERS` row), this list, Issue 9 |
-| New shared field label | `format.rs` or `push_common_lines` |
-| Performance | `TxDetailState::cached_lines` only — avoid per-frame `detail_lines_for` without cache |
-| Cross-module amount formatting | Note `fmt_xrpl_amount` → `client::drops_to_xrp` (graph INFERRED edge) |
+1. Implement `fn foo_detail_lines(tx: &Value) -> Option<Vec<Line>>` in `parsers.rs` (prefer `typed_detail` helper).
+2. Add one row to `TX_DETAIL_PARSERS`.
+3. Add `/// TC-xxx` test in `parsers.rs` or `registry_tests` when behavior is user-visible or regression-prone.
+4. Update this file’s type list if the registry grows.
 
-Run `graphify update .` after edits under `src/components/shared/tx_detail/`.
+No `DESIGN.md` change unless overlay interaction changes.
 
-## graphify hub nodes
+## Tests
 
-High-centrality symbols (see [`graphify-out/GRAPH_REPORT.md`](../graphify-out/GRAPH_REPORT.md) § God Nodes): `detail_lines_for`, `build_detail_lines`, `push_common_lines`, `dim_style`, `accent_style`, `WalletPanel`.
+- **TC-094** — registry has no duplicates; required types dispatch.
+- Panel integration — tables open overlay on `Enter` (see `docs/test.md` wallet/history rows).

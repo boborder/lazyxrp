@@ -1,5 +1,7 @@
 # references.md
 
+**Role:** 参考文献・サンプルコード（外部ドキュメントとプロジェクト内リンク集）。
+
 ## Rust / Async
 
 - [The Rust Programming Language](https://doc.rust-lang.org/book/)
@@ -16,15 +18,17 @@
 
 ## Flare / FAssets
 
+- [Flare network RPC endpoints](https://dev.flare.network/network/overview)
+- [FTSOv2](https://dev.flare.network/ftso/overview)
 - [FAssets operational parameters](https://dev.flare.network/fassets/operational-parameters)
 - [Direct minting (tag)](https://dev.flare.network/fassets/developer-guides/fassets-direct-minting-tag)
 - [Direct minting (memo)](https://dev.flare.network/fassets/developer-guides/fassets-direct-minting)
 - [Smart Accounts overview](https://dev.flare.network/smart-accounts/overview)
-- **Repo snapshot:** [`external/fassets-direct-mint-mainnet.md`](external/fassets-direct-mint-mainnet.md) (Tag + Memo + Smart Account, Mainnet checklist)
-- **Repo snapshot:** [`external/fassets-direct-mint-monitoring.md`](external/fassets-direct-mint-monitoring.md) (mint-job states, events, SLAs, runbook)
+- **Local snapshot:** Flare skill — [`.agents/skills/flare-fassets/`](../.agents/skills/flare-fassets/SKILL.md) (Mainnet checklist, mint-job monitoring runbook)
 
 ## XRPL
 
+- [Xahau network](https://xahau.network/)
 - [XRP Ledger Documentation](https://xrpl.org/docs/)
 - [xrpl-rust crate docs](https://docs.rs/xrpl-rust/latest/xrpl/)
 - [XRPL WebSocket API Reference](https://xrpl.org/docs/references/http-websocket-apis/public-api-methods/)
@@ -48,7 +52,7 @@
 ## このプロジェクト内の関連ドキュメント
 
 - [`docs/requirements.md`](requirements.md)
-- [`docs/design.md`](design.md)
+- [`docs/architecture.md`](architecture.md)
 - [`docs/tech.md`](tech.md)
 - [`docs/test.md`](test.md)
 - [`docs/directory.md`](directory.md)

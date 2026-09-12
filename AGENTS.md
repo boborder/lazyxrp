@@ -7,11 +7,25 @@
 | Topic | Command / note |
 |---|---|
 | Rust pin | `rust-toolchain.toml` + `Cargo.toml` `rust-version` (see `docs/tech.md`) |
-| Domain skills | [`.agents/skills/xrpl-rust/`](.agents/skills/xrpl-rust/SKILL.md) · [`.agents/skills/ratatui-tui/`](.agents/skills/ratatui-tui/SKILL.md) |
+| Domain skills | [`.agents/skills/xrpl-rust/`](.agents/skills/xrpl-rust/SKILL.md) · Flare: `flare-general` / `flare-ftso` / `flare-fassets` |
+| Human docs | [`README.md`](README.md) § Documentation — **do not duplicate that index here** |
 | Verify | `cargo check` (minimum after code changes) |
 | Format | `cargo fmt` |
 | Install | `./install.sh` or `mise run install` (see `.mise.toml`) |
 | Tests | [`docs/test.md`](docs/test.md) |
+
+## Optional: OpenSpec
+
+`openspec/` is **optional** agent change-tracking. It may reference `docs/`; **`docs/` never links to `openspec/`** (one-way).
+
+| Use | Path |
+|-----|------|
+| Active change checklists | `openspec/changes/<name>/tasks.md` |
+| Archived changes | `openspec/changes/archive/` |
+| Agent runtime contracts | `openspec/specs/<cap>/spec.md` |
+| Hub config | `openspec/config.yaml` |
+
+When shipping behavior: update `docs/` (`roadmap.md`, `architecture.md`, `test.md`, …) in the same change. If OpenSpec was used: `openspec archive <name> -y`.
 
 ## Execution contract
 
@@ -27,13 +41,10 @@ If assumptions are unavoidable, state them explicitly before proceeding.
 
 - Components never call `xrpl/` clients/`poll`/`app` — `Action` flow only.
 - Never sign/submit without simulate; mainnet writes require `--yes`.
-- Use `secret_seed` only (cleared `seed` is invalid). Never mutate shared `ArcValue` JSON.
+- Use `SigningCredential` via `credential_from_secrets` (family seed **or** BIP39 mnemonic, not both). Cleared plaintext `seed`/`mnemonic` fields are invalid. Never mutate shared `ArcValue` JSON.
 - No unrelated refactors; do not remove features to bypass errors; do not contradict `docs/`.
 - Do not skip `cargo check` after implementation.
 
 ## Detailed instructions
 
-- [Architecture](docs/agent/ARCHITECTURE.md) · [Invariants](docs/agent/INVARIANTS.md) · [Data model](docs/agent/DATA_MODEL.md)
-- [Dependency rules](docs/agent/DEPENDENCY_RULES.md) · [Change guide](docs/agent/CHANGE_GUIDE.md) · [Risk register](docs/agent/RISK_REGISTER.md)
-- [Repo inventory](docs/agent/REPO_INVENTORY.md) · [Design issues](docs/agent/DESIGN_ISSUES.md) · [ADR 0001](docs/agent/adr/0001-observed-architecture.md)
 - Graphify: [`graphify-out/GRAPH_REPORT.md`](graphify-out/GRAPH_REPORT.md) — if `HEAD` differs or `graphify-out/needs_update` exists, run `graphify update .` before structure queries.

@@ -1,5 +1,7 @@
 # directory.md
 
+**Role:** ディレクトリ構成・命名規則（`src/` モジュール責務と `docs/` 階層の索引）。
+
 ## 1. ディレクトリ構成
 
 ```txt
@@ -9,6 +11,7 @@ lazyxrp/
 ├── Cargo.lock
 ├── build.rs
 ├── README.md
+├── DESIGN.md              # UI/UX SSOT (keys, layout, theme, modals)
 ├── config.json5
 ├── .env.example
 ├── install.sh
@@ -33,17 +36,16 @@ lazyxrp/
 │   ├── xrpl/
 │   │   ├── mod.rs
 │   │   ├── address.rs
-│   │   ├── backoff.rs
 │   │   ├── client.rs
 │   │   ├── cli_exec.rs
 │   │   ├── dunl.rs
 │   │   ├── format.rs
-│   │   ├── json_util.rs
 │   │   ├── parse.rs
 │   │   ├── nft_image.rs          # NFT metadata/image fetch and limits
 │   │   ├── poll.rs
 │   │   ├── toml.rs
 │   │   ├── types.rs
+│   │   ├── util.rs               # JSON path helpers + reconnect backoff
 │   │   └── ws.rs
 │   └── components/
 │       ├── mod.rs
@@ -54,6 +56,7 @@ lazyxrp/
 │       │   ├── book.rs
 │       │   ├── combined_oracle.rs
 │       │   ├── flare_ftso.rs
+│       │   ├── flare_wallet.rs
 │       │   ├── fxrp_direct_mint.rs
 │       │   ├── ledger_objects.rs
 │       │   ├── oracle.rs
@@ -61,7 +64,6 @@ lazyxrp/
 │       │   ├── server.rs
 │       │   ├── server_detail.rs
 │       │   ├── server_dunl.rs
-│       │   ├── server_metrics.rs
 │       │   ├── trust_lines.rs
 │       │   ├── tx_history.rs
 │       │   ├── wallet.rs
@@ -89,27 +91,20 @@ lazyxrp/
 │               ├── mod.rs
 │               ├── format.rs
 │               └── parsers.rs
-└── docs/
-    ├── README.md          # ドキュメント導線と一覧
-    ├── tx-detail.md       # TX 詳細オーバーレイ
-    ├── graphify.md        # graphify ナレッジグラフの使い方
-    ├── RELEASE.md         # リリース / auto-tag
-    ├── external/          # 外部システムのスナップショット（FAssets 等）
-    ├── architecture/
-    │   ├── c4-context.md
-    │   └── c4-containers.md
-    ├── agent/             # AGENTS.md からリンクする運用規約
-    ├── requirements.md
-    ├── design.md
+├── docs/
+    ├── architecture.md    # システム・行動設計（ネットワーク・設定・データフロー）
+    ├── tx-detail.md       # TX detail パーサー契約（オーバーレイキーは DESIGN.md）
+    ├── roadmap.md         # マイルストーン・バックログ
+    ├── requirements.md    # FR/NFR（何をするか）
     ├── tech.md
-    ├── test.md
-    ├── tasks.md
+    ├── test.md            # TC カタログ（requirements / architecture へトレース）
     ├── directory.md
     ├── references.md
     ├── security.md
     ├── problems.md
-    └── benchmark.md
+└── .agents/skills/         # domain skills (xrpl-rust, flare-*)
 ```
+
 
 ## 2. ルート直下ファイル
 
@@ -131,16 +126,16 @@ lazyxrp/
 - `bin/rp.rs`: `rp` バイナリの薄いエントリ（`lazyxrp::run_rp()`）。`cargo install` / リリース tarball で常に付く。
 - `uninstall.rs`: `lazyxrp --self-uninstall` — 実行中バイナリ・同階層の `{name}.bak`・同階層の `rp`（実体/symlink）、`Config` で解決した config/data ディレクトリの削除（`cargo uninstall` は呼ばない）。
 - `app.rs`: TUI アプリ本体。イベントループ、コンポーネント管理、バックグラウンド処理起動を担当。
-- `xrpl/`: XRPL 連携一式。`mod.rs` は再エクスポートのみ。`address.rs`（classic/X-Address 解決・ネットワーク一致検査）、`client.rs`（`RpcClient` façade・JSON-RPC / HTTPS dUNL fetch・`tx` lookup）、`dunl.rs`（XRPLF dUNL JSON・manifest ST）、`format.rs`（金額・path・ripple time 整形、`xrp_to_drops` / `path_find_*`）、`parse.rs`（JSON-RPC レスポンスパーサ・book helper）、`json_util.rs`（JSON パスヘルパ）、`types.rs`（行データ型・`BookPair`・`PollContext` / `PollCommand`）、`poll.rs`（定期ポーリング・ウォレット送信パス）、`ws.rs`（WebSocket）、`cli_exec.rs`（非 TUI の `execute_cli_command` / `execute_rp_lookup`）、`toml.rs`（`xrp-ledger.toml` パーサ）、`backoff.rs`（再接続間隔）。
+- `xrpl/`: XRPL 連携一式。`mod.rs` は再エクスポートのみ。`address.rs`（classic/X-Address 解決・ネットワーク一致検査）、`client.rs`（`RpcClient` façade・JSON-RPC / HTTPS dUNL fetch・`tx` lookup）、`dunl.rs`（XRPLF dUNL JSON・manifest ST）、`format.rs`（金額・path・ripple time 整形、`xrp_to_drops` / `hex_to_ascii` / `path_find_*`）、`parse.rs`（JSON-RPC レスポンスパーサ・book helper）、`util.rs`（JSON パスヘルパ + 再接続バックオフ）、`types.rs`（行データ型・`BookPair`・`PollContext` / `PollCommand`）、`poll.rs`（定期ポーリング・ウォレット送信パス）、`ws.rs`（WebSocket）、`cli_exec.rs`（非 TUI の `execute_cli_command` / `execute_rp_lookup`）、`toml.rs`（`xrp-ledger.toml` パーサ）。
 - `cli.rs`: コマンドライン引数とサブコマンド定義（`Cli`）および `rp` 用 `RpCli`。
-- `action.rs`: アプリ内部で流す `Action` 定義。
+- `action.rs`: アプリ内部で流す `Action` とキーバインド用 `Mode`。
 - `config.rs`: 既定値 + 設定ファイルのロードとマージ、`XRPL_*` 環境変数（シード・RPC/WS・ネットワーク）の反映。
 - `components/mod.rs`: UI コンポーネント共通トレイトとサブモジュール統合。
 - `tui.rs`: TUI 基盤（描画・イベント・端末管理）の共通処理。
 - `logging.rs`: ログ初期化処理。
-- `errors.rs`: エラー型と関連ユーティリティ。
-- `network.rs`: `Network` 列挙型（mainnet / testnet / devnet）とエンドポイント定義。
-- `signing.rs`: `SigningConfig`（署名シード管理）、`prompt_mainnet_confirmation`、Payment 向け `create_and_sign_payment`（submit用blob生成） / `create_unsigned_payment_json`。
+- `errors.rs`: `color-eyre` の panic/eyre hook 導入（TUI 終了クリーンアップ付き）。
+- `network.rs`: `Network` 列挙型（mainnet / testnet / devnet / xahau / xahau-test）とエンドポイント定義、`next_network()` セッション切替。
+- `signing.rs`: `SigningCredential`（family seed / BIP39 mnemonic 管理）、`prompt_mainnet_confirmation`、Payment 向け `create_and_sign_payment`（submit用blob生成） / `build_payment_tx_json_for_simulate`。
 
 ## 4. `src/components/panels/` 配下の責務
 
@@ -149,7 +144,7 @@ lazyxrp/
 - `book.rs`: オーダーブック表示パネル。
 - `path_find.rs`: `ripple_path_find` ルート一覧（送信額・ホップ・経路、安い順）。
 - `amm.rs`: AMM プール詳細パネル。
-- `oracle.rs` / `flare_ftso.rs` / `fxrp_direct_mint.rs` / `combined_oracle.rs`: XRPL oracle 集約・Flare FTSOv2・FXRP Direct Mint 読み取り・Overview 用統合表示。
+- `oracle.rs` / `flare_ftso.rs` / `fxrp_direct_mint.rs` / `flare_wallet.rs` / `combined_oracle.rs`: XRPL oracle 集約・Flare FTSOv2・FXRP Direct Mint 読み取り・Overview 用統合表示。
 
 - `trust_lines.rs`: TrustLine 一覧パネル（Table + Scrollbar、残高で色分け）。
 - `tx_history.rs`: TX 履歴パネル（Table + Scrollbar、tesSUCCESS で色分け）。
@@ -158,7 +153,7 @@ lazyxrp/
 
 ## 5. `src/components/tabs/` 配下の責務
 
-- `overview.rs`: Tab 0 — Server + Combined Oracle/FTSO/FXRP。
+- `overview.rs`: Tab 0 — Server + Combined Oracle/FTSO/FXRP + Flare wallet read panel。
 - `account_wallet.rs`: Tab 1 — Wallet（上）+ TxHistory（下）。seed 未設定時は Account パネル。
 - `market_oracle.rs`: Tab 2 — Book / Path-Find / AMM / Trust lines / Flare FTSO / XRPL Oracle。
 - `assets.rs`: Tab 3 — NFT + ledger objects（PayChannel / Escrow 含む）。
@@ -175,21 +170,49 @@ lazyxrp/
 - `theme.rs`: 共通テーマ・色定義（`ACCENT` に加え `SECONDARY` でハッシュ列などを区別）。
 - `tx_detail/`: トランザクション詳細オーバーレイ（`TxDetailState` + `render_tx_detail`）— 全 XRPL トランザクション型をパースしてポップアップ表示。
   - `mod.rs`: 状態管理 (`TxDetailState`) とレンダリング (`render_tx_detail`, `detail_lines_for`)。
-  - `format.rs`: 共通フォーマット関数（`fmt_xrpl_amount`, `push_common_lines`, `format_value`, `hex_to_ascii`, `fmt_currency`）。
+  - `format.rs`: 共通フォーマット関数（`fmt_xrpl_amount`, `push_common_lines`, `format_value`, `fmt_currency`）。URI hex は `xrpl::hex_to_ascii`。
   - `parsers.rs`: 29 種類の XRPL トランザクション型をパースする `*_detail_lines` 関数群。
-- `widgets.rs`: 共通 UI ヘルパー（`titled_block`、`tx_table_row`、`render_tx_scroll_table`、`spinner`）。
+- `widgets.rs`: 共通 UI ヘルパー（`titled_block`、`titled_block_with_count`、`tx_table`、`spinner`）。履歴テーブルは更新時に構築し、`render_selectable_table` で再利用する。
 
 ## 7. `docs/` 配下の責務
 
-- `README.md`: 各ドキュメントへの導線と一覧。エージェント向けルールはルート `AGENTS.md` に集約済み。
-- `architecture/`: C4 モデル（`c4-context.md`, `c4-containers.md`）。高レベル境界とコンテナ分解。
-- `requirements.md`: 要件定義（機能/非機能）。
-- `design.md`: アーキテクチャ設計とデータフロー。
-- `tech.md`: 技術スタックと依存バージョン。
-- `test.md`: テスト方針、TC-ID 付きケースリスト、TDD ロードマップ、実行コマンド。
-- `tasks.md`: 現在のタスク状態と優先度。
-- `directory.md`: このファイル。構成と責務の索引。
-- `references.md`: 参照先リンクや補助情報の一覧。
-- `security.md`: セキュリティ設計と脅威モデル、対策の一覧。
-- `problems.md`: 既知の問題と対処方針。
-- `benchmark.md`: ベンチマークスuiteの使い方、計測項目、CI統合方法。
+ドキュメント階層（ルート [`DESIGN.md`](../DESIGN.md) は `docs/` 外）:
+
+| File | Layer | Contents |
+|------|-------|----------|
+| `requirements.md` | What | FR/NFR ids |
+| `architecture.md` | How (system) | Network, config precedence, data flow, behavioral contracts |
+| `../DESIGN.md` | Look & feel | Keys, layout splits, theme, modals, loading |
+| `tx-detail.md` | How (parser) | TX detail overlay parser registry & pipeline |
+| `test.md` | Verify | TC catalog → traces to requirements + architecture |
+| `roadmap.md` | When | Milestones, cross-cutting backlog |
+| `tech.md` | Stack | Dependencies, versions, dev commands |
+| `directory.md` | Index | This file |
+| `references.md` | Links | External references |
+| `security.md` | Audit | S-xxx / R-xxx, threat model |
+| `problems.md` | Debt | P-xxx known issues |
+
+Human doc index: root `README.md` § Documentation. This tree is self-contained for product readers.
+
+## 8. Build / test commands and entry points
+
+| Command | Purpose |
+|---------|---------|
+| `cargo check` | Minimum verification after code changes |
+| `cargo fmt` | Format code |
+| `cargo test` | Run all tests |
+| `cargo build --release` | Release build |
+| `./install.sh` or `mise run install` | Install binary |
+| `mise run bench` | Full benchmark suite (~10 min) |
+| `mise run bench-fast` | Quick benchmarks |
+
+| Entry | File | Description |
+|-------|------|-------------|
+| `main()` | `src/main.rs` | Thin `lazyxrp` binary → `lazyxrp::run()`. |
+| `main()` | `src/bin/rp.rs` | Thin `rp` binary → `lazyxrp::run_rp()` (lookup-only). |
+| `run()` / `run_rp()` | `src/lib.rs` | Shared entry: TUI/CLI vs tx/account lookup. |
+| `Cli` / `RpCli` | `src/cli.rs` | Clap-derived CLIs. `Cli`: TUI flags + `-x` script mode. |
+| `App::run()` | `src/app.rs` | TUI main loop: event handling → action processing → dirty-flagged render (`needs_draw`). |
+| `execute_cli_command()` / `execute_rp_lookup()` | `src/xrpl/cli_exec.rs` | Non-TUI CLI dispatchers. |
+| `Config::new()` | `src/config.rs` | Config loading: built-in defaults → user config.toml → env vars. |
+| `build.rs` | `build.rs` | Build-time metadata (vergen-gix for commit hash, date). |
