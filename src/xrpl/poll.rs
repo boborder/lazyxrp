@@ -1404,38 +1404,6 @@ async fn submit_fxrp_execute_direct_mint(
     };
 }
 
-fn build_poll_batch<'b>(
-    rpc: &'b RpcClient,
-    watch_address: &'b str,
-    book_pair: &'b BookPair,
-    oracles: &'b [OracleId],
-    oracle_pairs: &'b [crate::xrpl::OraclePricePair],
-    flare_rpc_url: Option<&'b str>,
-    flare_feeds: &'b [String],
-    flare_display: crate::config::FlareDisplay,
-    flare_wallet_address: Option<&'b str>,
-    flare_fassets_execute: bool,
-    flare_evm_key_env: &'b str,
-    skip_account_tx: bool,
-    active_tab: usize,
-) -> PollBatchInputs<'b> {
-    PollBatchInputs {
-        rpc,
-        watch_address,
-        book_pair,
-        oracles,
-        oracle_pairs,
-        flare_rpc_url,
-        flare_feeds,
-        flare_display,
-        flare_wallet_address,
-        flare_fassets_execute,
-        flare_evm_key_env,
-        skip_account_tx,
-        active_tab,
-    }
-}
-
 async fn run_scheduled_poll<'a>(
     rpc: &'a RpcClient,
     tab_watch: &tokio::sync::watch::Receiver<usize>,
@@ -1581,21 +1549,21 @@ async fn drive_poll_loop(
                 last_poll = run_scheduled_poll(
                     rpc,
                     &tab_watch,
-                    &|active_tab| build_poll_batch(
+                    &|active_tab| PollBatchInputs {
                         rpc,
-                        &watch_address,
-                        &book_pair,
-                        &oracles,
-                        &oracle_pairs,
-                        flare_rpc_url.as_deref(),
-                        &flare_feeds,
+                        watch_address: &watch_address,
+                        book_pair: &book_pair,
+                        oracles: &oracles,
+                        oracle_pairs: &oracle_pairs,
+                        flare_rpc_url: flare_rpc_url.as_deref(),
+                        flare_feeds: &flare_feeds,
                         flare_display,
-                        flare_wallet_address.as_deref(),
+                        flare_wallet_address: flare_wallet_address.as_deref(),
                         flare_fassets_execute,
-                        &flare_evm_key_env,
-                        seed_address.is_some(),
+                        flare_evm_key_env: &flare_evm_key_env,
+                        skip_account_tx: seed_address.is_some(),
                         active_tab,
-                    ),
+                    },
                     seed_address.as_deref(),
                     &action_tx,
                     &mut backoff_secs,
@@ -1612,21 +1580,21 @@ async fn drive_poll_loop(
                 last_poll = run_scheduled_poll(
                     rpc,
                     &tab_watch,
-                    &|active_tab| build_poll_batch(
+                    &|active_tab| PollBatchInputs {
                         rpc,
-                        &watch_address,
-                        &book_pair,
-                        &oracles,
-                        &oracle_pairs,
-                        flare_rpc_url.as_deref(),
-                        &flare_feeds,
+                        watch_address: &watch_address,
+                        book_pair: &book_pair,
+                        oracles: &oracles,
+                        oracle_pairs: &oracle_pairs,
+                        flare_rpc_url: flare_rpc_url.as_deref(),
+                        flare_feeds: &flare_feeds,
                         flare_display,
-                        flare_wallet_address.as_deref(),
+                        flare_wallet_address: flare_wallet_address.as_deref(),
                         flare_fassets_execute,
-                        &flare_evm_key_env,
-                        seed_address.is_some(),
+                        flare_evm_key_env: &flare_evm_key_env,
+                        skip_account_tx: seed_address.is_some(),
                         active_tab,
-                    ),
+                    },
                     seed_address.as_deref(),
                     &action_tx,
                     &mut backoff_secs,
@@ -1684,11 +1652,11 @@ async fn drive_poll_loop(
                         Action::XrplTrustLines,
                     ),
                     PollCommand::TxHistory => {
-                        dispatch_account_tx(&&*rpc_cell.read().await, &watch_address, None, false, &action_tx)
+                        dispatch_account_tx(&*rpc_cell.read().await, &watch_address, None, false, &action_tx)
                             .await;
                     }
                     PollCommand::TxHistoryMore(marker) => {
-                        dispatch_account_tx(&&*rpc_cell.read().await, &watch_address, marker, true, &action_tx)
+                        dispatch_account_tx(&*rpc_cell.read().await, &watch_address, marker, true, &action_tx)
                             .await;
                     }
                     PollCommand::LedgerObjects => dispatch_timed(
@@ -1699,15 +1667,15 @@ async fn drive_poll_loop(
                     ),
                     PollCommand::AccountSetSubmit(params) => {
                         let _guard = submit_lock.lock().await;
-                        submit_account_set_transaction(&&*rpc_cell.read().await, &network, params, &action_tx, signing_credential).await;
+                        submit_account_set_transaction(&*rpc_cell.read().await, &network, params, &action_tx, signing_credential).await;
                     }
                     PollCommand::PaymentSubmit(params) => {
                         let _guard = submit_lock.lock().await;
-                        submit_payment_transaction(&&*rpc_cell.read().await, &network, params, &action_tx, signing_credential).await;
+                        submit_payment_transaction(&*rpc_cell.read().await, &network, params, &action_tx, signing_credential).await;
                     }
                     PollCommand::FxrpDirectMintPayment(params) => {
                         let _guard = submit_lock.lock().await;
-                        submit_fxrp_direct_mint_payment(&&*rpc_cell.read().await, &network, params, &action_tx, signing_credential).await;
+                        submit_fxrp_direct_mint_payment(&*rpc_cell.read().await, &network, params, &action_tx, signing_credential).await;
                     }
                     PollCommand::FxrpExecuteDirectMint(params) => {
                         submit_fxrp_execute_direct_mint(
@@ -1721,15 +1689,15 @@ async fn drive_poll_loop(
                     }
                     PollCommand::SetRegularKeySubmit(params) => {
                         let _guard = submit_lock.lock().await;
-                        submit_set_regular_key_transaction(&&*rpc_cell.read().await, &network, params, &action_tx, signing_credential).await;
+                        submit_set_regular_key_transaction(&*rpc_cell.read().await, &network, params, &action_tx, signing_credential).await;
                     }
                     PollCommand::OfferCreateSubmit(params) => {
                         let _guard = submit_lock.lock().await;
-                        submit_offer_create_transaction(&&*rpc_cell.read().await, &network, params, &action_tx, signing_credential).await;
+                        submit_offer_create_transaction(&*rpc_cell.read().await, &network, params, &action_tx, signing_credential).await;
                     }
                     PollCommand::TrustSetSubmit(params) => {
                         let _guard = submit_lock.lock().await;
-                        submit_trust_set_transaction(&&*rpc_cell.read().await, &network, params, &action_tx, signing_credential).await;
+                        submit_trust_set_transaction(&*rpc_cell.read().await, &network, params, &action_tx, signing_credential).await;
                     }
                     PollCommand::WalletPropose(key_type) => {
                         match crate::signing::propose_wallet_local(&key_type) {

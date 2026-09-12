@@ -40,7 +40,7 @@ impl FlareNetwork {
     #[must_use]
     pub fn rpc_url(&self) -> &'static str {
         match self {
-            Self::Flare => "https://flare-api.flare.network/ext/C/rpc",
+            Self::Flare => crate::flare::DEFAULT_FLARE_RPC,
             Self::Songbird => "https://songbird-api.flare.network/ext/C/rpc",
             Self::Coston2 => "https://coston2-api.flare.network/ext/C/rpc",
         }
