@@ -6,6 +6,12 @@ on:
       - main
   pull_request:
 
+# Fast main pushes (e.g. version bump followed by Cargo.lock sync) queue
+# redundant full test matrices; supersede the older run on the same ref.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     name: Test Suite
