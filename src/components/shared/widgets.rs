@@ -6,16 +6,12 @@ use ratatui::{
 };
 
 use crate::{
-    components::shared::{
-        fmt,
-        selectable_table::{SelectableTableState, render_selectable_table},
-        theme,
-    },
+    components::shared::{fmt, theme},
     xrpl::TxRow,
 };
 
 /// One table row for [`TxRow`] with per-column colors (hash / dir / type / ledger / result).
-pub fn tx_table_row(t: &TxRow) -> Row<'_> {
+fn tx_table_row(t: &TxRow) -> Row<'static> {
     let result_style = if t.result == "tesSUCCESS" {
         theme::success_style()
     } else {
@@ -29,29 +25,23 @@ pub fn tx_table_row(t: &TxRow) -> Row<'_> {
     let hash_cell = if t.hash.len() > 16 {
         Cell::from(format!("{}…", &t.hash[..16])).style(theme::secondary_style())
     } else {
-        Cell::from(t.hash.as_str()).style(theme::secondary_style())
+        Cell::from(t.hash.clone()).style(theme::secondary_style())
     };
     Row::new(vec![
         hash_cell,
-        Cell::from(t.direction.as_str()).style(dir_style),
-        Cell::from(t.tx_type.as_str()).style(theme::accent_style()),
+        Cell::from(t.direction.clone()).style(dir_style),
+        Cell::from(t.tx_type.clone()).style(theme::accent_style()),
         Cell::from(fmt::group_digits_u64(u64::from(t.ledger_index))).style(theme::dim_style()),
-        Cell::from(t.result.as_str()).style(result_style),
+        Cell::from(t.result.clone()).style(result_style),
     ])
 }
 
-/// Recent-tx / Tx History table with header, column layout, highlight, and vertical scrollbar.
-pub fn render_tx_scroll_table(
-    frame: &mut Frame,
-    area: Rect,
-    txs: &[TxRow],
-    table_state: &mut SelectableTableState,
-    is_focused: bool,
-) {
+/// Build owned transaction rows once per history/filter change.
+pub fn tx_table<'a>(txs: impl IntoIterator<Item = &'a TxRow>) -> Table<'static> {
     let header =
         Row::new(vec!["Hash", "Dir", "Type", "Ledger", "Result"]).style(theme::header_row_style());
-    let rows = txs.iter().map(tx_table_row);
-    let table = Table::new(
+    let rows = txs.into_iter().map(tx_table_row);
+    Table::new(
         rows,
         [
             Constraint::Length(19),
@@ -62,9 +52,7 @@ pub fn render_tx_scroll_table(
         ],
     )
     .header(header)
-    .column_spacing(1);
-
-    render_selectable_table(frame, area, table, table_state, is_focused);
+    .column_spacing(1)
 }
 
 pub fn titled_block(title: &str, is_focused: bool) -> Block<'static> {

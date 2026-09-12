@@ -2,6 +2,7 @@ use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
+    widgets::Table,
 };
 
 use crate::{
@@ -9,11 +10,9 @@ use crate::{
     components::{
         Component,
         shared::{
-            selectable_table::SelectableTableState,
+            selectable_table::{SelectableTableState, render_selectable_table},
             tx_detail::{TxDetailState, render_tx_detail},
-            widgets::{
-                render_empty, render_loading, render_tx_scroll_table, titled_block_with_count,
-            },
+            widgets::{render_empty, render_loading, titled_block_with_count, tx_table},
         },
     },
     xrpl::TxRow,
@@ -22,8 +21,9 @@ use crate::{
 #[derive(Default)]
 pub struct TxHistoryPanel {
     txs: Vec<TxRow>,
-    filtered: Option<Vec<TxRow>>,
+    filtered: Option<Vec<usize>>,
     table_state: SelectableTableState,
+    table: Table<'static>,
     tick: usize,
     has_received_history: bool,
     pub is_focused: bool,
@@ -36,13 +36,6 @@ pub struct TxHistoryPanel {
 }
 
 impl TxHistoryPanel {
-    pub fn new() -> Self {
-        Self {
-            is_focused: false,
-            ..Self::default()
-        }
-    }
-
     fn reapply_filter(&mut self) {
         if self.filter_input.is_empty() {
             self.filtered = None;
@@ -51,15 +44,18 @@ impl TxHistoryPanel {
             self.filtered = Some(
                 self.txs
                     .iter()
-                    .filter(|r| {
-                        r.tx_type.to_lowercase().contains(&f) || r.hash.to_lowercase().contains(&f)
+                    .enumerate()
+                    .filter_map(|(index, r)| {
+                        (r.tx_type.to_lowercase().contains(&f)
+                            || r.hash.to_lowercase().contains(&f))
+                        .then_some(index)
                     })
-                    .cloned()
                     .collect(),
             );
         }
         let count = self.row_count();
         self.table_state.reset_len(count);
+        self.table = tx_table((0..count).filter_map(|index| self.display_row(index)));
     }
 
     fn row_count(&self) -> usize {
@@ -69,31 +65,24 @@ impl TxHistoryPanel {
             .unwrap_or(self.txs.len())
     }
 
-    fn display_rows(&self) -> &[TxRow] {
-        self.filtered.as_deref().unwrap_or(&self.txs)
+    fn display_row(&self, index: usize) -> Option<&TxRow> {
+        self.txs.get(match &self.filtered {
+            Some(indices) => *indices.get(index)?,
+            None => index,
+        })
     }
 }
 
 impl Component for TxHistoryPanel {
     fn update(&mut self, action: &Action) -> color_eyre::Result<Option<Action>> {
-        // Detail overlay takes precedence when open
-        if self.detail.visible {
-            match action {
-                Action::TxDetailToggle => {
-                    self.detail.close();
-                    return Ok(None);
-                }
-                Action::SelectNext | Action::FocusNext => {
-                    self.detail.scroll = self.detail.scroll.saturating_add(1);
-                    return Ok(None);
-                }
-                Action::SelectPrev | Action::FocusPrev => {
-                    self.detail.scroll = self.detail.scroll.saturating_sub(1);
-                    return Ok(None);
-                }
-                Action::Quit => return Ok(None),
-                _ => return Ok(None),
-            }
+        let len = self.row_count();
+        let open = matches!(action, Action::TxDetailToggle)
+            .then(|| self.table_state.selected_if_focused(self.is_focused, len))
+            .flatten()
+            .and_then(|idx| self.display_row(idx))
+            .map(|tx| (tx.tx_json.clone(), tx.meta_json.clone()));
+        if self.detail.handle_panel_action(action, open) {
+            return Ok(None);
         }
 
         match action {
@@ -113,20 +102,9 @@ impl Component for TxHistoryPanel {
                 self.loading_more = false;
                 self.reapply_filter();
             }
-            Action::SelectNext if self.row_count() > 0 && self.is_focused => {
-                self.table_state.select_next(self.row_count());
-            }
-            Action::SelectPrev if self.row_count() > 0 && self.is_focused => {
-                self.table_state.select_prev(self.row_count());
-            }
-            Action::TxDetailToggle if self.is_focused && self.row_count() > 0 => {
-                let rows = self.display_rows();
-                if let Some(idx) = self.table_state.selected()
-                    && let Some(tx) = rows.get(idx)
-                {
-                    self.detail.open(tx.tx_json.clone(), tx.meta_json.clone());
-                }
-            }
+            _ if self
+                .table_state
+                .handle_row_select(action, self.is_focused, len) => {}
             _ => {}
         }
         Ok(None)
@@ -226,23 +204,13 @@ impl Component for TxHistoryPanel {
         let [table_area, hint_area] =
             Layout::vertical([Constraint::Fill(1), Constraint::Length(1)]).areas(inner);
 
-        if let Some(ref filtered) = self.filtered {
-            render_tx_scroll_table(
-                frame,
-                table_area,
-                filtered,
-                &mut self.table_state,
-                self.is_focused,
-            );
-        } else {
-            render_tx_scroll_table(
-                frame,
-                table_area,
-                &self.txs,
-                &mut self.table_state,
-                self.is_focused,
-            );
-        }
+        self.table = render_selectable_table(
+            frame,
+            table_area,
+            std::mem::take(&mut self.table),
+            &mut self.table_state,
+            self.is_focused,
+        );
 
         use ratatui::text::Line;
         use ratatui::widgets::Paragraph;
@@ -279,43 +247,118 @@ mod tests {
     #[test]
     /// TC-077
     fn filter_by_tx_type() {
-        let mut panel = TxHistoryPanel::new();
-        panel.txs = vec![
-            dummy_tx_row("aaa", "Payment"),
-            dummy_tx_row("bbb", "OfferCreate"),
-            dummy_tx_row("ccc", "Payment"),
-        ];
-        panel.filter_input = "pay".to_string();
+        let mut panel = TxHistoryPanel {
+            txs: vec![
+                dummy_tx_row("aaa", "Payment"),
+                dummy_tx_row("bbb", "OfferCreate"),
+                dummy_tx_row("ccc", "Payment"),
+            ],
+            filter_input: "pay".to_string(),
+            ..Default::default()
+        };
         panel.reapply_filter();
         assert_eq!(panel.row_count(), 2);
-        assert!(panel.filtered.as_ref().unwrap()[0].tx_type == "Payment");
+        assert_eq!(panel.display_row(0).unwrap().tx_type, "Payment");
     }
 
     #[test]
     /// TC-078
     fn filter_by_hash_partial() {
-        let mut panel = TxHistoryPanel::new();
-        panel.txs = vec![
-            dummy_tx_row("deadbeef", "Payment"),
-            dummy_tx_row("cafebabe", "AccountSet"),
-        ];
-        panel.filter_input = "cafe".to_string();
+        let mut panel = TxHistoryPanel {
+            txs: vec![
+                dummy_tx_row("deadbeef", "Payment"),
+                dummy_tx_row("cafebabe", "AccountSet"),
+            ],
+            filter_input: "cafe".to_string(),
+            ..Default::default()
+        };
         panel.reapply_filter();
         assert_eq!(panel.row_count(), 1);
-        assert_eq!(panel.filtered.as_ref().unwrap()[0].hash, "cafebabe");
+        assert_eq!(panel.display_row(0).unwrap().hash, "cafebabe");
     }
 
     #[test]
     /// TC-079
     fn filter_empty_shows_all() {
-        let mut panel = TxHistoryPanel::new();
-        panel.txs = vec![
-            dummy_tx_row("aaa", "Payment"),
-            dummy_tx_row("bbb", "TrustSet"),
-        ];
-        panel.filter_input = String::new();
+        let mut panel = TxHistoryPanel {
+            txs: vec![
+                dummy_tx_row("aaa", "Payment"),
+                dummy_tx_row("bbb", "TrustSet"),
+            ],
+            ..Default::default()
+        };
         panel.reapply_filter();
         assert_eq!(panel.row_count(), 2);
         assert!(panel.filtered.is_none());
+    }
+
+    #[test]
+    fn cached_rows_follow_filter_append_and_selected_detail() {
+        let mut panel = TxHistoryPanel {
+            is_focused: true,
+            ..Default::default()
+        };
+        panel
+            .update(&Action::XrplTxHistory(
+                vec![
+                    dummy_tx_row("first", "Payment"),
+                    dummy_tx_row("excluded", "OfferCreate"),
+                ],
+                None,
+            ))
+            .unwrap();
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 20)).unwrap();
+        panel
+            .on_key_event(KeyEvent::from(KeyCode::Char('f')))
+            .unwrap();
+        for c in "pay".chars() {
+            panel
+                .on_key_event(KeyEvent::from(KeyCode::Char(c)))
+                .unwrap();
+        }
+        panel.on_key_event(KeyEvent::from(KeyCode::Enter)).unwrap();
+        panel
+            .update(&Action::XrplTxHistoryAppend(
+                vec![dummy_tx_row("second", "Payment")],
+                None,
+            ))
+            .unwrap();
+        panel.update(&Action::SelectNext).unwrap();
+        terminal
+            .draw(|frame| panel.draw(frame, frame.area()).unwrap())
+            .unwrap();
+        let rendered = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(rendered.contains("first"));
+        assert!(rendered.contains("second"));
+        assert!(!rendered.contains("excluded"));
+        panel.update(&Action::TxDetailToggle).unwrap();
+        assert_eq!(panel.detail.tx_json.0["hash"], "second");
+        panel.update(&Action::TxDetailToggle).unwrap();
+        panel
+            .update(&Action::XrplTxHistory(
+                vec![dummy_tx_row("replacement", "Payment")],
+                None,
+            ))
+            .unwrap();
+        terminal
+            .draw(|frame| panel.draw(frame, frame.area()).unwrap())
+            .unwrap();
+        let rendered = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(rendered.contains("replacement"));
+        assert!(!rendered.contains("first"));
+        assert!(!rendered.contains("second"));
     }
 }

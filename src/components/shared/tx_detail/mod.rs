@@ -10,14 +10,13 @@ use ratatui::{
 
 use serde_json::Value;
 
+use crate::action::Action;
 use crate::components::shared::{theme, widgets::centered_popup_rect};
 use crate::xrpl::ArcValue;
+use crate::xrpl::RIPPLE_EPOCH_UNIX as RIPPLE_EPOCH;
 
 mod format;
 mod parsers;
-
-/// Ripple epoch offset: seconds between Unix epoch (1970-01-01) and Ripple epoch (2000-01-01).
-const RIPPLE_EPOCH: i64 = 946_684_800;
 
 use format::format_value;
 use parsers::typed_detail_lines;
@@ -44,6 +43,42 @@ impl TxDetailState {
     pub fn close(&mut self) {
         self.visible = false;
         self.scroll = 0;
+    }
+
+    /// Consume panel actions while open; application-level routing remains separate.
+    pub fn handle_action(&mut self, action: &Action) -> bool {
+        if !self.visible {
+            return false;
+        }
+        match action {
+            Action::TxDetailToggle => self.close(),
+            Action::SelectNext | Action::FocusNext => {
+                self.scroll = self.scroll.saturating_add(1);
+            }
+            Action::SelectPrev | Action::FocusPrev => {
+                self.scroll = self.scroll.saturating_sub(1);
+            }
+            _ => {}
+        }
+        true
+    }
+
+    /// Overlay guard plus open-on-toggle for table panels.
+    pub fn handle_panel_action(
+        &mut self,
+        action: &Action,
+        open: Option<(ArcValue, ArcValue)>,
+    ) -> bool {
+        if self.handle_action(action) {
+            return true;
+        }
+        if matches!(action, Action::TxDetailToggle)
+            && let Some((tx_json, meta_json)) = open
+        {
+            self.open(tx_json, meta_json);
+            return true;
+        }
+        false
     }
 }
 

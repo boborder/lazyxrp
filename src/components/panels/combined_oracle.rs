@@ -1,8 +1,6 @@
-#![allow(dead_code)]
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
-    widgets::Block,
 };
 
 use crate::{
@@ -14,23 +12,74 @@ use crate::{
         },
         shared::theme,
     },
+    config::FlareDisplay,
 };
 
 pub struct CombinedOraclePanel {
     oracle: OraclePanel,
     ftso: FlareFtsoPanel,
     fxrp: FxrpDirectMintPanel,
+    flare_display: FlareDisplay,
     pub is_focused: bool,
 }
 
 impl CombinedOraclePanel {
-    pub fn new() -> Self {
+    pub fn new(flare_display: FlareDisplay) -> Self {
         Self {
-            oracle: OraclePanel::new(),
-            ftso: FlareFtsoPanel::new(),
-            fxrp: FxrpDirectMintPanel::new(),
+            oracle: OraclePanel::default(),
+            ftso: FlareFtsoPanel::default(),
+            fxrp: FxrpDirectMintPanel::default(),
+            flare_display,
             is_focused: false,
         }
+    }
+
+    fn draw_full(&mut self, frame: &mut Frame, inner: Rect) -> color_eyre::Result<()> {
+        let [oracle_area, _gap, right] = Layout::horizontal([
+            Constraint::Fill(1),
+            Constraint::Length(1),
+            Constraint::Fill(1),
+        ])
+        .areas(inner);
+
+        let [ftso_area, fxrp_area] =
+            Layout::vertical([Constraint::Percentage(55), Constraint::Percentage(45)]).areas(right);
+
+        let oracle_block = theme::panel_block("Oracle", self.is_focused);
+        let oracle_inner = oracle_block.inner(oracle_area);
+        frame.render_widget(oracle_block, oracle_area);
+        self.oracle.render_content(frame, oracle_inner);
+
+        let ftso_block = theme::panel_block("FTSO", self.is_focused);
+        let ftso_inner = ftso_block.inner(ftso_area);
+        frame.render_widget(ftso_block, ftso_area);
+        self.ftso.render_content(frame, ftso_inner);
+
+        let fxrp_block = theme::panel_block("FXRP Direct Mint", self.is_focused);
+        let fxrp_inner = fxrp_block.inner(fxrp_area);
+        frame.render_widget(fxrp_block, fxrp_area);
+        self.fxrp.render_content(frame, fxrp_inner);
+        Ok(())
+    }
+
+    fn draw_compact(&mut self, frame: &mut Frame, inner: Rect) -> color_eyre::Result<()> {
+        let [oracle_area, _gap, right] = Layout::horizontal([
+            Constraint::Fill(1),
+            Constraint::Length(1),
+            Constraint::Fill(1),
+        ])
+        .areas(inner);
+
+        let oracle_block = theme::panel_block("Oracle", self.is_focused);
+        let oracle_inner = oracle_block.inner(oracle_area);
+        frame.render_widget(oracle_block, oracle_area);
+        self.oracle.render_content(frame, oracle_inner);
+
+        let [ftso_line, fxrp_line] =
+            Layout::vertical([Constraint::Length(1), Constraint::Length(1)]).areas(right);
+        self.ftso.render_compact(frame, ftso_line);
+        self.fxrp.render_compact(frame, fxrp_line);
+        Ok(())
     }
 }
 
@@ -60,48 +109,14 @@ impl Component for CombinedOraclePanel {
     }
 
     fn draw(&mut self, frame: &mut Frame, area: Rect) -> color_eyre::Result<()> {
-        let block = Block::bordered()
-            .title(" Oracle / FTSO / FXRP ")
-            .border_style(if self.is_focused {
-                theme::accent_style()
-            } else {
-                theme::dim_style()
-            });
+        let block = theme::panel_block("Oracle / FTSO / FXRP", self.is_focused);
         let inner = block.inner(area);
         frame.render_widget(block, area);
 
-        let [oracle_area, _gap, right] = Layout::horizontal([
-            Constraint::Fill(1),
-            Constraint::Length(1),
-            Constraint::Fill(1),
-        ])
-        .areas(inner);
-
-        let [ftso_area, fxrp_area] =
-            Layout::vertical([Constraint::Percentage(55), Constraint::Percentage(45)]).areas(right);
-
-        let sub_border = if self.is_focused {
-            theme::accent_style()
+        if self.flare_display == FlareDisplay::Compact {
+            self.draw_compact(frame, inner)
         } else {
-            theme::dim_style()
-        };
-
-        let oracle_block = Block::bordered().title(" Oracle ").border_style(sub_border);
-        let oracle_inner = oracle_block.inner(oracle_area);
-        frame.render_widget(oracle_block, oracle_area);
-        self.oracle.render_content(frame, oracle_inner);
-
-        let ftso_block = Block::bordered().title(" FTSO ").border_style(sub_border);
-        let ftso_inner = ftso_block.inner(ftso_area);
-        frame.render_widget(ftso_block, ftso_area);
-        self.ftso.render_content(frame, ftso_inner);
-
-        let fxrp_block = Block::bordered()
-            .title(" FXRP Direct Mint ")
-            .border_style(sub_border);
-        let fxrp_inner = fxrp_block.inner(fxrp_area);
-        frame.render_widget(fxrp_block, fxrp_area);
-        self.fxrp.render_content(frame, fxrp_inner);
-        Ok(())
+            self.draw_full(frame, inner)
+        }
     }
 }

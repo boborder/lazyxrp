@@ -1,7 +1,7 @@
 use ratatui::{
     Frame,
     layout::{Constraint, Rect},
-    widgets::{Paragraph, Row, Table},
+    widgets::{Cell, Paragraph, Row, Table},
 };
 
 use crate::{
@@ -27,13 +27,6 @@ pub struct OraclePanel {
 }
 
 impl OraclePanel {
-    pub fn new() -> Self {
-        Self {
-            is_focused: true,
-            ..Self::default()
-        }
-    }
-
     pub(crate) fn render_content(&mut self, frame: &mut Frame, area: Rect) {
         let has_xrpl = !self.prices.is_empty();
 
@@ -54,28 +47,24 @@ impl OraclePanel {
             return;
         }
 
-        let rows: Vec<Row> = self
-            .prices
-            .iter()
-            .map(|p| {
-                let pair = format!(
-                    "{}/{}",
-                    asset_display_name(&p.base_asset),
-                    asset_display_name(&p.quote_asset)
-                );
-                Row::new(vec![
-                    pair,
-                    p.entire_set.mean.clone(),
-                    p.entire_set.size.to_string(),
-                    p.entire_set.standard_deviation.clone(),
-                    if p.time > 0 {
-                        p.time.to_string()
-                    } else {
-                        "-".into()
-                    },
-                ])
-            })
-            .collect();
+        let rows = self.prices.iter().map(|p| {
+            let pair = format!(
+                "{}/{}",
+                asset_display_name(&p.base_asset),
+                asset_display_name(&p.quote_asset)
+            );
+            Row::new(vec![
+                Cell::from(pair),
+                Cell::from(p.entire_set.mean.as_str()),
+                Cell::from(p.entire_set.size.to_string()),
+                Cell::from(p.entire_set.standard_deviation.as_str()),
+                Cell::from(if p.time > 0 {
+                    p.time.to_string()
+                } else {
+                    "-".to_owned()
+                }),
+            ])
+        });
         let table = Table::new(
             rows,
             [
@@ -100,18 +89,12 @@ impl Component for OraclePanel {
             Action::Tick => self.tick = self.tick.wrapping_add(1),
             Action::XrplOraclePrices(prices) => {
                 self.prices = prices.clone();
-                self.prices.sort_by(|a, b| {
-                    let ak = format!(
+                self.prices.sort_by_cached_key(|p| {
+                    format!(
                         "{}/{}",
-                        asset_display_name(&a.base_asset),
-                        asset_display_name(&a.quote_asset)
-                    );
-                    let bk = format!(
-                        "{}/{}",
-                        asset_display_name(&b.base_asset),
-                        asset_display_name(&b.quote_asset)
-                    );
-                    ak.cmp(&bk)
+                        asset_display_name(&p.base_asset),
+                        asset_display_name(&p.quote_asset)
+                    )
                 });
                 self.table_state.reset_len(self.prices.len());
                 self.not_configured = false;
@@ -119,12 +102,11 @@ impl Component for OraclePanel {
             Action::XrplOracleNotConfigured => {
                 self.not_configured = true;
             }
-            Action::SelectNext if !self.prices.is_empty() && self.is_focused => {
-                self.table_state.select_next(self.prices.len());
-            }
-            Action::SelectPrev if !self.prices.is_empty() && self.is_focused => {
-                self.table_state.select_prev(self.prices.len());
-            }
+            _a if self.table_state.handle_row_select(
+                action,
+                self.is_focused,
+                self.prices.len(),
+            ) => {}
             _ => {}
         }
         Ok(None)

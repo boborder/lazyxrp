@@ -1,8 +1,8 @@
-#![allow(dead_code)]
 use ratatui::{
     Frame,
     layout::{Constraint, Rect},
-    widgets::{Paragraph, Row, Table},
+    text::{Line, Span},
+    widgets::{Cell, Paragraph, Row, Table},
 };
 
 use crate::{
@@ -27,11 +27,26 @@ pub struct FlareFtsoPanel {
 }
 
 impl FlareFtsoPanel {
-    pub fn new() -> Self {
-        Self {
-            is_focused: false,
-            ..Self::default()
+    /// One-line FTSO summary for compact display (first feed + overflow count).
+    pub(crate) fn compact_summary(&self) -> String {
+        if self.prices.is_empty() {
+            return "loading…".to_string();
         }
+        let first = &self.prices[0];
+        let extra = self.prices.len().saturating_sub(1);
+        if extra == 0 {
+            format!("{} {}", first.pair, first.price)
+        } else {
+            format!("{} {} · +{}", first.pair, first.price, extra)
+        }
+    }
+
+    pub(crate) fn render_compact(&self, frame: &mut Frame, area: Rect) {
+        let line = Line::from(vec![
+            Span::styled("FTSO ", theme::dim_style()),
+            Span::styled(self.compact_summary(), theme::secondary_style()),
+        ]);
+        frame.render_widget(Paragraph::new(line), area);
     }
 
     pub(crate) fn render_content(&mut self, frame: &mut Frame, area: Rect) {
@@ -58,10 +73,10 @@ impl FlareFtsoPanel {
 
         let rows = self.prices.iter().map(|fp| {
             Row::new(vec![
-                fp.pair.clone(),
-                fp.price.clone(),
-                fp.timestamp.to_string(),
-                fp.source.clone(),
+                Cell::from(fp.pair.as_str()),
+                Cell::from(fp.price.as_str()),
+                Cell::from(fp.timestamp.to_string()),
+                Cell::from(fp.source.as_str()),
             ])
         });
         let table = Table::new(
@@ -87,12 +102,11 @@ impl Component for FlareFtsoPanel {
                 self.prices.sort_by(|a, b| a.pair.cmp(&b.pair));
                 self.table_state.reset_len(self.prices.len());
             }
-            Action::SelectNext if !self.prices.is_empty() && self.is_focused => {
-                self.table_state.select_next(self.prices.len());
-            }
-            Action::SelectPrev if !self.prices.is_empty() && self.is_focused => {
-                self.table_state.select_prev(self.prices.len());
-            }
+            _a if self.table_state.handle_row_select(
+                action,
+                self.is_focused,
+                self.prices.len(),
+            ) => {}
             _ => {}
         }
         Ok(None)

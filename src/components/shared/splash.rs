@@ -68,21 +68,16 @@ fn splash_art_column(art_area: Rect) -> Rect {
 
 /// 利用可能な高さに応じて ASCII アートの表示行を調整
 fn splash_ascii_lines_for_height(tick: usize, max_lines: usize) -> Vec<Line<'static>> {
-    let lines: Vec<&'static str> = ASCII_ART.trim_start_matches('\n').lines().collect();
-    let n = lines.len().max(1);
+    let lines = ASCII_ART.trim_start_matches('\n').lines();
+    let n = lines.clone().count();
 
     // 十分な高さがない場合は下の部分だけ表示（ロゴの下半分が重要）
-    let skip = if max_lines >= n {
-        0
-    } else {
-        n.saturating_sub(max_lines)
-    };
-    let visible: Vec<&'static str> = lines.into_iter().skip(skip).collect();
-    let vn = visible.len().max(1);
+    let skip = n.saturating_sub(max_lines);
+    let vn = (n - skip).max(1);
     let head = (tick / 2) % vn;
 
-    visible
-        .into_iter()
+    lines
+        .skip(skip)
         .enumerate()
         .map(|(i, text)| {
             let ring_dist = (vn + i - head) % vn;
@@ -113,7 +108,6 @@ fn quit_hint_line(tick: usize) -> Line<'static> {
 }
 
 pub struct SplashScreen {
-    command_tx: Option<UnboundedSender<Action>>,
     config: Arc<Config>,
     tick: usize,
 }
@@ -121,7 +115,6 @@ pub struct SplashScreen {
 impl Default for SplashScreen {
     fn default() -> Self {
         Self {
-            command_tx: None,
             config: Arc::new(Config::default()),
             tick: 0,
         }
@@ -129,8 +122,7 @@ impl Default for SplashScreen {
 }
 
 impl Component for SplashScreen {
-    fn register_action_handler(&mut self, tx: UnboundedSender<Action>) -> color_eyre::Result<()> {
-        self.command_tx = Some(tx);
+    fn register_action_handler(&mut self, _tx: UnboundedSender<Action>) -> color_eyre::Result<()> {
         Ok(())
     }
 

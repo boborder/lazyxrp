@@ -1,4 +1,4 @@
-use secrecy::ExposeSecret;
+// use secrecy::ExposeSecret;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -9,13 +9,13 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Paragraph, Tabs},
 };
-use serde::{Deserialize, Serialize};
+// use serde::{Deserialize, Serialize};
 use tokio::sync::{mpsc, watch};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
 use crate::{
-    action::Action,
+    action::{Action, Mode},
     components::{
         Component,
         shared::{
@@ -27,8 +27,8 @@ use crate::{
             overview::OverviewTab,
         },
     },
-    config::Config,
-    flare::{DEFAULT_FLARE_FEEDS, DEFAULT_FLARE_RPC},
+    config::{Config, FlareConfig},
+    flare::DEFAULT_FLARE_FEEDS,
     network::Network,
     tui::{Event, Tui},
     xrpl::{
@@ -108,18 +108,20 @@ pub struct App {
     rpc_server: String,
     ws_server: String,
     watch_account: String,
-    /// Watch sender — future: dynamic network switching from the UI
+    network: Network,
+    custom_rpc: bool,
+    custom_ws: bool,
     net_tx: watch::Sender<Network>,
     tab_tx: watch::Sender<usize>,
     needs_draw: bool,
 }
 
-fn resolve_flare_rpc_url() -> Option<String> {
+fn resolve_flare_rpc_url(flare: &FlareConfig) -> Option<String> {
     std::env::var("FLARE_RPC_URL")
         .ok()
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
-        .or_else(|| Some(DEFAULT_FLARE_RPC.to_string()))
+        .or_else(|| Some(flare.network.rpc_url().to_string()))
 }
 
 fn resolve_flare_feeds() -> Vec<String> {
@@ -144,12 +146,6 @@ fn resolve_flare_feeds() -> Vec<String> {
         .iter()
         .map(|s| (*s).to_string())
         .collect()
-}
-
-#[derive(Default, Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum Mode {
-    #[default]
-    Splash,
 }
 
 impl App {
@@ -187,10 +183,13 @@ impl App {
         // Keep wallet UI / config network aligned with the resolved CLI/env network.
         config.xrpl.network = network;
         let watch_account = account.unwrap_or_else(|| config.xrpl.account.clone());
+        let flare_display = config.flare.display;
+        let custom_rpc = rpc_server != network.rpc_url();
+        let custom_ws = ws_server != network.ws_url();
         let panels: Vec<Box<dyn Component>> = vec![
-            Box::new(OverviewTab::new(rpc_server.clone())),
+            Box::new(OverviewTab::new(rpc_server.clone(), flare_display)),
             Box::new(AccountWalletTab::new(skip_mainnet_prompt)),
-            Box::new(MarketOracleTab::new()),
+            Box::new(MarketOracleTab::new(flare_display)),
             Box::new(AssetsTab::new()),
         ];
         // UA-1: guard against tab/panel index mismatch (docs/agent/INVARIANTS.md)
@@ -220,7 +219,7 @@ impl App {
             should_quit: false,
             should_suspend: false,
             config: Arc::new(config),
-            mode: Mode::Splash,
+            mode: Mode::default(),
             last_tick_key_events: Vec::new(),
             action_tx,
             action_rx,
@@ -229,6 +228,9 @@ impl App {
             rpc_server,
             ws_server,
             watch_account,
+            network,
+            custom_rpc,
+            custom_ws,
             net_tx,
             tab_tx,
             needs_draw: true,
@@ -275,29 +277,29 @@ impl App {
         };
         start_ws_task(
             self.ws_server.clone(),
+            self.custom_ws,
+            self.net_tx.subscribe(),
             Some(self.watch_account.clone()),
             action_tx.clone(),
             poll_trigger_tx,
             cancel.clone(),
         );
-        let seed_address = self
-            .config
-            .xrpl
-            .signing
-            .secret_seed
-            .as_ref()
-            .map(|s| crate::signing::seed_to_address(s.expose_secret()))
-            .and_then(Result::ok);
-        let flare_rpc_url = resolve_flare_rpc_url();
+        let signing_seed = crate::signing::credential_from_secrets(
+            self.config.xrpl.signing.secret_seed.as_ref(),
+            self.config.xrpl.signing.secret_mnemonic.as_ref(),
+        )?;
+        let seed_address = signing_seed.as_ref().and_then(|c| c.address().ok());
+        let flare_rpc_url = resolve_flare_rpc_url(&self.config.flare);
         let flare_feeds = resolve_flare_feeds();
         start_poll_task(
             PollContext {
                 rpc_url: self.rpc_server.clone(),
+                custom_rpc: self.custom_rpc,
                 watch_address: self.watch_account.clone(),
                 book_pair,
                 poll_interval: Duration::from_millis(self.config.xrpl.poll_interval_ms),
                 seed_address,
-                signing_seed: self.config.xrpl.signing.secret_seed.clone(),
+                signing_seed,
                 network_watch: self.net_tx.subscribe(),
                 tab_watch: self.tab_tx.subscribe(),
                 oracles: self.config.xrpl.oracles.clone(),
@@ -305,7 +307,9 @@ impl App {
                 flare_rpc_url: flare_rpc_url.clone(),
                 flare_feeds: flare_feeds.clone(),
                 flare_fassets_execute: self.config.flare.fassets.execute,
+                flare_display: self.config.flare.display,
                 flare_evm_key_env: self.config.flare.fassets.evm_key_env.clone(),
+                flare_wallet_address: self.config.flare.wallet.address.clone(),
                 submit_lock: Arc::new(tokio::sync::Mutex::new(())),
             },
             poll_rx,
@@ -344,9 +348,7 @@ impl App {
         };
         let action_tx = self.action_tx.clone();
         match &event {
-            Event::Quit => action_tx.send(Action::Quit)?,
             Event::Tick => action_tx.send(Action::Tick)?,
-            Event::Render => action_tx.send(Action::Render)?,
             Event::Resize(x, y) => action_tx.send(Action::Resize(*x, *y))?,
             Event::Key(key) => self.on_key_event(*key)?,
             _ => {}
@@ -514,8 +516,15 @@ impl App {
                     let _ = self.tab_tx.send(self.active_tab);
                 }
                 Action::NetworkChange(net) => {
+                    self.network = *net;
                     if let Err(err) = self.net_tx.send(*net) {
                         warn!(?err, "network watch channel closed");
+                    }
+                }
+                Action::NetworkSwitchCycle => {
+                    let next = self.network.next_network();
+                    if self.action_tx.send(Action::NetworkChange(next)).is_err() {
+                        warn!("action channel closed (network switch)");
                     }
                 }
                 Action::NftImageRequest { nft_id, uri } => {
@@ -527,7 +536,7 @@ impl App {
                             Ok(image) => {
                                 if let Err(err) = action_tx.send(Action::NftImageLoaded {
                                     nft_id,
-                                    bytes: image.bytes,
+                                    bytes: Arc::new(image.bytes),
                                 }) {
                                     warn!(?err, "action channel closed (nft image)");
                                 }
@@ -906,6 +915,25 @@ mod tests {
         app.on_key_event(q)?;
         app.drain_and_dispatch_actions(None)?;
         assert!(app.show_help);
+        Ok(())
+    }
+
+    /// TC-115: NetworkSwitchCycle advances to the next network via net_tx.
+    #[tokio::test]
+    async fn network_switch_cycle_sends_next_network() -> color_eyre::Result<()> {
+        let mut app = test_app()?;
+        let net_rx = app.net_tx.subscribe();
+        app.action_tx.send(Action::NetworkSwitchCycle)?;
+        app.drain_and_dispatch_actions(None)?;
+        app.drain_and_dispatch_actions(None)?;
+        assert_eq!(*net_rx.borrow(), Network::Testnet);
+        assert_eq!(app.network, Network::Testnet);
+        assert_eq!(app.status_bar.network_badge, format!(" {} ", "TESTNET"));
+        app.action_tx.send(Action::NetworkSwitchCycle)?;
+        app.drain_and_dispatch_actions(None)?;
+        app.drain_and_dispatch_actions(None)?;
+        assert_eq!(*net_rx.borrow(), Network::Devnet);
+        assert_eq!(app.network, Network::Devnet);
         Ok(())
     }
 

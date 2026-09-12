@@ -28,11 +28,32 @@ const METRICS_LINES: u16 = 5;
 mod detail;
 #[path = "server_dunl.rs"]
 mod dunl;
-#[path = "server_metrics.rs"]
-mod metrics;
 
 use detail::{ValidatorDetail, render_validator_detail};
-use metrics::{dunl_expiry_tag, quorum_match_tag};
+
+fn dunl_expiry_tag(dunl: &DunlSummary) -> String {
+    dunl.days_until_expiry()
+        .map(|d| {
+            if d < 0 {
+                "expired".to_string()
+            } else if d < 14 {
+                format!("{d}d left!")
+            } else {
+                format!("{d}d left")
+            }
+        })
+        .unwrap_or_default()
+}
+
+fn quorum_match_tag(quorum: Option<u32>, dunl_count: u32) -> Option<&'static str> {
+    quorum.map(|q| {
+        if q == dunl_count {
+            "matches dUNL"
+        } else {
+            "≠ dUNL size"
+        }
+    })
+}
 
 #[derive(Default)]
 pub struct ServerPanel {
@@ -135,12 +156,9 @@ impl Component for ServerPanel {
                 self.base_fee = Some(*base_fee);
                 self.reserve_base = Some(*reserve_base);
             }
-            Action::SelectNext if self.is_focused && self.dunl_len() > 0 => {
-                self.dunl_table.select_next(self.dunl_len());
-            }
-            Action::SelectPrev if self.is_focused && self.dunl_len() > 0 => {
-                self.dunl_table.select_prev(self.dunl_len());
-            }
+            _a if self
+                .dunl_table
+                .handle_row_select(action, self.is_focused, self.dunl_len()) => {}
             Action::TxDetailToggle if self.is_focused && self.dunl_len() > 0 => {
                 if let Some(idx) = self.dunl_table.selected()
                     && let (Some(d), Some(row)) = (

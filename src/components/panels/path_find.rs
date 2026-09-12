@@ -33,13 +33,6 @@ pub struct PathFindPanel {
 }
 
 impl PathFindPanel {
-    pub fn new() -> Self {
-        Self {
-            is_focused: false,
-            ..Self::default()
-        }
-    }
-
     fn summary_lines(&self) -> Vec<Line<'static>> {
         if self.dest_summary.is_empty() {
             return Vec::new();
@@ -79,23 +72,14 @@ fn path_find_table_row(rank: usize, row: &PathFindRow) -> Row<'_> {
 
 impl Component for PathFindPanel {
     fn update(&mut self, action: &Action) -> color_eyre::Result<Option<Action>> {
-        if self.detail.visible {
-            match action {
-                Action::TxDetailToggle => {
-                    self.detail.close();
-                    return Ok(None);
-                }
-                Action::SelectNext | Action::FocusNext => {
-                    self.detail.scroll = self.detail.scroll.saturating_add(1);
-                    return Ok(None);
-                }
-                Action::SelectPrev | Action::FocusPrev => {
-                    self.detail.scroll = self.detail.scroll.saturating_sub(1);
-                    return Ok(None);
-                }
-                Action::Quit => return Ok(None),
-                _ => return Ok(None),
-            }
+        let len = self.rows.len();
+        let open = matches!(action, Action::TxDetailToggle)
+            .then(|| self.table_state.selected_if_focused(self.is_focused, len))
+            .flatten()
+            .and_then(|idx| self.rows.get(idx))
+            .map(|row| (row.raw_json.clone(), ArcValue::default()));
+        if self.detail.handle_panel_action(action, open) {
+            return Ok(None);
         }
         match action {
             Action::Tick => self.tick = self.tick.wrapping_add(1),
@@ -114,30 +98,15 @@ impl Component for PathFindPanel {
                 self.table_state.reset_len(0);
                 self.error = Some(e.to_string());
             }
-            Action::SelectNext if !self.rows.is_empty() && self.is_focused => {
-                self.table_state.select_next(self.rows.len());
-            }
-            Action::SelectPrev if !self.rows.is_empty() && self.is_focused => {
-                self.table_state.select_prev(self.rows.len());
-            }
-            Action::TxDetailToggle if self.is_focused && !self.rows.is_empty() => {
-                if let Some(idx) = self.table_state.selected()
-                    && let Some(row) = self.rows.get(idx)
-                {
-                    self.detail.open(row.raw_json.clone(), ArcValue::default());
-                }
-            }
+            _ if self
+                .table_state
+                .handle_row_select(action, self.is_focused, len) => {}
             _ => {}
         }
         Ok(None)
     }
 
     fn draw(&mut self, frame: &mut Frame, area: Rect) -> color_eyre::Result<()> {
-        if self.detail.visible {
-            render_tx_detail(frame, area, &mut self.detail);
-            return Ok(());
-        }
-
         if !self.received {
             render_loading(
                 frame,
@@ -219,6 +188,8 @@ impl Component for PathFindPanel {
             &mut self.table_state,
             self.is_focused,
         );
+
+        render_tx_detail(frame, area, &mut self.detail);
         Ok(())
     }
 }

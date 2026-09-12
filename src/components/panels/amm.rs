@@ -26,15 +26,6 @@ pub struct AmmPanel {
     pub is_focused: bool,
 }
 
-impl AmmPanel {
-    pub fn new() -> Self {
-        Self {
-            is_focused: false,
-            ..Self::default()
-        }
-    }
-}
-
 impl Component for AmmPanel {
     fn update(&mut self, action: &Action) -> color_eyre::Result<Option<Action>> {
         match action {

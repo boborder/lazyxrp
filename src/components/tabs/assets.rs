@@ -25,7 +25,7 @@ pub struct AssetsTab {
 
 impl AssetsTab {
     pub fn new() -> Self {
-        let mut nft = NftTab::new();
+        let mut nft = NftTab::default();
         nft.is_focused = true;
         Self {
             nft,

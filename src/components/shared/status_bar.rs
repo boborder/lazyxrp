@@ -54,7 +54,7 @@ impl ConnectionState {
 pub struct StatusBar {
     account_short: String,
     network: Network,
-    network_badge: String,
+    pub(crate) network_badge: String,
     last_server_update: Option<Instant>,
     last_account_update: Option<Instant>,
     last_book_update: Option<Instant>,
@@ -77,7 +77,7 @@ pub struct StatusBar {
 
 impl StatusBar {
     pub fn new(account: String, network: Network) -> Self {
-        let account_short = short_account(&account);
+        let account_short = fmt::short_hex(&account, 6, 4);
         let network_badge = format!(" {} ", network.display_name());
         Self {
             account_short,
@@ -102,31 +102,32 @@ impl StatusBar {
         }
     }
 
-    fn cached_freshness_label(
-        cache: &mut Option<(u64, String)>,
-        latest: Option<Instant>,
-    ) -> String {
+    fn cached_freshness_label(cache: &mut Option<(u64, String)>, latest: Option<Instant>) -> &str {
         match latest {
             Some(t) => {
                 let secs = t.elapsed().as_secs();
-                if let Some((cached_secs, cached_str)) = cache
-                    && *cached_secs == secs
+                if cache
+                    .as_ref()
+                    .is_none_or(|(cached_secs, _)| *cached_secs != secs)
                 {
-                    return cached_str.clone();
+                    let freshness_label = if secs < 60 {
+                        format!("{secs}s")
+                    } else if secs < 3600 {
+                        format!("{}m", secs / 60)
+                    } else {
+                        format!("{}h", secs / 3600)
+                    };
+                    *cache = Some((secs, freshness_label));
                 }
-                let freshness_label = if secs < 60 {
-                    format!("{secs}s")
-                } else if secs < 3600 {
-                    format!("{}m", secs / 60)
-                } else {
-                    format!("{}h", secs / 3600)
-                };
-                *cache = Some((secs, freshness_label.clone()));
-                freshness_label
+                cache
+                    .as_ref()
+                    .expect("freshness cache populated")
+                    .1
+                    .as_str()
             }
             None => {
                 *cache = None;
-                "-".to_string()
+                "-"
             }
         }
     }
@@ -139,14 +140,6 @@ impl StatusBar {
         } else {
             ConnectionState::Connecting
         }
-    }
-}
-
-fn short_account(address: &str) -> String {
-    if address.len() > 12 {
-        format!("{}…{}", &address[..6], &address[address.len() - 4..])
-    } else {
-        address.to_string()
     }
 }
 
@@ -194,6 +187,10 @@ impl Component for StatusBar {
                 self.cached_error_display = Some(format!("err:{msg}"));
                 self.cached_state_display = None;
             }
+            Action::NetworkChange(net) => {
+                self.network = *net;
+                self.network_badge = format!(" {} ", (*net).display_name());
+            }
             Action::RefreshAccount => self.refreshing_account = true,
             Action::RefreshBook => self.refreshing_book = true,
             _ => {}
@@ -210,10 +207,10 @@ impl Component for StatusBar {
             .cached_state_display
             .get_or_insert_with(|| format!(" {} {} ", state.icon(), state.label()));
         let mut spans = vec![
-            Span::styled(state_display.clone(), state_style),
+            Span::styled(state_display.as_str(), state_style),
             Span::raw(" "),
             Span::styled("acct:", label_style),
-            Span::styled(self.account_short.clone(), theme::accent_style()),
+            Span::styled(self.account_short.as_str(), theme::accent_style()),
             Span::raw("  "),
             Span::styled("srv:", label_style),
             Span::raw(Self::cached_freshness_label(
@@ -237,14 +234,14 @@ impl Component for StatusBar {
             spans.push(Span::raw("  "));
             spans.push(Span::styled("@", label_style));
             // Cache wall-time string (changes once per second)
-            let wall_str = match &self.cached_wall_time {
-                Some(address) if address.len() >= 8 => address.clone(), // rough heuristic; reformat below
-                _ => {
-                    let address = fmt::fmt_local_hms(t);
-                    self.cached_wall_time = Some(address.clone());
-                    address
-                }
-            };
+            if self
+                .cached_wall_time
+                .as_ref()
+                .is_none_or(|value| value.len() < 8)
+            {
+                self.cached_wall_time = Some(fmt::fmt_local_hms(t));
+            }
+            let wall_str = self.cached_wall_time.as_deref().expect("wall time cached");
             spans.push(Span::styled(wall_str, theme::accent_style()));
         }
         if !self.cached_price_spans.is_empty() {
@@ -258,7 +255,7 @@ impl Component for StatusBar {
         }
         if let Some(err_display) = &self.cached_error_display {
             spans.push(Span::raw("  "));
-            spans.push(Span::styled(err_display.clone(), theme::error_style()));
+            spans.push(Span::styled(err_display.as_str(), theme::error_style()));
         }
         let net_color = if self.network.is_mainnet() {
             theme::ERROR
@@ -274,7 +271,7 @@ impl Component for StatusBar {
         frame.render_widget(Paragraph::new(Line::from(spans)), left_area);
         frame.render_widget(
             Paragraph::new(Line::from(vec![Span::styled(
-                self.network_badge.clone(),
+                self.network_badge.as_str(),
                 net_style,
             )])),
             right_area,

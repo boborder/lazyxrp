@@ -25,12 +25,12 @@ pub struct AccountWalletTab {
 
 impl AccountWalletTab {
     pub fn new(skip_mainnet_prompt: bool) -> Self {
-        let mut account = AccountPanel::new();
+        let mut account = AccountPanel::default();
         account.is_focused = true;
         Self {
             wallet: WalletPanel::new(skip_mainnet_prompt),
             account,
-            tx: TxHistoryPanel::new(),
+            tx: TxHistoryPanel::default(),
             focus_index: 0,
             has_wallet: false,
         }
@@ -65,7 +65,8 @@ impl Component for AccountWalletTab {
     }
 
     fn register_config_handler(&mut self, config: Arc<Config>) -> color_eyre::Result<()> {
-        self.has_wallet = config.xrpl.signing.secret_seed.is_some();
+        self.has_wallet = config.xrpl.signing.secret_seed.is_some()
+            || config.xrpl.signing.secret_mnemonic.is_some();
         self.wallet.register_config_handler(Arc::clone(&config))?;
         self.account.register_config_handler(Arc::clone(&config))?;
         self.tx.register_config_handler(config)?;

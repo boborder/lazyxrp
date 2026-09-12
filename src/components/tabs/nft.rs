@@ -1,11 +1,16 @@
-use std::sync::mpsc;
+use std::sync::mpsc::{self, Receiver};
 
 use ratatui::{
     Frame,
-    layout::{Constraint, Layout, Rect, Size},
+    layout::{Constraint, Layout, Rect},
     widgets::{Block, Paragraph, Row, Table},
 };
-use ratatui_image::{Image, Resize, picker::Picker, protocol::Protocol};
+use ratatui_image::{
+    Resize, StatefulImage,
+    errors::Errors,
+    picker::Picker,
+    thread::{ResizeRequest, ResizeResponse, ThreadProtocol},
+};
 
 use crate::{
     action::Action,
@@ -20,6 +25,18 @@ use crate::{
     },
     xrpl::{ArcValue, NftRow},
 };
+
+fn spawn_image_worker() -> (ThreadProtocol, Receiver<Result<ResizeResponse, Errors>>) {
+    let (worker_tx, worker_rx) = mpsc::channel::<ResizeRequest>();
+    let (result_tx, result_rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        while let Ok(request) = worker_rx.recv() {
+            let _ = result_tx.send(request.resize_encode());
+        }
+    });
+    (ThreadProtocol::new(worker_tx, None), result_rx)
+}
+
 #[derive(Default)]
 pub struct NftTab {
     nfts: Vec<NftRow>,
@@ -29,25 +46,14 @@ pub struct NftTab {
     pub is_focused: bool,
     detail: TxDetailState,
     picker: Option<Picker>,
-    image_bytes: Option<Vec<u8>>,
-    image_protocol: Option<Protocol>,
-    image_rx: Option<mpsc::Receiver<Result<Protocol, String>>>,
-    image_nft_id: Option<String>,
+    image_state: Option<ThreadProtocol>,
+    image_result_rx: Option<Receiver<Result<ResizeResponse, Errors>>>,
     requested_nft_id: Option<String>,
-    image_size: Size,
     image_loading: bool,
     image_error: Option<String>,
-    action_tx: Option<tokio::sync::mpsc::UnboundedSender<Action>>,
 }
 
 impl NftTab {
-    pub fn new() -> Self {
-        Self {
-            is_focused: true,
-            ..Self::default()
-        }
-    }
-
     fn request_selected_image(&mut self) -> Option<Action> {
         let nft = self
             .table_state
@@ -56,11 +62,10 @@ impl NftTab {
         if self.requested_nft_id.as_deref() == Some(nft.nft_id.as_str()) {
             return None;
         }
-        self.image_rx = None;
         self.requested_nft_id = Some(nft.nft_id.clone());
-        self.image_nft_id = Some(nft.nft_id.clone());
-        self.image_bytes = None;
-        self.image_protocol = None;
+        if let Some(state) = self.image_state.as_mut() {
+            state.empty_protocol();
+        }
         self.image_error = None;
         self.image_loading = !nft.uri.is_empty();
         (!nft.uri.is_empty()).then(|| Action::NftImageRequest {
@@ -69,80 +74,79 @@ impl NftTab {
         })
     }
 
-    fn poll_image_result(&mut self) {
-        let Some(rx) = self.image_rx.take() else {
+    fn poll_image_resize(&mut self) {
+        let Some(rx) = self.image_result_rx.as_ref() else {
             return;
         };
-        match rx.try_recv() {
-            Ok(Ok(protocol)) => {
-                self.image_protocol = Some(protocol);
-                self.image_loading = false;
-            }
-            Ok(Err(error)) => {
-                self.image_error = Some(error);
-                self.image_loading = false;
-            }
-            Err(mpsc::TryRecvError::Empty) => {
-                self.image_rx = Some(rx);
-            }
-            Err(mpsc::TryRecvError::Disconnected) => {
-                self.image_error = Some("image worker stopped".to_owned());
-                self.image_loading = false;
+        while let Ok(result) = rx.try_recv() {
+            match result {
+                Ok(response) => {
+                    if self
+                        .image_state
+                        .as_mut()
+                        .is_some_and(|state| state.update_resized_protocol(response))
+                    {
+                        self.image_loading = false;
+                        self.image_error = None;
+                    }
+                }
+                Err(error) => {
+                    self.image_error = Some(error.to_string());
+                    self.image_loading = false;
+                }
             }
         }
     }
 
-    fn start_image_encode(&mut self, size: Size) {
-        let (Some(picker), Some(bytes)) = (self.picker.clone(), self.image_bytes.clone()) else {
-            return;
-        };
-        if size.width == 0 || size.height == 0 || self.image_rx.is_some() {
-            return;
-        }
-        let (tx, rx) = mpsc::channel();
-        self.image_rx = Some(rx);
-        self.image_loading = true;
-        let image_nft_id = self.image_nft_id.clone();
-        let action_tx = self.action_tx.clone();
-        std::thread::spawn(move || {
-            let result = image::load_from_memory(&bytes)
-                .map_err(|error| error.to_string())
-                .and_then(|image| {
-                    picker
-                        .new_protocol(image, size, Resize::Fit(None))
-                        .map_err(|error| error.to_string())
-                });
-            let _ = tx.send(result);
-            if let (Some(action_tx), Some(nft_id)) = (action_tx, image_nft_id) {
-                let _ = action_tx.send(Action::NftImageReady { nft_id });
-            }
-        });
-    }
-
-    fn handle_image_loaded(&mut self, nft_id: &str, bytes: Vec<u8>) {
+    fn handle_image_loaded(&mut self, nft_id: &str, bytes: &[u8]) {
         if self.requested_nft_id.as_deref() != Some(nft_id) {
             return;
         }
-        self.image_bytes = Some(bytes);
-        self.image_protocol = None;
-        self.image_error = None;
-        self.image_loading = true;
-        self.start_image_encode(self.image_size);
+        let Some(picker) = self.picker.as_ref() else {
+            self.image_error = Some("image picker not initialized".to_owned());
+            self.image_loading = false;
+            return;
+        };
+        let dyn_img = match image::load_from_memory(bytes) {
+            Ok(image) => image,
+            Err(error) => {
+                self.image_error = Some(error.to_string());
+                self.image_loading = false;
+                return;
+            }
+        };
+        let protocol = picker.new_resize_protocol(dyn_img);
+        if let Some(state) = self.image_state.as_mut() {
+            state.replace_protocol(protocol);
+            self.image_loading = true;
+            self.image_error = None;
+        }
+    }
+
+    fn has_preview_protocol(&self) -> bool {
+        self.image_state
+            .as_ref()
+            .and_then(|state| state.protocol_type())
+            .is_some()
     }
 
     fn draw_preview(&mut self, frame: &mut Frame, area: Rect) {
         let block = Block::bordered().title(" Preview ");
         let inner = block.inner(area);
         frame.render_widget(block, area);
-        let size = Size::new(inner.width, inner.height);
-        if size != self.image_size {
-            self.image_size = size;
-            self.image_protocol = None;
-            self.start_image_encode(size);
+        if inner.width == 0 || inner.height == 0 {
+            return;
         }
-        if let Some(protocol) = self.image_protocol.as_ref() {
-            frame.render_widget(Image::new(protocol), inner);
-        } else {
+        let show_image = self.has_preview_protocol() && self.image_error.is_none();
+        if show_image && let Some(state) = self.image_state.as_mut() {
+            frame.render_stateful_widget(
+                StatefulImage::new().resize(Resize::Fit(None)),
+                inner,
+                state,
+            );
+        }
+
+        if !show_image || self.image_loading {
             let message = self
                 .image_error
                 .as_deref()
@@ -154,39 +158,29 @@ impl NftTab {
 }
 
 impl Component for NftTab {
-    fn init(&mut self, _area: Size) -> color_eyre::Result<()> {
+    fn init(&mut self, _area: ratatui::layout::Size) -> color_eyre::Result<()> {
         self.picker = Some(Picker::from_query_stdio().unwrap_or_else(|_| Picker::halfblocks()));
-        Ok(())
-    }
-
-    fn register_action_handler(
-        &mut self,
-        action_tx: tokio::sync::mpsc::UnboundedSender<Action>,
-    ) -> color_eyre::Result<()> {
-        self.action_tx = Some(action_tx);
+        let (state, result_rx) = spawn_image_worker();
+        self.image_state = Some(state);
+        self.image_result_rx = Some(result_rx);
         Ok(())
     }
 
     fn update(&mut self, action: &Action) -> color_eyre::Result<Option<Action>> {
-        if self.detail.visible {
-            match action {
-                Action::TxDetailToggle => self.detail.close(),
-                Action::SelectNext | Action::FocusNext => {
-                    self.detail.scroll = self.detail.scroll.saturating_add(1)
-                }
-                Action::SelectPrev | Action::FocusPrev => {
-                    self.detail.scroll = self.detail.scroll.saturating_sub(1)
-                }
-                Action::Quit => {}
-                _ => {}
-            }
+        let len = self.nfts.len();
+        let open = matches!(action, Action::TxDetailToggle)
+            .then(|| self.table_state.selected_if_focused(self.is_focused, len))
+            .flatten()
+            .and_then(|idx| self.nfts.get(idx))
+            .map(|nft| (nft.raw_json.clone(), ArcValue::default()));
+        if self.detail.handle_panel_action(action, open) {
             return Ok(None);
         }
 
         match action {
             Action::Tick => {
                 self.tick = self.tick.wrapping_add(1);
-                self.poll_image_result();
+                self.poll_image_resize();
             }
             Action::XrplAccountNfts(nfts) => {
                 self.nfts = nfts.to_vec();
@@ -194,34 +188,20 @@ impl Component for NftTab {
                 self.received = true;
                 return Ok(self.request_selected_image());
             }
-            Action::SelectNext if !self.nfts.is_empty() && self.is_focused => {
-                self.table_state.select_next(self.nfts.len());
-                return Ok(self.request_selected_image());
-            }
-            Action::SelectPrev if !self.nfts.is_empty() && self.is_focused => {
-                self.table_state.select_prev(self.nfts.len());
+            _a if self
+                .table_state
+                .handle_row_select(action, self.is_focused, self.nfts.len()) =>
+            {
                 return Ok(self.request_selected_image());
             }
             Action::NftImageLoaded { nft_id, bytes } => {
-                self.handle_image_loaded(nft_id, bytes.clone());
+                self.handle_image_loaded(nft_id, bytes.as_ref());
             }
             Action::NftImageError { nft_id, message }
                 if self.requested_nft_id.as_deref() == Some(nft_id) =>
             {
                 self.image_error = Some(message.clone());
                 self.image_loading = false;
-            }
-            Action::NftImageReady { nft_id }
-                if self.requested_nft_id.as_deref() == Some(nft_id) =>
-            {
-                self.poll_image_result();
-            }
-            Action::TxDetailToggle if self.is_focused && !self.nfts.is_empty() => {
-                if let Some(idx) = self.table_state.selected()
-                    && let Some(nft) = self.nfts.get(idx)
-                {
-                    self.detail.open(nft.raw_json.clone(), ArcValue::default());
-                }
             }
             _ => {}
         }
@@ -299,6 +279,90 @@ impl Component for NftTab {
         );
         self.draw_preview(frame, preview_area);
         render_tx_detail(frame, area, &mut self.detail);
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample_nft(id: &str, uri: &str) -> NftRow {
+        NftRow {
+            nft_id: id.to_string(),
+            taxon: 0,
+            serial: 1,
+            transfer_fee: 0,
+            uri: uri.to_string(),
+            is_mutable: false,
+            raw_json: ArcValue::default(),
+        }
+    }
+
+    fn focused_tab() -> color_eyre::Result<NftTab> {
+        let mut tab = NftTab {
+            is_focused: true,
+            ..NftTab::default()
+        };
+        tab.init(ratatui::layout::Size::new(80, 24))?;
+        Ok(tab)
+    }
+
+    /// TC-109: selected NFT with URI emits `NftImageRequest`.
+    #[test]
+    fn account_nfts_with_uri_emits_image_request() -> color_eyre::Result<()> {
+        let mut tab = focused_tab()?;
+        let action = tab.update(&Action::XrplAccountNfts(vec![sample_nft(
+            "NFT_A",
+            "ipfs://image-a",
+        )]))?;
+        assert_eq!(
+            action,
+            Some(Action::NftImageRequest {
+                nft_id: "NFT_A".into(),
+                uri: "ipfs://image-a".into(),
+            })
+        );
+        Ok(())
+    }
+
+    /// TC-110: NFT without URI emits no preview request.
+    #[test]
+    fn account_nfts_without_uri_emits_no_image_request() -> color_eyre::Result<()> {
+        let mut tab = focused_tab()?;
+        let action = tab.update(&Action::XrplAccountNfts(vec![sample_nft("NFT_B", "")]))?;
+        assert_eq!(action, None);
+        Ok(())
+    }
+
+    #[test]
+    fn select_next_emits_image_request_for_newly_selected_nft() -> color_eyre::Result<()> {
+        let mut tab = focused_tab()?;
+        tab.update(&Action::XrplAccountNfts(vec![
+            sample_nft("NFT_A", "ipfs://a"),
+            sample_nft("NFT_B", "ipfs://b"),
+        ]))?;
+        let action = tab.update(&Action::SelectNext)?;
+        assert_eq!(
+            action,
+            Some(Action::NftImageRequest {
+                nft_id: "NFT_B".into(),
+                uri: "ipfs://b".into(),
+            })
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn duplicate_selection_emits_no_image_request() -> color_eyre::Result<()> {
+        let mut tab = focused_tab()?;
+        tab.update(&Action::XrplAccountNfts(vec![sample_nft(
+            "NFT_A", "ipfs://a",
+        )]))?;
+        let action = tab.update(&Action::XrplAccountNfts(vec![sample_nft(
+            "NFT_A", "ipfs://a",
+        )]))?;
+        assert_eq!(action, None);
         Ok(())
     }
 }

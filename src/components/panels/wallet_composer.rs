@@ -10,21 +10,77 @@ use ratatui::{
 use super::{ComposerPhase, DangerResume, SubmitFlash, WalletPanel};
 use crate::{
     action::Action,
-    components::shared::theme,
+    components::shared::{fmt, theme},
     xrpl::{
         AccountSetSubmitParams, FxrpDirectMintPaymentParams, FxrpExecuteDirectMintParams,
         OfferCreateSubmitParams, PaymentSubmitParams, SetRegularKeySubmitParams,
         TrustSetSubmitParams,
     },
 };
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 impl WalletPanel {
+    /// Shared `e` toggle for single-row composer phases (no row navigation).
+    /// Returns `true` when the composer enters editing mode (caller must set
+    /// keymap suppression). Takes the `is_form_editing` field directly so it
+    /// can be called while `self.composer` is mutably borrowed.
+    pub(super) fn composer_edit_toggle_nav(is_form_editing: &mut bool, key: &KeyEvent) -> bool {
+        match key.code {
+            KeyCode::Char('e') | KeyCode::Char('E')
+                if !key.modifiers.contains(KeyModifiers::CONTROL) =>
+            {
+                *is_form_editing = !*is_form_editing;
+                return *is_form_editing;
+            }
+            KeyCode::Enter if !*is_form_editing => {
+                *is_form_editing = true;
+                return true;
+            }
+            _ => {}
+        }
+        false
+    }
+
+    /// Shared `e` / Enter / Tab row navigation for multi-row composer phases.
+    /// Advances `row` within `rows`; returns `true` when entering editing mode.
+    pub(super) fn composer_row_nav(
+        is_form_editing: &mut bool,
+        key: &KeyEvent,
+        row: &mut usize,
+        rows: usize,
+    ) -> bool {
+        match key.code {
+            KeyCode::Char('e') | KeyCode::Char('E')
+                if !key.modifiers.contains(KeyModifiers::CONTROL) =>
+            {
+                *is_form_editing = !*is_form_editing;
+                return *is_form_editing;
+            }
+            KeyCode::Enter => {
+                if *is_form_editing {
+                    *row = (*row + 1) % rows;
+                } else {
+                    *is_form_editing = true;
+                    return true;
+                }
+            }
+            KeyCode::Char('[') | KeyCode::BackTab => {
+                *row = (*row + rows - 1) % rows;
+            }
+            KeyCode::Char(']') | KeyCode::Tab => {
+                *row = (*row + 1) % rows;
+            }
+            _ => {}
+        }
+        false
+    }
+
     pub(super) fn open_account_set_composer(&mut self) {
         self.domain = self
             .account
             .as_ref()
             .and_then(|a| a.domain_hex.as_deref())
-            .and_then(Self::decode_domain_hex)
+            .and_then(|hex| crate::xrpl::hex_to_ascii(hex.trim()))
             .unwrap_or_default();
         self.tick_size.clear();
         self.transfer_rate.clear();
@@ -415,30 +471,7 @@ impl WalletPanel {
     }
 
     pub(super) fn shorten_display(text: &str, max: usize) -> String {
-        let trimmed = text.trim();
-        if trimmed.len() <= max {
-            return trimmed.to_string();
-        }
-        let keep = max.saturating_sub(1).max(8);
-        let head = keep * 2 / 3;
-        let tail = keep - head;
-        format!("{}…{}", &trimmed[..head], &trimmed[trimmed.len() - tail..])
-    }
-
-    /// Decode `AccountRoot.domain` hex → ASCII string, or None if invalid.
-    pub(super) fn decode_domain_hex(hex: &str) -> Option<String> {
-        let hex = hex.trim();
-        if !hex.len().is_multiple_of(2) {
-            return None;
-        }
-        let bytes: Vec<u8> = (0..hex.len())
-            .step_by(2)
-            .filter_map(|i| u8::from_str_radix(&hex[i..i + 2], 16).ok())
-            .collect();
-        if bytes.len() != hex.len() / 2 {
-            return None;
-        }
-        String::from_utf8(bytes).ok()
+        fmt::truncate_middle(text, max)
     }
 
     pub(super) fn render_composer(&self, frame: &mut Frame, area: Rect) {

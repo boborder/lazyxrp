@@ -1,4 +1,5 @@
 use crate::components::shared::theme;
+use crate::xrpl::{JsonAmount, drops_to_xrp, hex_to_ascii, json_amount};
 use ratatui::text::{Line, Span};
 use serde_json::Value;
 
@@ -24,55 +25,48 @@ pub(crate) fn push_common_lines_from_value(lines: &mut Vec<Line>, tx: &Value) {
         lines.push(Line::from(vec![
             Span::styled("Fee", accent),
             Span::raw(": "),
-            Span::styled(crate::xrpl::drops_to_xrp(fee), theme::dim_style()),
+            Span::styled(drops_to_xrp(fee), theme::dim_style()),
         ]));
     }
 }
 
 /// Format a transaction Amount field directly from serde_json::Value (no clone).
 pub(crate) fn fmt_xrpl_amount_from_value(value: &Value) -> String {
-    if let Some(s) = value.as_str() {
-        crate::xrpl::drops_to_xrp(s)
-    } else if let Some(obj) = value.as_object() {
-        let currency = obj.get("currency").and_then(Value::as_str).unwrap_or("?");
-        let amount_value = obj.get("value").and_then(Value::as_str).unwrap_or("0");
-        if let Some(issuer) = obj.get("issuer").and_then(Value::as_str) {
-            format!("{amount_value} {currency} (issuer: {issuer})")
-        } else {
-            format!("{amount_value} {currency}")
-        }
-    } else {
-        value.to_string()
+    match json_amount(value) {
+        Some(JsonAmount::XrpDrops(s)) => drops_to_xrp(s),
+        Some(JsonAmount::Issued {
+            currency,
+            value: amount,
+            issuer,
+        }) => match issuer {
+            Some(issuer) => format!("{amount} {currency} (issuer: {issuer})"),
+            None => format!("{amount} {currency}"),
+        },
+        None => value
+            .as_u64()
+            .map_or_else(|| value.to_string(), |n| drops_to_xrp(&n.to_string())),
     }
 }
 
+fn is_amount_field(key: &str) -> bool {
+    matches!(
+        key,
+        "Fee" | "SendMax" | "DeliverMin" | "Balance" | "TakerGets" | "TakerPays"
+    ) || key.ends_with("Amount")
+}
+
 pub(crate) fn format_value(key: &str, value: &Value) -> String {
-    // Fast-path for amount-bearing fields without cloning the Value
-    if key.ends_with("Amount")
-        || key == "Fee"
-        || key == "SendMax"
-        || key == "DeliverMin"
-        || key == "Balance"
-        || key == "TakerGets"
-        || key == "TakerPays"
-    {
-        if let Some(s) = value.as_str() {
-            if let Ok(drops) = s.parse::<u64>() {
-                return format!("{:.6} XRP", drops as f64 / 1_000_000.0);
-            }
-            return s.to_string();
-        } else if let Some(n) = value.as_u64() {
-            return format!("{:.6} XRP", n as f64 / 1_000_000.0);
-        } else if let Some(obj) = value.as_object()
-            && obj.contains_key("currency")
-            && obj.contains_key("value")
+    if is_amount_field(key) {
+        if let Some(s) = value.as_str()
+            && s.parse::<u64>().is_err()
         {
-            let currency = obj.get("currency").and_then(Value::as_str).unwrap_or("?");
-            let amount_value = obj.get("value").and_then(Value::as_str).unwrap_or("0");
-            if let Some(issuer) = obj.get("issuer").and_then(Value::as_str) {
-                return format!("{amount_value} {currency} (issuer: {issuer})");
-            }
-            return format!("{amount_value} {currency}");
+            return s.to_string();
+        }
+        if value.as_str().is_some() || value.as_u64().is_some() {
+            return format!("{} XRP", fmt_xrpl_amount_from_value(value));
+        }
+        if value.is_object() {
+            return fmt_xrpl_amount_from_value(value);
         }
     }
 
@@ -83,11 +77,9 @@ pub(crate) fn format_value(key: &str, value: &Value) -> String {
             }
             s.clone()
         }
-        Value::Object(o) => {
-            if o.contains_key("currency") && o.contains_key("value") {
-                let currency = o.get("currency").and_then(Value::as_str).unwrap_or("?");
-                let amount_value = o.get("value").and_then(Value::as_str).unwrap_or("0");
-                return format!("{amount_value} {currency}");
+        Value::Object(_) => {
+            if json_amount(value).is_some() {
+                return fmt_xrpl_amount_from_value(value);
             }
             let s = value.to_string();
             if s.len() > 80 {
@@ -100,19 +92,6 @@ pub(crate) fn format_value(key: &str, value: &Value) -> String {
         _ => value.to_string(),
     }
 }
-pub(crate) fn hex_to_ascii(hex: &str) -> Option<String> {
-    if hex.is_empty() {
-        return Some(String::new());
-    }
-    if !hex.len().is_multiple_of(2) {
-        return None;
-    }
-    let bytes: Vec<u8> = (0..hex.len())
-        .step_by(2)
-        .map(|i| u8::from_str_radix(hex.get(i..i + 2)?, 16).ok())
-        .collect::<Option<Vec<_>>>()?;
-    String::from_utf8(bytes).ok()
-}
 
 #[cfg(test)]
 mod tests {
@@ -120,34 +99,9 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn hex_to_ascii_basic() {
-        assert_eq!(hex_to_ascii("68656c6c6f"), Some("hello".to_string()));
-    }
-
-    #[test]
-    fn hex_to_ascii_empty() {
-        assert_eq!(hex_to_ascii(""), Some(String::new()));
-    }
-
-    #[test]
-    fn hex_to_ascii_odd_length_returns_none() {
-        assert_eq!(hex_to_ascii("68656"), None);
-    }
-
-    #[test]
-    fn hex_to_ascii_invalid_hex_returns_none() {
-        assert_eq!(hex_to_ascii("zzzz"), None);
-    }
-
-    #[test]
-    fn hex_to_ascii_non_utf8_returns_none() {
-        // 0x80 is not valid UTF-8 start byte
-        assert_eq!(hex_to_ascii("80"), None);
-    }
-
-    #[test]
     fn fmt_xrpl_amount_from_value_xrp() {
         assert_eq!(fmt_xrpl_amount_from_value(&json!("1000000")), "1.000000");
+        assert_eq!(fmt_xrpl_amount_from_value(&json!(1_000_000)), "1.000000");
     }
 
     #[test]
@@ -179,53 +133,36 @@ mod tests {
     }
 
     #[test]
-    fn format_value_xrp_drops_string() {
-        let v = json!("1000000");
-        assert_eq!(format_value("Amount", &v), "1.000000 XRP");
-    }
-
-    #[test]
-    fn format_value_xrp_drops_parse_failure_falls_back() {
-        let v = json!("not_a_number");
-        assert_eq!(format_value("Amount", &v), "not_a_number");
-    }
-
-    #[test]
-    fn format_value_issued_currency() {
-        let v = json!({"value":"100","currency":"USD","issuer":"rsA2LpG"});
-        assert_eq!(format_value("Amount", &v), "100 USD (issuer: rsA2LpG)");
-    }
-
-    #[test]
-    fn format_value_domain_hex() {
-        let v = json!("6578616d706c652e636f6d");
-        assert_eq!(format_value("Domain", &v), "example.com");
-    }
-
-    #[test]
-    fn format_value_domain_hex_invalid_fallback() {
-        let v = json!("zzzz");
-        // hex_to_ascii returns None for invalid hex, so unwrap_or_else falls back to raw string
-        assert_eq!(format_value("Domain", &v), "zzzz");
-    }
-
-    #[test]
-    fn format_value_plain_string() {
-        let v = json!("hello");
-        assert_eq!(format_value("Memo", &v), "hello");
-    }
-
-    #[test]
-    fn format_value_currency_object_without_issuer() {
-        let v = json!({"currency":"EUR","value":"50"});
-        // Without issuer it does not parse as IssuedCurrencyAmount; should fall back to generic object formatting
-        assert_eq!(format_value("LimitAmount", &v), "50 EUR");
-    }
-
-    #[test]
-    fn format_value_issued_currency_with_issuer() {
-        let v = json!({"currency":"EUR","value":"50","issuer":"rsA2LpG"});
-        assert_eq!(format_value("LimitAmount", &v), "50 EUR (issuer: rsA2LpG)");
+    fn format_value_maps_json_fields_to_display_strings() {
+        let cases = [
+            ("Amount", json!("1000000"), "1.000000 XRP"),
+            ("Amount", json!(1_000_000), "1.000000 XRP"),
+            ("Amount", json!("not_a_number"), "not_a_number"),
+            (
+                "Amount",
+                json!({"value":"100","currency":"USD","issuer":"rsA2LpG"}),
+                "100 USD (issuer: rsA2LpG)",
+            ),
+            (
+                "LimitAmount",
+                json!({"currency":"EUR","value":"50"}),
+                "50 EUR",
+            ),
+            (
+                "LimitAmount",
+                json!({"currency":"EUR","value":"50","issuer":"rsA2LpG"}),
+                "50 EUR (issuer: rsA2LpG)",
+            ),
+            ("Domain", json!("6578616d706c652e636f6d"), "example.com"),
+            ("Domain", json!("zzzz"), "zzzz"),
+            ("Memo", json!("hello"), "hello"),
+            ("Memos", json!([1, 2, 3]), "[3 items]"),
+            ("Count", json!(42), "42"),
+            ("Nothing", json!(null), "null"),
+        ];
+        for (key, value, expected) in cases {
+            assert_eq!(format_value(key, &value), expected, "key={key}");
+        }
     }
 
     #[test]
@@ -244,23 +181,6 @@ mod tests {
         let v = json!({"a":"accent"});
         let result = format_value("Foo", &v);
         assert!(!result.ends_with('…'));
-    }
-
-    #[test]
-    fn format_value_array() {
-        let v = json!([1, 2, 3]);
-        assert_eq!(format_value("Memos", &v), "[3 items]");
-    }
-
-    #[test]
-    fn format_value_number() {
-        let v = json!(42);
-        assert_eq!(format_value("Count", &v), "42");
-    }
-
-    #[test]
-    fn format_value_null() {
-        let v = json!(null);
-        assert_eq!(format_value("Nothing", &v), "null");
+        assert_eq!(result, v.to_string());
     }
 }

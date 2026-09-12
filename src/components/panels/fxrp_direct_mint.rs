@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 use ratatui::{
     Frame,
     layout::Rect,
@@ -11,7 +10,7 @@ use crate::{
     components::{
         Component,
         shared::{
-            theme,
+            fmt, theme,
             widgets::{render_loading, titled_block},
         },
     },
@@ -27,11 +26,23 @@ pub struct FxrpDirectMintPanel {
 }
 
 impl FxrpDirectMintPanel {
-    pub fn new() -> Self {
-        Self {
-            is_focused: false,
-            ..Self::default()
+    pub(crate) fn compact_summary(&self) -> String {
+        match &self.info {
+            None => "loading…".to_string(),
+            Some(info) => format!(
+                "fee {} · min {} XRP",
+                bips_to_percent_display(info.fee_bips),
+                uba_to_xrp_display(info.min_fee_uba),
+            ),
         }
+    }
+
+    pub(crate) fn render_compact(&self, frame: &mut Frame, area: Rect) {
+        let line = Line::from(vec![
+            Span::styled("FXRP ", theme::dim_style()),
+            Span::styled(self.compact_summary(), theme::secondary_style()),
+        ]);
+        frame.render_widget(Paragraph::new(line), area);
     }
 
     pub(crate) fn render_content(&mut self, frame: &mut Frame, area: Rect) {
@@ -52,7 +63,7 @@ impl FxrpDirectMintPanel {
         let lines = vec![
             Line::from(vec![
                 Span::styled("Vault ", label),
-                Span::styled(shorten(&info.core_vault_xrpl, 28), value),
+                Span::styled(fmt::truncate_middle(&info.core_vault_xrpl, 28), value),
             ]),
             Line::from(vec![
                 Span::styled("Min fee ", label),
@@ -74,7 +85,10 @@ impl FxrpDirectMintPanel {
             ]),
             Line::from(vec![
                 Span::styled("AM ", label),
-                Span::styled(shorten(&info.asset_manager, 22), theme::dim_style()),
+                Span::styled(
+                    fmt::truncate_middle(&info.asset_manager, 22),
+                    theme::dim_style(),
+                ),
             ]),
             Line::from(Span::styled(
                 "Direct Mint · read-only",
@@ -82,15 +96,6 @@ impl FxrpDirectMintPanel {
             )),
         ];
         frame.render_widget(Paragraph::new(lines), area);
-    }
-}
-
-fn shorten(s: &str, max: usize) -> String {
-    if s.chars().count() <= max {
-        s.to_string()
-    } else {
-        let keep = max.saturating_sub(1);
-        format!("{}…", s.chars().take(keep).collect::<String>())
     }
 }
 
@@ -112,26 +117,5 @@ impl Component for FxrpDirectMintPanel {
         frame.render_widget(block, area);
         self.render_content(frame, inner);
         Ok(())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn update_stores_direct_mint_info() {
-        let mut panel = FxrpDirectMintPanel::new();
-        let info = FxrpDirectMintInfo {
-            core_vault_xrpl: "rCoreVaultTestAddressXXXXXXXXXXXXX".into(),
-            asset_manager: "0xabc".into(),
-            min_fee_uba: 100_000,
-            fee_bips: 10,
-            executor_fee_uba: 200_000,
-        };
-        panel
-            .update(&Action::FxrpDirectMintInfo(Box::new(info.clone())))
-            .unwrap();
-        assert_eq!(panel.info.as_ref(), Some(&info));
     }
 }

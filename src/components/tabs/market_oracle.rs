@@ -14,7 +14,7 @@ use crate::{
             path_find::PathFindPanel, trust_lines::TrustLinesPanel,
         },
     },
-    config::Config,
+    config::{Config, FlareDisplay},
 };
 
 pub struct MarketOracleTab {
@@ -25,30 +25,47 @@ pub struct MarketOracleTab {
     ftso: FlareFtsoPanel,
     oracle: OraclePanel,
     focus_index: usize,
+    flare_display: FlareDisplay,
 }
 
 impl MarketOracleTab {
-    pub fn new() -> Self {
-        let mut book = BookPanel::new();
+    pub fn new(flare_display: FlareDisplay) -> Self {
+        let mut book = BookPanel::default();
         book.is_focused = true;
         Self {
             book,
-            path: PathFindPanel::new(),
-            amm: AmmPanel::new(),
-            trust: TrustLinesPanel::new(),
-            ftso: FlareFtsoPanel::new(),
-            oracle: OraclePanel::new(),
+            path: PathFindPanel::default(),
+            amm: AmmPanel::default(),
+            trust: TrustLinesPanel::default(),
+            ftso: FlareFtsoPanel::default(),
+            oracle: OraclePanel::default(),
             focus_index: 0,
+            flare_display,
+        }
+    }
+
+    fn panel_count(&self) -> usize {
+        if self.flare_display == FlareDisplay::Off {
+            5
+        } else {
+            6
         }
     }
 
     fn update_focus(&mut self) {
+        let off = self.flare_display == FlareDisplay::Off;
         self.book.is_focused = self.focus_index == 0;
         self.path.is_focused = self.focus_index == 1;
         self.amm.is_focused = self.focus_index == 2;
         self.trust.is_focused = self.focus_index == 3;
-        self.ftso.is_focused = self.focus_index == 4;
-        self.oracle.is_focused = self.focus_index == 5;
+        if off {
+            // Hidden FTSO is skipped — index 4 lands on oracle.
+            self.ftso.is_focused = false;
+            self.oracle.is_focused = self.focus_index == 4;
+        } else {
+            self.ftso.is_focused = self.focus_index == 4;
+            self.oracle.is_focused = self.focus_index == 5;
+        }
     }
 }
 
@@ -79,11 +96,11 @@ impl Component for MarketOracleTab {
     fn update(&mut self, action: &Action) -> color_eyre::Result<Option<Action>> {
         match action {
             Action::FocusNext => {
-                self.focus_index = (self.focus_index + 1) % 6;
+                self.focus_index = (self.focus_index + 1) % self.panel_count();
                 self.update_focus();
             }
             Action::FocusPrev => {
-                self.focus_index = (self.focus_index + 5) % 6;
+                self.focus_index = (self.focus_index + self.panel_count() - 1) % self.panel_count();
                 self.update_focus();
             }
             _ => {}
@@ -118,6 +135,14 @@ impl Component for MarketOracleTab {
             Constraint::Percentage(33),
         ])
         .areas(top_right);
+        if self.flare_display == FlareDisplay::Off {
+            self.book.draw(frame, top_left)?;
+            self.path.draw(frame, path_a)?;
+            self.amm.draw(frame, amm_a)?;
+            self.trust.draw(frame, trust_a)?;
+            self.oracle.draw(frame, bottom)?;
+            return Ok(());
+        }
         let [ftso_a, oracle_a] =
             Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)])
                 .areas(bottom);
@@ -126,8 +151,60 @@ impl Component for MarketOracleTab {
         self.path.draw(frame, path_a)?;
         self.amm.draw(frame, amm_a)?;
         self.trust.draw(frame, trust_a)?;
-        self.ftso.draw(frame, ftso_a)?;
+        if self.flare_display == FlareDisplay::Compact {
+            self.ftso.render_compact(frame, ftso_a);
+        } else {
+            self.ftso.draw(frame, ftso_a)?;
+        }
         self.oracle.draw(frame, oracle_a)?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    fn render_tab(tab: &mut MarketOracleTab) -> String {
+        let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
+        terminal
+            .draw(|frame| tab.draw(frame, frame.area()).unwrap())
+            .unwrap();
+        terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect()
+    }
+
+    /// TC-118: Market Off omits the FTSO panel but keeps XRPL oracle.
+    #[test]
+    fn market_off_omits_ftso_panel() {
+        let mut tab = MarketOracleTab::new(FlareDisplay::Off);
+        let out = render_tab(&mut tab);
+        assert!(!out.contains("FTSOv2"));
+        assert!(out.contains("Oracle"));
+    }
+
+    /// TC-119: Market Compact uses a one-line FTSO summary instead of the feed table.
+    #[test]
+    fn market_compact_uses_one_line_ftso_summary() {
+        let mut tab = MarketOracleTab::new(FlareDisplay::Compact);
+        tab.update(&Action::FlareOraclePrices(vec![
+            crate::xrpl::FlareFeedPrice {
+                pair: "FLR/USD".into(),
+                price: "0.03".into(),
+                timestamp: 1,
+                source: "test".into(),
+            },
+        ]))
+        .unwrap();
+        let out = render_tab(&mut tab);
+        assert!(out.contains("FLR/USD 0.03"));
+        assert!(!out.contains("Pair"));
     }
 }

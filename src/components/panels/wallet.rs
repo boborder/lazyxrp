@@ -7,7 +7,6 @@ use ratatui::{
     text::{Line, Span},
     widgets::Paragraph,
 };
-use secrecy::ExposeSecret;
 
 use crate::{
     action::Action,
@@ -182,12 +181,14 @@ fn submit_shortcut(key: &KeyEvent, is_form_editing: bool) -> bool {
 
 impl Component for WalletPanel {
     fn register_config_handler(&mut self, config: Arc<Config>) -> color_eyre::Result<()> {
-        self.seed_address = config
-            .xrpl
-            .signing
-            .secret_seed
-            .as_ref()
-            .map(|s| crate::signing::seed_to_address(s.expose_secret()));
+        self.seed_address = crate::signing::credential_from_secrets(
+            config.xrpl.signing.secret_seed.as_ref(),
+            config.xrpl.signing.secret_mnemonic.as_ref(),
+        )
+        .map_err(|e| e.to_string())
+        .ok()
+        .flatten()
+        .map(|credential| credential.address().map_err(|e| e.to_string()));
         self.network = config.xrpl.network;
         self.config = Some(config);
         Ok(())
@@ -670,153 +671,38 @@ impl Component for WalletPanel {
             }
             Some(ComposerPhase::Payment { row, is_iou, .. }) => {
                 let row_count: usize = if *is_iou { 4 } else { 2 };
-                match key.code {
-                    KeyCode::Char('e') | KeyCode::Char('E')
-                        if !key.modifiers.contains(KeyModifiers::CONTROL) =>
-                    {
-                        self.is_form_editing = !self.is_form_editing;
-                        if self.is_form_editing {
-                            return Ok(Some(Action::SetKeymapSuppression(true)));
-                        }
-                    }
-                    KeyCode::Enter => {
-                        if self.is_form_editing {
-                            *row = (*row + 1) % row_count;
-                        } else {
-                            self.is_form_editing = true;
-                            return Ok(Some(Action::SetKeymapSuppression(true)));
-                        }
-                    }
-                    KeyCode::Char('[') | KeyCode::BackTab => {
-                        *row = (*row + row_count - 1) % row_count;
-                    }
-                    KeyCode::Char(']') | KeyCode::Tab => {
-                        *row = (*row + 1) % row_count;
-                    }
-                    _ => {}
+                if Self::composer_row_nav(&mut self.is_form_editing, &key, row, row_count) {
+                    return Ok(Some(Action::SetKeymapSuppression(true)));
                 }
                 return Ok(None);
             }
             Some(ComposerPhase::SetRegularKey { .. }) => {
-                match key.code {
-                    KeyCode::Char('e') | KeyCode::Char('E')
-                        if !key.modifiers.contains(KeyModifiers::CONTROL) =>
-                    {
-                        self.is_form_editing = !self.is_form_editing;
-                        if self.is_form_editing {
-                            return Ok(Some(Action::SetKeymapSuppression(true)));
-                        }
-                    }
-                    KeyCode::Enter if !self.is_form_editing => {
-                        self.is_form_editing = true;
-                        return Ok(Some(Action::SetKeymapSuppression(true)));
-                    }
-                    _ => {}
+                if Self::composer_edit_toggle_nav(&mut self.is_form_editing, &key) {
+                    return Ok(Some(Action::SetKeymapSuppression(true)));
                 }
                 return Ok(None);
             }
             Some(ComposerPhase::OfferCreate { row, .. }) => {
-                const ROWS: usize = 2;
-                match key.code {
-                    KeyCode::Char('e') | KeyCode::Char('E')
-                        if !key.modifiers.contains(KeyModifiers::CONTROL) =>
-                    {
-                        self.is_form_editing = !self.is_form_editing;
-                        if self.is_form_editing {
-                            return Ok(Some(Action::SetKeymapSuppression(true)));
-                        }
-                    }
-                    KeyCode::Enter => {
-                        if self.is_form_editing {
-                            *row = (*row + 1) % ROWS;
-                        } else {
-                            self.is_form_editing = true;
-                            return Ok(Some(Action::SetKeymapSuppression(true)));
-                        }
-                    }
-                    KeyCode::Char('[') | KeyCode::BackTab => {
-                        *row = (*row + ROWS - 1) % ROWS;
-                    }
-                    KeyCode::Char(']') | KeyCode::Tab => {
-                        *row = (*row + 1) % ROWS;
-                    }
-                    _ => {}
+                if Self::composer_row_nav(&mut self.is_form_editing, &key, row, 2) {
+                    return Ok(Some(Action::SetKeymapSuppression(true)));
                 }
                 return Ok(None);
             }
             Some(ComposerPhase::TrustSet { row, .. }) => {
-                const ROWS: usize = 3;
-                match key.code {
-                    KeyCode::Char('e') | KeyCode::Char('E')
-                        if !key.modifiers.contains(KeyModifiers::CONTROL) =>
-                    {
-                        self.is_form_editing = !self.is_form_editing;
-                        if self.is_form_editing {
-                            return Ok(Some(Action::SetKeymapSuppression(true)));
-                        }
-                    }
-                    KeyCode::Enter => {
-                        if self.is_form_editing {
-                            *row = (*row + 1) % ROWS;
-                        } else {
-                            self.is_form_editing = true;
-                            return Ok(Some(Action::SetKeymapSuppression(true)));
-                        }
-                    }
-                    KeyCode::Char('[') | KeyCode::BackTab => {
-                        *row = (*row + ROWS - 1) % ROWS;
-                    }
-                    KeyCode::Char(']') | KeyCode::Tab => {
-                        *row = (*row + 1) % ROWS;
-                    }
-                    _ => {}
+                if Self::composer_row_nav(&mut self.is_form_editing, &key, row, 3) {
+                    return Ok(Some(Action::SetKeymapSuppression(true)));
                 }
                 return Ok(None);
             }
             Some(ComposerPhase::FxrpDirectMint { row, .. }) => {
-                const ROWS: usize = 2;
-                match key.code {
-                    KeyCode::Char('e') | KeyCode::Char('E')
-                        if !key.modifiers.contains(KeyModifiers::CONTROL) =>
-                    {
-                        self.is_form_editing = !self.is_form_editing;
-                        if self.is_form_editing {
-                            return Ok(Some(Action::SetKeymapSuppression(true)));
-                        }
-                    }
-                    KeyCode::Enter => {
-                        if self.is_form_editing {
-                            *row = (*row + 1) % ROWS;
-                        } else {
-                            self.is_form_editing = true;
-                            return Ok(Some(Action::SetKeymapSuppression(true)));
-                        }
-                    }
-                    KeyCode::Char('[') | KeyCode::BackTab => {
-                        *row = (*row + ROWS - 1) % ROWS;
-                    }
-                    KeyCode::Char(']') | KeyCode::Tab => {
-                        *row = (*row + 1) % ROWS;
-                    }
-                    _ => {}
+                if Self::composer_row_nav(&mut self.is_form_editing, &key, row, 2) {
+                    return Ok(Some(Action::SetKeymapSuppression(true)));
                 }
                 return Ok(None);
             }
             Some(ComposerPhase::FxrpExecuteDirectMint { .. }) => {
-                match key.code {
-                    KeyCode::Char('e') | KeyCode::Char('E')
-                        if !key.modifiers.contains(KeyModifiers::CONTROL) =>
-                    {
-                        self.is_form_editing = !self.is_form_editing;
-                        if self.is_form_editing {
-                            return Ok(Some(Action::SetKeymapSuppression(true)));
-                        }
-                    }
-                    KeyCode::Enter if !self.is_form_editing => {
-                        self.is_form_editing = true;
-                        return Ok(Some(Action::SetKeymapSuppression(true)));
-                    }
-                    _ => {}
+                if Self::composer_edit_toggle_nav(&mut self.is_form_editing, &key) {
+                    return Ok(Some(Action::SetKeymapSuppression(true)));
                 }
                 return Ok(None);
             }
@@ -966,7 +852,7 @@ impl Component for WalletPanel {
             ]));
         }
         if let Some(ref dh) = account.domain_hex {
-            let domain_str = Self::decode_domain_hex(dh).unwrap_or_else(|| dh.clone());
+            let domain_str = crate::xrpl::hex_to_ascii(dh.trim()).unwrap_or_else(|| dh.clone());
             summary.push(Line::from(vec![
                 Span::styled("Domain ", label_style),
                 Span::styled(domain_str, theme::dim_style()),

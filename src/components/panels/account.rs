@@ -39,15 +39,6 @@ pub struct AccountPanel {
     pub is_focused: bool,
 }
 
-impl AccountPanel {
-    pub fn new() -> Self {
-        Self {
-            is_focused: false,
-            ..Self::default()
-        }
-    }
-}
-
 impl Component for AccountPanel {
     fn register_config_handler(&mut self, config: Arc<Config>) -> color_eyre::Result<()> {
         self.config = Some(config);

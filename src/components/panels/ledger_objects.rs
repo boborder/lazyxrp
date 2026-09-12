@@ -1,7 +1,7 @@
 use ratatui::{
     Frame,
     layout::{Constraint, Rect},
-    widgets::{Row, Table},
+    widgets::{Cell, Row, Table},
 };
 
 use crate::{
@@ -74,42 +74,23 @@ impl LedgerObjectsPanel {
 
 impl Component for LedgerObjectsPanel {
     fn update(&mut self, action: &Action) -> color_eyre::Result<Option<Action>> {
-        if self.detail.visible {
-            match action {
-                Action::TxDetailToggle => {
-                    self.detail.close();
-                    return Ok(None);
-                }
-                Action::SelectNext | Action::FocusNext => {
-                    self.detail.scroll = self.detail.scroll.saturating_add(1);
-                    return Ok(None);
-                }
-                Action::SelectPrev | Action::FocusPrev => {
-                    self.detail.scroll = self.detail.scroll.saturating_sub(1);
-                    return Ok(None);
-                }
-                Action::Quit => return Ok(None),
-                _ => return Ok(None),
-            }
+        let len = self.rows.len();
+        let open = matches!(action, Action::TxDetailToggle)
+            .then(|| self.table_state.selected_if_focused(self.is_focused, len))
+            .flatten()
+            .and_then(|idx| self.rows.get(idx))
+            .map(|row| (row.raw_json.clone(), ArcValue::default()));
+        if self.detail.handle_panel_action(action, open) {
+            return Ok(None);
         }
         match action {
             Action::Tick => self.tick = self.tick.wrapping_add(1),
             Action::XrplLedgerObjects(all) => {
                 self.apply_filter(all);
             }
-            Action::SelectNext if !self.rows.is_empty() && self.is_focused => {
-                self.table_state.select_next(self.rows.len());
-            }
-            Action::SelectPrev if !self.rows.is_empty() && self.is_focused => {
-                self.table_state.select_prev(self.rows.len());
-            }
-            Action::TxDetailToggle if self.is_focused && !self.rows.is_empty() => {
-                if let Some(idx) = self.table_state.selected()
-                    && let Some(row) = self.rows.get(idx)
-                {
-                    self.detail.open(row.raw_json.clone(), ArcValue::default());
-                }
-            }
+            _ if self
+                .table_state
+                .handle_row_select(action, self.is_focused, len) => {}
             _ => {}
         }
         Ok(None)
@@ -150,9 +131,9 @@ impl Component for LedgerObjectsPanel {
             Row::new(vec!["Type", "Object index", "Detail"]).style(theme::header_row_style());
         let rows = self.rows.iter().map(|r| {
             Row::new(vec![
-                r.ledger_type.clone(),
-                r.index.chars().take(20).collect::<String>(),
-                r.detail.chars().take(64).collect::<String>(),
+                Cell::from(r.ledger_type.as_str()),
+                Cell::from(r.index.chars().take(20).collect::<String>()),
+                Cell::from(r.detail.chars().take(64).collect::<String>()),
             ])
         });
         let table = Table::new(

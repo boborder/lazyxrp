@@ -60,7 +60,6 @@ pub fn fmt_xrp(xrp: f64) -> String {
     };
     group_digits(final_str)
 }
-
 /// Format an integer drops value as a thousands-separated drops string.
 pub fn fmt_drops(drops: u64) -> String {
     group_digits_u64(drops)
@@ -73,18 +72,11 @@ pub fn truncate_middle(s: &str, max_chars: usize) -> String {
         return s.to_string();
     }
     let keep = max_chars.saturating_sub(1) / 2;
-    let chars: Vec<char> = s.chars().collect();
-    let left: String = chars.iter().take(keep).copied().collect();
-    let right: String = chars
-        .iter()
-        .copied()
-        .rev()
+    s.chars()
         .take(keep)
-        .collect::<Vec<_>>()
-        .into_iter()
-        .rev()
-        .collect();
-    format!("{left}…{right}")
+        .chain(['…'])
+        .chain(s.chars().skip(char_count - keep))
+        .collect()
 }
 
 /// Middle-ellipsis for long hex strings (e.g. validator pubkeys).
@@ -149,7 +141,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn group_basic() {
+    fn group_digits_inserts_commas_per_thousands() {
         assert_eq!(group_digits("0"), "0");
         assert_eq!(group_digits("1234"), "1,234");
         assert_eq!(group_digits("1234567"), "1,234,567");
@@ -159,7 +151,7 @@ mod tests {
     }
 
     #[test]
-    fn xrp_format() {
+    fn fmt_xrp_trims_trailing_zeros_and_groups() {
         assert_eq!(fmt_xrp(0.0), "0");
         assert_eq!(fmt_xrp(1.5), "1.5");
         assert_eq!(fmt_xrp(55660.60415), "55,660.60415");
@@ -167,7 +159,7 @@ mod tests {
     }
 
     #[test]
-    fn drops_format() {
+    fn fmt_drops_groups_thousands() {
         assert_eq!(fmt_drops(0), "0");
         assert_eq!(fmt_drops(12), "12");
         assert_eq!(fmt_drops(1_234_567), "1,234,567");
@@ -186,6 +178,7 @@ mod tests {
         assert_eq!(truncate_middle(s, 20), "validator…ample.com");
         assert_eq!(truncate_middle("short", 20), "short");
         assert_eq!(truncate_middle(s, 3), s); // max_chars <= 3 keeps original
+        assert_eq!(truncate_middle("あいうえおかきくけこ", 7), "あいう…くけこ");
     }
 
     #[test]
