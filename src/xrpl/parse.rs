@@ -3,13 +3,12 @@
 use serde_json::{Value, json};
 
 use super::format::{decode_uri, format_amount, format_asset};
-use super::json_util::{extract_json_u32, json_str};
 use super::types::{
     AccountTxPage, AggregatePrice, AmmSummary, ArcValue, FeeSummary, LedgerObjectRow,
     NFTOKEN_FLAG_MUTABLE, NftRow, NodeValidatorListSummary, OfferRow, PathAlternative, PriceStats,
     RipplePathFindResult, ServerInfoSummary, SimulateResult, TrustLineRow, TxRow, TxSummary,
-    WalletProposeResult,
 };
+use super::util::{extract_json_u32, json_str};
 
 pub(crate) fn parse_submit_success(value: &Value) -> color_eyre::Result<TxSummary> {
     let result = value.get("result").unwrap_or(&Value::Null);
@@ -106,34 +105,8 @@ pub(crate) fn parse_aggregate_price_value(value: &Value) -> color_eyre::Result<A
     let entire_set = result
         .get("entire_set")
         .ok_or_else(|| color_eyre::eyre::eyre!("get_aggregate_price: missing entire_set"))?;
-    let entire = PriceStats {
-        mean: entire_set
-            .get("mean")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_string(),
-        size: entire_set.get("size").and_then(Value::as_u64).unwrap_or(0) as u32,
-        standard_deviation: entire_set
-            .get("standard_deviation")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_string(),
-    };
-
-    let trimmed_set = result.get("trimmed_set").map(|t| PriceStats {
-        mean: t
-            .get("mean")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_string(),
-        size: t.get("size").and_then(Value::as_u64).unwrap_or(0) as u32,
-        standard_deviation: t
-            .get("standard_deviation")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_string(),
-    });
-
+    let entire = parse_price_stats(entire_set);
+    let trimmed_set = result.get("trimmed_set").map(parse_price_stats);
     let time = result.get("time").and_then(Value::as_u64).unwrap_or(0);
 
     Ok(AggregatePrice {
@@ -145,34 +118,20 @@ pub(crate) fn parse_aggregate_price_value(value: &Value) -> color_eyre::Result<A
     })
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
-pub(crate) fn parse_wallet_propose(value: &Value) -> color_eyre::Result<WalletProposeResult> {
-    let result = value.get("result").unwrap_or(&Value::Null);
-
-    let master_seed = result
-        .get("master_seed")
-        .and_then(Value::as_str)
-        .map(String::from)
-        .ok_or_else(|| {
-            color_eyre::eyre::eyre!(
-                "wallet_propose: missing master_seed (node may disable wallet methods on public/Clio RPC)"
-            )
-        })?;
-
-    let account_id = result
-        .get("account_id")
-        .and_then(Value::as_str)
-        .map(String::from)
-        .ok_or_else(|| color_eyre::eyre::eyre!("wallet_propose: missing account_id"))?;
-
-    Ok(WalletProposeResult {
-        master_seed,
-        master_seed_hex: json_str(value, &["result", "master_seed_hex"]).to_string(),
-        account_id,
-        public_key: json_str(value, &["result", "public_key"]).to_string(),
-        public_key_hex: json_str(value, &["result", "public_key_hex"]).to_string(),
-        key_type: json_str(value, &["result", "key_type"]).to_string(),
-    })
+fn parse_price_stats(set: &Value) -> PriceStats {
+    PriceStats {
+        mean: set
+            .get("mean")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        size: set.get("size").and_then(Value::as_u64).unwrap_or(0) as u32,
+        standard_deviation: set
+            .get("standard_deviation")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+    }
 }
 
 pub(crate) fn parse_server_info_value(value: &Value) -> ServerInfoSummary {
@@ -822,28 +781,19 @@ mod tests {
         assert_eq!(fs.open_ledger_fee_drops, 15);
     }
 
-    /// TC-001
+    /// TC-001-003: `book_currency` — XRP uppercase/case-insensitive vs issued with issuer
     #[test]
-    fn book_currency_xrp_uppercase() {
-        let v = book_currency("XRP", None);
-        assert_eq!(v["currency"], "XRP");
-        assert!(v.get("issuer").is_none());
-    }
-
-    /// TC-002
-    #[test]
-    fn book_currency_xrp_case_insensitive() {
-        let v = book_currency("xrp", Some("rIssuer"));
-        assert_eq!(v["currency"], "XRP");
-        assert!(v.get("issuer").is_none());
-    }
-
-    /// TC-003
-    #[test]
-    fn book_currency_issued_includes_issuer() {
-        let v = book_currency("USD", Some("rIssuer"));
-        assert_eq!(v["currency"], "USD");
-        assert_eq!(v["issuer"], "rIssuer");
+    fn book_currency_xrp_and_issued() {
+        let cases = [
+            ("XRP", None, "XRP", None),
+            ("xrp", Some("rIssuer"), "XRP", None),
+            ("USD", Some("rIssuer"), "USD", Some("rIssuer")),
+        ];
+        for (currency, issuer, want_currency, want_issuer) in cases {
+            let v = book_currency(currency, issuer);
+            assert_eq!(v["currency"], want_currency);
+            assert_eq!(v.get("issuer").and_then(Value::as_str), want_issuer);
+        }
     }
 
     /// TC-089 (I-7): `account_tx` RPC not-found maps to empty page at client boundary
@@ -1125,36 +1075,6 @@ mod tests {
         assert_eq!(paths.alternatives.len(), 1);
         // source_amount is a plain drops string, not an object
         assert_eq!(paths.alternatives[0].source_amount, json!("256987"));
-    }
-
-    /// TC-095 wallet_propose ed25519
-    #[test]
-    fn parse_wallet_propose_ed25519() {
-        let value = json!({
-            "result": {
-                "account_id": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
-                "key_type": "ed25519",
-                "master_seed": "sEdTzYqD8TKiF4MjRmq9h5RZVvqQeGF",
-                "master_seed_hex": "DEDCE9CE67B451D852FD4E846FCDE31C",
-                "master_key": "ED74D4036C6591A4BDF9C54CEFA39B996A5DCE5F86D11FDA1878C3A9E45606A5AB",
-                "public_key": "aBQG8RQAzjs1eTKFEAQXr2gSJutMrk9oXqVtYN7qFZjNn82BScnG",
-                "public_key_hex": "ED74D4036C6591A4BDF9C54CEFA39B996A5DCE5F86D11FDA1878C3A9E45606A5AB",
-                "status": "success"
-            }
-        });
-        let r = parse_wallet_propose(&value).expect("wallet_propose should parse");
-        assert_eq!(r.master_seed, "sEdTzYqD8TKiF4MjRmq9h5RZVvqQeGF");
-        assert_eq!(r.account_id, "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh");
-        assert_eq!(
-            r.public_key,
-            "aBQG8RQAzjs1eTKFEAQXr2gSJutMrk9oXqVtYN7qFZjNn82BScnG"
-        );
-        assert_eq!(r.key_type, "ed25519");
-        assert_eq!(r.master_seed_hex, "DEDCE9CE67B451D852FD4E846FCDE31C");
-        assert_eq!(
-            r.public_key_hex,
-            "ED74D4036C6591A4BDF9C54CEFA39B996A5DCE5F86D11FDA1878C3A9E45606A5AB"
-        );
     }
 
     /// TC-096: get_aggregate_price parser — full response

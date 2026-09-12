@@ -1,23 +1,92 @@
 //! XRPL CLI signing helpers and payment helpers.
-//!
-//! ## Threading vs. environment mutation
-//!
-//! [`SigningConfig::prime_seed_source`] clears `XRPL_SEED` with [`std::env::remove_var`], wrapped in
-//! `unsafe` where required by the platform API. Only call during **single-threaded process
-//! startup** before other threads observe the environment — concurrent mutation is undefined behaviour.
 
-use std::{
-    env,
-    io::{self, Write},
-};
+use std::io::{self, Write};
 
+use kobe_primitives::Derive;
 use secrecy::{ExposeSecret, SecretString};
 use serde_json::Value;
 
 use crate::network::Network;
 use crate::xrpl::WalletProposeResult;
-
 pub const SEED_ENV: &str = "XRPL_SEED";
+pub const MNEMONIC_ENV: &str = "XRPL_MNEMONIC";
+
+pub fn credential_from_secrets(
+    seed: Option<&SecretString>,
+    mnemonic: Option<&SecretString>,
+) -> color_eyre::Result<Option<SigningCredential>> {
+    match (seed, mnemonic) {
+        (Some(_), Some(_)) => {
+            color_eyre::eyre::bail!("configure only one of XRPL_SEED or XRPL_MNEMONIC")
+        }
+        (Some(seed), None) => Ok(Some(SigningCredential::from_family_seed(
+            seed.expose_secret(),
+        ))),
+        (None, Some(mnemonic)) => Ok(Some(SigningCredential::from_bip39_mnemonic(
+            mnemonic.expose_secret(),
+        )?)),
+        (None, None) => Ok(None),
+    }
+}
+
+/// Supported XRPL signing credentials.
+///
+/// BIP39 currently derives the XRPL secp256k1 account at index 0 only.
+#[derive(Clone)]
+pub enum SigningCredential {
+    FamilySeed(SecretString),
+    Bip39Mnemonic(SecretString),
+}
+
+impl SigningCredential {
+    #[must_use]
+    pub fn from_family_seed(seed: impl Into<String>) -> Self {
+        Self::FamilySeed(SecretString::from(seed.into()))
+    }
+
+    pub fn from_bip39_mnemonic(mnemonic: impl Into<String>) -> color_eyre::Result<Self> {
+        let mnemonic = mnemonic.into();
+        kobe_primitives::Wallet::from_mnemonic(&mnemonic, None)
+            .map_err(|e| color_eyre::eyre::eyre!("invalid BIP39 mnemonic: {e}"))?;
+        Ok(Self::Bip39Mnemonic(SecretString::from(mnemonic)))
+    }
+
+    pub fn wallet(&self) -> color_eyre::Result<xrpl::wallet::Wallet> {
+        match self {
+            Self::FamilySeed(seed) => wallet_from_family_seed(seed.expose_secret(), 0),
+            Self::Bip39Mnemonic(mnemonic) => {
+                let wallet = kobe_primitives::Wallet::from_mnemonic(mnemonic.expose_secret(), None)
+                    .map_err(|e| color_eyre::eyre::eyre!("BIP39 wallet: {e}"))?;
+                let account = kobe_xrpl::Deriver::new(&wallet)
+                    .derive(0)
+                    .map_err(|e| color_eyre::eyre::eyre!("XRPL derivation: {e}"))?;
+                let private_key = account.private_key_hex();
+
+                Ok(xrpl::wallet::Wallet {
+                    seed: String::new(),
+                    public_key: account.public_key_hex().to_uppercase(),
+                    private_key: format!("00{}", private_key.to_uppercase()),
+                    classic_address: account.address().to_owned(),
+                    sequence: 0,
+                })
+            }
+        }
+    }
+    pub fn address(&self) -> color_eyre::Result<String> {
+        Ok(self.wallet()?.classic_address.clone())
+    }
+}
+
+impl std::fmt::Debug for SigningCredential {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple(match self {
+            Self::FamilySeed(_) => "FamilySeed",
+            Self::Bip39Mnemonic(_) => "Bip39Mnemonic",
+        })
+        .field(&"[REDACTED]")
+        .finish()
+    }
+}
 
 /// Generate a new key pair locally (no `wallet_propose` RPC).
 ///
@@ -42,7 +111,7 @@ pub fn propose_wallet_local(key_type: &str) -> color_eyre::Result<WalletProposeR
         Wallet::create(Some(algo)).map_err(|e| color_eyre::eyre::eyre!("keygen: {e:?}"))?;
     let (entropy, _) = decode_seed(&wallet.seed)
         .map_err(|e| color_eyre::eyre::eyre!("keygen: decode seed: {e:?}"))?;
-    let master_seed_hex: String = entropy.iter().map(|b| format!("{b:02X}")).collect();
+    let master_seed_hex = hex::encode_upper(entropy);
 
     Ok(WalletProposeResult {
         master_seed: wallet.seed.clone(),
@@ -98,51 +167,6 @@ pub fn wallet_from_family_seed(
             .map_err(|e| color_eyre::eyre::eyre!("wallet error: {:?}", e))
     } else {
         Wallet::new(seed, sequence).map_err(|e| color_eyre::eyre::eyre!("wallet error: {:?}", e))
-    }
-}
-
-/// Derive classic address from a family seed (UI / poll seed-address lookup).
-pub fn seed_to_address(seed: &str) -> Result<String, String> {
-    wallet_from_family_seed(trim_family_seed(seed), 0)
-        .map(|w| w.classic_address.clone())
-        .map_err(|e| format!("{e}"))
-}
-
-/// Resolved signing credentials. Seed is memory-masked via `secrecy`.
-///
-/// Test/CLI helper now: production submit paths read the seed from
-/// `PollContext.signing_seed`. `prime_seed_source` also clears `XRPL_SEED`
-/// from the process environment after reading it.
-#[allow(dead_code)]
-pub struct SigningConfig {
-    pub seed: Option<SecretString>,
-}
-
-impl SigningConfig {
-    /// Resolves the signing seed.
-    /// Priority: `XRPL_SEED` env var > `config.toml [xrpl.signing] seed`.
-    /// The plain string is immediately wrapped in `SecretString` to minimise
-    /// the window where the value is unprotected in memory.
-    #[allow(dead_code)]
-    pub fn prime_seed_source(seed_from_config: Option<String>) -> Self {
-        let env_seed = env::var(SEED_ENV).ok();
-        // Security: remove seed from environment immediately after reading to prevent
-        // exposure via /proc/self/environ or inheritance by child processes.
-        if env_seed.is_some() {
-            // SAFETY: no other threads access SEED_ENV concurrently at this point
-            unsafe { env::remove_var(SEED_ENV) };
-        }
-        let seed = env_seed
-            .or(seed_from_config)
-            .map(|s| trim_family_seed(&s).to_string())
-            .filter(|s| !s.is_empty())
-            .map(SecretString::from);
-        Self { seed }
-    }
-
-    #[cfg(test)]
-    pub fn has_seed(&self) -> bool {
-        self.seed.is_some()
     }
 }
 
@@ -207,16 +231,38 @@ fn payment_memos_from_memo_data(
         }]
     })
 }
+/// Build the Payment `Amount` from composer input (IOU when currency+issuer, else XRP drops).
+fn payment_amount(
+    amount_spec: &str,
+    iou_currency: Option<&str>,
+    iou_issuer: Option<&str>,
+) -> color_eyre::Result<xrpl::models::Amount<'static>> {
+    use xrpl::models::{Amount, IssuedCurrencyAmount};
+
+    match (iou_currency, iou_issuer) {
+        (Some(cur), Some(iss)) => {
+            validate_iou_fields(cur, iss, amount_spec)?;
+            Ok(Amount::IssuedCurrencyAmount(IssuedCurrencyAmount {
+                currency: cur.to_string().into(),
+                issuer: iss.to_string().into(),
+                value: amount_spec.to_string().into(),
+            }))
+        }
+        (None, None) => Ok(crate::xrpl::xrp_to_drops(amount_spec)?.into()),
+        _ => Err(color_eyre::eyre::eyre!(
+            "IOU payment requires both currency and issuer"
+        )),
+    }
+}
 
 /// Create, sign, and encode a Payment transaction as a submit-ready blob.
 ///
-/// Phase 3: Transaction signing implementation for XRP transfers
-#[allow(dead_code, clippy::too_many_arguments)]
 /// `amount_spec`: XRP value (XRP mode) or IOU value (IOU mode).
 /// `iou_currency`: If Some, triggers IOU mode (e.g. "USD").
 /// `iou_issuer`: If Some, issuer address for IOU mode.
+#[allow(clippy::too_many_arguments)]
 pub fn create_and_sign_payment(
-    seed: &SecretString,
+    wallet: &xrpl::wallet::Wallet,
     account: &str,
     destination: &str,
     amount_spec: &str,
@@ -230,35 +276,12 @@ pub fn create_and_sign_payment(
     _network: &Network,
 ) -> color_eyre::Result<String> {
     use xrpl::core::binarycodec::encode;
+    use xrpl::models::XRPAmount;
     use xrpl::models::transactions::payment::Payment;
     use xrpl::models::transactions::{CommonFields, TransactionType};
-    use xrpl::models::{Amount, XRPAmount};
     use xrpl::transaction::sign;
 
-    let wallet =
-        wallet_from_family_seed(seed.expose_secret(), 0).map_err(|e| color_eyre::eyre::eyre!(e))?;
-
-    let amount: Amount = match (iou_currency, iou_issuer) {
-        (Some(cur), Some(iss)) => {
-            validate_iou_fields(cur, iss, amount_spec)?;
-            let ica = xrpl::models::IssuedCurrencyAmount {
-                currency: cur.to_string().into(),
-                issuer: iss.to_string().into(),
-                value: amount_spec.to_string().into(),
-            };
-            Amount::IssuedCurrencyAmount(ica)
-        }
-        (None, None) => {
-            let amount_drops = crate::xrpl::xrp_to_drops(amount_spec)?;
-            amount_drops.into()
-        }
-        _ => {
-            return Err(color_eyre::eyre::eyre!(
-                "IOU payment requires both currency and issuer"
-            ));
-        }
-    };
-
+    let amount = payment_amount(amount_spec, iou_currency, iou_issuer)?;
     let mut common = CommonFields::from_account(account.to_string())
         .with_transaction_type(TransactionType::Payment)
         .with_sequence(sequence)
@@ -275,7 +298,7 @@ pub fn create_and_sign_payment(
         ..Default::default()
     };
 
-    sign(&mut payment, &wallet, false)
+    sign(&mut payment, wallet, false)
         .map_err(|e| color_eyre::eyre::eyre!("sign error: {:?}", e))?;
 
     encode(&payment).map_err(|e| color_eyre::eyre::eyre!("encode error: {:?}", e))
@@ -295,29 +318,8 @@ pub fn build_payment_tx_json_for_simulate(
 ) -> color_eyre::Result<Value> {
     use xrpl::models::transactions::payment::Payment;
     use xrpl::models::transactions::{CommonFields, TransactionType};
-    use xrpl::models::{Amount, IssuedCurrencyAmount};
 
-    let amount: Amount = match (iou_currency, iou_issuer) {
-        (Some(cur), Some(iss)) => {
-            validate_iou_fields(cur, iss, amount_spec)?;
-            let ica = IssuedCurrencyAmount {
-                currency: cur.to_string().into(),
-                issuer: iss.to_string().into(),
-                value: amount_spec.to_string().into(),
-            };
-            Amount::IssuedCurrencyAmount(ica)
-        }
-        (None, None) => {
-            let amount_drops = crate::xrpl::xrp_to_drops(amount_spec)?;
-            amount_drops.into()
-        }
-        _ => {
-            return Err(color_eyre::eyre::eyre!(
-                "IOU payment requires both currency and issuer"
-            ));
-        }
-    };
-
+    let amount = payment_amount(amount_spec, iou_currency, iou_issuer)?;
     let mut common = CommonFields::from_account(account.to_string())
         .with_transaction_type(TransactionType::Payment)
         .with_sequence(sequence);
@@ -384,31 +386,6 @@ pub fn sequence_fee_ledger_from_simulate(tx_json: &Value) -> color_eyre::Result<
     ))
 }
 
-/// Create unsigned Payment JSON for signing
-#[allow(dead_code)]
-pub fn create_unsigned_payment_json(
-    account: &str,
-    destination: &str,
-    amount_xrp: &str,
-    sequence: u32,
-    fee: u32,
-    last_ledger_sequence: u32,
-) -> color_eyre::Result<Value> {
-    let amount_drops = crate::xrpl::xrp_to_drops(amount_xrp)?;
-
-    let tx_json = serde_json::json!({
-        "Account": account,
-        "Destination": destination,
-        "Amount": amount_drops,
-        "Sequence": sequence,
-        "Fee": fee,
-        "LastLedgerSequence": last_ledger_sequence,
-        "TransactionType": "Payment"
-    });
-
-    Ok(tx_json)
-}
-
 /// Unsigned SetRegularKey JSON for `simulate`.
 /// Pass `regular_key` as `None` (or empty) to clear the existing regular key.
 pub fn build_set_regular_key_tx_json_for_simulate(
@@ -438,7 +415,7 @@ pub fn build_set_regular_key_tx_json_for_simulate(
 ///
 /// Pass `regular_key` as `None` to clear (remove) the existing regular key.
 pub fn create_and_sign_set_regular_key(
-    seed: &SecretString,
+    wallet: &xrpl::wallet::Wallet,
     account: &str,
     regular_key: Option<&str>,
     sequence: u32,
@@ -452,9 +429,6 @@ pub fn create_and_sign_set_regular_key(
     use xrpl::models::transactions::{CommonFields, TransactionType};
     use xrpl::transaction::sign;
 
-    let wallet =
-        wallet_from_family_seed(seed.expose_secret(), 0).map_err(|e| color_eyre::eyre::eyre!(e))?;
-
     let mut tx = SetRegularKey {
         common_fields: CommonFields::from_account(account.to_string())
             .with_transaction_type(TransactionType::SetRegularKey)
@@ -464,50 +438,7 @@ pub fn create_and_sign_set_regular_key(
         regular_key: regular_key.map(|k| k.to_string().into()),
     };
 
-    sign(&mut tx, &wallet, false).map_err(|e| color_eyre::eyre::eyre!("sign error: {:?}", e))?;
-
-    encode(&tx).map_err(|e| color_eyre::eyre::eyre!("encode error: {:?}", e))
-}
-
-/// Create and sign an `EscrowCreate` transaction, returning the tx_blob hex.
-#[allow(dead_code)]
-#[allow(clippy::too_many_arguments)]
-pub fn create_and_sign_escrow_create(
-    seed: &SecretString,
-    account: &str,
-    destination: &str,
-    amount_drops: &str,
-    finish_after: u32,
-    sequence: u32,
-    fee_drops: u32,
-    last_ledger_sequence: u32,
-    _network: &Network,
-) -> color_eyre::Result<String> {
-    use xrpl::core::binarycodec::encode;
-    use xrpl::models::transactions::escrow_create::EscrowCreate;
-    use xrpl::models::transactions::{CommonFields, TransactionType};
-    use xrpl::transaction::sign;
-
-    let wallet =
-        wallet_from_family_seed(seed.expose_secret(), 0).map_err(|e| color_eyre::eyre::eyre!(e))?;
-
-    let mut tx = EscrowCreate {
-        common_fields: CommonFields::from_account(account.to_string())
-            .with_transaction_type(TransactionType::EscrowCreate)
-            .with_sequence(sequence)
-            .with_fee(xrpl::models::XRPAmount::from(fee_drops.to_string()))
-            .with_last_ledger_sequence(last_ledger_sequence),
-        amount: xrpl::models::XRPAmount::from(amount_drops.to_string()),
-        destination: destination.into(),
-        finish_after: if finish_after > 0 {
-            Some(finish_after)
-        } else {
-            None
-        },
-        ..Default::default()
-    };
-
-    sign(&mut tx, &wallet, false).map_err(|e| color_eyre::eyre::eyre!("sign error: {:?}", e))?;
+    sign(&mut tx, wallet, false).map_err(|e| color_eyre::eyre::eyre!("sign error: {:?}", e))?;
 
     encode(&tx).map_err(|e| color_eyre::eyre::eyre!("encode error: {:?}", e))
 }
@@ -536,11 +467,15 @@ pub(crate) fn require_classic_address_shape<'a>(
     Ok(t)
 }
 
-fn validate_iou_fields(currency: &str, issuer: &str, value: &str) -> color_eyre::Result<()> {
-    let valid_currency = (currency.len() == 3
-        && currency.bytes().all(|b| b.is_ascii_alphanumeric()))
+/// IOU currency codes: 3 ASCII alphanumerics or 40 hex chars; never `XRP`.
+fn is_valid_iou_currency(currency: &str) -> bool {
+    let shape_ok = (currency.len() == 3 && currency.bytes().all(|b| b.is_ascii_alphanumeric()))
         || (currency.len() == 40 && currency.bytes().all(|b| b.is_ascii_hexdigit()));
-    if !valid_currency || currency.eq_ignore_ascii_case("XRP") {
+    shape_ok && !currency.eq_ignore_ascii_case("XRP")
+}
+
+fn validate_iou_fields(currency: &str, issuer: &str, value: &str) -> color_eyre::Result<()> {
+    if !is_valid_iou_currency(currency) {
         color_eyre::eyre::bail!("invalid IOU currency code");
     }
     require_classic_address_shape("issuer", issuer)?;
@@ -580,19 +515,7 @@ fn parse_offer_amount_spec(spec: &str) -> color_eyre::Result<OfferAmountSpec<'_>
         color_eyre::eyre::bail!("IOU amount needs 3 parts (CUR:issuer:value): {spec}");
     }
     let currency = parts[0];
-    let valid_currency = (currency.len() == 3
-        && currency.bytes().all(|b| b.is_ascii_alphanumeric()))
-        || (currency.len() == 40 && currency.bytes().all(|b| b.is_ascii_hexdigit()));
-    if !valid_currency || currency.eq_ignore_ascii_case("XRP") {
-        color_eyre::eyre::bail!("invalid IOU currency code");
-    }
-    require_classic_address_shape("issuer", parts[1])?;
-    let value = parts[2]
-        .parse::<f64>()
-        .map_err(|_| color_eyre::eyre::eyre!("IOU value must be numeric"))?;
-    if !value.is_finite() || value <= 0.0 {
-        color_eyre::eyre::bail!("IOU value must be finite and greater than zero");
-    }
+    validate_iou_fields(currency, parts[1], parts[2])?;
     Ok(OfferAmountSpec::Iou {
         currency,
         issuer: parts[1],
@@ -620,24 +543,6 @@ fn parse_offer_amount(spec: &str) -> color_eyre::Result<xrpl::models::Amount<'st
             };
             Ok(Amount::IssuedCurrencyAmount(ica))
         }
-    }
-}
-
-/// Convert an OfferCreate compact amount spec to a [`serde_json::Value`] for
-/// use in simulate tx_json.
-#[allow(dead_code)]
-pub(crate) fn offer_spec_to_json_value(spec: &str) -> color_eyre::Result<serde_json::Value> {
-    match parse_offer_amount_spec(spec)? {
-        OfferAmountSpec::Xrp(drops) => Ok(serde_json::Value::String(drops.to_string())),
-        OfferAmountSpec::Iou {
-            currency,
-            issuer,
-            value,
-        } => Ok(serde_json::json!({
-            "currency": currency,
-            "issuer": issuer,
-            "value": value
-        })),
     }
 }
 
@@ -670,7 +575,7 @@ pub fn build_offer_create_tx_json_for_simulate(
 /// Create and sign an `OfferCreate` transaction, returning the tx_blob hex.
 #[allow(clippy::too_many_arguments)]
 pub fn create_and_sign_offer_create(
-    seed: &SecretString,
+    wallet: &xrpl::wallet::Wallet,
     account: &str,
     taker_gets_spec: &str,
     taker_pays_spec: &str,
@@ -685,10 +590,8 @@ pub fn create_and_sign_offer_create(
     use xrpl::models::transactions::{CommonFields, TransactionType};
     use xrpl::transaction::sign;
 
-    let wallet =
-        wallet_from_family_seed(seed.expose_secret(), 0).map_err(|e| color_eyre::eyre::eyre!(e))?;
-
     let taker_gets = parse_offer_amount(taker_gets_spec)?;
+
     let taker_pays = parse_offer_amount(taker_pays_spec)?;
 
     let mut tx = OfferCreate {
@@ -702,7 +605,7 @@ pub fn create_and_sign_offer_create(
         ..Default::default()
     };
 
-    sign(&mut tx, &wallet, false).map_err(|e| color_eyre::eyre::eyre!("sign error: {:?}", e))?;
+    sign(&mut tx, wallet, false).map_err(|e| color_eyre::eyre::eyre!("sign error: {:?}", e))?;
 
     encode(&tx).map_err(|e| color_eyre::eyre::eyre!("encode error: {:?}", e))
 }
@@ -710,7 +613,7 @@ pub fn create_and_sign_offer_create(
 /// Create and sign a TrustSet transaction, returning the tx_blob hex (v1: limit only).
 #[allow(clippy::too_many_arguments)]
 pub fn create_and_sign_trust_set(
-    seed: &SecretString,
+    wallet: &xrpl::wallet::Wallet,
     account: &str,
     currency: &str,
     issuer: &str,
@@ -727,10 +630,8 @@ pub fn create_and_sign_trust_set(
     use xrpl::models::transactions::{CommonFields, TransactionType};
     use xrpl::transaction::sign;
 
-    let wallet =
-        wallet_from_family_seed(seed.expose_secret(), 0).map_err(|e| color_eyre::eyre::eyre!(e))?;
-
     let currency = require_nonempty_field("currency", currency)?;
+
     let issuer = require_classic_address_shape("issuer", issuer)?;
     let limit = require_nonempty_field("limit", limit)?;
 
@@ -748,7 +649,7 @@ pub fn create_and_sign_trust_set(
         ..Default::default()
     };
 
-    sign(&mut tx, &wallet, false).map_err(|e| color_eyre::eyre::eyre!("sign error: {:?}", e))?;
+    sign(&mut tx, wallet, false).map_err(|e| color_eyre::eyre::eyre!("sign error: {:?}", e))?;
     encode(&tx).map_err(|e| color_eyre::eyre::eyre!("encode error: {:?}", e))
 }
 
@@ -784,12 +685,9 @@ pub fn build_trust_set_tx_json_for_simulate(
 }
 
 /// Lowercase ASCII domain → hex string for `AccountSet.domain`.
+#[must_use]
 pub fn domain_ascii_to_hex(domain: &str) -> String {
-    domain
-        .to_ascii_lowercase()
-        .bytes()
-        .map(|b| format!("{b:02x}"))
-        .collect()
+    hex::encode(domain.to_ascii_lowercase())
 }
 
 #[must_use]
@@ -835,7 +733,7 @@ pub fn parse_account_set_flag_choice(
 /// Serialize, sign, and encode an AccountSet transaction.
 #[allow(clippy::too_many_arguments)]
 pub fn create_and_sign_account_set(
-    seed: &SecretString,
+    wallet: &xrpl::wallet::Wallet,
     account: &str,
     sequence: u32,
     fee_drops: u32,
@@ -852,9 +750,6 @@ pub fn create_and_sign_account_set(
     use xrpl::models::transactions::{CommonFields, TransactionType};
     use xrpl::models::{Model, XRPAmount};
     use xrpl::transaction::sign;
-
-    let wallet =
-        wallet_from_family_seed(seed.expose_secret(), 0).map_err(|e| color_eyre::eyre::eyre!(e))?;
 
     let mut tx = AccountSet {
         common_fields: CommonFields::from_account(account.to_string())
@@ -873,25 +768,62 @@ pub fn create_and_sign_account_set(
     tx.validate()
         .map_err(|e| color_eyre::eyre::eyre!("account_set validation: {e}"))?;
 
-    sign(&mut tx, &wallet, false).map_err(|e| color_eyre::eyre::eyre!("sign error: {:?}", e))?;
+    sign(&mut tx, wallet, false).map_err(|e| color_eyre::eyre::eyre!("sign error: {:?}", e))?;
 
     encode(&tx).map_err(|e| color_eyre::eyre::eyre!("encode error: {:?}", e))
 }
 
 #[cfg(test)]
 mod tests {
-    use secrecy::ExposeSecret;
-
     use super::*;
-    use crate::config::{TestEnvGuard, env_lock};
 
     #[test]
-    fn resolve_seed_none_when_no_source() {
-        let _g = env_lock();
-        let _env = TestEnvGuard::new(&[SEED_ENV]);
-        _env.remove(SEED_ENV);
-        let signing_config = SigningConfig::prime_seed_source(None);
-        assert!(!signing_config.has_seed());
+    fn credential_from_secrets_returns_none_when_no_source() {
+        let result = credential_from_secrets(None, None).expect("no source is ok");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn credential_from_secrets_wraps_family_seed() {
+        let seed = SecretString::from("sEdSkooMk31MeTjbHVE7vLvgCpEMAdB".to_string());
+        let cred = credential_from_secrets(Some(&seed), None)
+            .expect("seed only")
+            .expect("credential");
+        match cred {
+            SigningCredential::FamilySeed(s) => {
+                assert_eq!(s.expose_secret(), "sEdSkooMk31MeTjbHVE7vLvgCpEMAdB");
+            }
+            other => panic!("expected FamilySeed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn credential_from_secrets_wraps_bip39_mnemonic() {
+        let mnemonic = SecretString::from(
+            "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
+                .to_string(),
+        );
+        let cred = credential_from_secrets(None, Some(&mnemonic))
+            .expect("mnemonic only")
+            .expect("credential");
+        match cred {
+            SigningCredential::Bip39Mnemonic(s) => {
+                assert!(s.expose_secret().starts_with("abandon"));
+            }
+            other => panic!("expected Bip39Mnemonic, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn credential_from_secrets_rejects_seed_and_mnemonic_together() {
+        let seed = SecretString::from("sEdSkooMk31MeTjbHVE7vLvgCpEMAdB".to_string());
+        let mnemonic = SecretString::from(
+            "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
+                .to_string(),
+        );
+        let err =
+            credential_from_secrets(Some(&seed), Some(&mnemonic)).expect_err("both configured");
+        assert!(format!("{err}").contains("only one"));
     }
 
     #[test]
@@ -1010,20 +942,7 @@ mod tests {
     }
 
     #[test]
-    fn resolve_seed_from_config_raw() {
-        let _g = env_lock();
-        let _env = TestEnvGuard::new(&[SEED_ENV]);
-        _env.remove(SEED_ENV);
-        let signing_config = SigningConfig::prime_seed_source(Some("sTest1234".to_string()));
-        assert_eq!(
-            signing_config.seed.as_ref().unwrap().expose_secret(),
-            "sTest1234"
-        );
-    }
-
-    #[test]
     fn confirm_non_mainnet_skips_prompt() {
-        let _g = env_lock();
         assert!(prompt_mainnet_confirmation(
             "Payment",
             &Network::Testnet,
@@ -1038,7 +957,6 @@ mod tests {
 
     #[test]
     fn confirm_mainnet_with_yes_flag_skips_prompt() {
-        let _g = env_lock();
         assert!(prompt_mainnet_confirmation(
             "Payment",
             &Network::Mainnet,
@@ -1069,6 +987,54 @@ mod tests {
         assert!(r.account_id.starts_with('r'));
         assert_eq!(r.key_type, "ed25519");
         assert_eq!(r.master_seed_hex.len(), 32);
+    }
+    #[test]
+    fn bip39_secp256k1_derives_known_xrpl_wallet() {
+        let credential = SigningCredential::from_bip39_mnemonic(
+            "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+        )
+        .expect("valid BIP39 mnemonic");
+        let wallet = credential.wallet().expect("XRPL wallet");
+
+        assert_eq!(
+            wallet.private_key,
+            "0090802A50AA84EFB6CDB225F17C27616EA94048C179142FECF03F4712A07EA7A4"
+        );
+        assert_eq!(
+            xrpl::core::keypairs::derive_classic_address(&wallet.public_key).unwrap(),
+            wallet.classic_address
+        );
+        assert!(xrpl::core::addresscodec::is_valid_classic_address(
+            "rG1QQv2nh2gr7RCZ1P8YYcBUKCCN633jCn"
+        ));
+        assert!(xrpl::core::keypairs::sign(b"test", &wallet.private_key).is_ok());
+    }
+    #[test]
+    fn bip39_secp256k1_can_sign_payment() {
+        let credential = SigningCredential::from_bip39_mnemonic(
+            "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+        )
+        .expect("valid BIP39 mnemonic");
+        let wallet = credential.wallet().expect("XRPL wallet");
+        let account = wallet.classic_address.clone();
+        let blob = create_and_sign_payment(
+            &wallet,
+            &account,
+            "rG1QQv2nh2gr7RCZ1P8YYcBUKCCN633jCn",
+            "1",
+            None,
+            None,
+            None,
+            None,
+            1,
+            12,
+            100,
+            &Network::Mainnet,
+        )
+        .expect("signed payment");
+
+        assert!(!blob.is_empty());
+        assert!(blob.chars().all(|c| c.is_ascii_hexdigit()));
     }
 
     #[test]
@@ -1197,20 +1163,5 @@ mod tests {
         assert!(validate_iou_fields("XRP", issuer, "1").is_err());
         assert!(validate_iou_fields("TOOLONG", issuer, "1").is_err());
         assert!(validate_iou_fields("USD", issuer, "1").is_ok());
-    }
-
-    /// TC-049
-    #[test]
-    fn env_seed_overrides_config_seed() {
-        let _g = env_lock();
-        let _env = TestEnvGuard::new(&[SEED_ENV]);
-        _env.set(SEED_ENV, "sFromEnvOverride");
-        let signing_config =
-            SigningConfig::prime_seed_source(Some("sFromConfigIgnored".to_string()));
-        assert!(signing_config.has_seed());
-        assert_eq!(
-            signing_config.seed.as_ref().unwrap().expose_secret(),
-            "sFromEnvOverride"
-        );
     }
 }

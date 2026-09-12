@@ -10,9 +10,8 @@ use xrpl::{
 
 use crate::action::Action;
 
-use super::backoff::next_backoff_secs;
-use super::json_util::extract_json_u32;
 use super::types::TxSummary;
+use super::util::{extract_json_u32, next_backoff_secs};
 
 /// Emit one poll trigger per ledger index within a WebSocket session.
 fn should_emit_ledger_trigger(last: Option<u32>, current: u32) -> bool {
@@ -21,6 +20,8 @@ fn should_emit_ledger_trigger(last: Option<u32>, current: u32) -> bool {
 
 pub fn start_ws_task(
     ws_url: String,
+    custom_ws: bool,
+    network_watch: tokio::sync::watch::Receiver<crate::network::Network>,
     watch_address: Option<String>,
     action_tx: UnboundedSender<Action>,
     poll_trigger_tx: UnboundedSender<()>,
@@ -28,6 +29,8 @@ pub fn start_ws_task(
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(drive_ws_reconnect_loop(
         ws_url,
+        custom_ws,
+        network_watch,
         watch_address,
         action_tx,
         poll_trigger_tx,
@@ -37,15 +40,34 @@ pub fn start_ws_task(
 
 async fn drive_ws_reconnect_loop(
     ws_url: String,
+    custom_ws: bool,
+    mut network_watch: tokio::sync::watch::Receiver<crate::network::Network>,
     watch_address: Option<String>,
     action_tx: UnboundedSender<Action>,
     poll_trigger_tx: UnboundedSender<()>,
     cancel: CancellationToken,
 ) {
+    let mut current_network = *network_watch.borrow();
+    let mut ws_url = ws_url;
     let mut backoff_secs: u64 = 0;
     loop {
         tokio::select! {
             _ = cancel.cancelled() => return,
+            network_res = network_watch.changed() => {
+                if network_res.is_err() {
+                    continue;
+                }
+                let new_network = *network_watch.borrow();
+                if new_network != current_network {
+                    current_network = new_network;
+                    if !custom_ws {
+                        ws_url = new_network.ws_url().to_string();
+                        // force reconnect by treating this as a live-session end
+                        backoff_secs = 0;
+                    }
+                }
+                continue;
+            }
             _ = tokio::time::sleep(Duration::from_secs(backoff_secs)) => {}
         }
 

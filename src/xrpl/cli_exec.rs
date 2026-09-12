@@ -1,8 +1,6 @@
-use secrecy::{ExposeSecret, SecretString};
-
 use crate::cli::Cmd;
 use crate::network::Network;
-use crate::signing::{self, prompt_mainnet_confirmation};
+use crate::signing::{self, SigningCredential, prompt_mainnet_confirmation};
 
 use super::client::{RpcClient, xrp_to_drops};
 
@@ -10,7 +8,7 @@ pub async fn execute_cli_command(
     cmd: Cmd,
     rpc_url: &str,
     network: &Network,
-    signing_seed: Option<SecretString>,
+    signing_credential: Option<SigningCredential>,
     yes: bool,
 ) -> color_eyre::Result<()> {
     let rpc = RpcClient::connect(rpc_url)?;
@@ -116,13 +114,12 @@ pub async fn execute_cli_command(
         } => {
             use super::address::{ensure_xaddress_matches_network, resolve_payment_destination};
 
-            let Some(seed) = signing_seed.as_ref() else {
+            let Some(credential) = signing_credential.as_ref() else {
                 return Err(color_eyre::eyre::eyre!(
-                    "No signing seed: set XRPL_SEED, put seed in config [xrpl.signing] seed, or use --seed (family seed s... or sEd...)."
+                    "No signing credential: set XRPL_SEED or XRPL_MNEMONIC, configure [xrpl.signing] seed or mnemonic, or use --seed/--mnemonic."
                 ));
             };
-            let wallet = signing::wallet_from_family_seed(seed.expose_secret(), 0)
-                .map_err(|e| color_eyre::eyre::eyre!(e))?;
+            let wallet = credential.wallet()?;
             let account = wallet.classic_address.clone();
 
             let resolved = resolve_payment_destination(destination.trim())?;
@@ -168,7 +165,7 @@ pub async fn execute_cli_command(
             }
 
             match signing::create_and_sign_payment(
-                seed,
+                &wallet,
                 &account,
                 &destination_classic,
                 &amount,

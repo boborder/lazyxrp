@@ -6,20 +6,20 @@ use xrpl::asynch::clients::{AsyncJsonRpcClient, XRPLClient};
 use super::dunl::{XRPLF_DUNL_URL, parse_xrplf_dunl_json};
 use super::format::drops_to_xrp;
 pub use super::format::{path_find_snapshot, xrp_to_drops};
-use super::json_util::{extract_json_u32, json_str};
 pub(crate) use super::parse::empty_account_tx_page_on_not_found;
 use super::parse::{
     book_currency, book_offer_best_price, is_not_found_error, is_rate_limited_error,
     is_transient_xrpl_error, parse_account_lines_value, parse_account_nfts_value,
     parse_account_objects_value, parse_account_tx_page, parse_aggregate_price_value,
     parse_amm_info_value, parse_book_offers_value, parse_fee_value, parse_ripple_path_find,
-    parse_server_info_value, parse_simulate_result, parse_submit_success, parse_wallet_propose,
+    parse_server_info_value, parse_simulate_result, parse_submit_success,
 };
 use super::types::{
     AccountSummary, AccountTxPage, AggregatePrice, AmmSummary, DunlSummary, FeeSummary,
     LedgerObjectRow, NftRow, OfferRow, OracleId, RipplePathFindResult, ServerInfoSummary,
-    SimulateResult, TrustLineRow, TxRow, TxSummary, WalletProposeResult, XrplRlusdPrice,
+    SimulateResult, TrustLineRow, TxRow, TxSummary, XrplRlusdPrice,
 };
+use super::util::{extract_json_u32, json_str};
 
 pub(crate) const RPC_TIMEOUT: Duration = Duration::from_secs(20);
 /// Hard cap for JSON-RPC / dUNL response bodies (DoS guard).
@@ -432,17 +432,6 @@ impl RpcClient {
         parse_ripple_path_find(&value)
     }
 
-    /// Generate a new XRPL wallet via `wallet_propose` RPC (tests / optional callers).
-    ///
-    /// TUI keygen uses [`crate::signing::propose_wallet_local`] because public RPC nodes
-    /// often omit `master_seed`.
-    #[allow(dead_code)]
-    pub async fn wallet_propose(&self, key_type: &str) -> color_eyre::Result<WalletProposeResult> {
-        let params = json!({ "key_type": key_type });
-        let value = self.rpc_value("wallet_propose", params).await?;
-        parse_wallet_propose(&value)
-    }
-
     pub async fn get_aggregate_price(
         &self,
         oracles: &[OracleId],
@@ -510,6 +499,7 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    /// TC-068: XRPL RPC error — not found is not silently swallowed
     #[test]
     fn ensure_no_xrpl_rpc_error_preserves_not_found_as_error() {
         let value = json!({

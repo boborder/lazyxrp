@@ -1,9 +1,9 @@
 //! XRPL Foundation dUNL JSON + validator manifest decoding.
 
+use base64::Engine as _;
+use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
-
-use serde_json::Value;
 
 use super::format::format_ripple_time_utc;
 use super::types::{DunlSummary, DunlValidatorRow};
@@ -173,7 +173,7 @@ fn read_st_vl(data: &[u8], off: usize) -> Option<(Vec<u8>, usize)> {
 }
 
 fn validator_key_bytes_to_hex(blob: &[u8]) -> String {
-    blob.iter().map(|b| format!("{b:02X}")).collect()
+    hex::encode_upper(blob)
 }
 
 pub(crate) fn parse_xrplf_dunl_json(text: &str) -> color_eyre::Result<DunlSummary> {
@@ -227,39 +227,11 @@ pub(crate) fn parse_xrplf_dunl_json(text: &str) -> color_eyre::Result<DunlSummar
 }
 
 fn base64_decode(input: &str) -> color_eyre::Result<Vec<u8>> {
-    const TABLE: &[u8; 256] = &{
-        let mut t = [255u8; 256];
-        let chars = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-        let mut i = 0u8;
-        while (i as usize) < chars.len() {
-            t[chars[i as usize] as usize] = i;
-            i += 1;
-        }
-        t
-    };
-    let mut out = Vec::new();
-    let mut buf = 0u32;
-    let mut bits = 0u32;
-    for &b in input.as_bytes() {
-        if b == b'=' {
-            break;
-        }
-        if b.is_ascii_whitespace() {
-            continue;
-        }
-        let v = TABLE[b as usize];
-        if v == 255 {
-            return Err(color_eyre::eyre::eyre!("dUNL invalid base64"));
-        }
-        buf = (buf << 6) | u32::from(v);
-        bits += 6;
-        if bits >= 8 {
-            bits -= 8;
-            out.push((buf >> bits) as u8);
-            buf &= (1 << bits) - 1;
-        }
-    }
-    Ok(out)
+    // Mirror the old decoder's leniency: skip ASCII whitespace before padding.
+    let cleaned: Vec<u8> = input.bytes().filter(|b| !b.is_ascii_whitespace()).collect();
+    base64::engine::general_purpose::STANDARD
+        .decode(&cleaned)
+        .map_err(|e| color_eyre::eyre::eyre!("dUNL invalid base64: {e}"))
 }
 
 #[cfg(test)]

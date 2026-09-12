@@ -2,6 +2,9 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
 
+/// Seconds between Unix epoch (1970-01-01) and Ripple epoch (2000-01-01).
+pub(crate) const RIPPLE_EPOCH_UNIX: i64 = 946_684_800;
+
 /// Newtype wrapper so `Arc<serde_json::Value>` can derive `Serialize`/`Deserialize`.
 ///
 /// # Immutability contract
@@ -130,7 +133,6 @@ impl DunlSummary {
 
     /// Whole days until blob expiry (negative if already expired).
     pub fn days_until_expiry(&self) -> Option<i64> {
-        const RIPPLE_EPOCH_UNIX: i64 = 946_684_800;
         let expiry_unix =
             RIPPLE_EPOCH_UNIX.saturating_add(self.expiration_ripple.min(i64::MAX as u64) as i64);
         let now = std::time::SystemTime::now()
@@ -411,6 +413,18 @@ pub struct FlareFeedPrice {
     pub source: String,
 }
 
+/// Flare EVM wallet read snapshot for the Overview wallet panel.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FlareWalletSummary {
+    pub address: String,
+    pub native_balance_display: String,
+    pub fxrp_balance_display: String,
+    /// `[flare.fassets] execute` gate (C3 writes allowed when true).
+    pub execute_enabled: bool,
+    /// Whether the configured executor env var is set in this session.
+    pub executor_key_configured: bool,
+}
+
 /// FXRP Direct Mint read-only snapshot from AssetManagerFXRP (C1).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct FxrpDirectMintInfo {
@@ -655,12 +669,15 @@ pub enum PollCommand {
 #[derive(Debug)]
 pub struct PollContext {
     pub rpc_url: String,
+    /// True when a custom `--server`/`XRPL_RPC_SERVER` was set: network switching
+    /// keeps the custom endpoint instead of the per-network preset.
+    pub custom_rpc: bool,
     pub watch_address: String,
     pub book_pair: BookPair,
     pub poll_interval: Duration,
     pub seed_address: Option<String>,
-    /// Signing seed held by the poll task (never sent over Action/params channels).
-    pub signing_seed: Option<secrecy::SecretString>,
+    /// Signing credential held by the poll task (never sent over Action/params channels).
+    pub signing_seed: Option<crate::signing::SigningCredential>,
     pub network_watch: watch::Receiver<Network>,
     /// Active UI tab index (0 Overview …) for optional heavy-RPC skips.
     pub tab_watch: watch::Receiver<usize>,
@@ -674,8 +691,12 @@ pub struct PollContext {
     pub flare_feeds: Vec<String>,
     /// `[flare.fassets] execute` — when false, C3 execute path is refused.
     pub flare_fassets_execute: bool,
+    /// `[flare] display` — Off skips FTSO/FXRP read fetches (C3 execute URL unaffected).
+    pub flare_display: crate::config::FlareDisplay,
     /// Env var name for Flare executor key (`[flare.fassets] evm_key_env`).
     pub flare_evm_key_env: String,
+    /// `[flare.wallet] address` for Overview Flare wallet panel reads.
+    pub flare_wallet_address: Option<String>,
     /// Serializes account_info → simulate → sign → submit for one wallet.
     pub submit_lock: Arc<Mutex<()>>,
 }

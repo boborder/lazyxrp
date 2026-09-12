@@ -13,7 +13,7 @@ pub struct XrplTomlFetch {
     pub result: Result<XrplTomlData, String>,
 }
 
-/// Fetch xrp-ledger.toml and check whether `expected_pubkey` appears under [[VALIDATORS]].
+/// Fetch xrp-ledger.toml and check whether `expected_pubkey` appears under `[[VALIDATORS]]`.
 pub async fn fetch_xrpl_toml_with_meta(
     domain: &str,
     expected_pubkey: &str,
@@ -80,7 +80,7 @@ pub async fn fetch_xrpl_toml_with_meta(
 }
 
 /// Parse xrp-ledger.toml text and check whether `expected_pubkey`
-/// appears under [[VALIDATORS]].
+/// appears under `[[VALIDATORS]]`.
 pub fn parse_xrpl_toml(
     text: &str,
     expected_pubkey: &str,
