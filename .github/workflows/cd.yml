@@ -209,6 +209,7 @@ jobs:
       contents: read
     steps:
       - name: Dispatch Benchmark on the release tag
-        run: gh workflow run Benchmark --ref "$GITHUB_REF_NAME"
+        # No checkout here — gh needs an explicit repo (it probes local git otherwise).
+        run: gh workflow run Benchmark -R "$GITHUB_REPOSITORY" --ref "$GITHUB_REF_NAME"
         env:
           GH_TOKEN: ${{ github.token }}
