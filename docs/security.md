@@ -75,7 +75,7 @@ Risks without a matching S entry (e.g. R-006 mainnet guard bypass, R-008 RPC 429
 | --- | --- | --- |
 | S-001 | `RawSigningConfig` の `Debug` derive がシードを平文でログ出力 | `impl fmt::Debug` で `[REDACTED]` にマスク |
 | S-002 | `SigningConfig::load()` が環境変数を読み取り後に削除しない | `unsafe { env::remove_var(SEED_ENV) }` で除去 |
-| S-003 | 設定ファイルにシードが保存される場合のファイル権限チェックなし | Unix でグループ/ワールド読取時に `tracing::warn!` |
+| S-003 | 設定ファイルに署名資格情報（seed / mnemonic）が保存される場合のファイル権限チェックなし | Unix でグループ/ワールド読取時に `tracing::warn!`（`warn_if_config_world_readable`） |
 | S-004 | env var 経由のパスに対するパス検証なし | `validated_path` で `..` を拒否。`canonicalize()` + ホーム外拒否は Phase 3 前に推奨 |
 | S-006 | `tui.rs` の `Drop` 実装で `unwrap()` を使用 | `if let Err(e) = self.exit() { eprintln!(...) }` |
 | S-007 | 組み込み設定のパース | ビルド時 `expect` で開発時検知 |

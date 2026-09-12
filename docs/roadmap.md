@@ -4,7 +4,7 @@
 
 **Planning view**. Requirements → [`requirements.md`](requirements.md) · System behavior → [`architecture.md`](architecture.md) · UI/UX → [`DESIGN.md`](../DESIGN.md).
 
-**Current version:** `Cargo.toml` → 0.2.5  
+**Current version:** `Cargo.toml` → 0.2.6  
 **Last updated:** 2026-09-12
 
 ## Milestones
@@ -45,8 +45,10 @@
 | Concern | SSOT |
 |---------|------|
 | Portfolio milestones + cross-cutting backlog | This file |
+| This week's implementation checkboxes | `openspec/changes/<name>/tasks.md` (when using OpenSpec) |
+| Completion history | `openspec/changes/archive/**` + git |
 | Human doc index | Root `README.md` § Documentation |
-| Shipped releases | Git history + milestone notes above |
+| Agent contracts | `openspec/specs/` + `openspec/config.yaml` |
 
 ## How to add work
 
@@ -54,3 +56,4 @@
 2. New requirement → `docs/requirements.md` (FR/NFR)
 3. Shipped behavior / network / config rules → `docs/architecture.md` (+ TC in `docs/test.md`)
 4. Keys, layout, colors, modals → root [`DESIGN.md`](../DESIGN.md)
+5. Active implementation checkboxes (when using OpenSpec) → `openspec/changes/<name>/tasks.md`
