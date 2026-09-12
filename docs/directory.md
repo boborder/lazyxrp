@@ -115,7 +115,7 @@ lazyxrp/
 - `README.md`: 利用者向けの概要と起動手順。
 - `.env.example`: `XRPL_*` 環境変数の例（任意。一覧は `docs/tech.md` と実装を参照）。
 - `install.sh`: インタラクティブインストーラ（必須は `curl` **または** `wget`）。プロンプトとメッセージは英語。`--help` で CLI 一覧（`--method cargo|binary`、`--install-rust` / `--no-install-rust`、`--install-mise` / `--no-install-mise`、`-q`）。`CI=1` は `-q` 相当。PATH 未設定時は shell profile へ追記可。リリースアーカイブに `rp` があればそれを入れ、無ければ `rp` → `lazyxrp` symlink。**手動アンインストール**は `--uninstall-help`（`lazyxrp --self-uninstall`、`INSTALL_DIR/rp` 削除など）。
-- `.mise.toml`: [mise](https://mise.jdx.dev/) タスク（例: `install`、`tags`（一覧）、`tag-push`（緊急時の手動タグフォールバック）、`bench` / `bench-fast`（ベンチマーク））。`main` へ push して CI が緑で、かつ `Cargo.toml` の `version` が前回から上がっていれば [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) の `auto-tag` が `v<version>` を打ち、[`.github/workflows/cd.yml`](../.github/workflows/cd.yml) がリリースする。CD 成功後に [`.github/workflows/benchmark.yml`](../.github/workflows/benchmark.yml) が連鎖する（手動 `workflow_dispatch` も可）。
+- `.mise.toml`: [mise](https://mise.jdx.dev/) タスク（例: `install`、`tags`（一覧）、`tag-push`（緊急時の手動タグフォールバック）、`bench` / `bench-fast`（ベンチマーク））。`main` へ push して CI が緑で、かつ `Cargo.toml` の `version` が前回から上がっていれば [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) の `auto-tag` が `v<version>` を打ち、[`.github/workflows/cd.yml`](../.github/workflows/cd.yml) がリリースする。CD 成功後に `cd.yml` の `trigger-benchmark` ジョブが [`.github/workflows/benchmark.yml`](../.github/workflows/benchmark.yml) を `--ref v<version>` で dispatch する（GITHUB_TOKEN dispatch は `workflow_run` を発火させないため。手動 `workflow_dispatch` も可）。
 - `AGENTS.md`: プロジェクト運用ルールと実行契約（禁止事項・クイックリファレンスを含む）。graphify の構造情報も参照。
 
 ## 3. `src/` 配下の責務
