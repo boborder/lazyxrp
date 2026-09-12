@@ -2,7 +2,7 @@
 
 **Role:** 進捗管理（マイルストーンとポートフォリオバックログの SSOT）。
 
-**Planning view**. Requirements → [`requirements.md`](requirements.md) · System behavior → [`architecture.md`](architecture.md) · UI/UX → [`DESIGN.md`](../DESIGN.md).
+**Planning view**. Requirements → [`requirements.md`](docs/requirements.md) · System behavior → [`architecture.md`](docs/architecture.md) · UI/UX → [`DESIGN.md`](../DESIGN.md).
 
 **Current version:** `Cargo.toml` → 0.2.6  
 **Last updated:** 2026-09-12

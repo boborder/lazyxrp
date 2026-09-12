@@ -93,7 +93,6 @@ lazyxrp/
 │               └── parsers.rs
 ├── docs/
     ├── architecture.md    # システム・行動設計（TX detail §5.2.1 含む）
-    ├── roadmap.md         # マイルストーン・バックログ
     ├── requirements.md    # FR/NFR（何をするか）
     ├── tech.md
     ├── test.md            # TC カタログ（requirements / architecture へトレース）
@@ -183,7 +182,7 @@ lazyxrp/
 | `architecture.md` | How (system) | Network, config precedence, data flow, behavioral contracts |
 | `../DESIGN.md` | Look & feel | Keys, layout splits, theme, modals, loading |
 | `test.md` | Verify | TC catalog → traces to requirements + architecture |
-| `roadmap.md` | When | Milestones, cross-cutting backlog |
+| [`ROADMAP.md`](../ROADMAP.md) | When | Milestones, cross-cutting backlog |
 | `tech.md` | Stack | Dependencies, versions, dev commands |
 | `directory.md` | Index | This file |
 | `references.md` | Links | External references |

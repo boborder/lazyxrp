@@ -205,7 +205,7 @@ Agents and contributors: [`AGENTS.md`](./AGENTS.md) (`cargo fmt` / `cargo check`
 
 Product docs live under [`docs/`](./docs/). **Where to read what:** [`AGENTS.md`](./AGENTS.md) (progressive disclosure — single index).
 
-Planning: [`docs/roadmap.md`](./docs/roadmap.md).
+Planning: [`ROADMAP.md`](./ROADMAP.md).
 
 ## References
 

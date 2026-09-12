@@ -11,14 +11,14 @@
 | [`docs/requirements.md`](docs/requirements.md) | **何をするか** — 要件定義・ゴール設計 |
 | [`docs/architecture.md`](docs/architecture.md) | **どう動くか** — 詳細設計・スキーマ設計 |
 | [`docs/test.md`](docs/test.md) | **どう検証するか** — テスト設計・テストガイド |
-| [`docs/roadmap.md`](docs/roadmap.md) | **いつ・何を・どこまで** — 進捗・目標・バージョン |
+| [`ROADMAP.md`](ROADMAP.md) | **何を・いつ・どこまで** — 進捗・目標・バージョン |
 | [`docs/tech.md`](docs/tech.md) | **何で作るか** — 技術選定・依存・API 連携 |
 | [`docs/directory.md`](docs/directory.md) | **どこにあるか** — ディレクトリ構成・命名 |
 | [`docs/security.md`](docs/security.md) | **どう守るか** — セキュリティ・機密管理 |
 | [`docs/problems.md`](docs/problems.md) | **何に注意するか** — 注意点・落とし穴 |
-| [`docs/references.md`](docs/references.md) | **調べる前に見るべき** — 参考文献・サンプル |
+| [`docs/references.md`](docs/references.md) | **調べる前に見る** — 参考文献・サンプル |
 | [`DESIGN.md`](DESIGN.md) | **どう見える・操作するか** — UI/UX |
-| **AGENTS.md** *(here)* | **どう作る/運用するか** — Agent 指示（最小） |
+| **AGENTS.md** *(here)* | **どう作る・運用するか** — Agent 指示（最小） |
 
 ## Quick reference
 
@@ -43,7 +43,7 @@
 | Agent runtime contracts | `openspec/specs/<cap>/spec.md` |
 | Hub config | `openspec/config.yaml` |
 
-When shipping behavior: update `docs/` (`roadmap.md`, `architecture.md`, `test.md`, …) in the same change. If OpenSpec was used: `openspec archive <name> -y`.
+When shipping behavior: update root `ROADMAP.md` and `docs/` (`architecture.md`, `test.md`, …) in the same change. If OpenSpec was used: `openspec archive <name> -y`.
 
 ## Execution contract
 
