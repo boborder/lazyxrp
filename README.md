@@ -110,7 +110,7 @@ rc book --base XRP --quote USD --issuer <r-issuer>
 | `lines <ADDR>` | Trust lines |
 | `amm --asset1 … --asset2 …` | AMM pool info |
 | `tx-history <ADDR> [--limit N]` | Transaction history |
-| `send <DEST> [--amount AMT]` | Send XRP (requires seed) |
+| `send <DEST> [--amount AMT]` | Send XRP (requires `XRPL_SEED` or `XRPL_MNEMONIC`) |
 
 Bare `lazyxrp info` (without `-x`) still works temporarily but prints a deprecation warning.
 
@@ -234,6 +234,3 @@ Self-contained product docs under [`docs/`](./docs/) — no other repo folders r
 ## License
 
 MIT — see [`LICENSE`](./LICENSE).
-
-
-[You have received this identical output 3 times. Re-reading '/Users/hotmilk/Developer/rust/lazyxrp/README.md:raw' will not change it — use a narrower selector (path:A-B), or proceed with the edit.]

@@ -181,14 +181,14 @@ fn submit_shortcut(key: &KeyEvent, is_form_editing: bool) -> bool {
 
 impl Component for WalletPanel {
     fn register_config_handler(&mut self, config: Arc<Config>) -> color_eyre::Result<()> {
-        self.seed_address = crate::signing::credential_from_secrets(
+        self.seed_address = match crate::signing::credential_from_secrets(
             config.xrpl.signing.secret_seed.as_ref(),
             config.xrpl.signing.secret_mnemonic.as_ref(),
-        )
-        .map_err(|e| e.to_string())
-        .ok()
-        .flatten()
-        .map(|credential| credential.address().map_err(|e| e.to_string()));
+        ) {
+            Ok(None) => None,
+            Ok(Some(credential)) => Some(credential.address().map_err(|e| e.to_string())),
+            Err(error) => Some(Err(error.to_string())),
+        };
         self.network = config.xrpl.network;
         self.config = Some(config);
         Ok(())

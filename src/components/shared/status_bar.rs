@@ -60,6 +60,7 @@ pub struct StatusBar {
     last_book_update: Option<Instant>,
     last_any_update_wall: Option<SystemTime>,
     cached_wall_time: Option<String>,
+    cached_wall_for: Option<SystemTime>,
     last_error: Option<String>,
     cached_error_display: Option<String>,
     refreshing_account: bool,
@@ -88,6 +89,7 @@ impl StatusBar {
             last_book_update: None,
             last_any_update_wall: None,
             cached_wall_time: None,
+            cached_wall_for: None,
             last_error: None,
             cached_error_display: None,
             refreshing_account: false,
@@ -233,12 +235,9 @@ impl Component for StatusBar {
         if let Some(t) = self.last_any_update_wall {
             spans.push(Span::raw("  "));
             spans.push(Span::styled("@", label_style));
-            // Cache wall-time string (changes once per second)
-            if self
-                .cached_wall_time
-                .as_ref()
-                .is_none_or(|value| value.len() < 8)
-            {
+            // Cache wall-time string until last_any_update_wall changes
+            if self.cached_wall_for != Some(t) {
+                self.cached_wall_for = Some(t);
                 self.cached_wall_time = Some(fmt::fmt_local_hms(t));
             }
             let wall_str = self.cached_wall_time.as_deref().expect("wall time cached");

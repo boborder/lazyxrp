@@ -18,6 +18,8 @@ include = [
     "/src/**",
     "/build.rs",
     "/config.json5",
+    "/docs/**",
+    "/DESIGN.md",
     "/LICENSE",
     "/README.md",
     "/.env.example",

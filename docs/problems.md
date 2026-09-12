@@ -10,7 +10,7 @@
 - 原因: `embassy-sync` などの依存経路で `critical-section` が必要だが、`std` 実装が有効でない構成だとリンク失敗する
 - 対応: `Cargo.toml` で `critical-section = { version = "1.2.0", features = ["std"] }` を追加
 - 注意: ソース内に直接の利用がなくても、この依存は `std` 実装の有効化に必要。未使用依存として削除しない
-- 検証: `cargo check` / `cargo build` を連続実行して再発有無を確認する
+- 検証: `cargo check` / `cargo build --bins` を連続実行して再発有無を確認する
 
 ### P-003: EscrowCreate composer/poll still unwired
 

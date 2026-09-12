@@ -365,10 +365,10 @@ impl Config {
 
         let mut config: Self = builder.build()?.try_deserialize()?;
 
-        // Security (S-003): if a signing seed is present in config, warn about file permissions
-        // BEFORE we move it out of the plain-text field.
+        // Security (S-003): if a signing credential is present in config, warn about file permissions
+        // BEFORE we move it out of the plain-text fields.
         let resolved_cfg_dir = config.resolved_config_dir();
-        if config.xrpl.signing.seed.is_some() {
+        if config.xrpl.signing.seed.is_some() || config.xrpl.signing.mnemonic.is_some() {
             for (file, _) in &config_files {
                 let path = resolved_cfg_dir.join(file);
                 if path.exists() {
@@ -443,7 +443,7 @@ impl Config {
     }
 }
 
-/// Security (S-003): warn when a config file containing a seed is group- or world-readable.
+/// Security (S-003): warn when a config file containing a signing credential is group- or world-readable.
 /// On non-Unix platforms this is a no-op.
 #[cfg(unix)]
 fn warn_if_config_world_readable(path: &std::path::Path) {
@@ -453,8 +453,8 @@ fn warn_if_config_world_readable(path: &std::path::Path) {
         // 0o044 = group-read (0o040) | world-read (0o004)
         if mode & 0o044 != 0 {
             tracing::warn!(
-                // Security: config file with seed should be readable only by owner (0600)
-                "Config file '{}' has mode {:04o} and contains a signing seed. \
+                // Security: config file with signing credential should be readable only by owner (0600)
+                "Config file '{}' has mode {:04o} and contains a signing credential. \
                  Run: chmod 600 {}",
                 path.display(),
                 mode & 0o777,

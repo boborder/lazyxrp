@@ -80,7 +80,7 @@ cargo doc --no-deps --document-private-items --all-features
 | TC-054 | P1 | `src/xrpl/cli_exec.rs` | CLI nfts — exits with code 0 |
 | TC-055 | P1 | `src/xrpl/cli_exec.rs` | CLI lines — exits with code 0 |
 | TC-056 | P2 | `src/xrpl/cli_exec.rs` | CLI amm — exits with code 0 |
-| TC-057 | P2 | `src/xrpl/cli_exec.rs` | CLI txhistory — exits with code 0 |
+| TC-057 | P2 | `src/xrpl/cli_exec.rs` | CLI tx-history — exits with code 0 |
 | TC-058 | P1 | `src/cli.rs` | CLI — invalid parameters error |
 | TC-059 | P2 | `src/xrpl/cli_exec.rs` | CLI — invalid r-address format |
 | TC-060 | P1 | `src/app.rs` | Watch mode — App builds 4 tabs with watch account (I-9) |

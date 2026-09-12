@@ -78,7 +78,7 @@ Environment variables:
 Examples:
   ./install.sh --dir ~/.local/bin
   INSTALL_DIR=/usr/local/bin ./install.sh -q --method binary
-  curl -fsSL .../install.sh | sh -s -- -q --no-install-rust --method binary
+  curl -fsSL .../install.sh | bash -s -- -q --no-install-rust --method binary
 
 Uninstall:
   Prefer: lazyxrp --self-uninstall [--yes]
@@ -156,6 +156,7 @@ parse_args() {
                 ;;
             --dir=*)
                 INSTALL_DIR="${1#*=}"
+                [ -n "$INSTALL_DIR" ] || die "--dir requires a path (try --help)"
                 shift
                 ;;
             --no-install-rust)

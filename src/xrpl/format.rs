@@ -27,8 +27,12 @@ pub fn format_ripple_time_utc(seconds: u64) -> String {
 
 pub fn xrp_to_drops(xrp: &str) -> color_eyre::Result<u64> {
     const DROPS_PER_XRP: u64 = 1_000_000;
+    let overflow = || color_eyre::eyre::eyre!("XRP amount overflow");
     match xrp.split_once('.') {
-        None => Ok(xrp.parse::<u64>()? * DROPS_PER_XRP),
+        None => {
+            let whole = xrp.parse::<u64>()?;
+            whole.checked_mul(DROPS_PER_XRP).ok_or_else(overflow)
+        }
         Some((whole, frac)) => {
             if frac.len() > 6 {
                 return Err(color_eyre::eyre::eyre!(
@@ -37,7 +41,8 @@ pub fn xrp_to_drops(xrp: &str) -> color_eyre::Result<u64> {
             }
             let whole: u64 = whole.parse()?;
             let frac: u64 = format!("{frac:0<6}").parse()?;
-            Ok(whole * DROPS_PER_XRP + frac)
+            let whole_drops = whole.checked_mul(DROPS_PER_XRP).ok_or_else(overflow)?;
+            whole_drops.checked_add(frac).ok_or_else(overflow)
         }
     }
 }
@@ -351,6 +356,11 @@ mod tests {
     #[test]
     fn xrp_to_drops_zero() {
         assert_eq!(xrp_to_drops("0").unwrap(), 0);
+    }
+
+    #[test]
+    fn xrp_to_drops_overflow_err() {
+        assert!(xrp_to_drops("18446744073710").is_err());
     }
 
     #[test]

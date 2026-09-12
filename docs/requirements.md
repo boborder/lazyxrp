@@ -94,7 +94,7 @@ Product **requirements** (what). Behavioral design: [`architecture.md`](architec
 ### FR-11: Tx 履歴取得
 
 - `account_tx` で監視アカウントの最新 N 件のトランザクション履歴を取得し表示すること。
-- CLI コマンド `txhistory <address> [--limit N]` でも出力できること。
+- CLI コマンド `tx-history <address> [--limit N]` でも出力できること。
 
 ### FR-14: アカウント ledger objects（読み取り）
 
