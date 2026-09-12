@@ -16,8 +16,7 @@
  *   - Solidity contracts: https://www.npmjs.com/package/@flarenetwork/flare-periphery-contracts
  *   - Artifacts: https://www.npmjs.com/package/@flarenetwork/flare-periphery-contract-artifacts
  *   - Wagmi types: https://www.npmjs.com/package/@flarenetwork/flare-wagmi-periphery-package
- * Environment: FLARE_RPC_URL, PRIVATE_KEY, DRY_RUN (default true)
- * Optional: AGENT_LIST_MAX (page size, default 100), TX_WAIT_TIMEOUT_MS (default 120000)
+ * Environment: FLARE_RPC_URL, PRIVATE_KEY
  * Usage: npx ts-node scripts/reserve-collateral.ts
  * Or with Hardhat: yarn hardhat run scripts/reserve-collateral.ts --network coston2
  *
@@ -43,40 +42,14 @@ const ASSET_MANAGER_ABI = [
 
 const LOTS_TO_MINT = 1;
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
-const DEFAULT_AGENT_LIST_MAX = 100;
-const DEFAULT_TX_WAIT_TIMEOUT_MS = 120_000;
-const GAS_LIMIT_NUMERATOR = 120n;
-const GAS_LIMIT_DENOMINATOR = 100n;
-
-async function fetchAllAvailableAgents(
-  assetManager: Contract,
-  pageSize: number,
-): Promise<{ agentVault: string; feeBIPS: bigint; freeCollateralLots: bigint }[]> {
-  const agents: { agentVault: string; feeBIPS: bigint; freeCollateralLots: bigint }[] = [];
-  let start = 0;
-
-  while (true) {
-    const end = start + pageSize;
-    const result = await assetManager.getAvailableAgentsDetailedList(start, end);
-    agents.push(...result._agents);
-    const total = Number(result._totalLength);
-    start = end;
-    if (start >= total || result._agents.length === 0) {
-      break;
-    }
-  }
-
-  return agents;
-}
 
 async function findBestAgent(
   assetManager: Contract,
   minAvailableLots: number,
-  pageSize: number,
 ): Promise<string | undefined> {
-  const allAgents = await fetchAllAvailableAgents(assetManager, pageSize);
-  let agents = allAgents.filter(
-    (a) => Number(a.freeCollateralLots) >= minAvailableLots,
+  const result = await assetManager.getAvailableAgentsDetailedList(0, 100);
+  let agents = result._agents.filter(
+    (a: { freeCollateralLots: bigint }) => Number(a.freeCollateralLots) > minAvailableLots,
   );
 
   if (agents.length === 0) return undefined;
@@ -108,12 +81,7 @@ async function main() {
   const assetManagerAddress = await registry.getContractAddressByName("AssetManagerFXRP");
   const assetManager = new Contract(assetManagerAddress, ASSET_MANAGER_ABI, wallet);
 
-  const agentListMax = Number(process.env.AGENT_LIST_MAX ?? String(DEFAULT_AGENT_LIST_MAX));
-  if (!Number.isFinite(agentListMax) || agentListMax < 1) {
-    throw new Error("AGENT_LIST_MAX must be a positive integer");
-  }
-
-  const agentVault = await findBestAgent(assetManager, LOTS_TO_MINT, agentListMax);
+  const agentVault = await findBestAgent(assetManager, LOTS_TO_MINT);
   if (!agentVault) {
     throw new Error("No suitable agent found with enough free collateral lots");
   }
@@ -135,29 +103,14 @@ async function main() {
     return;
   }
 
-  const txOverrides = { value: fee };
-  const gasEstimate = await assetManager.reserveCollateral.estimateGas(
-    agentVault,
-    LOTS_TO_MINT,
-    agentInfo.feeBIPS,
-    ZERO_ADDRESS,
-    txOverrides,
-  );
-  const gasLimit = (gasEstimate * GAS_LIMIT_NUMERATOR) / GAS_LIMIT_DENOMINATOR;
-
   const tx = await assetManager.reserveCollateral(
     agentVault,
     LOTS_TO_MINT,
     agentInfo.feeBIPS,
     ZERO_ADDRESS,
-    { ...txOverrides, gasLimit },
+    { value: fee },
   );
-
-  const waitTimeoutMs = Number(process.env.TX_WAIT_TIMEOUT_MS ?? String(DEFAULT_TX_WAIT_TIMEOUT_MS));
-  if (!Number.isFinite(waitTimeoutMs) || waitTimeoutMs < 1) {
-    throw new Error("TX_WAIT_TIMEOUT_MS must be a positive integer");
-  }
-  const receipt = await tx.wait(1, waitTimeoutMs);
+  const receipt = await tx.wait();
   console.log("Collateral reserved. Transaction:", receipt.hash);
 
   const decimals = await assetManager.assetMintingDecimals();

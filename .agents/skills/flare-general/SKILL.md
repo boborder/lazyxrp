@@ -250,6 +250,7 @@ Reference: [dev.flare.network/network/fsp](https://dev.flare.network/network/fsp
 |------|-------------|
 | **QuickNode** | High-performance APIs for queries, transactions, and cross-chain operations |
 | **Ankr** | Infrastructure and developer tools for blockchain application deployment |
+| **NOWNodes** | Blockchain node provider with RPC access for Flare |
 | **ChainList** | Directory of all public RPCs supporting Flare (chain ID 14) |
 
 ### OFTs (Omnichain Fungible Tokens)
@@ -370,6 +371,7 @@ await network.undelegateFromFtso(wallet);
 await network.transferToP(wallet, Amount.nats(100));
 await network.delegateOnP(wallet, Amount.nats(50), nodeId, startTime, endTime);
 await network.transferToC(wallet);  // move back to C-chain
+// NOTE: do not stake from one address to more than 3 validators at once (see warning below)
 
 // Governance
 await network.castVoteForFoundationProposal(wallet, proposalId, FoundationProposalSupport.FOR);
@@ -379,6 +381,8 @@ await network.delegateGovernanceVotePower(wallet, delegateAddress);
 await network.invokeContractCallOnC(contractAddress, abi, "methodName", [params]);
 await network.invokeContractMethodOnC(wallet, contractAddress, abi, "methodName", value, [params]);
 ```
+
+> **Staking limit — max 3 validators per address.** Do not stake from the same address to more than three validators at once. Although additional stakes may be technically possible outside the staking portal, the stake-mirroring service only processes the first three, and stakes beyond that will **not earn rewards**. See [What You Should Consider When Staking FLR](https://flare.network/news/what-you-should-consider-when-staking-flr).
 
 ### Wallet Integrations
 

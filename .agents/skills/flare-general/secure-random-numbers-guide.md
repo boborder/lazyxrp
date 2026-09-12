@@ -251,12 +251,6 @@ func main() {
 
 ### Rust (alloy-rs)
 
-`RandomNumberV2.json` is the contract ABI (JSON array). Obtain it by one of:
-
-- **Block explorer:** open the [RandomNumberV2 contract on Coston2](https://coston2-explorer.flare.network/address/0x5CdF9eAF3EB8b44fB696984a1420B56A7575D250#code), export/copy the ABI, and save as `RandomNumberV2.json` next to your binary.
-- **Build artifacts:** after compiling the example contract (Hardhat/Foundry), copy `artifacts/.../RandomNumberV2.json` or the `abi` field into a standalone file.
-- **Inline ABI:** pass the ABI JSON string directly to `sol!` instead of a file path if you prefer not to check in a file.
-
 ```rust
 use alloy::{primitives::address, providers::ProviderBuilder, sol};
 

@@ -8,10 +8,8 @@
  * from the collateral reservation step encoded in the memo field.
  *
  * Review this script before running; execute in an isolated environment.
- * Update the constants (AGENT_ADDRESS, AMOUNT_XRP, PAYMENT_REFERENCE)
+ * Update the constants (AGENT_ADDRESS, AMOUNT_XRP, PAYMENT_REFERENCE, wallet seed)
  * with values from your collateral reservation.
- *
- * Environment: XRPL_SEED (required), XRPL_WS_URL (optional, default testnet)
  *
  * Prerequisites: npm install xrpl
  * For proper ABI usage and type safety in related FAssets scripts, use the Flare periphery packages:
@@ -32,25 +30,12 @@ const AMOUNT_XRP = "10.025";
 const PAYMENT_REFERENCE =
   "4642505266410001000000000000000000000000000000000000000000f655fb";
 
-const PLACEHOLDER_SEEDS = new Set(["PUT_SEED_HERE", "sXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"]);
-
-function loadWalletFromEnv(): Wallet {
-  const seed = process.env.XRPL_SEED?.trim();
-  if (!seed) {
-    throw new Error("XRPL_SEED environment variable is required");
-  }
-  if (PLACEHOLDER_SEEDS.has(seed)) {
-    throw new Error("XRPL_SEED is still a placeholder — set a funded testnet wallet seed");
-  }
-  return Wallet.fromSeed(seed);
-}
-
 async function main() {
-  const wsUrl = process.env.XRPL_WS_URL ?? "wss://s.altnet.rippletest.net:51233";
-  const client = new Client(wsUrl);
+  const client = new Client("wss://s.altnet.rippletest.net:51233");
   await client.connect();
 
-  const wallet = loadWalletFromEnv();
+  // Replace with your actual wallet seed
+  const wallet: Wallet = Wallet.fromSeed("PUT_SEED_HERE");
 
   const paymentTx: Payment = {
     TransactionType: "Payment",
