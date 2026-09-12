@@ -1,4 +1,5 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+use std::sync::{Mutex, OnceLock};
 
 use alloy::{
     network::EthereumWallet,
@@ -16,6 +17,68 @@ pub const DEFAULT_FLARE_FEED: &str = "FXRP/USD";
 pub const DEFAULT_FLARE_FEEDS: &[&str] = &["FXRP/USD", "FLR/USD", "BTC/USD", "ETH/USD"];
 const FLARE_CONTRACT_REGISTRY: Address = address!("aD67FE66660Fb8dFE9d6b1b4240d8650e30F6019");
 const ASSET_MANAGER_FXRP_NAME: &str = "AssetManagerFXRP";
+const FTSO_V2_REGISTRY_NAME: &str = "FtsoV2";
+
+#[derive(Default)]
+struct FlareRegistryAddresses {
+    ftso_v2: Option<Address>,
+    asset_manager_fxrp: Option<Address>,
+}
+
+fn flare_registry_cache() -> &'static Mutex<HashMap<String, FlareRegistryAddresses>> {
+    static CACHE: OnceLock<Mutex<HashMap<String, FlareRegistryAddresses>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+async fn resolve_registry_contract<P: Provider + Clone>(
+    provider: P,
+    rpc_url: &str,
+    contract_name: &str,
+) -> color_eyre::Result<Address> {
+    if let Ok(guard) = flare_registry_cache().lock()
+        && let Some(entry) = guard.get(rpc_url)
+    {
+        let cached = match contract_name {
+            FTSO_V2_REGISTRY_NAME => entry.ftso_v2,
+            ASSET_MANAGER_FXRP_NAME => entry.asset_manager_fxrp,
+            _ => None,
+        };
+        if let Some(addr) = cached {
+            return Ok(addr);
+        }
+    }
+
+    let registry = FlareContractRegistry::new(FLARE_CONTRACT_REGISTRY, provider);
+    let addr = registry
+        .getContractAddressByName(contract_name.to_string())
+        .call()
+        .await?;
+
+    if let Ok(mut guard) = flare_registry_cache().lock() {
+        let entry = guard.entry(rpc_url.to_string()).or_default();
+        match contract_name {
+            FTSO_V2_REGISTRY_NAME => entry.ftso_v2 = Some(addr),
+            ASSET_MANAGER_FXRP_NAME => entry.asset_manager_fxrp = Some(addr),
+            _ => {}
+        }
+    }
+
+    Ok(addr)
+}
+
+async fn resolve_ftso_v2_address<P: Provider + Clone>(
+    provider: P,
+    rpc_url: &str,
+) -> color_eyre::Result<Address> {
+    resolve_registry_contract(provider, rpc_url, FTSO_V2_REGISTRY_NAME).await
+}
+
+async fn resolve_asset_manager_fxrp_address<P: Provider + Clone>(
+    provider: P,
+    rpc_url: &str,
+) -> color_eyre::Result<Address> {
+    resolve_registry_contract(provider, rpc_url, ASSET_MANAGER_FXRP_NAME).await
+}
 
 sol! {
     #[sol(rpc)]
@@ -109,11 +172,7 @@ async fn fetch_from_rpc(
     feeds: &[String],
 ) -> color_eyre::Result<Vec<FlareFeedPrice>> {
     let provider = ProviderBuilder::new().connect_http(rpc_url.parse()?);
-    let registry = FlareContractRegistry::new(FLARE_CONTRACT_REGISTRY, provider.clone());
-    let ftso_address = registry
-        .getContractAddressByName("FtsoV2".to_string())
-        .call()
-        .await?;
+    let ftso_address = resolve_ftso_v2_address(provider.clone(), rpc_url).await?;
     let ftso = FtsoV2::new(ftso_address, provider);
 
     let mut out = Vec::new();
@@ -184,11 +243,7 @@ pub async fn fetch_flare_wallet_balance(
     let native = provider.get_balance(wallet).await?;
     let native_balance_display = format_token_balance(native, 18);
 
-    let registry = FlareContractRegistry::new(FLARE_CONTRACT_REGISTRY, provider.clone());
-    let asset_manager_addr = registry
-        .getContractAddressByName(ASSET_MANAGER_FXRP_NAME.to_string())
-        .call()
-        .await?;
+    let asset_manager_addr = resolve_asset_manager_fxrp_address(provider.clone(), rpc_url).await?;
     let am = IAssetManager::new(asset_manager_addr, provider.clone());
     let fxrp_token = am.fAsset().call().await?;
     let token = IERC20::new(fxrp_token, provider);
@@ -213,11 +268,7 @@ pub async fn fetch_flare_wallet_balance(
 /// Resolve AssetManagerFXRP and read Core Vault + direct-mint fee views (read-only).
 pub async fn fetch_fxrp_direct_mint_info(rpc_url: &str) -> color_eyre::Result<FxrpDirectMintInfo> {
     let provider = ProviderBuilder::new().connect_http(rpc_url.parse()?);
-    let registry = FlareContractRegistry::new(FLARE_CONTRACT_REGISTRY, provider.clone());
-    let asset_manager_addr = registry
-        .getContractAddressByName(ASSET_MANAGER_FXRP_NAME.to_string())
-        .call()
-        .await?;
+    let asset_manager_addr = resolve_asset_manager_fxrp_address(provider.clone(), rpc_url).await?;
     let am = IAssetManager::new(asset_manager_addr, provider);
 
     let core_vault_xrpl = am.directMintingPaymentAddress().call().await?;
@@ -344,11 +395,7 @@ pub async fn execute_direct_minting(
         .wallet(wallet)
         .connect_http(rpc_url.parse()?);
 
-    let registry = FlareContractRegistry::new(FLARE_CONTRACT_REGISTRY, provider.clone());
-    let asset_manager_addr = registry
-        .getContractAddressByName(ASSET_MANAGER_FXRP_NAME.to_string())
-        .call()
-        .await?;
+    let asset_manager_addr = resolve_asset_manager_fxrp_address(provider.clone(), rpc_url).await?;
     let am = IAssetManager::new(asset_manager_addr, provider);
 
     let arg = IAssetManager::DirectMintingProof {
@@ -371,6 +418,24 @@ pub async fn execute_direct_minting(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn flare_registry_cache_stores_per_rpc_url() {
+        let rpc = "https://flare-api.flare.network/ext/C/rpc";
+        let ftso = address!("1111111111111111111111111111111111111111");
+        let am = address!("2222222222222222222222222222222222222222");
+        if let Ok(mut guard) = flare_registry_cache().lock() {
+            guard.clear();
+            guard.entry(rpc.to_string()).or_default().ftso_v2 = Some(ftso);
+            guard.entry(rpc.to_string()).or_default().asset_manager_fxrp = Some(am);
+        }
+        let guard = flare_registry_cache().lock().expect("lock");
+        let entry = guard.get(rpc).expect("entry");
+        assert_eq!(entry.ftso_v2, Some(ftso));
+        assert_eq!(entry.asset_manager_fxrp, Some(am));
+        drop(guard);
+        flare_registry_cache().lock().expect("lock").clear();
+    }
 
     #[test]
     fn uba_to_xrp_display_table() {

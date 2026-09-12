@@ -4,12 +4,54 @@ use base64::Engine as _;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 use super::format::format_ripple_time_utc;
 use super::types::{DunlSummary, DunlValidatorRow};
 
 /// XRPL Foundation decentralized UNL publisher (read-only HTTPS).
 pub const XRPLF_DUNL_URL: &str = "https://unl.xrplf.org";
+
+/// dUNL manifest changes infrequently; avoid fetching on every poll tick.
+pub const DUNL_CACHE_TTL: Duration = Duration::from_secs(600);
+
+struct DunlCacheEntry {
+    fetched_at: Instant,
+    summary: DunlSummary,
+}
+
+fn dunl_summary_cache() -> &'static Mutex<Option<DunlCacheEntry>> {
+    static CACHE: OnceLock<Mutex<Option<DunlCacheEntry>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(None))
+}
+
+/// Return cached dUNL when still within [`DUNL_CACHE_TTL`].
+pub(crate) fn dunl_cache_get_if_fresh() -> Option<DunlSummary> {
+    let guard = dunl_summary_cache().lock().ok()?;
+    guard.as_ref().and_then(|entry| {
+        if entry.fetched_at.elapsed() < DUNL_CACHE_TTL {
+            Some(entry.summary.clone())
+        } else {
+            None
+        }
+    })
+}
+
+pub(crate) fn dunl_cache_store(summary: DunlSummary) {
+    if let Ok(mut guard) = dunl_summary_cache().lock() {
+        *guard = Some(DunlCacheEntry {
+            fetched_at: Instant::now(),
+            summary,
+        });
+    }
+}
+
+#[cfg(test)]
+fn dunl_cache_clear() {
+    if let Ok(mut guard) = dunl_summary_cache().lock() {
+        *guard = None;
+    }
+}
 
 /// Parsed fields from a validator manifest STObject (blob inside dUNL).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -247,6 +289,17 @@ mod tests {
         assert!(dunl.expiration_utc.contains("UTC"));
         assert_eq!(dunl.validators.len(), 1);
         assert_eq!(dunl.validators[0].validation_public_key, "n");
+    }
+
+    #[test]
+    fn dunl_cache_hit_within_ttl() {
+        dunl_cache_clear();
+        let sample = r#"{"blob":"eyJzZXF1ZW5jZSI6MSwiZXhwaXJhdGlvbiI6MCwidmFsaWRhdG9ycyI6W3sidmFsaWRhdGlvbl9wdWJsaWNfa2V5IjoibiIsIm1hbmlmZXN0IjoibSJ9XX0="}"#;
+        let dunl = parse_xrplf_dunl_json(sample).expect("parse dUNL");
+        dunl_cache_store(dunl.clone());
+        assert_eq!(dunl_cache_get_if_fresh().expect("cache hit"), dunl);
+        dunl_cache_clear();
+        assert!(dunl_cache_get_if_fresh().is_none());
     }
 
     #[test]

@@ -3,7 +3,9 @@ use std::time::Duration;
 use serde_json::{Value, json};
 use xrpl::asynch::clients::{AsyncJsonRpcClient, XRPLClient};
 
-use super::dunl::{XRPLF_DUNL_URL, parse_xrplf_dunl_json};
+use super::dunl::{
+    XRPLF_DUNL_URL, dunl_cache_get_if_fresh, dunl_cache_store, parse_xrplf_dunl_json,
+};
 use super::format::drops_to_xrp;
 pub use super::format::{path_find_snapshot, xrp_to_drops};
 pub(crate) use super::parse::empty_account_tx_page_on_not_found;
@@ -126,12 +128,17 @@ impl RpcClient {
     }
 
     pub async fn fetch_xrplf_dunl(&self) -> color_eyre::Result<DunlSummary> {
+        if let Some(cached) = dunl_cache_get_if_fresh() {
+            return Ok(cached);
+        }
         let resp = tokio::time::timeout(RPC_TIMEOUT, self.http.get(XRPLF_DUNL_URL).send())
             .await
             .map_err(|_| color_eyre::eyre::eyre!("dUNL fetch timeout"))?
             .map_err(|e| color_eyre::eyre::eyre!("dUNL fetch error: {e}"))?;
         let text = read_response_text_capped(resp, "dUNL").await?;
-        parse_xrplf_dunl_json(&text)
+        let summary = parse_xrplf_dunl_json(&text)?;
+        dunl_cache_store(summary.clone());
+        Ok(summary)
     }
 
     pub async fn fee(&self) -> color_eyre::Result<FeeSummary> {

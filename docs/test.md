@@ -143,6 +143,8 @@ cargo doc --no-deps --document-private-items --all-features
 | TC-120 | P2 | `src/config.rs` | `[flare.wallet] address` EVM validation + normalization |
 | TC-121 | P2 | `src/components/panels/flare_wallet.rs` | Unconfigured wallet shows setup guidance |
 | TC-122 | P2 | `src/components/panels/flare_wallet.rs` | Configured wallet renders balance rows from `FlareWalletBalance` |
+| TC-123 | P2 | `src/xrpl/dunl.rs` | dUNL cache — hit within TTL, miss after clear |
+| TC-124 | P2 | `src/flare.rs` | Flare registry cache — addresses stored per RPC URL |
 
 ## Traceability
 
@@ -153,6 +155,7 @@ cargo doc --no-deps --document-private-items --all-features
 | TC-115 | FR-12 | §6.1 session switch, §6.5 badge | `Ctrl-n`, status bar |
 | TC-116–119 | FR-15 | §6.7 | Flare display layouts |
 | TC-120–122 | FR-16 | §6.8 Flare wallet panel | Overview wallet panel |
+| TC-123–124 | — | §3 public-network politeness | dUNL TTL cache, Flare registry cache |
 
 ## Risk coverage
 

@@ -118,6 +118,8 @@ FLARE_FEEDS env > FLARE_FEED env > DEFAULT_FLARE_FEEDS (`FXRP/USD`, `FLR/USD`, `
 
 TUI セッション内の `<Ctrl-n>` は `Network::next_network()` で XRPL ネットワークを循環（config へは永続化しない）。`xahau` は mainnet 同等の書き込みガード（`--yes`）対象。
 
+**常駐運用:** 既定 `poll_interval_ms = 5000` はインタラクティブ向け。24/7 で公開 RPC（`xrplcluster.com` 等）を叩く場合は `15000`〜`30000` を推奨（[`architecture.md`](architecture.md) §3）。dUNL は 10 分 TTL キャッシュ、Flare registry 解決はプロセス内キャッシュ。
+
 ## 5. 開発コマンド
 
 - 依存解決: `cargo build`

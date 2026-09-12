@@ -71,7 +71,9 @@ Implementation: `src/xrpl/poll.rs`, `src/app.rs`.
 | Submit | `Action::*Submit` → `PollCommand` → simulate/sign/submit in poll |
 | Output | `Component::update` → `draw` (gated by `needs_draw`) |
 
-WebSocket ledger close coalesces poll triggers (`MIN_POLL_INTERVAL`). Scheduled poll uses `poll_interval_ms` from config.
+WebSocket ledger close coalesces poll triggers (`MIN_POLL_INTERVAL`). Scheduled poll uses `poll_interval_ms` from config (default **5000** ms for interactive use; **15000–30000** ms recommended for long-running / always-on sessions to reduce public RPC load).
+
+**Public-network politeness:** XRPL Foundation dUNL (`unl.xrplf.org`) is cached in-process for **10 minutes** (`DUNL_CACHE_TTL`). Flare `ContractRegistry` lookups (`FtsoV2`, `AssetManagerFXRP`) are cached per RPC URL for the process lifetime. Poll failures use exponential backoff (2s→60s cap); HTTP 429 is retried with delay.
 
 ## 4. 設定値と起動パラメータ
 
@@ -91,7 +93,7 @@ WebSocket ledger close coalesces poll triggers (`MIN_POLL_INTERVAL`). Scheduled 
 ### Config file (`Config::xrpl`)
 
 - Paths: `$XDG_CONFIG_HOME/lazyxrp/config.toml` → `~/.config/lazyxrp/config.toml`
-- Fields: `network`, `account`, `issuer`, `currency`, `currency_code`, `offer_limit`, `poll_interval_ms`, `oracles`, `oracle_pairs`, `[xrpl.signing]`, optional `rpc_server` / `ws_server`
+- Fields: `network`, `account`, `issuer`, `currency`, `currency_code`, `offer_limit`, `poll_interval_ms` (default 5000; raise for 24/7 dashboards), `oracles`, `oracle_pairs`, `[xrpl.signing]`, optional `rpc_server` / `ws_server`
 - Default issuer fallback (mainnet Bitstamp USD): `rvYAfWj5gh67oV6fW32ZzP3Aw4Eubs59B`
 - `currency_code`: 160-bit hex for `book_offers` (default display `"USD"`)
 
@@ -249,5 +251,5 @@ Load order (seed **xor** mnemonic):
 ## 7. Operations notes
 
 - `start_poll_task` = `tokio::spawn` with `PollContext`.
-- WS triggers debounced; interval poll uses `poll_interval_ms`.
+- WS triggers debounced; interval poll uses `poll_interval_ms`. dUNL + Flare registry addresses are session-cached (see §3).
 - Risks / debt: [`problems.md`](problems.md), [`security.md`](security.md).
