@@ -17,7 +17,6 @@ poll_interval_ms = 5000
 seed = "sEd..." # <-- replace with your own faucet seed
 
 [flare.fassets]
-# Testnet-only: execute gate ON for the C3 rehearsal.
-# Key file: executor.key (0x…) next to this file — feed via FLARE_EVM_KEY at launch.
-# NEVER enable on mainnet config.
-execute = true
+# Flare write gate. Keep false until you deliberately rehearse C3 on testnet.
+# Executor key goes in executor.key (0x…) next to this file — feed via FLARE_EVM_KEY at launch.
+execute = false
