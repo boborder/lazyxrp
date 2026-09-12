@@ -1,6 +1,6 @@
 [package]
 name = "lazyxrp"
-version = "0.2.5"
+version = "0.2.6"
 edition = "2024"
 rust-version = "1.91"
 description = "Terminal UI for the XRP Ledger — monitor accounts, order books, NFTs, trust lines, and AMM pools"
@@ -8,18 +8,21 @@ authors = ["boborder"]
 license = "MIT"
 repository = "https://github.com/boborder/lazyxrp"
 homepage = "https://github.com/boborder/lazyxrp"
+documentation = "https://docs.rs/lazyxrp"
 readme = "README.md"
 keywords = ["xrpl", "tui", "cli", "monitoring", "ledger"]
 categories = ["command-line-utilities", "visualization"]
-exclude = [
-    ".codegraph",
-    ".agents/",
-    "graphify-out/",
-    ".pi/",
-    ".atl/",
-    ".scratch/",
-    ".data/",
+# crates.io allowlist (gitignore patterns; leading `/` = package root only).
+# GitHub keeps docs/, workflows, and install.sh.
+include = [
+    "/src/**",
+    "/build.rs",
+    "/config.json5",
+    "/LICENSE",
+    "/README.md",
+    "/.env.example",
 ]
+autobins = false
 build = "build.rs"
 
 [[bin]]
@@ -30,46 +33,53 @@ path = "src/main.rs"
 name = "rp"
 path = "src/bin/rp.rs"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
 [dependencies]
-better-panic = "0.3"
-clap = { version = "4", features = [
-    "derive",
-    "cargo",
-    "wrap_help",
-    "unicode",
-    "string",
-    "unstable-styles",
-] }
+base64 = "0.23"
+clap = { version = "4", features = ["derive", "cargo", "wrap_help", "unicode", "string"] }
 color-eyre = "0.6"
-config = "0.15"
+config = { version = "0.15", default-features = false, features = [
+    "toml",
+    "json",
+    "json5",
+    "yaml",
+    "ini",
+    "convert-case",
+] }
+# xrpl-rust / embassy-sync needs the host critical-section implementation.
+critical-section = { version = "1.2.0", features = ["std"] }
 crossterm = { version = "0.29", features = ["serde", "event-stream"] }
 directories = "6"
 futures = "0.3"
-human-panic = "2"
+hex = "0.4"
 json5 = "1"
-lazy_static = "1.5"
 libc = "0.2"
-pretty_assertions = "1"
 ratatui = { version = "0.30", features = ["serde", "macros"] }
-serde = { version = "1", features = ["derive"] }
+serde = { version = "1", features = ["derive", "rc"] }
 serde_json = "1"
 signal-hook = "0.4"
-strip-ansi-escapes = "0.2"
+time = { version = "0.3", default-features = false, features = ["alloc"] }
 strum = { version = "0.28", features = ["derive"] }
-tokio = { version = "1", features = ["full"] }
-tokio-util = "0.7"
+tokio = { version = "1", features = [
+    "macros",
+    "rt-multi-thread",
+    "sync",
+    "time",
+    "net",
+    "io-util",
+] }
+# CancellationToken only — skip codec/io/time/net default features.
+tokio-util = { version = "0.7", default-features = false }
 toml = "1"
 tracing = "0.1"
 tracing-error = "0.2"
-tracing-subscriber = { version = "0.3", features = ["env-filter", "serde"] }
-critical-section = { version = "1.2", features = ["std"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 secrecy = { version = "0.10", features = ["serde"] }
+kobe-xrpl = "3.4"
+kobe-primitives = { version = "3.4", default-features = false, features = ["bip32", "encoding"] }
 xrpl-rust = "1.1"
 url = "2"
 reqwest = { version = "0.13", features = ["json", "stream"] }
-alloy = { version = "1", features = ["full"] }
+alloy = { version = "1", features = ["essentials"] }
 ratatui-image = { version = "11", default-features = false, features = ["crossterm", "image-defaults"] }
 image = { version = "0.25", default-features = false, features = ["gif", "jpeg", "png", "webp"] }
 # Linux GNU only: vendored OpenSSL so `cross` targets (i686/aarch64) do not need target
@@ -80,11 +90,17 @@ openssl = { version = "0.10", features = ["vendored"] }
 
 [build-dependencies]
 anyhow = "1"
-vergen-gix = { version = "9", features = ["build", "cargo"] }
+vergen-gix = { version = "9", features = ["build"] }
 
-# Read the optimization guideline for more details: https://ratatui.rs/recipes/apps/release-your-app/#optimizations
+[dev-dependencies]
+pretty_assertions = "1"
+
+[package.metadata.docs.rs]
+targets = ["x86_64-unknown-linux-gnu"]
+
+# Size-oriented release (also used by `cargo install` / CD). https://ratatui.rs/recipes/apps/release-your-app/#optimizations
 [profile.release]
 codegen-units = 1
-lto = true
+lto = "fat"
 opt-level = "s"
 strip = true
