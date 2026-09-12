@@ -16,7 +16,8 @@ graphify-out
 .atl/
 .scratch/
 ./agents/
-.config/lazyxrp-test/
+.config/lazyxrp-test/*
+!.config/lazyxrp-test/config.toml.example
 
 # Flare skill scratch scripts (local probes)
 .agents/skills/flare-fassets/scripts/_*.ts

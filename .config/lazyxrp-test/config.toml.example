@@ -1,0 +1,23 @@
+# Testnet rehearsal config template.
+# Copy to config.toml and fill in your own testnet credentials.
+#
+# Get a disposable testnet seed: https://faucet.altnet.rippletest.net/
+# NEVER put a mainnet seed here.
+
+[xrpl]
+network = "testnet"
+account = "rUMrVJ4KXphFcekqLaYhNWha5f4h2ZdQPk"
+currency = "RLUSD"
+currency_code = "524C555344000000000000000000000000000000"
+offer_limit = 5
+poll_interval_ms = 5000
+
+[xrpl.signing]
+# Testnet-only disposable seed (faucet-funded 100 testnet XRP).
+seed = "sEd..." # <-- replace with your own faucet seed
+
+[flare.fassets]
+# Testnet-only: execute gate ON for the C3 rehearsal.
+# Key file: executor.key (0x…) next to this file — feed via FLARE_EVM_KEY at launch.
+# NEVER enable on mainnet config.
+execute = true
