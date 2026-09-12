@@ -1,7 +1,7 @@
 #!/bin/bash
 # install.sh — lazyxrp interactive installer
 #
-# Parse CLI first (see usage with --help). Environment overrides:
+# Parse CLI first (see --help). Flags: --dir, --method, --install-rust, --install-mise, -q.
 #   INSTALL_DIR     Installation bin directory (default: ~/.local/bin)
 #   BINARY_INSTALL  Set to 1 to skip source build even when Cargo.toml is present
 #   VERSION         Specific version for binary install (default: latest release tag)
@@ -19,7 +19,8 @@ PARTIAL_BIN_DEST=""
 PARTIAL_RP_DEST=""
 
 # ── Configuration ────────────────────────────────────────────────────────────
-UA="lazyxrp-installer/2.1"
+INSTALLER_VERSION="2.2"
+UA="lazyxrp-installer/${INSTALLER_VERSION}"
 CURL_RETRY=(--retry 3 --retry-delay 1 --connect-timeout 15 --max-time 300)
 REPO="boborder/lazyxrp"
 BIN_NAME="lazyxrp"
@@ -40,107 +41,83 @@ usage() {
     cat <<'EOF'
 lazyxrp installer — https://github.com/boborder/lazyxrp
 
+Installs lazyxrp (and links `rp` when possible) to ~/.local/bin by default.
+
+Quick start:
+  curl -fsSL https://raw.githubusercontent.com/boborder/lazyxrp/main/install.sh | bash
+  ./install.sh                              # local clone: build or download
+  ./install.sh -q --method binary           # CI / non-interactive binary install
+
 Usage:
   ./install.sh [options]
 
 Options:
   -h, --help             Show this help and exit
-  --uninstall-help       Show manual uninstall commands (no removal)
-  -q, --quiet            Non-interactive: minimal output; defaults for prompts
+  -V, --version          Show installer version and exit
+  --uninstall-help       Manual uninstall reference (does not remove anything)
+  -q, --quiet            Non-interactive: minimal output; default answers for prompts
+
+  --dir <PATH>           Install directory (default: ~/.local/bin; same as INSTALL_DIR)
+  --method cargo         Build from source (requires Cargo.toml next to install.sh)
+  --method binary        Download prebuilt release archive for this OS/arch
 
   --install-rust         If cargo is missing, install Rust via rustup (TTY: skip prompt)
-  --no-install-rust      If cargo is missing, do not install rust (use binary path)
+  --no-install-rust      If cargo is missing, do not install Rust (binary path only)
 
   --install-mise         If mise is missing, install it (TTY: skip prompt)
   --no-install-mise      Skip mise install / offer
 
-  --method cargo         Build from source (requires this repo + Cargo.toml on disk)
-  --method binary        Download prebuilt release archive
-
-Environment:
-  INSTALL_DIR, BINARY_INSTALL, VERSION, NO_VERIFY, CI (see script header)
-  NO_VERIFY=1            Skip checksum verification (binary install only). ⚠️  Increases MITM risk.
-  CI=1                   Non-interactive (same as -q); auto-updates shell PATH when needed
-  Optional: GITHUB_TOKEN or GITHUB_API_TOKEN — authenticated GitHub REST (release / commit lookups)
+Environment variables:
+  INSTALL_DIR            Target bin directory (default: ~/.local/bin)
+  BINARY_INSTALL=1       Force prebuilt download even when a local clone exists
+  VERSION=<tag>          Release tag for binary install (default: latest GitHub release)
+  NO_VERIFY=1            Skip SHA-256 checksum verification (binary only; not recommended)
+  CI=1                   Non-interactive mode (same as -q); auto-append PATH when needed
+  GITHUB_TOKEN           Optional GitHub API token (or GITHUB_API_TOKEN) for release lookup
 
 Examples:
-  ./install.sh
-  ./install.sh -q --method binary
-  ./install.sh --no-install-mise
-  curl -fsSL https://raw.githubusercontent.com/boborder/lazyxrp/main/install.sh | sh -s -- -q --no-install-rust
+  ./install.sh --dir ~/.local/bin
+  INSTALL_DIR=/usr/local/bin ./install.sh -q --method binary
+  curl -fsSL .../install.sh | sh -s -- -q --no-install-rust --method binary
 
-Manual uninstall (this script does not remove lazyxrp for you):
+Uninstall:
+  Prefer: lazyxrp --self-uninstall [--yes]
+  Manual steps: ./install.sh --uninstall-help
 
-  If you still have lazyxrp on PATH (same binary you want gone):
-    lazyxrp --self-uninstall
-    lazyxrp --self-uninstall --yes   # skip "type yes" confirmation
-
-  Prebuilt/binary install — remove the executable (and backup if present):
-    rm -f INSTALL_DIR/lazyxrp INSTALL_DIR/lazyxrp.bak INSTALL_DIR/rp
-    Replace INSTALL_DIR with your target (default: ~/.local/bin).
-
-  Source install via this script into ~/.local/bin (cargo install --root ~/.local):
-    cargo uninstall lazyxrp --root "$HOME/.local"
-
-  Globally via cargo default prefix (~/.cargo/bin, no custom --root):
-    cargo uninstall lazyxrp
-
-  One-off: cargo install --path . — same as default-prefix case:
-    cargo uninstall lazyxrp
-
-  Optional: user config + app data (matches src/config.rs + directories::ProjectDirs; skip if you use custom paths):
-
-    Linux / *BSD (typical XDG — no LAZYXRP_* overrides):
-      rm -rf ~/.config/lazyxrp ~/.local/share/com.kdheepak.lazyxrp
-
-    macOS:
-      rm -rf "$HOME/Library/Application Support/lazyxrp" \
-             "$HOME/Library/Application Support/com.kdheepak.lazyxrp"
-
-    If you set LAZYXRP_CONFIG or LAZYXRP_DATA, remove those directories instead.
-    If config.toml sets data_dir / config_dir, remove those paths too.
-
-  Optional: revert rustup/mise only if you installed them for lazyxrp and want them gone —
-    rustup self uninstall
-    https://mise.jdx.dev/ (follow upstream uninstall docs)
+After install: lazyxrp --help
 EOF
 }
 
 uninstall_help() {
     cat <<'EOF'
-lazyxrp — manual uninstall (nothing is executed by this script)
+lazyxrp — manual uninstall (this script does not remove anything)
 
-0) If lazyxrp is still on your PATH (removes that binary + resolved config/data; see src/uninstall.rs):
-   lazyxrp --self-uninstall
-   lazyxrp --self-uninstall --yes
+Preferred (binary still on PATH):
+  lazyxrp --self-uninstall
+  lazyxrp --self-uninstall --yes    # skip confirmation
 
-1) Binary / GitHub-release install (installer copied lazyxrp to INSTALL_DIR):
+Binary / GitHub-release install (files copied to INSTALL_DIR):
+  rm -f INSTALL_DIR/lazyxrp INSTALL_DIR/lazyxrp.bak INSTALL_DIR/rp
+  Default INSTALL_DIR: ~/.local/bin
 
-   rm -f INSTALL_DIR/lazyxrp INSTALL_DIR/lazyxrp.bak INSTALL_DIR/rp
+Source install via this installer into ~/.local/bin (cargo --root "$HOME/.local"):
+  cargo uninstall lazyxrp --root "$HOME/.local"
 
-   Default INSTALL_DIR is ~/.local/bin. Use the same directory you chose at install.
+Cargo default prefix (~/.cargo/bin), including `cargo install --path .`:
+  cargo uninstall lazyxrp
 
-2) Source install with this installer into ~/.local/bin (cargo used --root "$HOME/.local"):
+Optional — config and data (only if you want them gone):
 
-   cargo uninstall lazyxrp --root "$HOME/.local"
+  Linux / *BSD (typical XDG; no LAZYXRP_* overrides):
+    rm -rf ~/.config/lazyxrp ~/.local/share/com.kdheepak.lazyxrp
 
-3) Cargo default install prefix (~/.cargo/bin), including `cargo install --path .`:
+  macOS:
+    rm -rf "$HOME/Library/Application Support/lazyxrp" \
+           "$HOME/Library/Application Support/com.kdheepak.lazyxrp"
 
-   cargo uninstall lazyxrp
+  Custom paths: LAZYXRP_CONFIG / LAZYXRP_DATA, or data_dir / config_dir in config.toml.
 
-4) Optional — remove user config and data (nothing runs this for you):
-
-   Linux / *BSD (typical XDG — no LAZYXRP_* overrides):
-     rm -rf ~/.config/lazyxrp ~/.local/share/com.kdheepak.lazyxrp
-
-   macOS:
-     rm -rf "$HOME/Library/Application Support/lazyxrp" \
-            "$HOME/Library/Application Support/com.kdheepak.lazyxrp"
-
-   If you use LAZYXRP_CONFIG or LAZYXRP_DATA, delete those paths. If `config.toml` sets
-   data_dir / config_dir, remove those directories too.
-
-This does NOT remove Rust, rustup, or mise unless you uninstall those tools separately.
+Does NOT remove Rust, rustup, or mise. See upstream docs for those tools.
 
 See also: ./install.sh --help
 EOF
@@ -157,12 +134,28 @@ parse_args() {
                 uninstall_help
                 exit 0
                 ;;
+            -V|--version)
+                printf 'lazyxrp-installer %s\n' "$INSTALLER_VERSION"
+                exit 0
+                ;;
             -q|--quiet)
                 QUIET=1
                 shift
                 ;;
             --install-rust)
                 CLI_INSTALL_RUST=yes
+                shift
+                ;;
+            --dir)
+                if [ -z "${2:-}" ]; then
+                    printf 'install.sh: --dir requires a path (try --help)\n' >&2
+                    exit 1
+                fi
+                INSTALL_DIR="$2"
+                shift 2
+                ;;
+            --dir=*)
+                INSTALL_DIR="${1#*=}"
                 shift
                 ;;
             --no-install-rust)
@@ -178,7 +171,11 @@ parse_args() {
                 shift
                 ;;
             --method)
-                CLI_METHOD="${2:-}"
+                if [ -z "${2:-}" ]; then
+                    printf 'install.sh: --method requires cargo or binary (try --help)\n' >&2
+                    exit 1
+                fi
+                CLI_METHOD="$2"
                 shift 2
                 ;;
             --method=*)

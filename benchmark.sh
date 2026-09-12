@@ -1,12 +1,15 @@
 #!/usr/bin/env bash
 # benchmark.sh — lazyxrp build & performance benchmark suite
-# Usage: ./benchmark.sh [--json] [--ci] [--fast]
-#   --json   Emit results as JSON to stdout (last line)
-#   --ci     Strict mode: fail on any step timeout/error
-#   --fast   Skip the clean release build (use when only checking warm builds)
+# Usage: ./benchmark.sh [--json] [--ci] [--fast] [--perf-only] [--full]
+#   --json        Write results JSON to benchmark-summary.json (stdout stays human-readable)
+#   --ci          Strict mode: fail on any step timeout/error (implies --perf-only unless --full)
+#   --fast        Skip the clean release build
+#   --perf-only   Build/startup/size only (skip check, test, clippy, doc — CI default)
+#   --full        Full suite including quality gates (local `mise run bench`)
 #
-# Tools: hyperfine (startup stats), cargo-bloat (size breakdown), cargo --timings (build profile)
-#   Install: cargo install hyperfine cargo-bloat
+# Tools: hyperfine (startup stats), cargo-bloat (size breakdown), cargo --timings (on warm build)
+#   Local: mise install  (hyperfine in .mise.toml)
+#   cargo-bloat: cargo install cargo-bloat
 
 set -euo pipefail
 
@@ -20,8 +23,19 @@ readonly TIMEOUT_CLIPPY="120"
 readonly TIMEOUT_DOC="120"
 readonly TIMEOUT_STARTUP="15"
 readonly TIMEOUT_INCREMENTAL="180"
+readonly JSON_FILE="benchmark-summary.json"
 
-readonly CHECKS=(
+readonly CHECKS_PERF=(
+  "clean_release_build"
+  "warm_release_build"
+  "incremental_build"
+  "release_binary_size"
+  "cargo_bloat"
+  "help_startup"
+  "version_startup"
+)
+
+readonly CHECKS_FULL=(
   "clean_release_build"
   "warm_release_build"
   "incremental_build"
@@ -33,7 +47,6 @@ readonly CHECKS=(
   "version_startup"
   "clippy_check"
   "doc_build"
-  "cargo_timings"
 )
 
 # ── State ──────────────────────────────────────────────────────────
@@ -45,12 +58,68 @@ FAILED=0
 JSON_MODE=false
 CI_MODE=false
 FAST_MODE=false
+PERF_ONLY_MODE=false
+FULL_MODE=false
+ACTIVE_CHECKS=()
 
 # ── Helpers ────────────────────────────────────────────────────────
 log() { printf '%s\n' "$*"; }
 hr()  { printf '─%.0s' $(seq 1 70); printf '\n'; }
 
-# Run a command with timeout, capturing elapsed time (seconds.millis)
+# Portable ISO-8601 timestamp (GNU date -Iseconds or BSD date)
+date_iso() {
+  if date -Iseconds >/dev/null 2>&1; then
+    date -Iseconds
+  else
+    date -u +"%Y-%m-%dT%H:%M:%S%z"
+  fi
+}
+
+# Portable timeout: GNU timeout, macOS gtimeout, or no timeout (warn once)
+TIMEOUT_CMD=""
+timeout_cmd() {
+  if [[ -n "$TIMEOUT_CMD" ]]; then
+    "$TIMEOUT_CMD" "$@"
+    return
+  fi
+  if command -v timeout >/dev/null 2>&1; then
+    TIMEOUT_CMD="timeout"
+    "$TIMEOUT_CMD" "$@"
+  elif command -v gtimeout >/dev/null 2>&1; then
+    TIMEOUT_CMD="gtimeout"
+    "$TIMEOUT_CMD" "$@"
+  else
+    log "  ⚠ timeout not available — running without time limit"
+    shift 2
+    "$@"
+  fi
+}
+
+check_dependencies() {
+  local missing=()
+  command -v bc >/dev/null 2>&1 || missing+=("bc")
+  if [[ ${#missing[@]} -gt 0 ]]; then
+    log "Missing required tools: ${missing[*]}"
+    log "  macOS: brew install bc"
+    log "  Ubuntu: sudo apt-get install -y bc"
+    exit 1
+  fi
+  if ! command -v jq >/dev/null 2>&1; then
+    log "⚠ jq not found — hyperfine startup benchmarks will SKIP"
+    log "  macOS: brew install jq | Ubuntu: sudo apt-get install -y jq"
+  fi
+}
+
+json_escape() {
+  local s="$1"
+  s="${s//\\/\\\\}"
+  s="${s//\"/\\\"}"
+  s="${s//$'\n'/\\n}"
+  s="${s//$'\r'/\\r}"
+  s="${s//$'\t'/\\t}"
+  printf '%s' "$s"
+}
+
 run_timed() {
   local name="$1" timeout_sec="$2" desc="$3"
   shift 3
@@ -60,8 +129,7 @@ run_timed() {
   start=$(date +%s%N)
   tmpout=$(mktemp)
 
-  # shellcheck disable=SC2086
-  timeout --foreground "$timeout_sec" "$@" >"$tmpout" 2>&1 || rc=$?
+  timeout_cmd --foreground "$timeout_sec" "$@" >"$tmpout" 2>&1 || rc=$?
   end=$(date +%s%N)
   elapsed=$(echo "scale=3; ($end - $start) / 1000000000" | bc | sed 's/^\./0./')
 
@@ -87,7 +155,6 @@ run_timed() {
   rm -f "$tmpout"
 }
 
-# Run hyperfine (startup / micro benchmarks) for statistical accuracy
 run_hyperfine() {
   local name="$1" timeout_sec="$2" desc="$3"
   shift 3
@@ -106,8 +173,7 @@ run_hyperfine() {
   tmpjson=$(mktemp)
   start=$(date +%s%N)
 
-  # shellcheck disable=SC2086
-  timeout --foreground "$timeout_sec" hyperfine \
+  timeout_cmd --foreground "$timeout_sec" hyperfine \
     --warmup 1 --runs 3 \
     --export-json "$tmpjson" \
     "$@" >"$tmpout" 2>&1 || rc=$?
@@ -130,10 +196,19 @@ run_hyperfine() {
     FAILED=$((FAILED + 1))
   else
     local mean stdev
-    mean=$(jq -r '.results[0].mean // 0' "$tmpjson")
-    stdev=$(jq -r '.results[0].stddev // 0' "$tmpjson")
+    mean=$(jq -r '.results[0].mean // empty' "$tmpjson" 2>/dev/null || true)
+    stdev=$(jq -r '.results[0].stddev // 0' "$tmpjson" 2>/dev/null || true)
+    if [[ -z "$mean" ]] || ! echo "$mean" | grep -qE '^[0-9]+([.][0-9]+)?$'; then
+      RESULTS[$name]="FAIL"
+      VALUES[$name]="$elapsed"
+      MESSAGES[$name]="invalid hyperfine JSON output"
+      log "  ✗ FAIL — invalid hyperfine JSON"
+      FAILED=$((FAILED + 1))
+      rm -f "$tmpout" "$tmpjson"
+      return
+    fi
     mean=$(printf '%.4f' "$mean")
-    stdev=$(printf '%.4f' "$stdev")
+    stdev=$(printf '%.4f' "${stdev:-0}")
     RESULTS[$name]="PASS"
     VALUES[$name]="$mean"
     MESSAGES[$name]="σ=${stdev}s (3 runs)"
@@ -173,6 +248,7 @@ run_cargo_bloat() {
   fi
   local tmpout
   tmpout=$(mktemp)
+  mkdir -p target
   if cargo bloat --release -n 20 >"$tmpout" 2>&1; then
     local lines
     lines=$(wc -l < "$tmpout" | tr -d ' ')
@@ -193,52 +269,17 @@ run_cargo_bloat() {
   rm -f "$tmpout"
 }
 
-run_cargo_timings() {
-  log "▶ cargo build --timings …"
-  rm -rf target/cargo-timings
-  local tmpout rc
-  tmpout=$(mktemp)
-  # Use run_timed under the hood but also capture timings HTML
-  local start end elapsed
-  start=$(date +%s%N)
-  timeout --foreground "$TIMEOUT_BUILD" cargo build --locked --release --timings >"$tmpout" 2>&1 || rc=$?
-  end=$(date +%s%N)
-  elapsed=$(echo "scale=3; ($end - $start) / 1000000000" | bc | sed 's/^\./0./')
-
-  if [[ "${rc:-0}" -eq 124 ]]; then
-    RESULTS["cargo_timings"]="TIMEOUT"
-    VALUES["cargo_timings"]="$TIMEOUT_BUILD"
-    MESSAGES["cargo_timings"]="exceeded ${TIMEOUT_BUILD}s timeout"
-    log "  ⚠ TIMEOUT ($elapsed s)"
-    FAILED=$((FAILED + 1))
-  elif [[ "${rc:-0}" -ne 0 ]]; then
-    RESULTS["cargo_timings"]="FAIL"
-    VALUES["cargo_timings"]="$elapsed"
-    MESSAGES["cargo_timings"]=$(head -n3 "$tmpout" | tr '\n' '; ')
-    log "  ✗ FAIL ($elapsed s)"
-    tail -n5 "$tmpout" >&2 || true
-    FAILED=$((FAILED + 1))
+copy_timings_report() {
+  local html_path
+  html_path=$(ls target/cargo-timings/*.html 2>/dev/null | head -n1)
+  if [[ -n "$html_path" && -f "$html_path" ]]; then
+    mkdir -p target
+    cp "$html_path" target/timings-report.html
+    log "  ✓ Timing report → target/timings-report.html"
   else
-    local html_path
-    html_path=$(ls target/cargo-timings/*.html 2>/dev/null | head -n1)
-    if [[ -n "$html_path" && -f "$html_path" ]]; then
-      cp "$html_path" target/timings-report.html
-      RESULTS["cargo_timings"]="PASS"
-      VALUES["cargo_timings"]="$elapsed"
-      MESSAGES["cargo_timings"]="target/timings-report.html"
-      log "  ✓ PASS ($elapsed s) → target/timings-report.html"
-    else
-      RESULTS["cargo_timings"]="FAIL"
-      VALUES["cargo_timings"]="$elapsed"
-      MESSAGES["cargo_timings"]="HTML report not found"
-      log "  ✗ FAIL ($elapsed s) — HTML report missing"
-      FAILED=$((FAILED + 1))
-    fi
+    log "  ⊘ No cargo-timings HTML report (non-fatal)"
   fi
-  rm -f "$tmpout"
 }
-
-# ── Benchmark steps ────────────────────────────────────────────────
 
 bench_clean_release() {
   cargo clean >/dev/null 2>&1
@@ -248,21 +289,43 @@ bench_clean_release() {
 }
 
 bench_warm_release() {
+  rm -rf target/cargo-timings
   run_timed "warm_release_build" "$TIMEOUT_BUILD" \
-    "Warm release build (cached deps)" \
-    cargo build --locked --release
+    "Warm release build (cached deps, --timings)" \
+    cargo build --locked --release --timings
+  if [[ "${RESULTS[warm_release_build]:-}" == "PASS" ]]; then
+    copy_timings_report || true
+  fi
 }
 
 bench_incremental() {
-  touch src/main.rs
+  local main_rs="src/main.rs"
+  local saved_mtime=""
+  if [[ -f "$main_rs" ]]; then
+    saved_mtime=$(stat -c %Y "$main_rs" 2>/dev/null || stat -f %m "$main_rs")
+  fi
+  touch "$main_rs"
   run_timed "incremental_build" "$TIMEOUT_INCREMENTAL" \
     "Incremental release build (touch main.rs)" \
     cargo build --locked --release
+  if [[ -n "$saved_mtime" ]]; then
+    if touch -d "@${saved_mtime}" "$main_rs" 2>/dev/null; then
+      :
+    else
+      touch -t "$(date -r "$saved_mtime" +%Y%m%d%H%M.%S 2>/dev/null || true)" "$main_rs" 2>/dev/null || true
+    fi
+  fi
 }
 
-bench_cargo_check() { run_timed "cargo_check" "$TIMEOUT_CHECK" "cargo check" cargo check --locked --all-features --workspace; }
+bench_cargo_check() {
+  run_timed "cargo_check" "$TIMEOUT_CHECK" "cargo check" \
+    cargo check --locked --all-features --workspace
+}
 
-bench_cargo_test()  { run_timed "cargo_test"  "$TIMEOUT_TEST"  "cargo test"  cargo test --locked --all-features --workspace; }
+bench_cargo_test() {
+  run_timed "cargo_test" "$TIMEOUT_TEST" "cargo test" \
+    cargo test --locked --all-features --workspace
+}
 
 bench_binary_size() {
   log "▶ Release binary size …"
@@ -271,8 +334,11 @@ bench_binary_size() {
 
 bench_help_startup() {
   if [[ ! -x target/release/lazyxrp ]]; then
-    RESULTS["help_startup"]="SKIP"; VALUES["help_startup"]="0"; MESSAGES["help_startup"]="release binary missing"
-    log "  ⊘ SKIP (release binary missing)"; return
+    RESULTS["help_startup"]="SKIP"
+    VALUES["help_startup"]="0"
+    MESSAGES["help_startup"]="release binary missing"
+    log "  ⊘ SKIP (release binary missing)"
+    return
   fi
   run_hyperfine "help_startup" "$TIMEOUT_STARTUP" \
     "Startup time --help (hyperfine ×3)" \
@@ -281,8 +347,11 @@ bench_help_startup() {
 
 bench_version_startup() {
   if [[ ! -x target/release/lazyxrp ]]; then
-    RESULTS["version_startup"]="SKIP"; VALUES["version_startup"]="0"; MESSAGES["version_startup"]="release binary missing"
-    log "  ⊘ SKIP (release binary missing)"; return
+    RESULTS["version_startup"]="SKIP"
+    VALUES["version_startup"]="0"
+    MESSAGES["version_startup"]="release binary missing"
+    log "  ⊘ SKIP (release binary missing)"
+    return
   fi
   run_hyperfine "version_startup" "$TIMEOUT_STARTUP" \
     "Startup time --version (hyperfine ×3)" \
@@ -301,16 +370,55 @@ bench_doc() {
     cargo doc --locked --no-deps --document-private-items --all-features --workspace
 }
 
-# ── Main ───────────────────────────────────────────────────────────
+write_json_summary() {
+  local total_pass="$1" total_fail="$2" total_skip="$3"
+  local saved="${4:-0}" pct="${5:-0}"
+  local json_items=()
+  local check res val unit msg json_body cache_json
+
+  for check in "${ACTIVE_CHECKS[@]}"; do
+    res="${RESULTS[$check]:-SKIP}"
+    val="${VALUES[$check]:-0}"
+    unit="${UNITS[$check]:-s}"
+    msg="$(json_escape "${MESSAGES[$check]:-}")"
+    json_items+=("{\"name\":\"$check\",\"result\":\"$res\",\"value\":$val,\"unit\":\"$unit\",\"message\":\"$msg\"}")
+  done
+
+  json_body=$(printf '%s,' "${json_items[@]}" | sed 's/,$//')
+  cache_json="null"
+  if [[ "${RESULTS[clean_release_build]:-}" == "PASS" && "${RESULTS[warm_release_build]:-}" == "PASS" ]]; then
+    cache_json="{\"cold\":${VALUES[clean_release_build]},\"warm\":${VALUES[warm_release_build]},\"saved_seconds\":$saved,\"saved_percent\":$pct}"
+  fi
+
+  printf '%s\n' "{\"benchmarks\":[$json_body],\"summary\":{\"pass\":$total_pass,\"fail\":$total_fail,\"skip\":$total_skip,\"timestamp\":\"$(date_iso)\"},\"cache_comparison\":$cache_json}" \
+    >"$JSON_FILE"
+  log ""
+  log "JSON summary → $JSON_FILE"
+}
 
 main() {
   for arg in "$@"; do
     case "$arg" in
-      --json) JSON_MODE=true ;;
-      --ci)   CI_MODE=true ;;
-      --fast) FAST_MODE=true ;;
+      --json)       JSON_MODE=true ;;
+      --ci)         CI_MODE=true ;;
+      --fast)       FAST_MODE=true ;;
+      --perf-only)  PERF_ONLY_MODE=true ;;
+      --full)       FULL_MODE=true ;;
     esac
   done
+
+  if $CI_MODE && ! $FULL_MODE; then
+    PERF_ONLY_MODE=true
+  fi
+
+  if $PERF_ONLY_MODE; then
+    ACTIVE_CHECKS=("${CHECKS_PERF[@]}")
+  else
+    ACTIVE_CHECKS=("${CHECKS_FULL[@]}")
+  fi
+
+  check_dependencies
+  mkdir -p target
 
   log ""
   log "╔════════════════════════════════════════════════════════════════════╗"
@@ -319,27 +427,37 @@ main() {
   log ""
   log "Workspace : $(pwd)"
   log "Toolchain : $(rustc --version 2>/dev/null || echo 'unknown')"
-  log "Date      : $(date -Iseconds)"
+  log "Date      : $(date_iso)"
+  log "Mode      : $( $PERF_ONLY_MODE && echo 'perf-only' || echo 'full' )$( $FAST_MODE && echo ' + fast' || true )$( $CI_MODE && echo ' + ci' || true )"
   log ""
   hr
 
   if $FAST_MODE; then
     log "▶ Fast mode: skipping clean_release_build"
-    RESULTS["clean_release_build"]="SKIP"; VALUES["clean_release_build"]="0"; MESSAGES["clean_release_build"]="skipped (--fast)"
+    RESULTS["clean_release_build"]="SKIP"
+    VALUES["clean_release_build"]="0"
+    MESSAGES["clean_release_build"]="skipped (--fast)"
   else
-    bench_clean_release   || true
+    bench_clean_release || true
   fi
-  bench_warm_release    || true
-  bench_incremental     || true
-  bench_cargo_check     || true
-  bench_cargo_test      || true
-  bench_binary_size     || true
-  run_cargo_bloat       || true
-  bench_help_startup    || true
-  bench_version_startup || true
-  bench_clippy          || true
-  bench_doc             || true
-  run_cargo_timings     || true
+
+  bench_warm_release      || true
+  bench_incremental       || true
+
+  if ! $PERF_ONLY_MODE; then
+    bench_cargo_check     || true
+    bench_cargo_test      || true
+  fi
+
+  bench_binary_size       || true
+  run_cargo_bloat         || true
+  bench_help_startup      || true
+  bench_version_startup   || true
+
+  if ! $PERF_ONLY_MODE; then
+    bench_clippy          || true
+    bench_doc             || true
+  fi
 
   hr
   log ""
@@ -350,17 +468,17 @@ main() {
   printf '  %-28s %-10s %12s  %s\n' "CHECK" "RESULT" "VALUE" "NOTE"
   printf '  %s\n' "$(hr | head -c 64)"
 
-  for check in "${CHECKS[@]}"; do
+  for check in "${ACTIVE_CHECKS[@]}"; do
     local res="${RESULTS[$check]:-SKIP}"
     local val="${VALUES[$check]:-0}"
     local unit="${UNITS[$check]:-s}"
-    local msg="${MESSAGES[$check]:-}"]
+    local msg="${MESSAGES[$check]:-}"
 
     case "$res" in
-      PASS)  icon="✓"; total_pass=$((total_pass + 1)) ;;
-      FAIL)  icon="✗"; total_fail=$((total_fail + 1)) ;;
+      PASS)    icon="✓"; total_pass=$((total_pass + 1)) ;;
+      FAIL)    icon="✗"; total_fail=$((total_fail + 1)) ;;
       TIMEOUT) icon="⚠"; total_fail=$((total_fail + 1)) ;;
-      SKIP)  icon="⊘"; total_skip=$((total_skip + 1)) ;;
+      SKIP)    icon="⊘"; total_skip=$((total_skip + 1)) ;;
     esac
 
     if [[ "$check" == "release_binary_size" || "$check" == "cargo_bloat" ]]; then
@@ -373,9 +491,9 @@ main() {
   log ""
   log "Summary: $total_pass passed, $total_fail failed, $total_skip skipped"
 
-  # ── Cache comparison ────────────────────────────────────────────
+  local saved=0 pct=0
   if [[ "${RESULTS[clean_release_build]:-}" == "PASS" && "${RESULTS[warm_release_build]:-}" == "PASS" ]]; then
-    local cold warm saved pct
+    local cold warm
     cold="${VALUES[clean_release_build]}"
     warm="${VALUES[warm_release_build]}"
     saved=$(echo "scale=3; $cold - $warm" | bc)
@@ -389,23 +507,7 @@ main() {
   fi
 
   if $JSON_MODE; then
-    local json_items=()
-    for check in "${CHECKS[@]}"; do
-      local res="${RESULTS[$check]:-SKIP}"
-      local val="${VALUES[$check]:-0}"
-      local unit="${UNITS[$check]:-s}"
-      local msg="${MESSAGES[$check]:-}"
-      msg="${msg//\\/\\\\}"
-      msg="${msg//\"/\\\"}"
-      json_items+=("{\"name\":\"$check\",\"result\":\"$res\",\"value\":$val,\"unit\":\"$unit\",\"message\":\"$msg\"}")
-    done
-    local json_body
-    json_body=$(printf '%s,' "${json_items[@]}" | sed 's/,$//')
-    local cache_json="null"
-    if [[ "${RESULTS[clean_release_build]:-}" == "PASS" && "${RESULTS[warm_release_build]:-}" == "PASS" ]]; then
-      cache_json="{\"cold\":${VALUES[clean_release_build]},\"warm\":${VALUES[warm_release_build]},\"saved_seconds\":$saved,\"saved_percent\":$pct}"
-    fi
-    echo "{\"benchmarks\":[$json_body],\"summary\":{\"pass\":$total_pass,\"fail\":$total_fail,\"skip\":$total_skip,\"timestamp\":\"$(date -Iseconds)\"},\"cache_comparison\":$cache_json}"
+    write_json_summary "$total_pass" "$total_fail" "$total_skip" "$saved" "$pct"
   fi
 
   if $CI_MODE && [[ "$FAILED" -gt 0 ]]; then

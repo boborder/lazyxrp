@@ -28,7 +28,7 @@ jobs:
       github.event_name == 'workflow_dispatch' ||
       github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 45
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -42,22 +42,30 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: Install bc (for benchmark arithmetic)
-        run: sudo apt-get update && sudo apt-get install -y bc
+      - name: Install mise tools (hyperfine)
+        uses: jdx/mise-action@v2
+        with:
+          install: true
 
-      - name: Install hyperfine & cargo-bloat
-        run: cargo install hyperfine cargo-bloat
+      - name: Install benchmark helpers
+        run: |
+          sudo apt-get update && sudo apt-get install -y bc jq
+          if ! command -v cargo-bloat >/dev/null 2>&1; then
+            cargo install cargo-bloat --locked
+          fi
 
       - name: Run benchmark suite
-        id: benchmark
         run: |
+          set -euo pipefail
+          ARGS=(--json --fast --perf-only)
           if [[ "${{ github.event.inputs.strict }}" == "true" ]]; then
-            ./benchmark.sh --json --ci | tee benchmark.json
-          else
-            ./benchmark.sh --json | tee benchmark.json
+            ARGS+=(--ci)
           fi
-          # Emit last line (JSON) as step output
-          echo "json=$(tail -n1 benchmark.json)" >> "$GITHUB_OUTPUT"
+          ./benchmark.sh "${ARGS[@]}" 2>&1 | tee benchmark.log
+          test -s benchmark-summary.json || {
+            echo "benchmark-summary.json missing or empty" >&2
+            exit 1
+          }
         shell: bash
 
       - name: Upload benchmark results
@@ -65,17 +73,18 @@ jobs:
         with:
           name: benchmark-results
           path: |
-            benchmark.json
+            benchmark-summary.json
+            benchmark.log
             target/bloat-report.txt
             target/timings-report.html
+          if-no-files-found: ignore
 
       - name: Render benchmark summary
         uses: actions/github-script@v7
         with:
           script: >-
             const fs = require('fs');
-            const raw = fs.readFileSync('benchmark.json', 'utf8').trim().split('\n').pop();
-            const data = JSON.parse(raw);
+            const data = JSON.parse(fs.readFileSync('benchmark-summary.json', 'utf8'));
 
             const rows = data.benchmarks.map(b => {
               const icon = b.result === 'PASS' ? '✅' : b.result === 'FAIL' ? '❌' : b.result === 'TIMEOUT' ? '⏱️' : '⏭️';
