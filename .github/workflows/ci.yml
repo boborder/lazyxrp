@@ -13,8 +13,34 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Fail fast when a version bump landed without its Cargo.lock sync
+  # (e.g. "chore: release 0.2.8" pushed separately from the lock). Spinning
+  # up the full matrix for a guaranteed `--locked` failure wasted a whole run.
+  release-gate:
+    name: Version & Lock Consistency
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+      - name: Compare Cargo.toml and Cargo.lock versions
+        run: |
+          set -euo pipefail
+          TOML_VERSION="$(grep -m1 '^version = ' Cargo.toml | sed -E 's/^version = "([^"]+)"/\1/')"
+          LOCK_VERSION="$(grep -A1 '^name = "lazyxrp"' Cargo.lock | grep -m1 '^version' | sed -E 's/^version = "([^"]+)"/\1/')"
+          if [ -z "$LOCK_VERSION" ]; then
+            echo "::error::lazyxrp entry not found in Cargo.lock"
+            exit 1
+          fi
+          if [ "$TOML_VERSION" != "$LOCK_VERSION" ]; then
+            echo "::error::Cargo.toml ($TOML_VERSION) and Cargo.lock ($LOCK_VERSION) disagree."
+            echo "::error::Ship the version bump and the Cargo.lock update in the SAME commit, then push."
+            exit 1
+          fi
+          echo "consistent: $TOML_VERSION"
   test:
     name: Test Suite
+    needs: [release-gate]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -28,6 +54,7 @@ jobs:
         run: cargo test --locked --all-features --workspace
 
   rustfmt:
+    needs: [release-gate]
     name: Rustfmt
     runs-on: ubuntu-latest
     steps:
@@ -43,6 +70,7 @@ jobs:
         run: cargo fmt --all --check
 
   clippy:
+    needs: [release-gate]
     name: Clippy
     runs-on: ubuntu-latest
     steps:
@@ -58,6 +86,7 @@ jobs:
         run: cargo clippy --locked --all-targets --all-features --workspace -- -D warnings
 
   docs:
+    needs: [release-gate]
     name: Docs
     runs-on: ubuntu-latest
     steps:
@@ -75,6 +104,7 @@ jobs:
 
 
   security-advisories:
+    needs: [release-gate]
     name: Security Advisories
     runs-on: ubuntu-latest
     steps:
