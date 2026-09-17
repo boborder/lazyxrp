@@ -7,7 +7,7 @@ use secrecy::{ExposeSecret, SecretString};
 use serde_json::Value;
 
 use crate::network::Network;
-use crate::xrpl::WalletProposeResult;
+use crate::xrpl::GeneratedWalletKeys;
 pub const SEED_ENV: &str = "XRPL_SEED";
 pub const MNEMONIC_ENV: &str = "XRPL_MNEMONIC";
 
@@ -92,7 +92,7 @@ impl std::fmt::Debug for SigningCredential {
 ///
 /// Public RPC / Clio endpoints often omit `master_seed` or reject the method;
 /// local generation matches rippled `wallet_propose` semantics for TUI keygen.
-pub fn propose_wallet_local(key_type: &str) -> color_eyre::Result<WalletProposeResult> {
+pub fn generate_wallet_keys_local(key_type: &str) -> color_eyre::Result<GeneratedWalletKeys> {
     use xrpl::constants::CryptoAlgorithm;
     use xrpl::core::addresscodec::decode_seed;
     use xrpl::wallet::Wallet;
@@ -113,7 +113,7 @@ pub fn propose_wallet_local(key_type: &str) -> color_eyre::Result<WalletProposeR
         .map_err(|e| color_eyre::eyre::eyre!("keygen: decode seed: {e:?}"))?;
     let master_seed_hex = hex::encode_upper(entropy);
 
-    Ok(WalletProposeResult {
+    Ok(GeneratedWalletKeys {
         master_seed: wallet.seed.clone(),
         master_seed_hex,
         account_id: wallet.classic_address.clone(),
@@ -170,20 +170,27 @@ pub fn wallet_from_family_seed(
     }
 }
 
-/// Prompts for explicit confirmation before executing a write operation on mainnet.
+/// Prompts for explicit confirmation before a write on a production chain
+/// (`Network::is_production()`: XRPL mainnet or Xahau).
 ///
 /// Returns `true` if the operation should proceed:
-/// - Always `true` when `yes == true` (scripting / `--yes` flag).
-/// - Always `true` when `network` is not mainnet.
+/// - Always `true` when `skip_prompt` is set (scripting / `--yes`).
+/// - Always `true` when `network` is not production.
 /// - `true` only if the user types `y` or `yes` (case-insensitive) otherwise.
 ///
-/// Non-TUI `Send` on mainnet calls this unless the caller passes `skip_prompt`
-/// (e.g. scripting / `--yes`).
-pub fn prompt_mainnet_confirmation(operation: &str, network: &Network, skip_prompt: bool) -> bool {
-    if !network.is_mainnet() || skip_prompt {
+/// Non-TUI `Send` on production calls this unless the caller passes `skip_prompt`.
+pub fn prompt_production_confirmation(
+    operation: &str,
+    network: &Network,
+    skip_prompt: bool,
+) -> bool {
+    if !network.is_production() || skip_prompt {
         return true;
     }
-    eprint!("⚠️  MAINNET: about to execute {operation}. Continue? [y/N] ");
+    eprint!(
+        "⚠️  {}: about to execute {operation}. Continue? [y/N] ",
+        network.display_name()
+    );
     let _ = io::stderr().flush();
     let mut input = String::new();
     if io::stdin().read_line(&mut input).is_err() {
@@ -943,12 +950,12 @@ mod tests {
 
     #[test]
     fn confirm_non_mainnet_skips_prompt() {
-        assert!(prompt_mainnet_confirmation(
+        assert!(prompt_production_confirmation(
             "Payment",
             &Network::Testnet,
             false
         ));
-        assert!(prompt_mainnet_confirmation(
+        assert!(prompt_production_confirmation(
             "Payment",
             &Network::Devnet,
             false
@@ -957,7 +964,7 @@ mod tests {
 
     #[test]
     fn confirm_mainnet_with_yes_flag_skips_prompt() {
-        assert!(prompt_mainnet_confirmation(
+        assert!(prompt_production_confirmation(
             "Payment",
             &Network::Mainnet,
             true
@@ -981,12 +988,16 @@ mod tests {
     }
 
     #[test]
-    fn propose_wallet_local_ed25519() {
-        let r = propose_wallet_local("ed25519").expect("local keygen");
-        assert!(r.master_seed.starts_with("sEd") || r.master_seed.starts_with('s'));
+    fn generate_wallet_keys_local_ed25519() {
+        let r = generate_wallet_keys_local("ed25519").expect("local keygen");
+        assert!(r.master_seed.starts_with("sEd"));
         assert!(r.account_id.starts_with('r'));
         assert_eq!(r.key_type, "ed25519");
         assert_eq!(r.master_seed_hex.len(), 32);
+        // Roundtrip: the generated seed must decode back to the same account.
+        let wallet =
+            wallet_from_family_seed(&r.master_seed, 0).expect("wallet from generated seed");
+        assert_eq!(wallet.classic_address, r.account_id);
     }
     #[test]
     fn bip39_secp256k1_derives_known_xrpl_wallet() {
@@ -1004,13 +1015,15 @@ mod tests {
             xrpl::core::keypairs::derive_classic_address(&wallet.public_key).unwrap(),
             wallet.classic_address
         );
-        assert!(xrpl::core::addresscodec::is_valid_classic_address(
-            "rG1QQv2nh2gr7RCZ1P8YYcBUKCCN633jCn"
-        ));
+        // Actual deterministic derivation for this mnemonic (index 0). The
+        // often-quoted rG1QQv2... address belongs to a different test vector.
+        assert_eq!(wallet.classic_address, "rHsMGQEkVNJmpGWs8XUBoTBiAAbwxZN5v3");
         assert!(xrpl::core::keypairs::sign(b"test", &wallet.private_key).is_ok());
     }
     #[test]
     fn bip39_secp256k1_can_sign_payment() {
+        use xrpl::core::binarycodec::decode;
+
         let credential = SigningCredential::from_bip39_mnemonic(
             "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
         )
@@ -1033,8 +1046,18 @@ mod tests {
         )
         .expect("signed payment");
 
-        assert!(!blob.is_empty());
-        assert!(blob.chars().all(|c| c.is_ascii_hexdigit()));
+        // The blob must round-trip through the XRPL binary codec as a Payment
+        // carrying the exact request arguments.
+        let decoded = decode(&blob).expect("blob decodes via XRPL binary codec");
+        assert_eq!(decoded["TransactionType"], serde_json::json!("Payment"));
+        assert_eq!(
+            decoded["Destination"],
+            serde_json::json!("rG1QQv2nh2gr7RCZ1P8YYcBUKCCN633jCn")
+        );
+        assert_eq!(decoded["Amount"], serde_json::json!("1000000"));
+        assert_eq!(decoded["Sequence"], serde_json::json!(1));
+        assert_eq!(decoded["Fee"], serde_json::json!("12"));
+        assert_eq!(decoded["Account"], serde_json::json!(account));
     }
 
     #[test]

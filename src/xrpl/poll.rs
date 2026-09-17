@@ -126,7 +126,7 @@ async fn dispatch_account_tx(
 }
 
 fn mainnet_write_guard_blocks(network: &Network, skip_mainnet_prompt: bool) -> bool {
-    network.is_mainnet() && !skip_mainnet_prompt
+    network.is_production() && !skip_mainnet_prompt
 }
 
 /// Mainnet guard, then load seed + wallet for AccountSet / Payment submit.
@@ -679,7 +679,7 @@ async fn submit_account_set_transaction(
         network,
         params.skip_mainnet_prompt,
         signing_credential,
-        "mainnet: restart lazyxrp with --yes to allow AccountSet writes",
+        "production network: restart lazyxrp with --yes to allow AccountSet writes",
         submit_err,
         action_tx,
     ) else {
@@ -805,7 +805,7 @@ async fn submit_trust_set_transaction(
         network,
         params.skip_mainnet_prompt,
         signing_credential,
-        "mainnet: restart lazyxrp with --yes to allow TrustSet writes",
+        "production network: restart lazyxrp with --yes to allow TrustSet writes",
         submit_err,
         action_tx,
     ) else {
@@ -882,7 +882,7 @@ async fn submit_offer_create_transaction(
         network,
         params.skip_mainnet_prompt,
         signing_credential,
-        "mainnet: restart lazyxrp with --yes to allow OfferCreate writes",
+        "production network: restart lazyxrp with --yes to allow OfferCreate writes",
         submit_err,
         action_tx,
     ) else {
@@ -956,7 +956,7 @@ async fn submit_set_regular_key_transaction(
         network,
         params.skip_mainnet_prompt,
         signing_credential,
-        "mainnet: restart lazyxrp with --yes to allow SetRegularKey writes",
+        "production network: restart lazyxrp with --yes to allow SetRegularKey writes",
         submit_err,
         action_tx,
     ) else {
@@ -1073,7 +1073,7 @@ async fn submit_payment_transaction(
         network,
         params.skip_mainnet_prompt,
         signing_credential,
-        "mainnet: restart lazyxrp with --yes to allow Payment writes",
+        "production network: restart lazyxrp with --yes to allow Payment writes",
         submit_err,
         action_tx,
     ) else {
@@ -1225,7 +1225,7 @@ async fn submit_fxrp_direct_mint_payment(
         network,
         params.skip_mainnet_prompt,
         signing_credential,
-        "mainnet: restart lazyxrp with --yes to allow FXRP Direct Mint Payment writes",
+        "production network: restart lazyxrp with --yes to allow FXRP Direct Mint Payment writes",
         submit_err,
         action_tx,
     ) else {
@@ -1367,7 +1367,7 @@ async fn submit_fxrp_execute_direct_mint(
         send_action(
             action_tx,
             submit_err(
-                "mainnet: restart lazyxrp with --yes to allow Flare executeDirectMinting writes"
+                "production network: restart lazyxrp with --yes to allow Flare executeDirectMinting writes"
                     .into(),
             ),
         );
@@ -1427,6 +1427,18 @@ async fn run_scheduled_poll<'a>(
     )
 }
 
+/// Reset the poll backoff on success; on failure escalate via [`next_backoff_secs`]
+/// and arm a backoff window observed by [`is_backoff_active`].
+fn update_backoff(succeeded: bool, backoff_secs: &mut u64, backoff_until: &mut Option<Instant>) {
+    if succeeded {
+        *backoff_secs = 0;
+        *backoff_until = None;
+    } else {
+        *backoff_secs = next_backoff_secs(*backoff_secs);
+        *backoff_until = Some(Instant::now() + Duration::from_secs(*backoff_secs));
+    }
+}
+
 async fn execute_scheduled_poll(
     rpc: &RpcClient,
     inputs: PollBatchInputs<'_>,
@@ -1444,13 +1456,11 @@ async fn execute_scheduled_poll(
     };
     let (batch_succeeded, wallet_overview_succeeded) =
         tokio::join!(poll_batch(inputs, action_tx), wallet_fut);
-    if batch_succeeded || wallet_overview_succeeded {
-        *backoff_secs = 0;
-        *backoff_until = None;
-    } else {
-        *backoff_secs = next_backoff_secs(*backoff_secs);
-        *backoff_until = Some(Instant::now() + Duration::from_secs(*backoff_secs));
-    }
+    update_backoff(
+        batch_succeeded || wallet_overview_succeeded,
+        backoff_secs,
+        backoff_until,
+    );
     Instant::now()
 }
 
@@ -1474,7 +1484,7 @@ async fn drive_poll_loop(
         book_pair,
         poll_interval,
         seed_address,
-        signing_seed,
+        signing_credential,
         mut network_watch,
         oracles,
         oracle_pairs,
@@ -1488,7 +1498,7 @@ async fn drive_poll_loop(
         submit_lock,
     } = ctx;
     // Immutable across the loop; the seven submit arms below borrow it.
-    let signing_credential = signing_seed.as_ref();
+    let signing_credential = signing_credential.as_ref();
     // Wrapped in an async RwLock so the network-switch arm can swap the client
     // mid-loop; read guards are Send and safe across awaits.
     let rpc_cell = tokio::sync::RwLock::new(match RpcClient::connect(&rpc_url) {
@@ -1605,11 +1615,11 @@ async fn drive_poll_loop(
             _ = price_tick.tick() => {
                 let price = tokio::time::timeout(
                     RPC_TIMEOUT,
-                    rpc_cell.read().await.xrp_rlusd_price(book_pair.pays_currency(), &book_pair.issuer),
+                    rpc_cell.read().await.book_mid_price(book_pair.pays_currency(), &book_pair.issuer),
                 )
                 .await;
                 match price {
-                    Ok(Ok(p)) => send_action(&action_tx, Action::XrplRlusdPrice(p)),
+                    Ok(Ok(p)) => send_action(&action_tx, Action::BookMidPrice(p)),
                     Ok(Err(e)) => send_action(&action_tx, Action::XrplError(format!("price: {e}"))),
                     Err(_) => send_action(&action_tx, Action::XrplError("price: timeout".into())),
                 };
@@ -1699,16 +1709,16 @@ async fn drive_poll_loop(
                         let _guard = submit_lock.lock().await;
                         submit_trust_set_transaction(&*rpc_cell.read().await, &network, params, &action_tx, signing_credential).await;
                     }
-                    PollCommand::WalletPropose(key_type) => {
-                        match crate::signing::propose_wallet_local(&key_type) {
+                    PollCommand::GenerateWalletKeys(key_type) => {
+                        match crate::signing::generate_wallet_keys_local(&key_type) {
                             Ok(result) => {
-                                if let Err(e) = action_tx.send(Action::WalletProposeOk(result)) {
+                                if let Err(e) = action_tx.send(Action::GenerateWalletKeysOk(result)) {
                                     warn!(?e, "action channel closed");
                                 }
                             }
                             Err(e) => {
                                 if let Err(e) =
-                                    action_tx.send(Action::WalletProposeErr(format!("{e}")))
+                                    action_tx.send(Action::GenerateWalletKeysErr(format!("{e}")))
                                 {
                                     warn!(?e, "action channel closed");
                                 }
@@ -1731,9 +1741,9 @@ mod tests {
     use tokio::sync::mpsc;
 
     use super::*;
-    use crate::config::{TestEnvGuard, env_lock};
     use crate::network::Network;
     use crate::signing::SEED_ENV;
+    use crate::test_support::{TestEnvGuard, env_lock_async};
     use crate::xrpl::client::RpcClient;
     use crate::xrpl::types::{
         AccountSetSubmitParams, FxrpDirectMintPaymentParams, FxrpExecuteDirectMintParams,
@@ -1771,6 +1781,7 @@ mod tests {
     #[test]
     fn should_skip_poll_trigger_within_min_interval() {
         assert!(should_skip_poll_trigger(Some(Instant::now())));
+        assert!(!should_skip_poll_trigger(None));
     }
 
     #[test]
@@ -1843,11 +1854,13 @@ mod tests {
     #[test]
     fn mainnet_write_guard_blocks_without_yes() {
         assert!(mainnet_write_guard_blocks(&Network::Mainnet, false));
+        assert!(mainnet_write_guard_blocks(&Network::Xahau, false));
         assert!(!mainnet_write_guard_blocks(&Network::Mainnet, true));
         assert!(!mainnet_write_guard_blocks(&Network::Testnet, false));
+        assert!(!mainnet_write_guard_blocks(&Network::XahauTest, false));
     }
 
-    /// TC-088 (R-006): every sign+submit path rejects mainnet without `--yes`
+    /// TC-088 (R-006): every sign+submit path rejects production writes without `--yes`
     /// before any RPC/signing.
     #[tokio::test]
     async fn mainnet_submit_without_yes_is_rejected() {
@@ -2001,7 +2014,7 @@ mod tests {
                 | Action::FxrpDirectMintPaymentSubmitErr(m) => m,
                 other => panic!("{name}: expected submit error, got {other:?}"),
             };
-            assert!(msg.contains("mainnet"), "{name}: {msg}");
+            assert!(msg.contains("production network"), "{name}: {msg}");
             assert!(msg.contains("--yes"), "{name}: {msg}");
         }
     }
@@ -2024,10 +2037,8 @@ mod tests {
         .await;
         match rx.try_recv() {
             Ok(Action::FxrpExecuteDirectMintSubmitErr(msg)) => {
-                assert!(
-                    msg.contains("disabled") || msg.contains("execute"),
-                    "unexpected err: {msg}"
-                );
+                assert!(msg.contains("disabled"), "unexpected message: {msg}");
+                assert!(msg.contains("execute = true"));
             }
             other => panic!("expected FxrpExecuteDirectMintSubmitErr, got {other:?}"),
         }
@@ -2035,12 +2046,9 @@ mod tests {
 
     #[tokio::test]
     async fn payment_submit_mainnet_with_yes_skips_mainnet_guard() {
-        let _env = {
-            let _g = env_lock();
-            let env = TestEnvGuard::new(&[SEED_ENV]);
-            env.remove(SEED_ENV);
-            env
-        };
+        let _env_lock = env_lock_async().await;
+        let _test_env = TestEnvGuard::new(&[SEED_ENV]);
+        _test_env.remove(SEED_ENV);
         let (action_tx, mut action_rx) = mpsc::unbounded_channel();
         let rpc = RpcClient::connect("http://127.0.0.1:1").expect("rpc client");
         let params = PaymentSubmitParams {
@@ -2070,12 +2078,9 @@ mod tests {
 
     #[tokio::test]
     async fn set_regular_key_submit_mainnet_with_yes_skips_mainnet_guard() {
-        let _env = {
-            let _g = env_lock();
-            let env = TestEnvGuard::new(&[SEED_ENV]);
-            env.remove(SEED_ENV);
-            env
-        };
+        let _env_lock = env_lock_async().await;
+        let _test_env = TestEnvGuard::new(&[SEED_ENV]);
+        _test_env.remove(SEED_ENV);
         let (action_tx, mut action_rx) = mpsc::unbounded_channel();
         let rpc = RpcClient::connect("http://127.0.0.1:1").expect("rpc client");
         let params = SetRegularKeySubmitParams {
@@ -2099,23 +2104,67 @@ mod tests {
         }
     }
 
+    /// TC-144: `account_tx` success mapping follows the append flag, and a
+    /// not-found page on the append path still yields `XrplTxHistoryAppend`.
     #[test]
-    fn resolve_xaddress_preserves_destination_tag() {
-        use xrpl::core::addresscodec::classic_address_to_xaddress;
-        let classic = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh";
-        let xaddr = classic_address_to_xaddress(classic, Some(42), false).expect("xaddr");
-        let resolved = resolve_payment_destination(&xaddr).expect("resolve");
-        assert_eq!(resolved.classic, classic);
-        assert_eq!(resolved.destination_tag, Some(42));
-        assert_eq!(resolved.xaddress_is_test, Some(false));
+    fn action_from_account_tx_result_follows_append_flag() {
+        use crate::xrpl::types::AccountTxPage;
+        let page = AccountTxPage {
+            rows: Vec::new(),
+            marker: Some(serde_json::json!({"ledger_index": 1})),
+        };
+        match action_from_account_tx_result(Ok(page.clone()), false) {
+            Action::XrplTxHistory(rows, marker) => {
+                assert!(rows.is_empty());
+                assert_eq!(marker, page.marker);
+            }
+            other => panic!("expected XrplTxHistory, got {other:?}"),
+        }
+        let marker_expected = page.marker.clone();
+        match action_from_account_tx_result(Ok(page), true) {
+            Action::XrplTxHistoryAppend(rows, marker) => {
+                assert!(rows.is_empty());
+                assert_eq!(marker, marker_expected);
+            }
+            other => panic!("expected XrplTxHistoryAppend, got {other:?}"),
+        }
     }
 
+    /// TC-144: not-found error on the append path becomes an empty
+    /// `XrplTxHistoryAppend`, not `XrplError`.
     #[test]
-    fn resolve_classic_address_has_no_tag() {
-        let classic = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh";
-        let resolved = resolve_payment_destination(classic).expect("resolve");
-        assert_eq!(resolved.classic, classic);
-        assert!(resolved.destination_tag.is_none());
-        assert!(resolved.xaddress_is_test.is_none());
+    fn action_from_account_tx_result_not_found_append_yields_empty_append() {
+        let err = color_eyre::eyre::eyre!("actNotFound");
+        match action_from_account_tx_result(Err(err), true) {
+            Action::XrplTxHistoryAppend(rows, marker) => {
+                assert!(rows.is_empty());
+                assert!(marker.is_none());
+            }
+            other => panic!("expected empty XrplTxHistoryAppend, got {other:?}"),
+        }
+    }
+
+    /// TC-145: a failed scheduled poll escalates `backoff_secs` and arms an
+    /// open backoff window; success resets both.
+    #[test]
+    fn scheduled_poll_backoff_escalates_then_resets() {
+        let mut secs = 0_u64;
+        let mut until = None;
+        for expected in [2, 4, 8] {
+            update_backoff(false, &mut secs, &mut until);
+            assert_eq!(secs, expected, "backoff must escalate after failure");
+            let deadline = until.expect("backoff window must be armed after failure");
+            assert!(
+                is_backoff_active(Some(deadline)),
+                "armed window must be open immediately after failure"
+            );
+            assert!(
+                deadline <= Instant::now() + Duration::from_secs(secs),
+                "window must be no longer than the escalated backoff"
+            );
+        }
+        update_backoff(true, &mut secs, &mut until);
+        assert_eq!(secs, 0, "success must reset backoff to the floor");
+        assert!(until.is_none(), "success must clear the backoff window");
     }
 }

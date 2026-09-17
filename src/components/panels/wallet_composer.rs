@@ -600,8 +600,8 @@ impl WalletPanel {
                 ])
             }
             ComposerPhase::AccountSet => {
-                let net_note = if self.network.is_mainnet() && !self.skip_mainnet_prompt {
-                    " · mainnet writes need --yes"
+                let net_note = if self.network.is_production() && !self.skip_mainnet_prompt {
+                    " · production writes need --yes"
                 } else {
                     ""
                 };
@@ -689,8 +689,8 @@ impl WalletPanel {
                 iou_issuer,
                 is_iou,
             } => {
-                let net_note = if self.network.is_mainnet() && !self.skip_mainnet_prompt {
-                    " · mainnet sends need --yes"
+                let net_note = if self.network.is_production() && !self.skip_mainnet_prompt {
+                    " · production sends need --yes"
                 } else {
                     ""
                 };
@@ -751,8 +751,8 @@ impl WalletPanel {
                 Paragraph::new(lines)
             }
             ComposerPhase::SetRegularKey { regular_key } => {
-                let net_note = if self.network.is_mainnet() && !self.skip_mainnet_prompt {
-                    " · mainnet writes need --yes"
+                let net_note = if self.network.is_production() && !self.skip_mainnet_prompt {
+                    " · production writes need --yes"
                 } else {
                     ""
                 };
@@ -783,8 +783,8 @@ impl WalletPanel {
                 taker_gets,
                 taker_pays,
             } => {
-                let net_note = if self.network.is_mainnet() && !self.skip_mainnet_prompt {
-                    " · mainnet writes need --yes"
+                let net_note = if self.network.is_production() && !self.skip_mainnet_prompt {
+                    " · production writes need --yes"
                 } else {
                     ""
                 };
@@ -829,8 +829,8 @@ impl WalletPanel {
                 issuer,
                 limit,
             } => {
-                let net_note = if self.network.is_mainnet() && !self.skip_mainnet_prompt {
-                    " · mainnet writes need --yes"
+                let net_note = if self.network.is_production() && !self.skip_mainnet_prompt {
+                    " · production writes need --yes"
                 } else {
                     ""
                 };
@@ -890,8 +890,8 @@ impl WalletPanel {
                     .as_ref()
                     .map(|i| i.core_vault_xrpl.as_str())
                     .unwrap_or("(not loaded)");
-                let net_note = if self.network.is_mainnet() && !self.skip_mainnet_prompt {
-                    " · mainnet writes need --yes"
+                let net_note = if self.network.is_production() && !self.skip_mainnet_prompt {
+                    " · production writes need --yes"
                 } else {
                     ""
                 };
@@ -935,13 +935,13 @@ impl WalletPanel {
                 ])
             }
             ComposerPhase::FxrpExecuteDirectMint { proof_json } => {
-                let net_note = if self.network.is_mainnet() && !self.skip_mainnet_prompt {
-                    " · mainnet writes need --yes"
+                let net_note = if self.network.is_production() && !self.skip_mainnet_prompt {
+                    " · production writes need --yes"
                 } else {
                     ""
                 };
-                let preview = if proof_json.len() > 72 {
-                    format!("{}…", &proof_json[..72])
+                let preview = if proof_json.chars().count() > 72 {
+                    format!("{}…", proof_json.chars().take(72).collect::<String>())
                 } else {
                     proof_json.clone()
                 };
@@ -968,5 +968,101 @@ impl WalletPanel {
             }
         };
         frame.render_widget(body, inner);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn key(c: char) -> KeyEvent {
+        KeyEvent::new(KeyCode::Char(c), KeyModifiers::empty())
+    }
+
+    /// TC-132: composer_row_nav — `]` wraps back to row 0 after a full cycle,
+    /// Enter while editing advances the row, Ctrl+E is never a toggle.
+    #[test]
+    fn composer_row_nav_wraps_and_advances() {
+        let mut editing = false;
+        let mut row = 0;
+
+        // `e` enters editing (true); second `e` exits (false).
+        assert!(WalletPanel::composer_row_nav(
+            &mut editing,
+            &key('e'),
+            &mut row,
+            3
+        ));
+        assert!(editing);
+        assert_eq!(row, 0);
+        assert!(!WalletPanel::composer_row_nav(
+            &mut editing,
+            &key('e'),
+            &mut row,
+            3
+        ));
+        assert!(!editing);
+
+        // Enter while editing advances the row and stays in editing mode.
+        editing = true;
+        assert!(!WalletPanel::composer_row_nav(
+            &mut editing,
+            &KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()),
+            &mut row,
+            3
+        ));
+        assert!(editing);
+        assert_eq!(row, 1);
+
+        // `]` from row 1 wraps: 2 → 0 → 1; three presses from 0 cycle back to 0.
+        let mut row = 0;
+        for expected in [1usize, 2, 0, 1] {
+            WalletPanel::composer_row_nav(&mut editing, &key(']'), &mut row, 3);
+            assert_eq!(row, expected);
+        }
+
+        // `[` from row 0 wraps to the last row.
+        let mut row = 0;
+        WalletPanel::composer_row_nav(&mut editing, &key('['), &mut row, 3);
+        assert_eq!(row, 2);
+
+        // Ctrl+E must not toggle editing.
+        editing = false;
+        assert!(!WalletPanel::composer_row_nav(
+            &mut editing,
+            &KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL),
+            &mut row,
+            3
+        ));
+        assert!(!editing);
+        assert_eq!(row, 2);
+    }
+
+    /// TC-132: composer_edit_toggle_nav for single-row phases — `e` toggles,
+    /// Enter enters editing when not editing and is a no-op while editing.
+    #[test]
+    fn composer_edit_toggle_nav_toggles_and_enters() {
+        let mut editing = false;
+        assert!(WalletPanel::composer_edit_toggle_nav(
+            &mut editing,
+            &key('e')
+        ));
+        assert!(editing);
+        assert!(!WalletPanel::composer_edit_toggle_nav(
+            &mut editing,
+            &key('e')
+        ));
+        assert!(!editing);
+
+        assert!(WalletPanel::composer_edit_toggle_nav(
+            &mut editing,
+            &KeyEvent::new(KeyCode::Enter, KeyModifiers::empty())
+        ));
+        assert!(editing);
+        assert!(!WalletPanel::composer_edit_toggle_nav(
+            &mut editing,
+            &KeyEvent::new(KeyCode::Enter, KeyModifiers::empty())
+        ));
+        assert!(editing);
     }
 }
