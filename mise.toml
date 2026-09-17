@@ -1,0 +1,91 @@
+# Dev toolchain & task runner (run from repo root: mise run <task>).
+# Toolchain truth: rust-toolchain.toml (stable + rustfmt/clippy); `rust` here
+# provisions the same channel via mise (its shims shadow rustup's).
+[tools]
+rust = "stable"
+hyperfine = "latest"
+# CI security-advisories parity (`.github/workflows/ci.yml`): cargo-audit uses
+# CLI flag --ignore RUSTSEC-2026-0235 (same as ci.yml); cargo-deny reads deny.toml.
+"cargo:cargo-audit" = "latest"
+"cargo:cargo-deny" = "latest"
+# benchmark.sh --full runs cargo bloat; without it that step SKIPs.
+"cargo:cargo-bloat" = "latest"
+
+# https://mise.jdx.dev/tasks/ — run from repo root: mise run install
+[tasks.install]
+description = "Source ./install.sh from repo root (same as curl installer; INSTALL_DIR / --method / see install.sh --help)"
+run = ". ./install.sh -q"
+
+[tasks.tags]
+description = "List local git tags"
+run = "git tag -l"
+
+# --- Development loop (mirrors CI gates; see AGENTS.md execution contract) ---
+
+[tasks.check]
+description = "cargo check --locked --all-features --workspace (contract minimum)"
+run = "cargo check --locked --all-features --workspace"
+
+[tasks.fmt]
+description = "Apply rustfmt to the workspace"
+run = "cargo fmt --all"
+
+[tasks.lint]
+description = "CI Rustfmt + Clippy gates"
+run = "cargo fmt --all --check && cargo clippy --locked --all-targets --all-features --workspace -- -D warnings"
+
+[tasks.test]
+description = "CI Test Suite gate"
+run = "cargo test --locked --all-features --workspace"
+
+[tasks.test-serial]
+description = "Test suite single-threaded (env-order-sensitive checks; caught cli_smoke races)"
+run = "cargo test --locked --all-features --workspace -- --test-threads=1"
+
+[tasks.doc]
+description = "CI Docs gate: rustdoc with -D warnings"
+env = { RUSTDOCFLAGS = "-D warnings" }
+run = "cargo doc --locked --no-deps --document-private-items --all-features --workspace --examples"
+
+[tasks.audit]
+description = "CI Security Advisories gate: cargo-audit (CLI --ignore RUSTSEC-2026-0235, same as ci.yml) + cargo-deny (ignores in deny.toml)"
+run = "cargo audit --ignore RUSTSEC-2026-0235 && cargo deny check"
+
+[tasks.update]
+description = "Update Cargo.lock within semver, then rebuild-check + advisory rescan"
+run = "cargo update && mise run check && mise run audit"
+
+[tasks.clean]
+description = "Remove build artifacts (target/, benchmark outputs)"
+run = "cargo clean && rm -f benchmark-summary.json"
+
+# --- Benchmarks ---
+
+[tasks.bench]
+description = "Full benchmark (cold build + check/test/clippy/doc; ~10 min)"
+run = "./benchmark.sh --full"
+
+[tasks.bench-fast]
+description = "Fast perf benchmark (skips clean build + quality gates; ~3 min)"
+run = "./benchmark.sh --fast --perf-only"
+
+[tasks.bench-ci]
+description = "CI-equivalent benchmark (--json --fast --perf-only)"
+run = "./benchmark.sh --json --fast --perf-only"
+
+# Cargo.toml を必ず更新する
+[tasks.tag-push]
+description = "Create v<version> from Cargo.toml and push that single tag to origin (gates first)"
+depends = ["lint", "test", "doc", "audit"]
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+VERSION=$(grep -m1 '^version = ' Cargo.toml | sed -E 's/^version = "([^"]+)"/\1/')
+TAG="v${VERSION}"
+if git rev-parse "$TAG" >/dev/null 2>&1; then
+  echo "error: tag $TAG already exists" >&2
+  exit 1
+fi
+git tag -a "$TAG" -m "Release $TAG"
+git push origin "$TAG"
+'''

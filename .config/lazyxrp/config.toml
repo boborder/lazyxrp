@@ -4,7 +4,7 @@
 
 [xrpl]
 # Network preset. Determines default RPC/WS endpoints.
-# Options: mainnet | testnet | devnet   Default: mainnet
+# Options: mainnet | testnet | devnet | xahau | xahau-test   Default: mainnet
 network = "mainnet"
 
 # Custom RPC/WS endpoints. When set, these override the network preset.

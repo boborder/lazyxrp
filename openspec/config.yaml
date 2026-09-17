@@ -1,0 +1,86 @@
+schema: spec-driven
+
+# Shown to AI when creating OpenSpec artifacts. Do not paste this block into artifacts.
+context: |
+  Project: lazyxrp — Rust TUI for XRPL (ratatui 0.30, Elm-style Action → App → panels).
+  Version: see Cargo.toml (currently 0.2.x). Rust 1.91+, `cargo … --locked` in CI.
+
+  Reference direction (strict): openspec/ MAY link to docs/; docs/ MUST NOT link to openspec/.
+  Human SSOT: docs/, DESIGN.md, README § Documentation. OpenSpec is optional agent overlay.
+
+  Human layers (ship updates here):
+  - docs/requirements.md — FR/NFR (what)
+  - docs/architecture.md — system & behavioral design (how; feeds test.md)
+  - DESIGN.md — UI/UX SSOT (keys, layout, theme, modals); link, do not copy tables
+  - docs/test.md — TC catalog (traces to requirements + architecture)
+  - ROADMAP.md (root) — portfolio / milestones / cross-cutting backlog
+
+  Optional OpenSpec (when this workflow is used):
+  - openspec/specs/<cap>/spec.md — agent-oriented contracts (mirror docs/; not linked from docs/)
+  - openspec/changes/<name>/ — proposal, design, tasks, delta specs
+  - openspec/config.yaml — this file
+
+  Where to write:
+  - FR/NFR IDs → docs/requirements.md
+  - Network, config precedence, data flow, behavioral contracts → docs/architecture.md
+  - Keys, layout, colors, scroll/modal interaction → DESIGN.md
+  - Invariants I-* → docs/security.md (+ openspec/specs/safety/spec.md when using OpenSpec)
+  - Module wiring / channels → docs/directory.md §3 (+ openspec/specs/architecture/spec.md when using OpenSpec)
+  - Types / SigningCredential → src/xrpl/types.rs, src/signing.rs (+ data-model spec when using OpenSpec)
+  - Import rules → openspec/specs/module-boundaries/spec.md (OpenSpec-only)
+  - This week's tasks → openspec/changes/<name>/tasks.md when using OpenSpec (not linked from docs/)
+  - Milestones → root ROADMAP.md
+  - UX diagrams → DESIGN.md
+  - TC-xxx → docs/test.md
+  - S-xxx / R-xxx → docs/security.md
+
+  Commands: `openspec list` · `openspec status --change <name>` · `openspec validate --changes`
+  Archive: merge delta specs into openspec/specs/ for behavior changes.
+  `--skip-specs` only when main specs were already written in apply (docs-only) or the change is a historical import.
+
+  Invariants: simulate-before-submit (I-3), mainnet --yes (I-2), 4 tabs (I-9). See openspec/specs/safety/spec.md.
+  Components never call xrpl/ client or poll; Action + PollCommand only.
+  After code changes: `cargo check` minimum; sync affected docs/ in the same change.
+  Graphify: read graphify-out/GRAPH_REPORT.md first; if HEAD differs or graphify-out/needs_update exists, run `graphify update .`. Query via `graphify query` / `path` / `explain`; cite EXTRACTED/INFERRED edges only.
+
+  Change slices:
+  - New CLI subcommand: src/cli.rs Cmd → src/xrpl/cli_exec.rs
+  - New TUI panel: components/panels → tabs → app.rs panels vec + TAB_TITLES (same change)
+  - New XRPL data: client.rs → types.rs → Action → poll/ws emit → component update
+  - New TX submit: types params → Action Submit/Ok/Err → poll.rs submit_* reusing finalize_simulate_sign_submit → wallet_composer.rs
+  - Config key: config.rs + config.json5 + docs that mention the key
+  - TX detail parser: tx_detail/parsers.rs + registry + docs/architecture.md §5.2.1 (keys in DESIGN.md)
+  Tests: inline #[cfg(test)] in the same file; helpers TestEnvGuard, env_lock(), minimal_config_toml(); /// TC-NNN on catalog cases. Do not add tests/.
+
+rules:
+  proposal:
+    - Link SSOT (docs/architecture.md, docs/requirements.md, openspec/specs/safety/spec.md) instead of copying tables.
+    - Include a completion summary table when importing or closing historical work.
+    - Always include Non-goals or Out of scope.
+  design:
+    - Prefer mermaid sequence/flowchart for cross-module flows; ASCII only if mermaid unavailable.
+    - Include at least one table mapping UI surface → source file → Action variants.
+    - Link DESIGN.md for keys/layout/theme; docs/architecture.md for behavioral contracts; openspec/specs/architecture/spec.md for wiring.
+    - Cite I-2, I-3, I-9 when touching submit or tab layout.
+  specs:
+    - Use SHALL/MUST requirement wording with Scenario blocks (Given/When/Then).
+    - Add a traceability table: Requirement → TC-xxx or test file when known.
+    - One capability directory per feature area (kebab-case).
+    - Deltas only (ADDED/MODIFIED/REMOVED). Shipped behavior must land in docs/; openspec/specs/ is an optional agent mirror — never require humans to read it.
+  tasks:
+    - Checkboxes only; group by phase or concern.
+    - Link to root ROADMAP.md milestone when task spans releases.
+    - Mark deferred items explicitly; do not mark done without code/doc evidence.
+    - Chunks should be completable in one focused session (~2h max).
+
+operations:
+  apply:
+    guidance:
+      - Read DESIGN.md + openspec/specs/architecture/spec.md + openspec/specs/safety/spec.md before UI or Action changes.
+      - Never: components importing xrpl/client or xrpl/poll; sign without simulate (I-3); mainnet write without --yes (I-2); mutate ArcValue; read cleared config.xrpl.signing.seed (use secret_seed / SigningCredential); skip cargo check; mix unrelated refactors.
+      - Run cargo check after implementation; update docs/ when behavior or config keys change.
+      - Use openspec/changes/<name>/tasks.md for OpenSpec task tracking only; root ROADMAP.md stays the human backlog SSOT.
+  archive:
+    guidance:
+      - Update root ROADMAP.md milestone status when archiving a shipped change.
+      - Merge delta specs into openspec/specs/ for normative behavior. Use --skip-specs only for doc-only work whose specs were already written during apply, or historical imports.

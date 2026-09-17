@@ -8,8 +8,7 @@
 #   --full        Full suite including quality gates (local `mise run bench`)
 #
 # Tools: hyperfine (startup stats), cargo-bloat (size breakdown), cargo --timings (on warm build)
-#   Local: mise install  (hyperfine in .mise.toml)
-#   cargo-bloat: cargo install cargo-bloat
+#   Local: mise install  (hyperfine + cargo-bloat provisioned via mise.toml [tools])
 
 set -euo pipefail
 
