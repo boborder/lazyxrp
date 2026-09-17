@@ -9,10 +9,7 @@ use directories::ProjectDirs;
 use ratatui::style::{Color, Modifier, Style};
 use serde::{Deserialize, de::Deserializer, de::Error as _};
 
-use crate::{
-    action::{Action, Mode},
-    network::Network,
-};
+use crate::{action::Action, network::Network};
 
 const CONFIG: &str = include_str!("../config.json5");
 const CONFIG_DIR_BASENAME: &str = "lazyxrp";
@@ -129,7 +126,7 @@ pub struct FlareConfig {
 #[derive(Clone, Debug, Default, Deserialize)]
 pub struct Config {
     #[serde(default, flatten)]
-    pub config: PathConfig,
+    pub paths: PathConfig,
     #[serde(default)]
     pub keybindings: KeyBindings,
     #[serde(default)]
@@ -141,7 +138,7 @@ pub struct Config {
 }
 
 /// Raw signing config as read from `[xrpl.signing]` in config.toml.
-/// Pass to `SigningConfig::load()` to get memory-masked credentials.
+/// After `Config::new()`, plaintext `seed`/`mnemonic` are cleared; use `secret_seed` / `secret_mnemonic`.
 #[derive(Clone, Default, Deserialize)]
 pub struct RawSigningConfig {
     /// Signing seed (family seed format, e.g. `sXXX...`).
@@ -235,7 +232,7 @@ pub struct LedgerConfig {
     /// Custom WebSocket endpoint. Overrides the network preset when set.
     #[serde(default)]
     pub ws_server: Option<String>,
-    /// Raw signing config (seed). Use `SigningConfig::resolve()` to access.
+    /// Raw signing config. After `Config::new()`, read `secret_seed` / `secret_mnemonic`.
     #[serde(default)]
     pub signing: RawSigningConfig,
     /// Oracle identifiers for `get_aggregate_price`.
@@ -319,12 +316,12 @@ fn non_empty_path_or(path: &Path, fallback: impl FnOnce() -> PathBuf) -> PathBuf
 impl Config {
     /// Effective data directory after merging embedded defaults, env keys, and config file.
     pub fn resolved_data_dir(&self) -> PathBuf {
-        non_empty_path_or(&self.config.data_dir, data_dir)
+        non_empty_path_or(&self.paths.data_dir, data_dir)
     }
 
     /// Effective config directory after merging embedded defaults, env keys, and config file.
     pub fn resolved_config_dir(&self) -> PathBuf {
-        non_empty_path_or(&self.config.config_dir, config_dir)
+        non_empty_path_or(&self.paths.config_dir, config_dir)
     }
 
     pub fn new() -> color_eyre::Result<Self, config::ConfigError> {
@@ -337,24 +334,13 @@ impl Config {
         let mut builder = config::Config::builder()
             .set_default("data_dir", data_dir.to_string_lossy().as_ref())?
             .set_default("config_dir", config_dir.to_string_lossy().as_ref())?;
-
-        let config_files = [
-            ("config.json5", config::FileFormat::Json5),
-            ("config.json", config::FileFormat::Json),
-            ("config.yaml", config::FileFormat::Yaml),
-            ("config.toml", config::FileFormat::Toml),
-            ("config.ini", config::FileFormat::Ini),
-        ];
-        let mut found_config = false;
-        for (file, format) in &config_files {
-            let source = config::File::from(config_dir.join(file))
-                .format(*format)
-                .required(false);
-            builder = builder.add_source(source);
-            if config_dir.join(file).exists() {
-                found_config = true
-            }
-        }
+        let config_file = config_dir.join("config.toml");
+        let found_config = config_file.exists();
+        builder = builder.add_source(
+            config::File::from(config_file)
+                .format(config::FileFormat::Toml)
+                .required(false),
+        );
         if !found_config {
             // Before `logging::init`, tracing may have no subscriber — surface this on stderr.
             eprintln!(
@@ -369,11 +355,9 @@ impl Config {
         // BEFORE we move it out of the plain-text fields.
         let resolved_cfg_dir = config.resolved_config_dir();
         if config.xrpl.signing.seed.is_some() || config.xrpl.signing.mnemonic.is_some() {
-            for (file, _) in &config_files {
-                let path = resolved_cfg_dir.join(file);
-                if path.exists() {
-                    warn_if_config_world_readable(&path);
-                }
+            let path = resolved_cfg_dir.join("config.toml");
+            if path.exists() {
+                warn_if_config_world_readable(&path);
             }
         }
 
@@ -424,19 +408,15 @@ impl Config {
             }
         }
 
-        for (mode, default_bindings) in default_config.keybindings.0.iter() {
-            let user_bindings = config.keybindings.0.entry(*mode).or_default();
-            for (key, cmd) in default_bindings.iter() {
-                user_bindings
-                    .entry(key.clone())
-                    .or_insert_with(|| cmd.clone());
-            }
+        for (key, cmd) in default_config.keybindings.0.iter() {
+            config
+                .keybindings
+                .0
+                .entry(key.clone())
+                .or_insert_with(|| cmd.clone());
         }
-        for (mode, default_styles) in default_config.styles.0.iter() {
-            let user_styles = config.styles.0.entry(*mode).or_default();
-            for (style_key, style) in default_styles.iter() {
-                user_styles.entry(style_key.clone()).or_insert(*style);
-            }
+        for (style_key, style) in default_config.styles.0.iter() {
+            config.styles.0.entry(style_key.clone()).or_insert(*style);
         }
 
         Ok(config)
@@ -498,25 +478,26 @@ fn project_directory() -> Option<ProjectDirs> {
 }
 
 #[derive(Clone, Debug, Default)]
-pub struct KeyBindings(pub HashMap<Mode, HashMap<Vec<KeyEvent>, Action>>);
+pub struct KeyBindings(pub HashMap<Vec<KeyEvent>, Action>);
 
 impl<'de> Deserialize<'de> for KeyBindings {
     fn deserialize<D>(deserializer: D) -> color_eyre::Result<Self, D::Error>
     where
         D: Deserializer<'de>,
     {
-        let parsed_map = HashMap::<Mode, HashMap<String, Action>>::deserialize(deserializer)?;
-
+        // Keep the existing on-disk `Splash` section for compatibility while
+        // storing one flat map internally until another mode is implemented.
+        let parsed_map = HashMap::<String, HashMap<String, Action>>::deserialize(deserializer)?;
+        let inner_map = parsed_map
+            .into_iter()
+            .find(|(mode, _)| mode.eq_ignore_ascii_case("splash"))
+            .map(|(_, bindings)| bindings)
+            .unwrap_or_default();
         let mut keybindings = HashMap::new();
-        for (mode, inner_map) in parsed_map {
-            let mut converted = HashMap::new();
-            for (key_str, cmd) in inner_map {
-                let seq = parse_key_sequence(&key_str).map_err(D::Error::custom)?;
-                converted.insert(seq, cmd);
-            }
-            keybindings.insert(mode, converted);
+        for (key_str, cmd) in inner_map {
+            let seq = parse_key_sequence(&key_str).map_err(D::Error::custom)?;
+            keybindings.insert(seq, cmd);
         }
-
         Ok(KeyBindings(keybindings))
     }
 }
@@ -698,26 +679,25 @@ pub fn parse_key_sequence(raw: &str) -> color_eyre::Result<Vec<KeyEvent>, String
 }
 
 #[derive(Clone, Debug, Default)]
-pub struct Styles(pub HashMap<Mode, HashMap<String, Style>>);
+pub struct Styles(pub HashMap<String, Style>);
 
 impl<'de> Deserialize<'de> for Styles {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
     {
-        let parsed_map = HashMap::<Mode, HashMap<String, String>>::deserialize(deserializer)?;
-
-        let styles = parsed_map
+        // Keep the existing on-disk `Splash` section for compatibility; styles
+        // are flat internally because no second mode currently exists.
+        let parsed_map = HashMap::<String, HashMap<String, String>>::deserialize(deserializer)?;
+        let inner_map = parsed_map
             .into_iter()
-            .map(|(mode, inner_map)| {
-                let converted_inner_map = inner_map
-                    .into_iter()
-                    .map(|(str, style)| (str, parse_style(&style)))
-                    .collect();
-                (mode, converted_inner_map)
-            })
+            .find(|(mode, _)| mode.eq_ignore_ascii_case("splash"))
+            .map(|(_, styles)| styles)
+            .unwrap_or_default();
+        let styles = inner_map
+            .into_iter()
+            .map(|(name, style)| (name, parse_style(&style)))
             .collect();
-
         Ok(Styles(styles))
     }
 }
@@ -832,62 +812,9 @@ fn parse_color(s: &str) -> Option<Color> {
 }
 
 #[cfg(test)]
-pub static ENV_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-/// Acquire the env-test lock, recovering gracefully from poison.
-#[cfg(test)]
-pub fn env_lock() -> std::sync::MutexGuard<'static, ()> {
-    ENV_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner())
-}
-
-/// RAII guard that saves a set of environment variables on creation
-/// and restores them (or removes them) when dropped.
-/// Use inside a test that holds `env_lock()`.
-#[cfg(test)]
-pub struct TestEnvGuard {
-    saved: Vec<(String, Option<String>)>,
-}
-
-#[cfg(test)]
-impl TestEnvGuard {
-    pub fn new(keys: &[&str]) -> Self {
-        let saved = keys
-            .iter()
-            .map(|&k| (k.to_string(), std::env::var(k).ok()))
-            .collect();
-        Self { saved }
-    }
-
-    pub fn set(&self, key: &str, value: &str) {
-        unsafe {
-            std::env::set_var(key, value);
-        }
-    }
-
-    pub fn remove(&self, key: &str) {
-        unsafe {
-            std::env::remove_var(key);
-        }
-    }
-}
-
-#[cfg(test)]
-impl Drop for TestEnvGuard {
-    fn drop(&mut self) {
-        for (k, v) in &self.saved {
-            match v {
-                Some(val) => unsafe { std::env::set_var(k, val) },
-                None => unsafe { std::env::remove_var(k) },
-            }
-        }
-    }
-}
-
-#[cfg(test)]
 mod tests {
-    use pretty_assertions::assert_eq;
-
     use super::*;
+    use crate::test_support::{TempRootGuard, TestEnvGuard, env_lock};
 
     /// TC-113: FlareNetwork parses case-insensitively, defaults to Flare
     #[test]
@@ -947,64 +874,61 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_style_default() {
-        let style = parse_style("");
-        assert_eq!(style, Style::default());
-    }
-
-    #[test]
-    fn test_parse_style_foreground() {
+    fn parse_style_maps_named_color_to_foreground_index() {
         let style = parse_style("red");
         assert_eq!(style.fg, Some(Color::Indexed(1)));
     }
 
     #[test]
-    fn test_parse_style_background() {
+    fn parse_style_maps_on_color_to_background_index() {
         let style = parse_style("on blue");
         assert_eq!(style.bg, Some(Color::Indexed(4)));
     }
 
     #[test]
-    fn test_parse_style_modifiers() {
-        let style = parse_style("underline red on blue");
-        assert_eq!(style.fg, Some(Color::Indexed(1)));
-        assert_eq!(style.bg, Some(Color::Indexed(4)));
+    fn parse_style_treats_gray_and_grey_identically() {
+        let gray = parse_style("underline bold inverse gray");
+        let grey = parse_style("underline bold inverse grey");
+        assert_eq!(gray.fg, grey.fg, "gray and grey must map to the same color");
+        for style in [gray, grey] {
+            assert!(style.add_modifier.contains(Modifier::UNDERLINED));
+            assert!(style.add_modifier.contains(Modifier::BOLD));
+            assert!(style.add_modifier.contains(Modifier::REVERSED));
+            assert!(style.fg.is_some());
+        }
     }
 
     #[test]
-    fn test_extract_color_and_modifiers() {
-        let (color, modifiers) = extract_color_and_modifiers("underline bold inverse gray");
-        assert_eq!(color, "gray");
-        assert!(modifiers.contains(Modifier::UNDERLINED));
-        assert!(modifiers.contains(Modifier::BOLD));
-        assert!(modifiers.contains(Modifier::REVERSED));
-    }
-
-    #[test]
-    fn test_parse_color_rgb() {
+    fn parse_color_maps_rgb_triplet_to_indexed_palette() {
         let color = parse_color("rgb123");
         let expected = 16 + 36 + 2 * 6 + 3;
         assert_eq!(color, Some(Color::Indexed(expected)));
     }
 
     #[test]
-    fn test_parse_color_unknown() {
+    fn parse_color_returns_none_for_unknown_name() {
         let color = parse_color("unknown");
         assert_eq!(color, None);
     }
 
     #[test]
-    fn test_config() -> color_eyre::Result<()> {
-        let _g = env_lock();
-        let _env = TestEnvGuard::new(&["LAZYXRP_CONFIG", "LAZYXRP_DATA"]);
-        _env.remove("LAZYXRP_CONFIG");
-        _env.remove("LAZYXRP_DATA");
+    fn splash_default_q_quits() -> color_eyre::Result<()> {
+        let _env_lock = env_lock();
+        let _test_env = TestEnvGuard::new(&["LAZYXRP_CONFIG", "LAZYXRP_DATA", "XDG_CONFIG_HOME"]);
+        _test_env.remove("LAZYXRP_CONFIG");
+        _test_env.remove("LAZYXRP_DATA");
+        // Redirect XDG so a real user config.toml (e.g. rebound keys) can't leak in.
+        _test_env.set(
+            "XDG_CONFIG_HOME",
+            std::env::temp_dir()
+                .join(format!("lazyxrp-xdg-test-{}", std::process::id()))
+                .to_str()
+                .expect("temp xdg path"),
+        );
         let c = Config::new()?;
         assert_eq!(
             c.keybindings
                 .0
-                .get(&Mode::Splash)
-                .unwrap()
                 .get(&parse_key_sequence("<q>").unwrap_or_default())
                 .unwrap(),
             &Action::Quit
@@ -1013,7 +937,7 @@ mod tests {
     }
 
     #[test]
-    fn test_simple_keys() {
+    fn parse_key_event_maps_plain_and_named_keys() {
         assert_eq!(
             parse_key_event("a").unwrap(),
             KeyEvent::new(KeyCode::Char('a'), KeyModifiers::empty())
@@ -1031,7 +955,7 @@ mod tests {
     }
 
     #[test]
-    fn test_with_modifiers() {
+    fn parse_key_event_applies_single_modifier() {
         assert_eq!(
             parse_key_event("ctrl-a").unwrap(),
             KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL)
@@ -1049,7 +973,7 @@ mod tests {
     }
 
     #[test]
-    fn test_multiple_modifiers() {
+    fn parse_key_event_applies_multiple_modifiers() {
         assert_eq!(
             parse_key_event("ctrl-alt-a").unwrap(),
             KeyEvent::new(
@@ -1065,7 +989,7 @@ mod tests {
     }
 
     #[test]
-    fn test_reverse_multiple_modifiers() {
+    fn key_event_to_string_lists_modifiers_before_key() {
         assert_eq!(
             key_event_to_string(&KeyEvent::new(
                 KeyCode::Char('a'),
@@ -1076,13 +1000,13 @@ mod tests {
     }
 
     #[test]
-    fn test_invalid_keys() {
+    fn parse_key_event_rejects_unknown_keys() {
         assert!(parse_key_event("invalid-key").is_err());
         assert!(parse_key_event("ctrl-invalid-key").is_err());
     }
 
     #[test]
-    fn test_case_insensitivity() {
+    fn parse_key_event_accepts_uppercase_modifiers() {
         assert_eq!(
             parse_key_event("CTRL-a").unwrap(),
             KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL)
@@ -1094,7 +1018,7 @@ mod tests {
         );
     }
 
-    fn xrpl_config_toml(poll_interval_ms: u64) -> String {
+    fn sample_xrpl_config_toml(poll_interval_ms: u64) -> String {
         format!(
             r#"[xrpl]
 account = "r3kmLJN5D28dHuH8vZNUZpMC43pEHpaocV"
@@ -1111,27 +1035,29 @@ network = "mainnet"
     /// TC-033
     #[test]
     fn config_merge_user_poll_interval_overrides_default() -> color_eyre::Result<()> {
-        let _g = env_lock();
-        let _env = TestEnvGuard::new(&["LAZYXRP_CONFIG", "XDG_CONFIG_HOME"]);
+        let _env_lock = env_lock();
+        let _test_env = TestEnvGuard::new(&["LAZYXRP_CONFIG", "XDG_CONFIG_HOME"]);
         let root = std::env::temp_dir().join(format!("lazyxrp-tc033-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
+        let _root_guard = TempRootGuard::new(root.clone());
         std::fs::create_dir_all(&root)?;
-        std::fs::write(root.join("config.toml"), xrpl_config_toml(88_888))?;
-        _env.remove("XDG_CONFIG_HOME");
-        _env.set("LAZYXRP_CONFIG", root.to_str().unwrap());
+        std::fs::write(root.join("config.toml"), sample_xrpl_config_toml(88_888))?;
+        _test_env.remove("XDG_CONFIG_HOME");
+        _test_env.set("LAZYXRP_CONFIG", root.to_str().unwrap());
         let c = Config::new()?;
         assert_eq!(c.xrpl.poll_interval_ms, 88_888);
-        std::fs::remove_dir_all(&root).ok();
         Ok(())
     }
 
     /// TC-092: Config merge — XRPL_RPC_SERVER overrides rpc_server from file
     #[test]
     fn config_merge_rpc_server_env_overrides_file() -> color_eyre::Result<()> {
-        let _g = env_lock();
-        let _env = TestEnvGuard::new(&["LAZYXRP_CONFIG", "XDG_CONFIG_HOME", XRPL_RPC_SERVER_ENV]);
+        let _env_lock = env_lock();
+        let _test_env =
+            TestEnvGuard::new(&["LAZYXRP_CONFIG", "XDG_CONFIG_HOME", XRPL_RPC_SERVER_ENV]);
         let root = std::env::temp_dir().join(format!("lazyxrp-tc092-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
+        let _root_guard = TempRootGuard::new(root.clone());
         std::fs::create_dir_all(&root)?;
         let toml = r#"[xrpl]
 account = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
@@ -1144,55 +1070,54 @@ network = "mainnet"
 rpc_server = "https://from-file.example"
 "#;
         std::fs::write(root.join("config.toml"), toml)?;
-        _env.remove("XDG_CONFIG_HOME");
-        _env.set("LAZYXRP_CONFIG", root.to_str().unwrap());
-        _env.set(XRPL_RPC_SERVER_ENV, "https://from-env.example");
+        _test_env.remove("XDG_CONFIG_HOME");
+        _test_env.set("LAZYXRP_CONFIG", root.to_str().unwrap());
+        _test_env.set(XRPL_RPC_SERVER_ENV, "https://from-env.example");
         let c = Config::new()?;
         assert_eq!(
             c.xrpl.rpc_server.as_deref(),
             Some("https://from-env.example")
         );
-        std::fs::remove_dir_all(&root).ok();
         Ok(())
     }
 
     /// TC-034
     #[test]
     fn config_loads_from_xdg_config_home() -> color_eyre::Result<()> {
-        let _g = env_lock();
-        let _env = TestEnvGuard::new(&["LAZYXRP_CONFIG", "XDG_CONFIG_HOME"]);
+        let _env_lock = env_lock();
+        let _test_env = TestEnvGuard::new(&["LAZYXRP_CONFIG", "XDG_CONFIG_HOME"]);
         let root = std::env::temp_dir().join(format!("lazyxrp-tc034-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
+        let _root_guard = TempRootGuard::new(root.clone());
         let xdg = root.join("xdg");
         let lazy = xdg.join("lazyxrp");
         std::fs::create_dir_all(&lazy)?;
-        std::fs::write(lazy.join("config.toml"), xrpl_config_toml(77_777))?;
-        _env.remove("LAZYXRP_CONFIG");
-        _env.set("XDG_CONFIG_HOME", xdg.to_str().unwrap());
+        std::fs::write(lazy.join("config.toml"), sample_xrpl_config_toml(77_777))?;
+        _test_env.remove("LAZYXRP_CONFIG");
+        _test_env.set("XDG_CONFIG_HOME", xdg.to_str().unwrap());
         let c = Config::new()?;
         assert_eq!(c.xrpl.poll_interval_ms, 77_777);
-        std::fs::remove_dir_all(&root).ok();
         Ok(())
     }
 
     /// TC-035
     #[test]
     fn config_loads_when_only_home_is_set() -> color_eyre::Result<()> {
-        let _g = env_lock();
-        let _env = TestEnvGuard::new(&["LAZYXRP_CONFIG", "XDG_CONFIG_HOME", "HOME"]);
+        let _env_lock = env_lock();
+        let _test_env = TestEnvGuard::new(&["LAZYXRP_CONFIG", "XDG_CONFIG_HOME", "HOME"]);
         let root = std::env::temp_dir().join(format!("lazyxrp-tc035-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
+        let _root_guard = TempRootGuard::new(root.clone());
         let home = root.join("home");
         std::fs::create_dir_all(&home)?;
-        _env.remove("LAZYXRP_CONFIG");
-        _env.remove("XDG_CONFIG_HOME");
-        _env.set("HOME", home.to_str().unwrap());
+        _test_env.remove("LAZYXRP_CONFIG");
+        _test_env.remove("XDG_CONFIG_HOME");
+        _test_env.set("HOME", home.to_str().unwrap());
         let dir = config_dir();
         std::fs::create_dir_all(&dir)?;
-        std::fs::write(dir.join("config.toml"), xrpl_config_toml(66_666))?;
+        std::fs::write(dir.join("config.toml"), sample_xrpl_config_toml(66_666))?;
         let c = Config::new()?;
         assert_eq!(c.xrpl.poll_interval_ms, 66_666);
-        std::fs::remove_dir_all(&root).ok();
         Ok(())
     }
 
@@ -1200,5 +1125,31 @@ rpc_server = "https://from-file.example"
     #[test]
     fn parse_key_sequence_unbalanced_brackets_errors() {
         assert!(parse_key_sequence("<<q>").is_err());
+    }
+
+    /// TC-127: config.toml `network = "xahau-test"` loads as XahauTest
+    #[test]
+    fn config_file_network_xahau_test_loads() -> color_eyre::Result<()> {
+        let _env_lock = env_lock();
+        let _test_env = TestEnvGuard::new(&["LAZYXRP_CONFIG", "XDG_CONFIG_HOME"]);
+        let root = std::env::temp_dir().join(format!("lazyxrp-tc127-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let _root_guard = TempRootGuard::new(root.clone());
+        std::fs::create_dir_all(&root)?;
+        let toml = r#"[xrpl]
+account = "r3kmLJN5D28dHuH8vZNUZpMC43pEHpaocV"
+issuer = "rMxCKbEDwqr76QuheSUMdEGf4B9xJ8m5De"
+currency = "RLUSD"
+currency_code = "524C555344000000000000000000000000000000"
+offer_limit = 5
+poll_interval_ms = 5000
+network = "xahau-test"
+"#;
+        std::fs::write(root.join("config.toml"), toml)?;
+        _test_env.remove("XDG_CONFIG_HOME");
+        _test_env.set("LAZYXRP_CONFIG", root.to_str().unwrap());
+        let c = Config::new()?;
+        assert_eq!(c.xrpl.network, Network::XahauTest);
+        Ok(())
     }
 }

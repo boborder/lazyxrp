@@ -23,10 +23,6 @@ pub struct Cli {
     #[arg(short, long, value_name = "FLOAT", default_value_t = 4.0)]
     pub tick_rate: f64,
 
-    /// Frame rate, i.e. number of frames per second
-    #[arg(short, long, value_name = "FLOAT", default_value_t = 60.0)]
-    pub frame_rate: f64,
-
     /// Custom JSON-RPC URL (overrides config and env)
     #[arg(long, value_name = "URL")]
     pub server: Option<String>,
@@ -288,10 +284,39 @@ mod tests {
     }
 
     #[test]
-    fn self_uninstall_plus_subcommand_is_parseable_but_invalid_at_runtime() {
+    fn self_uninstall_plus_subcommand_parses() {
         let c = Cli::try_parse_from(["lazyxrp", "--self-uninstall", "info"]).unwrap();
         assert!(c.self_uninstall);
         assert!(matches!(c.command, Some(super::Cmd::Info)));
+    }
+
+    /// TC-125: `--network` public values include `xahau` and `xahau-test`
+    #[test]
+    fn network_flag_accepts_xahau_and_xahau_test() {
+        let xahau = Cli::try_parse_from(["lazyxrp", "--network", "xahau"]).expect("parses");
+        assert_eq!(xahau.network, Some(Network::Xahau));
+        let test = Cli::try_parse_from(["lazyxrp", "--network", "xahau-test"]).expect("parses");
+        assert_eq!(test.network, Some(Network::XahauTest));
+        assert!(Cli::try_parse_from(["lazyxrp", "--network", "xahau-testnet"]).is_err());
+    }
+
+    /// TC-126: `--allow-insecure-rpc` defaults off and the flag enables it
+    #[test]
+    fn allow_insecure_rpc_defaults_false_and_flag_enables_it() {
+        let off = Cli::try_parse_from(["lazyxrp"]).expect("parses");
+        assert!(!off.allow_insecure_rpc);
+        let on = Cli::try_parse_from(["lazyxrp", "--allow-insecure-rpc"]).expect("parses");
+        assert!(on.allow_insecure_rpc);
+    }
+
+    /// TC-126: `rp --allow-insecure-rpc` parses
+    #[test]
+    fn rp_allow_insecure_rpc_flag_parses() {
+        let off = RpCli::try_parse_from(["rp", "-t", "abcd"]).expect("parses");
+        assert!(!off.allow_insecure_rpc);
+        let on =
+            RpCli::try_parse_from(["rp", "--allow-insecure-rpc", "-t", "abcd"]).expect("parses");
+        assert!(on.allow_insecure_rpc);
     }
 
     #[test]

@@ -15,7 +15,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
 use crate::{
-    action::{Action, Mode},
+    action::Action,
     components::{
         Component,
         shared::{
@@ -38,7 +38,7 @@ use crate::{
 };
 
 /// Tab labels (index mirrors `panels` Vec order)
-const TAB_TITLES: &[&str] = &["󰖟 Overview", "󰀉 Account", "󰠿 Market", "󰒍 Assets"];
+pub(crate) const TAB_TITLES: &[&str] = &["󰖟 Overview", "󰀉 Account", "󰠿 Market", "󰒍 Assets"];
 
 fn footer_line(active_tab: usize) -> Line<'static> {
     let bold = Style::new().bold();
@@ -80,7 +80,6 @@ pub struct App {
     /// Wallet AccountSet form typing mode: skip Splash keymap in `on_key_event`.
     keymap_suppressed: bool,
     tick_rate: f64,
-    frame_rate: f64,
     /// One panel per tab — index matches TAB_TITLES
     panels: Vec<Box<dyn Component>>,
     status_bar: StatusBar,
@@ -98,7 +97,6 @@ pub struct App {
     last_refresh_tx_history: Option<Instant>,
     should_quit: bool,
     should_suspend: bool,
-    mode: Mode,
     last_tick_key_events: Vec<KeyEvent>,
     action_tx: mpsc::UnboundedSender<Action>,
     action_rx: mpsc::UnboundedReceiver<Action>,
@@ -152,7 +150,6 @@ impl App {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         tick_rate: f64,
-        frame_rate: f64,
         rpc_server: String,
         ws_server: String,
         account: Option<String>,
@@ -201,7 +198,6 @@ impl App {
         Ok(Self {
             keymap_suppressed: false,
             tick_rate,
-            frame_rate,
             panels,
             status_bar: StatusBar::new(watch_account.clone(), network),
             fps: FpsCounter::default(),
@@ -219,7 +215,6 @@ impl App {
             should_quit: false,
             should_suspend: false,
             config: Arc::new(config),
-            mode: Mode::default(),
             last_tick_key_events: Vec::new(),
             action_tx,
             action_rx,
@@ -238,25 +233,23 @@ impl App {
     }
 
     pub async fn run(&mut self) -> color_eyre::Result<()> {
-        let mut tui = Tui::new()?
-            .tick_rate(self.tick_rate)
-            .frame_rate(self.frame_rate);
+        let mut tui = Tui::new()?.tick_rate(self.tick_rate);
         tui.enter()?;
 
         let action_tx = self.action_tx.clone();
         for panel in self.panels.iter_mut() {
             panel.register_action_handler(action_tx.clone())?;
             panel.register_config_handler(Arc::clone(&self.config))?;
-            panel.init(tui.size()?)?;
+            panel.init(tui.terminal.size()?)?;
         }
         self.status_bar.register_action_handler(action_tx.clone())?;
         self.status_bar
             .register_config_handler(Arc::clone(&self.config))?;
-        self.status_bar.init(tui.size()?)?;
+        self.status_bar.init(tui.terminal.size()?)?;
         self.splash.register_action_handler(action_tx.clone())?;
         self.splash
             .register_config_handler(Arc::clone(&self.config))?;
-        self.splash.init(tui.size()?)?;
+        self.splash.init(tui.terminal.size()?)?;
 
         let (poll_tx, poll_rx) = mpsc::unbounded_channel();
         let (poll_trigger_tx, poll_trigger_rx) = mpsc::unbounded_channel();
@@ -284,11 +277,11 @@ impl App {
             poll_trigger_tx,
             cancel.clone(),
         );
-        let signing_seed = crate::signing::credential_from_secrets(
+        let signing_credential = crate::signing::credential_from_secrets(
             self.config.xrpl.signing.secret_seed.as_ref(),
             self.config.xrpl.signing.secret_mnemonic.as_ref(),
         )?;
-        let seed_address = signing_seed.as_ref().and_then(|c| c.address().ok());
+        let seed_address = signing_credential.as_ref().and_then(|c| c.address().ok());
         let flare_rpc_url = resolve_flare_rpc_url(&self.config.flare);
         let flare_feeds = resolve_flare_feeds();
         start_poll_task(
@@ -299,7 +292,7 @@ impl App {
                 book_pair,
                 poll_interval: Duration::from_millis(self.config.xrpl.poll_interval_ms),
                 seed_address,
-                signing_seed,
+                signing_credential,
                 network_watch: self.net_tx.subscribe(),
                 tab_watch: self.tab_tx.subscribe(),
                 oracles: self.config.xrpl.oracles.clone(),
@@ -323,7 +316,6 @@ impl App {
         {
             warn!("action channel closed (oracle not configured)");
         }
-
         loop {
             self.forward_tui_events(&mut tui).await?;
             self.drain_and_dispatch_actions(Some(&mut tui))?;
@@ -410,9 +402,7 @@ impl App {
             return Ok(());
         }
 
-        let Some(keymap) = self.config.keybindings.0.get(&self.mode) else {
-            return Ok(());
-        };
+        let keymap = &self.config.keybindings.0;
         match keymap.get(&vec![key]) {
             Some(action) => {
                 info!("Got action: {action:?}");
@@ -655,8 +645,8 @@ impl App {
                 Action::FxrpExecuteDirectMintSubmit(params) => {
                     self.send_poll(PollCommand::FxrpExecuteDirectMint(params.clone()))
                 }
-                Action::WalletPropose => {
-                    self.send_poll(PollCommand::WalletPropose("ed25519".into()))
+                Action::GenerateWalletKeys => {
+                    self.send_poll(PollCommand::GenerateWalletKeys("ed25519".into()))
                 }
                 Action::XrplServerInfo(_) => self.startup_done = true,
                 Action::Help => self.show_help = !self.show_help,
@@ -682,7 +672,7 @@ impl App {
     }
 
     fn on_resize(&mut self, tui: &mut Tui, w: u16, h: u16) -> color_eyre::Result<()> {
-        tui.resize(Rect::new(0, 0, w, h))?;
+        tui.terminal.resize(Rect::new(0, 0, w, h))?;
         self.render(tui)?;
         let _ = self.fps.note_action(&Action::Render);
         Ok(())
@@ -692,7 +682,7 @@ impl App {
         if !self.startup_done {
             let splash = &mut self.splash;
             let action_tx = &self.action_tx;
-            tui.draw(|frame| {
+            tui.terminal.draw(|frame| {
                 if let Err(err) = splash.draw(frame, frame.area())
                     && let Err(e) =
                         action_tx.send(Action::Error(format!("Failed to draw: {err:?}")))
@@ -711,7 +701,7 @@ impl App {
         let fps = &mut self.fps;
         let action_tx = &self.action_tx;
 
-        tui.draw(|frame| {
+        tui.terminal.draw(|frame| {
             let [tabs_area, main_area, hints_area, status_area] = Layout::vertical([
                 Constraint::Length(1),
                 Constraint::Fill(1),
@@ -795,7 +785,6 @@ mod tests {
         let config = Config::new()?;
         App::new(
             4.0,
-            60.0,
             "https://xrplcluster.com".into(),
             "wss://xrplcluster.com".into(),
             Some("rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh".into()),

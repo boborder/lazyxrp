@@ -5,20 +5,14 @@ use strum::Display;
 use crate::{
     network::Network,
     xrpl::{
-        AccountSetSubmitParams, AccountSummary, AggregatePrice, AmmSummary, DunlSummary,
-        EscrowCreateSubmitParams, FeeSummary, FlareFeedPrice, FlareWalletSummary,
+        AccountSetSubmitParams, AccountSummary, AggregatePrice, AmmSummary, BookMidPrice,
+        DunlSummary, EscrowCreateSubmitParams, FeeSummary, FlareFeedPrice, FlareWalletSummary,
         FxrpDirectMintInfo, FxrpDirectMintPaymentParams, FxrpExecuteDirectMintParams,
-        LedgerObjectRow, NftRow, OfferCreateSubmitParams, OfferRow, PathFindSnapshot,
-        PaymentSubmitParams, ServerInfoSummary, SetRegularKeySubmitParams, TrustLineRow,
-        TrustSetSubmitParams, TxRow, TxSummary, WalletProposeResult, XrplRlusdPrice, XrplTomlData,
+        GeneratedWalletKeys, LedgerObjectRow, NftRow, OfferCreateSubmitParams, OfferRow,
+        PathFindSnapshot, PaymentSubmitParams, ServerInfoSummary, SetRegularKeySubmitParams,
+        TrustLineRow, TrustSetSubmitParams, TxRow, TxSummary, XrplTomlData,
     },
 };
-
-#[derive(Default, Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum Mode {
-    #[default]
-    Splash,
-}
 
 #[derive(Debug, Clone, PartialEq, Eq, Display, Serialize, Deserialize)]
 pub enum Action {
@@ -56,7 +50,7 @@ pub enum Action {
     XrplWalletOverview(Option<AccountSummary>),
     /// Wallet tab shown but no seed configured — show hint instead of loading spinner.
     XrplWalletNotConfigured,
-    XrplRlusdPrice(XrplRlusdPrice),
+    BookMidPrice(BookMidPrice),
     /// Aggregate price from `get_aggregate_price`.
     XrplOraclePrices(Vec<AggregatePrice>),
     /// FTSOv2 prices from Flare (alloy).
@@ -67,7 +61,7 @@ pub enum Action {
     FlareWalletBalance(Box<FlareWalletSummary>),
     /// Oracle tab shown but no oracles configured.
     XrplOracleNotConfigured,
-    /// `account_objects` snapshot; each tab filters rows by `LedgerEntryType`.
+    /// `account_objects` snapshot; Assets panels filter rows by `LedgerEntryType`.
     XrplLedgerObjects(Vec<LedgerObjectRow>),
     XrplError(String),
     /// Request xrp-ledger.toml fetch for domain verification.
@@ -107,7 +101,7 @@ pub enum Action {
     RefreshTxHistory,
     /// Load next page of tx history (uses current marker).
     RefreshTxHistoryMore(Option<serde_json::Value>),
-    /// Re-fetch `account_objects` (shared by Objects / PayChan+Escrow tabs).
+    /// Re-fetch `account_objects` (Assets: misc / pay channels / escrows).
     RefreshLedgerObjects,
     TabNext,
     TabPrev,
@@ -118,7 +112,7 @@ pub enum Action {
     NetworkChange(Network),
     /// Hotkey: cycle to the next XRPL network (mainnet→testnet→devnet→xahau→xahau-test→…).
     NetworkSwitchCycle,
-    /// Number keys `1`–`6`: switch to tab index (0-based target).
+    /// Number keys `1..=TAB_TITLES.len()`: switch to tab index (0-based target).
     TabJump(usize),
     /// While `true`, global Splash keybindings (e.g. `h`/`l` focus) are ignored so inline typing works.
     SetKeymapSuppression(bool),
@@ -156,9 +150,9 @@ pub enum Action {
     TrustSetSubmitOk(String),
     TrustSetSubmitErr(String),
     /// Request local key generation (Wallet tab, `g`).
-    WalletPropose,
-    WalletProposeOk(WalletProposeResult),
-    WalletProposeErr(String),
+    GenerateWalletKeys,
+    GenerateWalletKeysOk(GeneratedWalletKeys),
+    GenerateWalletKeysErr(String),
     /// Toggle transaction detail overlay in TxHistory panel.
     TxDetailToggle,
 }

@@ -16,6 +16,8 @@ mod flare;
 mod logging;
 mod network;
 mod signing;
+#[cfg(test)]
+mod test_support;
 mod tui;
 mod uninstall;
 mod xrpl;
@@ -54,8 +56,8 @@ fn is_insecure_endpoint(url: &str) -> bool {
     url.starts_with("http://") || url.starts_with("ws://")
 }
 
-fn refuses_insecure_signing(rpc_url: &str, ws_url: &str, has_signing_seed: bool) -> bool {
-    has_signing_seed && (is_insecure_endpoint(rpc_url) || is_insecure_endpoint(ws_url))
+fn refuses_insecure_signing(rpc_url: &str, ws_url: &str, has_signing_credential: bool) -> bool {
+    has_signing_credential && (is_insecure_endpoint(rpc_url) || is_insecure_endpoint(ws_url))
 }
 
 fn sanitize_rate(rate: f64, default: f64) -> f64 {
@@ -192,13 +194,12 @@ pub async fn run() -> color_eyre::Result<()> {
         );
     }
     let tick_rate = sanitize_rate(args.tick_rate, 4.0);
-    let frame_rate = sanitize_rate(args.frame_rate, 60.0);
     let yes = args.yes;
     let cmd = resolve_lazyxrp_command(&args)?;
     match cmd {
         Cmd::Watch { account } => {
             let mut app = app::App::new(
-                tick_rate, frame_rate, rpc_url, ws_url, account, network, config, None, yes,
+                tick_rate, rpc_url, ws_url, account, network, config, None, yes,
             )?;
             app.run().await?;
         }
@@ -250,19 +251,26 @@ mod network_resolve_tests {
     use clap::Parser;
 
     use super::*;
-    use crate::config::{Config, TestEnvGuard, env_lock};
+    use crate::config::Config;
+    use crate::test_support::{TestEnvGuard, env_lock};
 
     /// TC-042
     #[test]
     fn resolve_network_cli_overrides_env() -> color_eyre::Result<()> {
-        let _g = env_lock();
-        let _env = TestEnvGuard::new(&["LAZYXRP_CONFIG", "LAZYXRP_DATA", config::XRPL_NETWORK_ENV]);
-        _env.remove("LAZYXRP_CONFIG");
-        _env.remove("LAZYXRP_DATA");
+        let _env_lock = env_lock();
+        let _test_env = TestEnvGuard::new(&[
+            "LAZYXRP_CONFIG",
+            "LAZYXRP_DATA",
+            "XDG_CONFIG_HOME",
+            config::XRPL_NETWORK_ENV,
+        ]);
+        _test_env.remove("LAZYXRP_CONFIG");
+        _test_env.remove("LAZYXRP_DATA");
+        _test_env.remove("XDG_CONFIG_HOME");
         let config = Config::new()?;
         let cli = Cli::try_parse_from(["lazyxrp", "--network", "devnet"])
             .map_err(|e| color_eyre::eyre::eyre!("{e}"))?;
-        _env.set(config::XRPL_NETWORK_ENV, "testnet");
+        _test_env.set(config::XRPL_NETWORK_ENV, "testnet");
         let network = resolve_network(cli.network, &config);
         assert_eq!(network, Network::Devnet);
         Ok(())
@@ -283,21 +291,22 @@ network = "mainnet"
     /// TC-043
     #[test]
     fn resolve_rpc_url_uses_network_default() -> color_eyre::Result<()> {
-        let _g = env_lock();
-        let _env = TestEnvGuard::new(&[
+        let _env_lock = env_lock();
+        let _test_env = TestEnvGuard::new(&[
             "LAZYXRP_CONFIG",
             "XDG_CONFIG_HOME",
             config::XRPL_RPC_SERVER_ENV,
             config::XRPL_WS_SERVER_ENV,
         ]);
+
         let root = std::env::temp_dir().join(format!("lazyxrp-tc043-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root)?;
         std::fs::write(root.join("config.toml"), minimal_config_toml())?;
-        _env.remove("XDG_CONFIG_HOME");
-        _env.remove(config::XRPL_RPC_SERVER_ENV);
-        _env.remove(config::XRPL_WS_SERVER_ENV);
-        _env.set("LAZYXRP_CONFIG", root.to_str().unwrap());
+        _test_env.remove("XDG_CONFIG_HOME");
+        _test_env.remove(config::XRPL_RPC_SERVER_ENV);
+        _test_env.remove(config::XRPL_WS_SERVER_ENV);
+        _test_env.set("LAZYXRP_CONFIG", root.to_str().unwrap());
         let config = Config::new()?;
         let cli =
             Cli::try_parse_from(["lazyxrp", "info"]).map_err(|e| color_eyre::eyre::eyre!("{e}"))?;
@@ -307,7 +316,6 @@ network = "mainnet"
         std::fs::remove_dir_all(&root).ok();
         Ok(())
     }
-
     /// TC-044
     #[test]
     fn resolve_ws_url_cli_overrides_env() -> color_eyre::Result<()> {

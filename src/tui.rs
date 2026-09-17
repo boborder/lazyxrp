@@ -1,6 +1,5 @@
 use std::{
     io::{Stdout, stdout},
-    ops::{Deref, DerefMut},
     time::Duration,
 };
 
@@ -37,8 +36,6 @@ pub struct Tui {
     pub cancellation_token: CancellationToken,
     pub event_rx: UnboundedReceiver<Event>,
     pub event_tx: UnboundedSender<Event>,
-    /// Reserved for FPS overlay / CLI compat; event loop redraw is driven by input + tick only.
-    pub frame_rate: f64,
     pub tick_rate: f64,
 }
 
@@ -51,18 +48,12 @@ impl Tui {
             cancellation_token: CancellationToken::new(),
             event_rx,
             event_tx,
-            frame_rate: 60.0,
             tick_rate: 4.0,
         })
     }
 
     pub fn tick_rate(mut self, tick_rate: f64) -> Self {
         self.tick_rate = tick_rate;
-        self
-    }
-
-    pub fn frame_rate(mut self, frame_rate: f64) -> Self {
-        self.frame_rate = frame_rate;
         self
     }
 
@@ -146,7 +137,7 @@ impl Tui {
     pub fn exit(&mut self) -> color_eyre::Result<()> {
         self.stop()?;
         if crossterm::terminal::is_raw_mode_enabled()? {
-            self.flush()?;
+            self.terminal.flush()?;
             crossterm::execute!(stdout(), LeaveAlternateScreen, cursor::Show)?;
             crossterm::terminal::disable_raw_mode()?;
         }
@@ -171,20 +162,6 @@ impl Tui {
 
     pub async fn next_event(&mut self) -> Option<Event> {
         self.event_rx.recv().await
-    }
-}
-
-impl Deref for Tui {
-    type Target = ratatui::Terminal<Backend<Stdout>>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.terminal
-    }
-}
-
-impl DerefMut for Tui {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.terminal
     }
 }
 
