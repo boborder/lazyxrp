@@ -205,7 +205,7 @@ cargo deny check
 | TC | FR / NFR | Architecture § | Design |
 |----|----------|------------------|--------|
 | TC-111–112 | FR-12 | §6.1 presets | §6 `Ctrl-n` |
-| TC-113–114 | FR-15 | §6.7 Flare display | §4 Flare layouts |
+| TC-113–114 | FR-15 | §4 Flare config | §4 Flare layouts |
 | TC-115 | FR-12 | §6.1 session switch, §6.5 badge | §5 Status bar, §6 `Ctrl-n` |
 | TC-116–119 | FR-15 | §6.7 | §4 Flare layouts |
 | TC-120–122 | FR-16 | §6.8 Flare wallet panel | §4 Overview wallet strip |
@@ -217,7 +217,7 @@ cargo deny check
 | TC-137–141 | — | §5 read APIs | §5 Table / TX row |
 | TC-142–143 | — | §3 public-network politeness | — |
 | TC-144–145 | — | §3 poll loop | — |
-| TC-146–147 | NFR (SSRF) | — | — |
+| TC-146–147 | NFR (SSRF) | §3 SSRF fetch guards | — |
 | TC-148–149 | — | §3 public-network politeness | — |
 | TC-150 | — | §1 self-uninstall | — |
 | TC-151–152 | — | §5.4 ledger objects, §5.2 tx detail | §4 Assets / tx detail |

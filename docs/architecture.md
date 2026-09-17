@@ -75,7 +75,7 @@ Implementation: `src/xrpl/poll.rs`, `src/app.rs`.
 
 WebSocket ledger close coalesces poll triggers (`MIN_POLL_INTERVAL`). Scheduled poll uses `poll_interval_ms` from config (default **5000** ms for interactive use; **15000–30000** ms recommended for long-running / always-on sessions to reduce public RPC load).
 
-**Public-network politeness:** XRPL Foundation dUNL (`unl.xrplf.org`) is cached in-process for **10 minutes** (`DUNL_CACHE_TTL`). Flare `ContractRegistry` lookups (`FtsoV2`, `AssetManagerFXRP`) are cached per RPC URL for the process lifetime. Poll failures use exponential backoff (2s→60s cap); HTTP 429 is retried with delay.
+**Public-network politeness:** XRPL Foundation dUNL (`unl.xrplf.org`) is cached in-process for **10 minutes** (`DUNL_CACHE_TTL`). Flare `ContractRegistry` lookups (`FtsoV2`, `AssetManagerFXRP`) are cached per RPC URL for the process lifetime. Poll failures use exponential backoff (2s→60s cap); HTTP 429 is retried with delay. NFT image fetch (`nft_image.rs`) applies per-hop DNS SSRF checks, manual redirects, and a streamed response-size cap ([security.md](security.md) R-012).
 
 ## 4. 設定値と起動パラメータ
 
