@@ -8,7 +8,7 @@ use super::types::{
     NFTOKEN_FLAG_MUTABLE, NftRow, NodeValidatorListSummary, OfferRow, PathAlternative, PriceStats,
     RipplePathFindResult, ServerInfoSummary, SimulateResult, TrustLineRow, TxRow, TxSummary,
 };
-use super::util::{extract_json_u32, json_str};
+use super::util::{json_str, json_u32};
 
 pub(crate) fn parse_submit_success(value: &Value) -> color_eyre::Result<TxSummary> {
     let result = value.get("result").unwrap_or(&Value::Null);
@@ -56,7 +56,7 @@ pub(crate) fn parse_simulate_result(value: &Value) -> color_eyre::Result<Simulat
         .unwrap_or_default()
         .to_string();
 
-    let ledger_index = extract_json_u32(value, &["result", "ledger_index"]);
+    let ledger_index = json_u32(value, &["result", "ledger_index"]);
     let meta = result.get("meta").cloned();
 
     Ok(SimulateResult {
@@ -144,7 +144,7 @@ pub(crate) fn parse_server_info_value(value: &Value) -> ServerInfoSummary {
         .and_then(|i| i.get("validator_list"))
         .and_then(parse_node_validator_list);
     ServerInfoSummary {
-        ledger_index: extract_json_u32(value, &["result", "info", "validated_ledger", "seq"]),
+        ledger_index: json_u32(value, &["result", "info", "validated_ledger", "seq"]),
         hostid: json_str(value, &["result", "info", "hostid"]).to_string(),
         build_version: json_str(value, &["result", "info", "build_version"]).to_string(),
         validation_quorum: quorum,
@@ -171,7 +171,7 @@ pub(crate) fn parse_node_validator_list(value: &Value) -> Option<NodeValidatorLi
 
 pub(crate) fn parse_fee_value(value: &Value) -> FeeSummary {
     FeeSummary {
-        open_ledger_fee_drops: extract_json_u32(value, &["result", "drops", "open_ledger_fee"]),
+        open_ledger_fee_drops: json_u32(value, &["result", "drops", "open_ledger_fee"]),
     }
 }
 
@@ -184,12 +184,12 @@ pub(crate) fn parse_account_nfts_value(value: &Value) -> Vec<NftRow> {
         .unwrap_or_default();
     nfts.into_iter()
         .map(|n| {
-            let flags = extract_json_u32(&n, &["Flags"]);
+            let flags = json_u32(&n, &["Flags"]);
             NftRow {
                 nft_id: json_str(&n, &["NFTokenID"]).to_string(),
-                taxon: extract_json_u32(&n, &["NFTokenTaxon"]),
-                serial: extract_json_u32(&n, &["nft_serial"]),
-                transfer_fee: extract_json_u32(&n, &["TransferFee"]) as u16,
+                taxon: json_u32(&n, &["NFTokenTaxon"]),
+                serial: json_u32(&n, &["nft_serial"]),
+                transfer_fee: json_u32(&n, &["TransferFee"]) as u16,
                 uri: decode_uri(json_str(&n, &["URI"])),
                 is_mutable: (flags & NFTOKEN_FLAG_MUTABLE) != 0,
                 raw_json: ArcValue::new(n),
@@ -356,8 +356,8 @@ pub(crate) fn parse_book_offers_value(value: &Value) -> Vec<OfferRow> {
         .collect()
 }
 
-pub(crate) fn is_not_found_error(msg: &str) -> bool {
-    let lower = msg.to_lowercase();
+pub(crate) fn is_not_found_error(message: &str) -> bool {
+    let lower = message.to_lowercase();
     lower.contains("actnotfound")
         || lower.contains("actmalformed")
         || lower.contains("entrynotfound")
@@ -368,8 +368,8 @@ pub(crate) fn is_not_found_error(msg: &str) -> bool {
 }
 
 /// HTTP/RPC rate-limit / overload signals (case-insensitive).
-pub(crate) fn is_rate_limited_error(msg: &str) -> bool {
-    let lower = msg.to_lowercase();
+pub(crate) fn is_rate_limited_error(message: &str) -> bool {
+    let lower = message.to_lowercase();
     lower.contains("rate limited")
         || lower.contains("too many requests")
         || lower.contains("http 429")
@@ -380,8 +380,8 @@ pub(crate) fn is_rate_limited_error(msg: &str) -> bool {
 /// Transient XRPL server-side errors: the node is starting up, lagging behind
 /// the network, or overloaded. Retrying (possibly against another node in a
 /// cluster) can succeed, so these should not fail the request immediately.
-pub(crate) fn is_transient_xrpl_error(msg: &str) -> bool {
-    let lower = msg.to_lowercase();
+pub(crate) fn is_transient_xrpl_error(message: &str) -> bool {
+    let lower = message.to_lowercase();
     [
         "insufficientnetworkmode",
         "nonetwork",
@@ -486,10 +486,7 @@ fn summarize_ledger_object(ledger_object_json: &Value) -> String {
                 format!("→ {destination} · {amt}")
             }
         }
-        "Ticket" => format!(
-            "seq {}",
-            extract_json_u32(ledger_object_json, &["TicketSequence"])
-        ),
+        "Ticket" => format!("seq {}", json_u32(ledger_object_json, &["TicketSequence"])),
         "MPToken" | "MPTokenIssuance" => {
             let mid = json_str(ledger_object_json, &["MPTokenIssuanceID"]);
             let raw_amt = ledger_object_json
@@ -518,10 +515,7 @@ fn summarize_ledger_object(ledger_object_json: &Value) -> String {
             let authorized_account = json_str(ledger_object_json, &["Authorize"]);
             format!("auth {authorized_account}")
         }
-        "SignerList" => format!(
-            "quorum {}",
-            extract_json_u32(ledger_object_json, &["SignerQuorum"])
-        ),
+        "SignerList" => format!("quorum {}", json_u32(ledger_object_json, &["SignerQuorum"])),
         _ => {
             let raw_json = ledger_object_json.to_string();
             let truncated_json = raw_json.chars().take(88).collect::<String>();
@@ -541,7 +535,7 @@ mod tests {
 
     /// TC-013
     #[test]
-    fn parse_account_nfts_fixture() {
+    fn parse_account_nfts_maps_result_wrapper_to_rows() {
         let v = json!({
             "result": {
                 "account_nfts": [{
@@ -606,7 +600,7 @@ mod tests {
 
     /// TC-014
     #[test]
-    fn parse_account_lines_fixture() {
+    fn parse_account_lines_maps_lines_to_trust_rows() {
         let v = json!({
             "result": {
                 "lines": [{
@@ -627,7 +621,7 @@ mod tests {
 
     /// TC-015
     #[test]
-    fn parse_amm_info_fixture() {
+    fn parse_amm_info_extracts_assets_pools_lp_token_and_fee() {
         let v = json!({
             "result": {
                 "amm": {
@@ -651,7 +645,7 @@ mod tests {
 
     /// TC-016
     #[test]
-    fn parse_account_tx_fixture() {
+    fn parse_account_tx_maps_transactions_and_classifies_direction() {
         let v = json!({
             "result": {
                 "transactions": [
@@ -719,7 +713,7 @@ mod tests {
 
     /// TC-017
     #[test]
-    fn parse_book_offers_fixture() {
+    fn parse_book_offers_maps_offers_to_rows() {
         let v = json!({
             "result": {
                 "offers": [{
@@ -737,9 +731,58 @@ mod tests {
         assert_eq!(rows[0].taker_pays, "2 USD");
     }
 
+    /// TC-137: book_offer_best_price — string quality is not inverted,
+    /// invert=true returns 1/price, non-numeric quality falls back to None,
+    /// and missing/empty offers yield None.
+    #[test]
+    fn book_offer_best_price_branches() {
+        let book = |quality: Value| {
+            json!({
+                "result": { "offers": [{ "quality": quality }] }
+            })
+        };
+        // (a) string quality, not inverted: quality * 1_000_000
+        assert_eq!(
+            book_offer_best_price(&book(json!("0.5")), false),
+            Some(500_000.0)
+        );
+        // (b) invert=true → 1/price
+        assert_eq!(
+            book_offer_best_price(&book(json!("0.5")), true),
+            Some(1.0 / 500_000.0)
+        );
+        // (c) non-numeric quality → fallback None
+        assert_eq!(book_offer_best_price(&book(json!("abc")), false), None);
+        // (d) offers missing / empty → None
+        assert_eq!(book_offer_best_price(&json!({ "result": {} }), false), None);
+        assert_eq!(
+            book_offer_best_price(&json!({ "result": { "offers": [] } }), false),
+            None
+        );
+    }
+
+    /// TC-140: parse_book_offers_value — a non-numeric quality entry mixed
+    /// into the book renders price as "-" while numeric entries still parse.
+    #[test]
+    fn parse_book_offers_non_numeric_quality_price_dash() {
+        let v = json!({
+            "result": {
+                "offers": [
+                    { "quality": "0.5" },
+                    { "quality": "oops" }
+                ]
+            }
+        });
+        let rows = parse_book_offers_value(&v);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].price, "500000.000000");
+        assert_eq!(rows[1].quality, "oops");
+        assert_eq!(rows[1].price, "-");
+    }
+
     /// TC-018
     #[test]
-    fn parse_server_info_and_fee_fixtures() {
+    fn parse_server_info_and_fee_extracts_metrics() {
         let si = json!({
             "result": {
                 "info": {
@@ -989,12 +1032,12 @@ mod tests {
     /// TC-073
     #[test]
     fn ledger_object_tab_filters() {
-        use crate::xrpl::{is_escrow_type, is_objects_tab_ledger_type, is_pay_channel_type};
-        assert!(is_objects_tab_ledger_type("Check"));
-        assert!(is_objects_tab_ledger_type("Ticket"));
-        assert!(is_objects_tab_ledger_type("MPToken"));
-        assert!(is_objects_tab_ledger_type("DID"));
-        assert!(!is_objects_tab_ledger_type("PayChannel"));
+        use crate::xrpl::{is_escrow_type, is_misc_ledger_type, is_pay_channel_type};
+        assert!(is_misc_ledger_type("Check"));
+        assert!(is_misc_ledger_type("Ticket"));
+        assert!(is_misc_ledger_type("MPToken"));
+        assert!(is_misc_ledger_type("DID"));
+        assert!(!is_misc_ledger_type("PayChannel"));
         assert!(is_pay_channel_type("PayChannel"));
         assert!(is_escrow_type("Escrow"));
     }

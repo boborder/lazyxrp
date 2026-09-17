@@ -146,4 +146,34 @@ public_key = "OTHER"
         assert!(!toml_data.validator_found);
         assert_eq!(toml_data.validator_count, 1);
     }
+
+    /// TC-142: parse_xrpl_toml — a validator whose public_key matches
+    /// (case-insensitive) carries its attestation through to the result.
+    #[test]
+    fn parse_xrpl_toml_returns_attestation_for_matching_validator() {
+        let text = r#"
+[[VALIDATORS]]
+public_key = "KEY1"
+attestation = "sig-bytes"
+
+[[VALIDATORS]]
+public_key = "KEY2"
+attestation = "other-sig"
+"#;
+        let data = parse_xrpl_toml(text, "key2", "example.com").unwrap();
+        assert!(data.validator_found);
+        assert_eq!(data.attestation.as_deref(), Some("other-sig"));
+        assert_eq!(data.validator_count, 2);
+    }
+
+    /// TC-143: parse_xrpl_toml — malformed TOML is an error and a document
+    /// without a VALIDATORS section reports zero validators.
+    #[test]
+    fn parse_xrpl_toml_invalid_text_and_missing_validators() {
+        assert!(parse_xrpl_toml("not [valid toml", "KEY", "example.com").is_err());
+        let data = parse_xrpl_toml("domain = \"example.com\"", "KEY", "example.com").unwrap();
+        assert!(!data.validator_found);
+        assert_eq!(data.validator_count, 0);
+        assert!(data.attestation.is_none());
+    }
 }

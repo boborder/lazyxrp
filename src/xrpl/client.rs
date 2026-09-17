@@ -17,19 +17,35 @@ use super::parse::{
     parse_server_info_value, parse_simulate_result, parse_submit_success,
 };
 use super::types::{
-    AccountSummary, AccountTxPage, AggregatePrice, AmmSummary, DunlSummary, FeeSummary,
-    LedgerObjectRow, NftRow, OfferRow, OracleId, RipplePathFindResult, ServerInfoSummary,
-    SimulateResult, TrustLineRow, TxRow, TxSummary, XrplRlusdPrice,
+    AccountSummary, AccountTxPage, AggregatePrice, AmmSummary, BookMidPrice, DunlSummary,
+    FeeSummary, LedgerObjectRow, NftRow, OfferRow, OracleId, RipplePathFindResult,
+    ServerInfoSummary, SimulateResult, TrustLineRow, TxRow, TxSummary,
 };
-use super::util::{extract_json_u32, json_str};
+use super::util::{json_str, json_u32};
 
 pub(crate) const RPC_TIMEOUT: Duration = Duration::from_secs(20);
 /// Hard cap for JSON-RPC / dUNL response bodies (DoS guard).
 pub(crate) const MAX_RPC_BODY_BYTES: usize = 16 * 1024 * 1024;
 
+fn default_retry_delay_ms(attempt: usize, message: &str) -> u64 {
+    let delay = if is_rate_limited_error(message) {
+        Duration::from_secs(2 * (attempt + 1) as u64)
+    } else if is_transient_xrpl_error(message) {
+        // A node that is lagging or starting up needs seconds,
+        // not milliseconds, to become servable.
+        Duration::from_secs((attempt + 1) as u64)
+    } else {
+        Duration::from_millis(100 * (attempt + 1) as u64)
+    };
+    delay.as_millis() as u64
+}
+
+type RetryDelayMsFn = fn(usize, &str) -> u64;
+
 pub struct RpcClient {
     client: AsyncJsonRpcClient,
     http: reqwest::Client,
+    retry_delay_ms: RetryDelayMsFn,
 }
 
 async fn read_response_text_capped(
@@ -59,9 +75,17 @@ async fn read_response_text_capped(
 
 impl RpcClient {
     pub fn connect(rpc_url: &str) -> color_eyre::Result<Self> {
+        Self::connect_with_retry_delay(rpc_url, default_retry_delay_ms)
+    }
+
+    pub(crate) fn connect_with_retry_delay(
+        rpc_url: &str,
+        retry_delay_ms: RetryDelayMsFn,
+    ) -> color_eyre::Result<Self> {
         Ok(Self {
             client: AsyncJsonRpcClient::connect(rpc_url.parse()?),
             http: reqwest::Client::builder().http1_only().build()?,
+            retry_delay_ms,
         })
     }
 
@@ -100,21 +124,13 @@ impl RpcClient {
                 Err(e) if attempt < 2 && is_retryable_rpc_error(&format!("{e}")) => {
                     let message = format!("{e}");
                     last_error = Some(e);
-                    let delay = if is_rate_limited_error(&message) {
-                        Duration::from_secs(2 * (attempt + 1) as u64)
-                    } else if is_transient_xrpl_error(&message) {
-                        // A node that is lagging or starting up needs seconds,
-                        // not milliseconds, to become servable.
-                        Duration::from_secs((attempt + 1) as u64)
-                    } else {
-                        Duration::from_millis(100 * (attempt + 1) as u64)
-                    };
+                    let delay_ms = (self.retry_delay_ms)(attempt, &message);
                     tracing::warn!(
                         attempt = attempt + 1,
-                        delay_ms = delay.as_millis() as u64,
+                        delay_ms,
                         "{method} retry after: {message}"
                     );
-                    tokio::time::sleep(delay).await;
+                    tokio::time::sleep(Duration::from_millis(delay_ms)).await;
                 }
                 Err(e) => return Err(e),
             }
@@ -153,9 +169,9 @@ impl RpcClient {
         Ok(AccountSummary {
             account: json_str(&value, &["result", "account_data", "Account"]).to_string(),
             balance_xrp: drops_to_xrp(json_str(&value, &["result", "account_data", "Balance"])),
-            sequence: extract_json_u32(&value, &["result", "account_data", "Sequence"]),
-            owner_count: extract_json_u32(&value, &["result", "account_data", "OwnerCount"]),
-            flags: extract_json_u32(&value, &["result", "account_data", "Flags"]),
+            sequence: json_u32(&value, &["result", "account_data", "Sequence"]),
+            owner_count: json_u32(&value, &["result", "account_data", "OwnerCount"]),
+            flags: json_u32(&value, &["result", "account_data", "Flags"]),
             regular_key: value
                 .pointer("/result/account_data/RegularKey")
                 .and_then(|v| v.as_str())
@@ -324,18 +340,18 @@ impl RpcClient {
         Ok(parse_book_offers_value(&value))
     }
 
-    pub async fn xrp_rlusd_price(
+    pub async fn book_mid_price(
         &self,
-        rlusd_currency: &str,
-        rlusd_issuer: &str,
-    ) -> color_eyre::Result<XrplRlusdPrice> {
+        quote_currency: &str,
+        issuer: &str,
+    ) -> color_eyre::Result<BookMidPrice> {
         let bid_params = json!({
             "taker_gets": book_currency("XRP", None),
-            "taker_pays": book_currency(rlusd_currency, Some(rlusd_issuer)),
+            "taker_pays": book_currency(quote_currency, Some(issuer)),
             "limit": 1
         });
         let ask_params = json!({
-            "taker_gets": book_currency(rlusd_currency, Some(rlusd_issuer)),
+            "taker_gets": book_currency(quote_currency, Some(issuer)),
             "taker_pays": book_currency("XRP", None),
             "limit": 1
         });
@@ -375,14 +391,14 @@ impl RpcClient {
             _ => "-".into(),
         };
 
-        Ok(XrplRlusdPrice {
+        Ok(BookMidPrice {
             bid: bid_str,
             ask: ask_str,
             mid: mid_str,
         })
     }
 
-    pub async fn is_account_activated(&self, address: &str) -> color_eyre::Result<bool> {
+    pub async fn fetch_account_activation_status(&self, address: &str) -> color_eyre::Result<bool> {
         match self.account_info(address).await {
             Ok(account) => Ok(account.balance_xrp.parse::<f64>().unwrap_or(0.0) >= 10.0),
             Err(e) if is_not_found_error(&format!("{e}")) => Ok(false),
@@ -562,7 +578,13 @@ mod tests {
             }
         });
 
-        let rpc = RpcClient::connect(&format!("http://{address}")).unwrap();
+        fn zero_retry_delay_ms(_attempt: usize, _message: &str) -> u64 {
+            0
+        }
+
+        let rpc =
+            RpcClient::connect_with_retry_delay(&format!("http://{address}"), zero_retry_delay_ms)
+                .unwrap();
         let value = rpc.rpc_value("server_info", json!({})).await.unwrap();
         assert_eq!(value, json!({"result": {}}));
         server.await.unwrap();

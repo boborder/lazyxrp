@@ -1,8 +1,52 @@
 use crate::cli::Cmd;
 use crate::network::Network;
-use crate::signing::{self, SigningCredential, prompt_mainnet_confirmation};
+use crate::signing::{self, SigningCredential, prompt_production_confirmation};
 
 use super::client::{RpcClient, xrp_to_drops};
+
+fn validate_cmd_account_and_issuer_addresses(cmd: &Cmd) -> color_eyre::Result<()> {
+    use crate::signing::require_classic_address_shape;
+
+    match cmd {
+        Cmd::Account { address } => {
+            require_classic_address_shape("account", address)?;
+        }
+        Cmd::Nfts { address } => {
+            require_classic_address_shape("account", address)?;
+        }
+        Cmd::Lines { address } => {
+            require_classic_address_shape("account", address)?;
+        }
+        Cmd::TxHistory { address, .. } => {
+            require_classic_address_shape("account", address)?;
+        }
+        Cmd::AccountStatus { address } => {
+            require_classic_address_shape("account", address)?;
+        }
+        Cmd::Summary { account } => {
+            if let Some(account) = account.as_deref().filter(|s| !s.is_empty()) {
+                require_classic_address_shape("account", account)?;
+            }
+        }
+        Cmd::Book { issuer, .. } => {
+            if let Some(issuer) = issuer.as_deref().filter(|s| !s.is_empty()) {
+                require_classic_address_shape("issuer", issuer)?;
+            }
+        }
+        Cmd::Amm {
+            issuer1, issuer2, ..
+        } => {
+            if let Some(issuer) = issuer1.as_deref().filter(|s| !s.is_empty()) {
+                require_classic_address_shape("issuer", issuer)?;
+            }
+            if let Some(issuer) = issuer2.as_deref().filter(|s| !s.is_empty()) {
+                require_classic_address_shape("issuer", issuer)?;
+            }
+        }
+        Cmd::Info | Cmd::Watch { .. } | Cmd::Send { .. } => {}
+    }
+    Ok(())
+}
 
 pub async fn execute_cli_command(
     cmd: Cmd,
@@ -11,6 +55,7 @@ pub async fn execute_cli_command(
     signing_credential: Option<SigningCredential>,
     yes: bool,
 ) -> color_eyre::Result<()> {
+    validate_cmd_account_and_issuer_addresses(&cmd)?;
     let rpc = RpcClient::connect(rpc_url)?;
     match cmd {
         Cmd::Info => {
@@ -94,7 +139,7 @@ pub async fn execute_cli_command(
             );
         }
         Cmd::AccountStatus { address } => {
-            let is_activated = rpc.is_account_activated(&address).await?;
+            let is_activated = rpc.fetch_account_activation_status(&address).await?;
             println!("Account: {}", address);
             println!(
                 "Status: {}",
@@ -155,7 +200,7 @@ pub async fn execute_cli_command(
             let server_info = rpc.server_info().await?;
             let last_ledger_sequence = server_info.ledger_index + 20;
 
-            if !prompt_mainnet_confirmation(
+            if !prompt_production_confirmation(
                 &format!("Send {} XRP to {}", amount, destination_classic),
                 network,
                 yes,
@@ -254,7 +299,9 @@ fn classify_rp_target(raw: &str) -> color_eyre::Result<RpTarget> {
 
 #[cfg(test)]
 mod tests {
-    use super::{RpTarget, classify_rp_target, looks_like_tx_hash};
+    use super::{RpTarget, classify_rp_target, execute_cli_command, looks_like_tx_hash};
+    use crate::cli::Cmd;
+    use crate::network::Network;
 
     #[test]
     fn looks_like_tx_hash_accepts_64_hex_and_0x() {
@@ -282,7 +329,252 @@ mod tests {
         assert!(classify_rp_target("").is_err());
     }
 
-    /// Live XRPL JSON-RPC (mainnet public cluster). Serialized to avoid connection pile-up.
+    /// TC-059: invalid classic account addresses fail before RPC connect
+    #[tokio::test]
+    async fn cli_rejects_invalid_account_before_rpc_connect() {
+        let r = execute_cli_command(
+            Cmd::Account {
+                address: "not-an-address".into(),
+            },
+            "http://127.0.0.1:1",
+            &Network::Mainnet,
+            None,
+            false,
+        )
+        .await;
+        let err = r.expect_err("invalid classic address must fail");
+        let msg = err.to_string().to_lowercase();
+        assert!(
+            msg.contains("invalid") || msg.contains("address") || msg.contains("classic"),
+            "error should reflect address validation, got: {err}"
+        );
+    }
+
+    mod local_rpc_integration {
+        use std::time::Duration;
+
+        use serde_json::{Value, json};
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::{TcpListener, TcpStream};
+
+        use super::super::execute_cli_command;
+        use crate::cli::Cmd;
+        use crate::network::Network;
+
+        const GENESIS: &str = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh";
+        const RLUSD_ISSUER: &str = "rMxCKbEDwqr76QuheSUMdEGf4B9xJ8m5De";
+
+        async fn read_request(stream: &mut TcpStream) -> color_eyre::Result<Value> {
+            let mut bytes = Vec::new();
+            loop {
+                let mut chunk = [0_u8; 1024];
+                let read = stream.read(&mut chunk).await?;
+                if read == 0 {
+                    color_eyre::eyre::bail!("local RPC client closed before request");
+                }
+                bytes.extend_from_slice(&chunk[..read]);
+                let Some(end) = bytes.windows(4).position(|w| w == b"\r\n\r\n") else {
+                    continue;
+                };
+                let header_end = end + 4;
+                let headers = String::from_utf8_lossy(&bytes[..end]);
+                let length = headers
+                    .lines()
+                    .find_map(|line| {
+                        line.strip_prefix("Content-Length:")
+                            .or_else(|| line.strip_prefix("content-length:"))
+                            .and_then(|value| value.trim().parse::<usize>().ok())
+                    })
+                    .unwrap_or(0);
+                if bytes.len() >= header_end + length {
+                    return Ok(serde_json::from_slice(
+                        &bytes[header_end..header_end + length],
+                    )?);
+                }
+            }
+        }
+
+        fn result_for(method: &str) -> Value {
+            match method {
+                "server_info" => json!({
+                    "info": {
+                        "validated_ledger": {"seq": 80_000_000},
+                        "hostid": "local-test",
+                        "build_version": "local"
+                    }
+                }),
+                "fee" => json!({"drops": {"open_ledger_fee": 15}}),
+                "account_info" => json!({
+                    "account_data": {
+                        "Account": GENESIS,
+                        "Balance": "10000000",
+                        "Sequence": 7,
+                        "OwnerCount": 1,
+                        "Flags": 0
+                    }
+                }),
+                "book_offers" => json!({
+                    "offers": [{
+                        "quality": "0.5",
+                        "TakerGets": "1000000",
+                        "TakerPays": {
+                            "currency": "RLUSD",
+                            "value": "2",
+                            "issuer": RLUSD_ISSUER
+                        }
+                    }]
+                }),
+                "account_nfts" => json!({"account_nfts": []}),
+                "account_lines" => json!({"lines": []}),
+                "amm_info" => json!({
+                    "amm": {
+                        "Asset": {"currency": "XRP"},
+                        "Asset2": {"currency": "RLUSD", "issuer": RLUSD_ISSUER},
+                        "LPToken": {"value": "42", "currency": "03"},
+                        "TradingFee": 12,
+                        "Amount": "2000000",
+                        "Amount2": {
+                            "currency": "RLUSD",
+                            "value": "3",
+                            "issuer": RLUSD_ISSUER
+                        }
+                    }
+                }),
+                "account_tx" => json!({"transactions": []}),
+                other => panic!("unexpected local RPC method: {other}"),
+            }
+        }
+
+        async fn serve(listener: TcpListener, expected: usize) -> color_eyre::Result<Vec<String>> {
+            let mut methods = Vec::with_capacity(expected);
+            for _ in 0..expected {
+                let (mut stream, _) =
+                    tokio::time::timeout(Duration::from_secs(5), listener.accept()).await??;
+                let request = read_request(&mut stream).await?;
+                let method = request["method"]
+                    .as_str()
+                    .ok_or_else(|| color_eyre::eyre::eyre!("RPC method missing"))?
+                    .to_owned();
+                methods.push(method.clone());
+                let body = json!({"result": result_for(&method)}).to_string();
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                stream.write_all(response.as_bytes()).await?;
+            }
+            Ok(methods)
+        }
+
+        /// TC-050–057, TC-066: read-only CLI commands use a deterministic
+        /// local JSON-RPC boundary instead of the public internet.
+        #[tokio::test]
+        async fn read_only_cli_commands_succeed_against_local_rpc() -> color_eyre::Result<()> {
+            let listener = TcpListener::bind(("127.0.0.1", 0)).await?;
+            let url = format!("http://{}", listener.local_addr()?);
+            let server = tokio::spawn(serve(listener, 11));
+
+            async fn run(step: &str, cmd: Cmd, url: &str) -> color_eyre::Result<()> {
+                execute_cli_command(cmd, url, &Network::Testnet, None, false)
+                    .await
+                    .map_err(|e| color_eyre::eyre::eyre!("{step}: {e}"))
+            }
+
+            run("info (server_info)", Cmd::Info, &url).await?;
+            run(
+                "account (account_info #1)",
+                Cmd::Account {
+                    address: GENESIS.into(),
+                },
+                &url,
+            )
+            .await?;
+            run(
+                "book (book_offers)",
+                Cmd::Book {
+                    base: "XRP".into(),
+                    quote: "RLUSD".into(),
+                    issuer: Some(RLUSD_ISSUER.into()),
+                    limit: 5,
+                },
+                &url,
+            )
+            .await?;
+            run(
+                "summary (server_info #2, fee)",
+                Cmd::Summary {
+                    account: Some(GENESIS.into()),
+                },
+                &url,
+            )
+            .await?;
+            run(
+                "nfts (account_nfts)",
+                Cmd::Nfts {
+                    address: GENESIS.into(),
+                },
+                &url,
+            )
+            .await?;
+            run(
+                "lines (account_lines)",
+                Cmd::Lines {
+                    address: GENESIS.into(),
+                },
+                &url,
+            )
+            .await?;
+            run(
+                "amm (amm_info)",
+                Cmd::Amm {
+                    asset1: "XRP".into(),
+                    asset2: "RLUSD".into(),
+                    issuer1: None,
+                    issuer2: Some(RLUSD_ISSUER.into()),
+                },
+                &url,
+            )
+            .await?;
+            run(
+                "tx-history (account_tx)",
+                Cmd::TxHistory {
+                    address: GENESIS.into(),
+                    limit: 5,
+                },
+                &url,
+            )
+            .await?;
+            run(
+                "account-status (account_info #2)",
+                Cmd::AccountStatus {
+                    address: GENESIS.into(),
+                },
+                &url,
+            )
+            .await?;
+
+            let methods = server.await??;
+            assert_eq!(
+                methods,
+                [
+                    "server_info",
+                    "account_info",
+                    "book_offers",
+                    "server_info",
+                    "fee",
+                    "account_info",
+                    "account_nfts",
+                    "account_lines",
+                    "amm_info",
+                    "account_tx",
+                    "account_info",
+                ]
+            );
+            Ok(())
+        }
+    }
+
     mod integration_live_network {
         use std::time::Duration;
 
@@ -290,143 +582,26 @@ mod tests {
         use crate::cli::Cmd;
         use crate::network::Network;
 
-        const RPC: &str = "https://xrplcluster.com";
-        const GENESIS: &str = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh";
-        const RLUSD_ISSUER: &str = "rMxCKbEDwqr76QuheSUMdEGf4B9xJ8m5De";
-        static LIVE_RPC_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
-
-        async fn run(cmd: Cmd) -> color_eyre::Result<()> {
-            let _guard = LIVE_RPC_LOCK.lock().await;
-            tokio::time::sleep(Duration::from_millis(250)).await;
+        /// Manual live-network check only. Read-only CLI behavior is covered
+        /// by the local RPC test above; this remains opt-in for real-mainnet signing.
+        #[tokio::test]
+        #[ignore = "manual live-network check: requires XRPL_SEED; mainnet may send real XRP if stdin confirms"]
+        async fn cli_send_live_manual_only() -> color_eyre::Result<()> {
             tokio::time::timeout(
                 Duration::from_secs(90),
-                execute_cli_command(cmd, RPC, &Network::Mainnet, None, false),
+                execute_cli_command(
+                    Cmd::Send {
+                        destination: "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh".into(),
+                        amount: "0.000123".to_string(),
+                    },
+                    "https://xrplcluster.com",
+                    &Network::Mainnet,
+                    None,
+                    false,
+                ),
             )
             .await
             .map_err(|_| color_eyre::eyre::eyre!("XRPL integration test timed out"))?
-        }
-
-        /// TC-050
-        #[tokio::test]
-        #[ignore = "live network dependency"]
-        async fn cli_info_ok() -> color_eyre::Result<()> {
-            run(Cmd::Info).await
-        }
-
-        /// TC-051
-        #[tokio::test]
-        #[ignore = "live network dependency"]
-        async fn cli_account_ok() -> color_eyre::Result<()> {
-            run(Cmd::Account {
-                address: GENESIS.into(),
-            })
-            .await
-        }
-
-        /// TC-052
-        #[tokio::test]
-        #[ignore = "live network dependency: RLUSD 4-char code unsupported on public nodes"]
-        async fn cli_book_ok() -> color_eyre::Result<()> {
-            run(Cmd::Book {
-                base: "XRP".into(),
-                quote: "RLUSD".into(),
-                issuer: Some(RLUSD_ISSUER.into()),
-                limit: 5,
-            })
-            .await
-        }
-
-        /// TC-053
-        #[tokio::test]
-        #[ignore = "live network dependency"]
-        async fn cli_summary_ok() -> color_eyre::Result<()> {
-            run(Cmd::Summary {
-                account: Some(GENESIS.into()),
-            })
-            .await
-        }
-
-        /// TC-054
-        #[tokio::test]
-        #[ignore = "live network dependency"]
-        async fn cli_nfts_ok() -> color_eyre::Result<()> {
-            run(Cmd::Nfts {
-                address: GENESIS.into(),
-            })
-            .await
-        }
-
-        /// TC-055
-        #[tokio::test]
-        #[ignore = "live network dependency"]
-        async fn cli_lines_ok() -> color_eyre::Result<()> {
-            run(Cmd::Lines {
-                address: GENESIS.into(),
-            })
-            .await
-        }
-
-        /// TC-056
-        #[tokio::test]
-        #[ignore = "live network dependency: AMM support varies by public node"]
-        async fn cli_amm_ok() -> color_eyre::Result<()> {
-            run(Cmd::Amm {
-                asset1: "XRP".into(),
-                asset2: "RLUSD".into(),
-                issuer1: None,
-                issuer2: Some(RLUSD_ISSUER.into()),
-            })
-            .await
-        }
-
-        /// TC-057
-        #[tokio::test]
-        #[ignore = "live network dependency"]
-        async fn cli_txhistory_ok() -> color_eyre::Result<()> {
-            run(Cmd::TxHistory {
-                address: GENESIS.into(),
-                limit: 5,
-            })
-            .await
-        }
-
-        /// TC-059
-        #[tokio::test]
-        #[ignore = "live network dependency"]
-        async fn cli_invalid_account_errors() {
-            let _guard = LIVE_RPC_LOCK.lock().await;
-            let r = execute_cli_command(
-                Cmd::Account {
-                    address: "not-an-address".into(),
-                },
-                RPC,
-                &Network::Mainnet,
-                None,
-                false,
-            )
-            .await;
-            assert!(r.is_err());
-        }
-
-        /// TC-066
-        #[tokio::test]
-        #[ignore = "live network dependency"]
-        async fn cli_account_status_ok() -> color_eyre::Result<()> {
-            run(Cmd::AccountStatus {
-                address: GENESIS.into(),
-            })
-            .await
-        }
-
-        /// TC-067
-        #[tokio::test]
-        #[ignore = "requires XRPL_SEED environment variable"]
-        async fn cli_send_simulation_ok() -> color_eyre::Result<()> {
-            run(Cmd::Send {
-                destination: "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh".into(),
-                amount: "0.000123".to_string(),
-            })
-            .await
         }
     }
 }

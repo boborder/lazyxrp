@@ -285,6 +285,19 @@ mod tests {
         assert_eq!(drops_to_xrp("not-a-number"), "0.000000");
     }
 
+    /// TC-138: drops_to_xrp — beyond 2^53 the f64 conversion loses drop
+    /// precision (documented current behavior): 17-nines input collapses to
+    /// the same output as 1e17.
+    #[test]
+    fn drops_to_xrp_precision_collapses_beyond_2_pow_53() {
+        assert_eq!(drops_to_xrp("99999999999999999"), "100000000000.000000");
+        assert_eq!(drops_to_xrp("100000000000000000"), "100000000000.000000");
+        assert_eq!(
+            drops_to_xrp("99999999999999999"),
+            drops_to_xrp("100000000000000000")
+        );
+    }
+
     #[test]
     fn format_amount_none() {
         assert_eq!(format_amount(None), "-");
@@ -308,9 +321,26 @@ mod tests {
         assert_eq!(format_ripple_time_utc(838_204_893), "2026-07-24 10:41 UTC");
     }
 
+    /// TC-139: format_ripple_time_utc — epoch zero renders 2000-01-01 and
+    /// u64::MAX clamps to 9999-12-31 without panicking.
+    #[test]
+    fn format_ripple_time_utc_epoch_zero_and_u64_max_clamp() {
+        assert_eq!(format_ripple_time_utc(0), "2000-01-01 00:00 UTC");
+        assert_eq!(format_ripple_time_utc(u64::MAX), "9999-12-31 23:59 UTC");
+    }
+
     #[test]
     fn xrp_to_drops_whole() {
         assert_eq!(xrp_to_drops("1").unwrap(), 1_000_000);
+    }
+
+    /// TC-141: xrp_to_drops — the largest representable amount
+    /// (18446744073709.551615 XRP = u64::MAX drops) succeeds and one extra
+    /// fractional drop overflows.
+    #[test]
+    fn xrp_to_drops_max_fractional_boundary() {
+        assert_eq!(xrp_to_drops("18446744073709.551615").unwrap(), u64::MAX);
+        assert!(xrp_to_drops("18446744073709.551616").is_err());
     }
 
     #[test]

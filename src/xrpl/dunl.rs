@@ -47,7 +47,7 @@ pub(crate) fn dunl_cache_store(summary: DunlSummary) {
 }
 
 #[cfg(test)]
-fn dunl_cache_clear() {
+fn dunl_summary_cache_clear() {
     if let Ok(mut guard) = dunl_summary_cache().lock() {
         *guard = None;
     }
@@ -64,14 +64,20 @@ pub(crate) struct ValidatorManifestMeta {
 /// Decode XRPL validator manifest (base64) for domain / sequence / master key.
 ///
 /// Results are memoized by raw base64 (dUNL entries rarely change between polls).
-pub fn parse_validator_manifest_b64(b64: &str) -> Option<ValidatorManifestMeta> {
-    fn manifest_decode_cache() -> &'static Mutex<HashMap<String, Option<ValidatorManifestMeta>>> {
-        static MANIFEST_DECODE_CACHE: OnceLock<
-            Mutex<HashMap<String, Option<ValidatorManifestMeta>>>,
-        > = OnceLock::new();
-        MANIFEST_DECODE_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
-    }
+fn manifest_decode_cache() -> &'static Mutex<HashMap<String, Option<ValidatorManifestMeta>>> {
+    static MANIFEST_DECODE_CACHE: OnceLock<Mutex<HashMap<String, Option<ValidatorManifestMeta>>>> =
+        OnceLock::new();
+    MANIFEST_DECODE_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
 
+#[cfg(test)]
+fn manifest_decode_cache_clear() {
+    if let Ok(mut guard) = manifest_decode_cache().lock() {
+        guard.clear();
+    }
+}
+
+pub fn parse_validator_manifest_b64(b64: &str) -> Option<ValidatorManifestMeta> {
     if let Ok(guard) = manifest_decode_cache().lock()
         && let Some(hit) = guard.get(b64)
     {
@@ -286,24 +292,43 @@ mod tests {
         let dunl = parse_xrplf_dunl_json(sample).expect("parse dUNL");
         assert_eq!(dunl.validator_count, 1);
         assert_eq!(dunl.sequence, 1);
-        assert!(dunl.expiration_utc.contains("UTC"));
+        assert_eq!(dunl.expiration_utc, "2000-01-01 00:00 UTC");
         assert_eq!(dunl.validators.len(), 1);
         assert_eq!(dunl.validators[0].validation_public_key, "n");
     }
 
     #[test]
     fn dunl_cache_hit_within_ttl() {
-        dunl_cache_clear();
+        let _guard = DunlSummaryCacheGuard;
+        dunl_summary_cache_clear();
         let sample = r#"{"blob":"eyJzZXF1ZW5jZSI6MSwiZXhwaXJhdGlvbiI6MCwidmFsaWRhdG9ycyI6W3sidmFsaWRhdGlvbl9wdWJsaWNfa2V5IjoibiIsIm1hbmlmZXN0IjoibSJ9XX0="}"#;
         let dunl = parse_xrplf_dunl_json(sample).expect("parse dUNL");
         dunl_cache_store(dunl.clone());
         assert_eq!(dunl_cache_get_if_fresh().expect("cache hit"), dunl);
-        dunl_cache_clear();
+        dunl_summary_cache_clear();
         assert!(dunl_cache_get_if_fresh().is_none());
+    }
+
+    /// Drops with the test: clears the shared manifest decode cache even if an assert panics.
+    struct ManifestDecodeCacheGuard;
+    impl Drop for ManifestDecodeCacheGuard {
+        fn drop(&mut self) {
+            manifest_decode_cache_clear();
+        }
+    }
+
+    /// Drops with the test: clears the shared dUNL summary cache even if an assert panics.
+    struct DunlSummaryCacheGuard;
+
+    impl Drop for DunlSummaryCacheGuard {
+        fn drop(&mut self) {
+            dunl_summary_cache_clear();
+        }
     }
 
     #[test]
     fn parse_validator_manifest_extracts_domain_and_seq() {
+        let _guard = ManifestDecodeCacheGuard;
         let manifest_b64 = "JAAAAAFxIe0Tqvy2qHvLXQk8LvN/BEMcKREm1nQpMwUVLZd2xquk1nMhA9RioHJW8Kz6IjnHOOktbvbaHsZqwJb8otgoIu+46QbWdkYwRAIgE0pz8HpSKrUsJ8E390K8KCwmvExB00jLvqPv9LZr6roCIAl9zLWeIRSsBRIaOl5alblYMYMXrpbxJZ7t+jtbiT9Ldwd4cnAudmV0cBJADEZOQPQJcWj0zPjulcvH1o8WhQ9jrKzWV/mkXSHGjmzIiekkOzUcEnzmJXwJYWZZnA0jTLE30OYmxCRXfCm9Bg==";
         let meta = parse_validator_manifest_b64(manifest_b64).expect("manifest");
         assert_eq!(meta.domain.as_deref(), Some("xrp.vet"));
@@ -313,5 +338,48 @@ mod tests {
                 .as_ref()
                 .is_some_and(|k| k.starts_with("ED"))
         );
+    }
+
+    /// TC-148: dUNL JSON decode errors surface as `Err` for a missing blob,
+    /// invalid base64, a blob that is not JSON, and a blob missing fields.
+    #[test]
+    fn dunl_parse_error_paths() {
+        let err = parse_xrplf_dunl_json("{}").expect_err("missing blob must fail");
+        assert!(err.to_string().contains("missing blob"), "{err}");
+
+        let err = parse_xrplf_dunl_json(r#"{"blob":"not valid base64!!"}"#)
+            .expect_err("invalid base64 must fail");
+        assert!(err.to_string().contains("invalid base64"), "{err}");
+
+        let not_json = base64::engine::general_purpose::STANDARD.encode(b"definitely not json");
+        let err = parse_xrplf_dunl_json(&format!(r#"{{"blob":"{not_json}"}}"#))
+            .expect_err("non-JSON blob must fail");
+        assert!(err.to_string().contains("blob decode"), "{err}");
+
+        let no_sequence = base64::engine::general_purpose::STANDARD.encode(br#"{"expiration":1}"#);
+        let err = parse_xrplf_dunl_json(&format!(r#"{{"blob":"{no_sequence}"}}"#))
+            .expect_err("blob without sequence must fail");
+        assert!(err.to_string().contains("missing sequence"), "{err}");
+
+        let no_expiration = base64::engine::general_purpose::STANDARD.encode(br#"{"sequence":1}"#);
+        let err = parse_xrplf_dunl_json(&format!(r#"{{"blob":"{no_expiration}"}}"#))
+            .expect_err("blob without expiration must fail");
+        assert!(err.to_string().contains("missing expiration"), "{err}");
+    }
+
+    /// TC-149: `expiration_utc` is pinned to the exact Ripple-epoch UTC string.
+    #[test]
+    fn dunl_expiration_utc_is_exact_ripple_epoch_string() {
+        let blob = serde_json::json!({
+            "sequence": 2,
+            "expiration": 838_204_893_u64,
+            "validators": [],
+        });
+        let b64 = base64::engine::general_purpose::STANDARD.encode(blob.to_string());
+        let dunl = parse_xrplf_dunl_json(&format!(r#"{{"blob":"{b64}"}}"#))
+            .expect("parse dUNL with known expiration");
+        assert_eq!(dunl.expiration_ripple, 838_204_893);
+        assert_eq!(dunl.expiration_utc, "2026-07-24 10:41 UTC");
+        assert!(dunl.validators.is_empty());
     }
 }

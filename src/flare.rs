@@ -419,8 +419,19 @@ pub async fn execute_direct_minting(
 mod tests {
     use super::*;
 
+    /// Drops with the test: clears the shared registry cache even if an assert panics.
+    struct FlareRegistryCacheGuard;
+    impl Drop for FlareRegistryCacheGuard {
+        fn drop(&mut self) {
+            if let Ok(mut guard) = flare_registry_cache().lock() {
+                guard.clear();
+            }
+        }
+    }
+
     #[test]
     fn flare_registry_cache_stores_per_rpc_url() {
+        let _guard = FlareRegistryCacheGuard;
         let rpc = "https://flare-api.flare.network/ext/C/rpc";
         let ftso = address!("1111111111111111111111111111111111111111");
         let am = address!("2222222222222222222222222222222222222222");
@@ -433,8 +444,6 @@ mod tests {
         let entry = guard.get(rpc).expect("entry");
         assert_eq!(entry.ftso_v2, Some(ftso));
         assert_eq!(entry.asset_manager_fxrp, Some(am));
-        drop(guard);
-        flare_registry_cache().lock().expect("lock").clear();
     }
 
     #[test]

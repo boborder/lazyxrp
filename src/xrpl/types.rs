@@ -242,11 +242,11 @@ pub struct RipplePathFindResult {
     pub source_account: String,
 }
 
-/// Key generation result (TUI: local via `signing::propose_wallet_local`; RPC parser in `client`).
+/// Key generation result (TUI: local via `signing::generate_wallet_keys_local`; RPC parser in `client`).
 ///
 /// Security: `Debug` redacts `master_seed` / `master_seed_hex`.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct WalletProposeResult {
+pub struct GeneratedWalletKeys {
     /// Master seed (Ed25519 family seed, starts with `s`).
     pub master_seed: String,
     /// Hex-encoded master seed.
@@ -261,9 +261,9 @@ pub struct WalletProposeResult {
     pub key_type: String,
 }
 
-impl std::fmt::Debug for WalletProposeResult {
+impl std::fmt::Debug for GeneratedWalletKeys {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("WalletProposeResult")
+        f.debug_struct("GeneratedWalletKeys")
             .field("master_seed", &"[REDACTED]")
             .field("master_seed_hex", &"[REDACTED]")
             .field("account_id", &self.account_id)
@@ -314,7 +314,7 @@ pub struct AmmSummary {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct XrplRlusdPrice {
+pub struct BookMidPrice {
     pub bid: String,
     pub ask: String,
     pub mid: String,
@@ -474,7 +474,7 @@ pub struct LedgerObjectRow {
 
 /// True for ledger types shown in the upper «misc objects» panel (excludes PayChannel / Escrow).
 #[must_use]
-pub fn is_objects_tab_ledger_type(t: &str) -> bool {
+pub fn is_misc_ledger_type(t: &str) -> bool {
     matches!(
         t,
         "Check"
@@ -646,7 +646,7 @@ pub enum PollCommand {
     TxHistory,
     /// Load next page using the given marker.
     TxHistoryMore(Option<serde_json::Value>),
-    /// `account_objects` (limit 200); UI filters by ledger type per tab.
+    /// `account_objects` (limit 200); Assets panels filter by ledger type.
     LedgerObjects,
     /// Sign and submit AccountSet (wallet form).
     AccountSetSubmit(AccountSetSubmitParams),
@@ -662,8 +662,8 @@ pub enum PollCommand {
     OfferCreateSubmit(OfferCreateSubmitParams),
     /// Sign and submit TrustSet (wallet form).
     TrustSetSubmit(TrustSetSubmitParams),
-    /// Generate a new key pair via wallet_propose ("ed25519" or "secp256k1").
-    WalletPropose(String),
+    /// Generate a new key pair locally ("ed25519" or "secp256k1").
+    GenerateWalletKeys(String),
 }
 
 #[derive(Debug)]
@@ -677,7 +677,7 @@ pub struct PollContext {
     pub poll_interval: Duration,
     pub seed_address: Option<String>,
     /// Signing credential held by the poll task (never sent over Action/params channels).
-    pub signing_seed: Option<crate::signing::SigningCredential>,
+    pub signing_credential: Option<crate::signing::SigningCredential>,
     pub network_watch: watch::Receiver<Network>,
     /// Active UI tab index (0 Overview …) for optional heavy-RPC skips.
     pub tab_watch: watch::Receiver<usize>,
@@ -761,12 +761,12 @@ mod tests {
 }
 
 #[cfg(test)]
-mod wallet_propose_security_tests {
+mod generated_wallet_keys_security_tests {
     use super::*;
 
     #[test]
-    fn wallet_propose_result_debug_redacts_seed() {
-        let r = WalletProposeResult {
+    fn generated_wallet_keys_debug_redacts_seed() {
+        let r = GeneratedWalletKeys {
             master_seed: "sEdSecretShouldNotAppear".into(),
             master_seed_hex: "DEADBEEF".into(),
             account_id: "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh".into(),

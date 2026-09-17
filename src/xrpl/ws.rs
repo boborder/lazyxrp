@@ -11,7 +11,7 @@ use xrpl::{
 use crate::action::Action;
 
 use super::types::TxSummary;
-use super::util::{extract_json_u32, next_backoff_secs};
+use super::util::{json_u32, next_backoff_secs};
 
 /// Emit one poll trigger per ledger index within a WebSocket session.
 fn should_emit_ledger_trigger(last: Option<u32>, current: u32) -> bool {
@@ -141,16 +141,16 @@ async fn connect_and_subscribe(
                         let value = serde_json::to_value(ws_msg)?;
                         let event_type = value.get("type").and_then(Value::as_str).unwrap_or_default();
                         if event_type == "ledgerClosed" {
-                            let ledger_index = extract_json_u32(&value, &["ledger_index"]);
+                            let ledger_index = json_u32(&value, &["ledger_index"]);
                             if !should_emit_ledger_trigger(last_ledger_index, ledger_index) {
                                 continue;
                             }
                             last_ledger_index = Some(ledger_index);
                             let _ = action_tx.send(Action::XrplLedgerClose {
                                 ledger_index,
-                                base_fee: extract_json_u32(&value, &["fee_base"]),
-                                reserve_base: extract_json_u32(&value, &["reserve_base"]),
-                                reserve_inc: extract_json_u32(&value, &["reserve_inc"]),
+                                base_fee: json_u32(&value, &["fee_base"]),
+                                reserve_base: json_u32(&value, &["reserve_base"]),
+                                reserve_inc: json_u32(&value, &["reserve_inc"]),
                             });
                             let _ = poll_trigger_tx.send(());
                         } else if value.get("transaction").is_some() {
