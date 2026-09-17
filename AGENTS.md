@@ -13,6 +13,7 @@
 | [`docs/test.md`](docs/test.md) | **どう検証するか** — テスト設計・テストガイド |
 | [`ROADMAP.md`](ROADMAP.md) | **何を・いつ・どこまで** — 進捗・目標・バージョン |
 | [`docs/tech.md`](docs/tech.md) | **何で作るか** — 技術選定・依存・API 連携 |
+| [`docs/maintenance.md`](docs/maintenance.md) | **どう公開・運用するか** — リリース・公開フロー |
 | [`docs/directory.md`](docs/directory.md) | **どこにあるか** — ディレクトリ構成・命名 |
 | [`docs/security.md`](docs/security.md) | **どう守るか** — セキュリティ・機密管理 |
 | [`docs/problems.md`](docs/problems.md) | **何に注意するか** — 注意点・落とし穴 |

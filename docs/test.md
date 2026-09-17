@@ -2,7 +2,7 @@
 
 **Role:** テスト設計・テストガイド（重要 TC カタログと FR/architecture へのトレース）。
 
-> Last Updated: 2026-09-16 (TC-157–165; review batch #3: local CLI RPC boundary, binary smoke tests, Assets focus cycle, panel state coverage)
+> Last Updated: 2026-09-17 (traceability § pointers resynced to architecture.md / DESIGN.md headings)
 > Target: lazyxrp (Rust TUI for XRPL)
 > Catalog: important-case roster (not a 1:1 index of every `#[test]`)
 
@@ -204,25 +204,25 @@ cargo deny check
 
 | TC | FR / NFR | Architecture § | Design |
 |----|----------|------------------|--------|
-| TC-111–112 | FR-12 | §6.1 presets | §5 `Ctrl-n` |
+| TC-111–112 | FR-12 | §6.1 presets | §6 `Ctrl-n` |
 | TC-113–114 | FR-15 | §6.7 Flare display | §4 Flare layouts |
-| TC-115 | FR-12 | §6.1 session switch, §6.5 badge | §3 status bar, §5 `Ctrl-n` |
+| TC-115 | FR-12 | §6.1 session switch, §6.5 badge | §5 Status bar, §6 `Ctrl-n` |
 | TC-116–119 | FR-15 | §6.7 | §4 Flare layouts |
 | TC-120–122 | FR-16 | §6.8 Flare wallet panel | §4 Overview wallet strip |
 | TC-123–124 | — | §3 public-network politeness | — |
 | TC-125–127 | FR-12 | §6.1 presets, §4 CLI | — |
 | TC-128 | — | — | §2 Color + YAML frontmatter |
-| TC-129–135 | FR-16 | §6.8 wallet/composer, §3 shared tables | §3 wallet keys & composer |
-| TC-136 | — | §6.5 status bar | §3 status bar |
-| TC-137–141 | — | §2 client parsing | §2 book/amount formats |
+| TC-129–135 | FR-16 | §2 wallet composer, §5.2 shared behaviors | §6 wallet/composer keys |
+| TC-136 | — | §6.5 status bar | §5 Status bar |
+| TC-137–141 | — | §5 read APIs | §5 Table / TX row |
 | TC-142–143 | — | §3 public-network politeness | — |
-| TC-144–145 | — | §4 poll loop | — |
-| TC-146–147 | NFR (SSRF) | §3 public-network politeness | — |
+| TC-144–145 | — | §3 poll loop | — |
+| TC-146–147 | NFR (SSRF) | — | — |
 | TC-148–149 | — | §3 public-network politeness | — |
-| TC-150 | — | §3 self-uninstall guard | — |
-| TC-151–152 | — | §6.8 Assets panels, §3 shared tx detail | §4 Assets / tx detail |
-| TC-153–165 | — | §6.8 Assets panels, §6.5 CLI | §4 Assets tx history |
-| TC-166–171 | — | §6.8 Assets panels, §6.5 CLI, §4 poll loop | §4 Assets / tx detail |
+| TC-150 | — | §1 self-uninstall | — |
+| TC-151–152 | — | §5.4 ledger objects, §5.2 tx detail | §4 Assets / tx detail |
+| TC-153–165 | — | §5.1 Assets panels, §5.2 tx history, §4 CLI | §4 Assets tx history |
+| TC-166–171 | — | §2 address guards, §3 dUNL | §5 (splash) |
 
 ## Risk coverage
 

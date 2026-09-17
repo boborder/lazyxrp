@@ -54,6 +54,7 @@
 - [`docs/requirements.md`](requirements.md)
 - [`docs/architecture.md`](architecture.md)
 - [`docs/tech.md`](tech.md)
+- [`docs/maintenance.md`](maintenance.md)
 - [`docs/test.md`](test.md)
 - [`docs/directory.md`](directory.md)
 - [`docs/problems.md`](problems.md)

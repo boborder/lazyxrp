@@ -96,6 +96,7 @@ lazyxrp/
     ├── architecture.md    # システム・行動設計（TX detail §5.2.1 含む）
     ├── requirements.md    # FR/NFR（何をするか）
     ├── tech.md
+    ├── maintenance.md     # リリース・公開フロー（運用）
     ├── test.md            # TC カタログ（requirements / architecture へトレース）
     ├── directory.md
     ├── references.md
@@ -117,7 +118,7 @@ lazyxrp/
 - `ROADMAP.md`: マイルストーンとバックログ（進捗 SSOT）。
 - `.env.example`: `XRPL_*` 環境変数の例（任意。一覧は `docs/tech.md` と実装を参照）。
 - `install.sh`: インタラクティブインストーラ（必須は `curl` **または** `wget`）。プロンプトとメッセージは英語。`--help` で CLI 一覧（`--method cargo|binary`、`--install-rust` / `--no-install-rust`、`--install-mise` / `--no-install-mise`、`-q`）。`CI=1` は `-q` 相当。PATH 未設定時は shell profile へ追記可。リリースアーカイブに `rp` があればそれを入れ、無ければ `rp` → `lazyxrp` symlink。**手動アンインストール**は `--uninstall-help`（`lazyxrp --self-uninstall`、`INSTALL_DIR/rp` 削除など）。
-- `mise.toml`: [mise](https://mise.jdx.dev/) タスク（`install`、`tags`（一覧）、`tag-push`（緊急時の手動タグフォールバック）、`bench` / `bench-fast` / `bench-ci`（ベンチマーク））。公開フロー（CI の `Cargo.toml` version 検知 → auto-tag → CD 公開）の詳細は [`tech.md`](tech.md) §6。
+- `mise.toml`: [mise](https://mise.jdx.dev/) タスク（`install`、`tags`（一覧）、`tag-push`（緊急時の手動タグフォールバック）、`bench` / `bench-fast` / `bench-ci`（ベンチマーク））。公開フロー（CI の `Cargo.toml` version 検知 → auto-tag → CD 公開）の詳細は [`maintenance.md`](maintenance.md)。
 - `AGENTS.md`: プロジェクト運用ルールと実行契約（禁止事項・読み順）。graphify の構造情報も参照。
 
 ## 3. `src/` 配下の責務
@@ -137,6 +138,8 @@ lazyxrp/
 - `errors.rs`: `color-eyre` の panic/eyre hook 導入（TUI 終了クリーンアップ付き）。
 - `network.rs`: `Network` 列挙型（mainnet / testnet / devnet / xahau / xahau-test）とエンドポイント定義、`next_network()` セッション切替。
 - `signing.rs`: `SigningCredential`（family seed / BIP39 mnemonic 管理）、`prompt_production_confirmation`、Payment 向け `create_and_sign_payment`（submit用blob生成） / `build_payment_tx_json_for_simulate`。
+- `test_support.rs`: テスト共通ヘルパ（`TempRootGuard` / `env_lock` / `env_lock_async` / `TestEnvGuard`、`#[cfg(test)]` 限定）。
+- `../tests/cli_smoke.rs`: バイナリ境界スモーク（`lazyxrp` / `rp` 実行ファイルの argv・終了コード・出力をローカル JSON-RPC で検証、TC-158）。
 
 ## 4. `src/components/panels/` 配下の責務
 
@@ -187,6 +190,7 @@ lazyxrp/
 | `test.md` | Verify | TC catalog → traces to requirements + architecture |
 | [`ROADMAP.md`](../ROADMAP.md) | When | Milestones, cross-cutting backlog |
 | `tech.md` | Stack | Dependencies, versions, dev commands |
+| `maintenance.md` | Ops | Release pipeline (CI version detection → auto-tag → CD), publish flow |
 | `directory.md` | Index | This file |
 | `references.md` | Links | External references |
 | `security.md` | Audit | S-xxx / R-xxx, threat model |
