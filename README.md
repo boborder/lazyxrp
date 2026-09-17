@@ -17,10 +17,10 @@ Watch mode uses **four top-level tabs** (jump with `1`–`4`):
 
 ## Requirements
 
-- Rust **1.91+** (MSRV from `Cargo.toml` `rust-version`)
+- Rust **1.94.1+** (MSRV from `Cargo.toml` `rust-version`)
 - Daily builds use the **`stable`** channel from [`rust-toolchain.toml`](rust-toolchain.toml)
 - Edition 2024
-- macOS / Linux (verified on macOS arm64)
+- Release artifacts (`.github/workflows/cd.yml`): macOS (`x86_64`, `aarch64`), Linux (`x86_64`, `aarch64`, `i686`), Windows (`x86_64`). Verified on macOS arm64.
 
 ## Install
 
@@ -79,7 +79,7 @@ lazyxrp --account <r-address>
 lazyxrp --network testnet --account <r-address>
 ```
 
-TUI flags: `--tick-rate`, `--frame-rate`, `--account`, `--server`, `--ws-server`, `--network`, `--yes`, `--seed`, `--mnemonic`.
+TUI flags: `--tick-rate`, `--account`, `--server`, `--ws-server`, `--network`, `--yes`, `--seed`, `--mnemonic`, `--allow-insecure-rpc`.
 
 Legacy `lazyxrp watch` still works but prints a deprecation warning — prefer bare `lazyxrp`.
 
@@ -197,13 +197,25 @@ cargo run --bin lazyxrp -- --network testnet -x info
 # FLARE_RPC_URL=https://flare-api.flare.network/ext/C/rpc
 ```
 
+CI (`.github/workflows/ci.yml`):
+
+```bash
+cargo test --locked --all-features --workspace
+cargo fmt --all --check
+cargo clippy --locked --all-targets --all-features --workspace -- -D warnings
+cargo doc --locked --no-deps --document-private-items --all-features --workspace --examples
+cargo audit --ignore RUSTSEC-2026-0235
+cargo deny check
+```
+
+
 ## Contributing
 
-Agents and contributors: [`AGENTS.md`](./AGENTS.md) (`cargo fmt` / `cargo check`, sync `docs/` when behavior changes).
+See [`AGENTS.md`](./AGENTS.md).
 
 ## Documentation
 
-Product docs live under [`docs/`](./docs/). **Where to read what:** [`AGENTS.md`](./AGENTS.md) (progressive disclosure — single index).
+Product docs live under [`docs/`](./docs/). Reading order: [`AGENTS.md`](./AGENTS.md).
 
 Planning: [`ROADMAP.md`](./ROADMAP.md).
 

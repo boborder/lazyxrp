@@ -12,10 +12,11 @@ lazyxrp/
 ├── build.rs
 ├── README.md
 ├── DESIGN.md              # UI/UX SSOT (keys, layout, theme, modals)
+├── ROADMAP.md             # milestones / backlog SSOT
 ├── config.json5
 ├── .env.example
 ├── install.sh
-├── .mise.toml
+├── mise.toml
 ├── AGENTS.md
 ├── src/
 │   ├── lib.rs                 # shared library (lazyxrp + rp binaries)
@@ -112,10 +113,12 @@ lazyxrp/
 - `Cargo.lock`: 依存の固定バージョン（**バイナリ向けにコミット**。CI は `cargo … --locked`）。
 - `build.rs`: ビルド時の補助処理。
 - `README.md`: 利用者向けの概要と起動手順。
+- `DESIGN.md`: UI/UX SSOT（キー・レイアウト・テーマ）。
+- `ROADMAP.md`: マイルストーンとバックログ（進捗 SSOT）。
 - `.env.example`: `XRPL_*` 環境変数の例（任意。一覧は `docs/tech.md` と実装を参照）。
 - `install.sh`: インタラクティブインストーラ（必須は `curl` **または** `wget`）。プロンプトとメッセージは英語。`--help` で CLI 一覧（`--method cargo|binary`、`--install-rust` / `--no-install-rust`、`--install-mise` / `--no-install-mise`、`-q`）。`CI=1` は `-q` 相当。PATH 未設定時は shell profile へ追記可。リリースアーカイブに `rp` があればそれを入れ、無ければ `rp` → `lazyxrp` symlink。**手動アンインストール**は `--uninstall-help`（`lazyxrp --self-uninstall`、`INSTALL_DIR/rp` 削除など）。
-- `.mise.toml`: [mise](https://mise.jdx.dev/) タスク（例: `install`、`tags`（一覧）、`tag-push`（緊急時の手動タグフォールバック）、`bench` / `bench-fast`（ベンチマーク））。`main` へ push して CI が緑で、かつ `Cargo.toml` の `version` が前回から上がっていれば [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) の `auto-tag` が `v<version>` を打ち、[`.github/workflows/cd.yml`](../.github/workflows/cd.yml) がリリースする。CD 成功後に `cd.yml` の `trigger-benchmark` ジョブが [`.github/workflows/benchmark.yml`](../.github/workflows/benchmark.yml) を `--ref v<version>` で dispatch する（GITHUB_TOKEN dispatch は `workflow_run` を発火させないため。手動 `workflow_dispatch` も可）。
-- `AGENTS.md`: プロジェクト運用ルールと実行契約（禁止事項・クイックリファレンスを含む）。graphify の構造情報も参照。
+- `mise.toml`: [mise](https://mise.jdx.dev/) タスク（例: `install`、`tags`（一覧）、`tag-push`（緊急時の手動タグフォールバック）、`bench` / `bench-fast` / `bench-ci`（ベンチマーク））。`main` へ push して CI が緑で、かつ `Cargo.toml` の `version` が前回から上がっていれば [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) の `auto-tag` が `v<version>` を打ち、[`.github/workflows/cd.yml`](../.github/workflows/cd.yml) がリリースする。CD 成功後に `cd.yml` の `trigger-benchmark` ジョブが [`.github/workflows/benchmark.yml`](../.github/workflows/benchmark.yml) を `--ref v<version>` で dispatch する（GITHUB_TOKEN dispatch は `workflow_run` を発火させないため。手動 `workflow_dispatch` も可）。
+- `AGENTS.md`: プロジェクト運用ルールと実行契約（禁止事項・読み順）。graphify の構造情報も参照。
 
 ## 3. `src/` 配下の責務
 
@@ -126,14 +129,14 @@ lazyxrp/
 - `app.rs`: TUI アプリ本体。イベントループ、コンポーネント管理、バックグラウンド処理起動を担当。
 - `xrpl/`: XRPL 連携一式。`mod.rs` は再エクスポートのみ。`address.rs`（classic/X-Address 解決・ネットワーク一致検査）、`client.rs`（`RpcClient` façade・JSON-RPC / HTTPS dUNL fetch・`tx` lookup）、`dunl.rs`（XRPLF dUNL JSON・manifest ST）、`format.rs`（金額・path・ripple time 整形、`xrp_to_drops` / `hex_to_ascii` / `path_find_*`）、`parse.rs`（JSON-RPC レスポンスパーサ・book helper）、`util.rs`（JSON パスヘルパ + 再接続バックオフ）、`types.rs`（行データ型・`BookPair`・`PollContext` / `PollCommand`）、`poll.rs`（定期ポーリング・ウォレット送信パス）、`ws.rs`（WebSocket）、`cli_exec.rs`（非 TUI の `execute_cli_command` / `execute_rp_lookup`）、`toml.rs`（`xrp-ledger.toml` パーサ）。
 - `cli.rs`: コマンドライン引数とサブコマンド定義（`Cli`）および `rp` 用 `RpCli`。
-- `action.rs`: アプリ内部で流す `Action` とキーバインド用 `Mode`。
+- `action.rs`: アプリ内部で流す `Action`。
 - `config.rs`: 既定値 + 設定ファイルのロードとマージ、`XRPL_*` 環境変数（シード・RPC/WS・ネットワーク）の反映。
 - `components/mod.rs`: UI コンポーネント共通トレイトとサブモジュール統合。
 - `tui.rs`: TUI 基盤（描画・イベント・端末管理）の共通処理。
 - `logging.rs`: ログ初期化処理。
 - `errors.rs`: `color-eyre` の panic/eyre hook 導入（TUI 終了クリーンアップ付き）。
 - `network.rs`: `Network` 列挙型（mainnet / testnet / devnet / xahau / xahau-test）とエンドポイント定義、`next_network()` セッション切替。
-- `signing.rs`: `SigningCredential`（family seed / BIP39 mnemonic 管理）、`prompt_mainnet_confirmation`、Payment 向け `create_and_sign_payment`（submit用blob生成） / `build_payment_tx_json_for_simulate`。
+- `signing.rs`: `SigningCredential`（family seed / BIP39 mnemonic 管理）、`prompt_production_confirmation`、Payment 向け `create_and_sign_payment`（submit用blob生成） / `build_payment_tx_json_for_simulate`。
 
 ## 4. `src/components/panels/` 配下の責務
 
@@ -189,7 +192,7 @@ lazyxrp/
 | `security.md` | Audit | S-xxx / R-xxx, threat model |
 | `problems.md` | Debt | P-xxx known issues |
 
-Human doc index: [`AGENTS.md`](../AGENTS.md) progressive disclosure. This tree is self-contained for product readers.
+Index: [`AGENTS.md`](../AGENTS.md).
 
 ## 8. Build / test commands and entry points
 
@@ -202,6 +205,7 @@ Human doc index: [`AGENTS.md`](../AGENTS.md) progressive disclosure. This tree i
 | `./install.sh` or `mise run install` | Install binary |
 | `mise run bench` | Full benchmark suite (~10 min) |
 | `mise run bench-fast` | Quick benchmarks |
+| `mise run bench-ci` | CI-equivalent benchmark (`benchmark.sh --json --fast --perf-only`) |
 
 | Entry | File | Description |
 |-------|------|-------------|

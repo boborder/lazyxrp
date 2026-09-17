@@ -2,10 +2,10 @@
 
 **Role:** 進捗管理（マイルストーンとポートフォリオバックログの SSOT）。
 
-**Planning view**. Requirements → [`requirements.md`](docs/requirements.md) · System behavior → [`architecture.md`](docs/architecture.md) · UI/UX → [`DESIGN.md`](../DESIGN.md).
+**Planning view**. Requirements → [`requirements.md`](docs/requirements.md) · System behavior → [`architecture.md`](docs/architecture.md) · UI/UX → [`DESIGN.md`](DESIGN.md).
 
-**Current version:** `Cargo.toml` → 0.2.6  
-**Last updated:** 2026-09-12
+**Current version:** `Cargo.toml` → 0.2.10
+**Last updated:** 2026-09-17
 
 ## Milestones
 
@@ -18,6 +18,8 @@
 | Ratatui optimization | — | **Done** | dirty render + shared table shipped |
 | Docs hierarchy redesign | — | **Done** (2026-09-12) | keys → `DESIGN.md`; architecture = behavior; removed `docs/README` + `docs/tasks` |
 | Network multichain | 0.2.5+ | **Done** (2026-09-12) | Xahau + `<Ctrl-n>` session switch + Flare display + wallet read panel |
+| Test coverage / local integration pass | 0.2.9 | **Done** (2026-09-16) | Local RPC read-only CLI coverage, `lazyxrp`/`rp` binary smoke tests, Assets and panel state coverage |
+| Review batch #3: production guard + test coverage | 0.2.10 | **Done** (2026-09-17) | Xahau production write guard, local CLI RPC migration, nft_image SSRF hardening, binary smoke tests, alloy 2 / MSRV 1.94.1 |
 
 ## Open work
 
@@ -37,7 +39,7 @@
 | F-02 OfferCancel TX | — | Later |
 | F-03 EscrowFinish/Cancel TX | — | Later |
 | F-04 AMM Deposit/Withdraw TX | — | Later |
-| Fake RPC / WebSocket integration fixtures | `docs/test.md` | P2 |
+| Fake WebSocket integration fixtures | `docs/test.md` | P2 — local WS boundary coverage remains open |
 | Global row cache (A1) | quality-pass bottleneck plan | Later |
 
 ## Task tracking
@@ -55,5 +57,5 @@
 1. Add a row to the Milestones table in this file
 2. New requirement → `docs/requirements.md` (FR/NFR)
 3. Shipped behavior / network / config rules → `docs/architecture.md` (+ TC in `docs/test.md`)
-4. Keys, layout, colors, modals → root [`DESIGN.md`](../DESIGN.md)
+4. Keys, layout, colors, modals → root [`DESIGN.md`](DESIGN.md)
 5. Active implementation checkboxes (when using OpenSpec) → `openspec/changes/<name>/tasks.md`

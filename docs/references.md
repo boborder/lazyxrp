@@ -58,3 +58,5 @@
 - [`docs/directory.md`](directory.md)
 - [`docs/problems.md`](problems.md)
 - [`docs/security.md`](security.md)
+- [`DESIGN.md`](../DESIGN.md)
+- [`ROADMAP.md`](../ROADMAP.md)

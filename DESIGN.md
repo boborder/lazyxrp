@@ -1,297 +1,197 @@
-# DESIGN — UI/UX (look, feel, interaction)
+---
+version: alpha
+name: LazyXRP
+description: Dense XRPL trading terminal — royal-blue chrome, turquoise metadata, ledger-semantic green/red.
+omitted:
+  - section: typography
+    reason: "Terminal TUI — no shipped font; hierarchy is ratatui modifiers only (bold/underlined/italic/reversed)."
+  - section: spacing
+    reason: "Layout is proportional area splits (%), not a px spacing scale — see Layout."
+  - section: rounded
+    reason: "Panels use a single ratatui BorderType::Rounded; no radius scale."
+colors:
+  primary: "#1E90FF"
+  border: "#4169E1"
+  title: "#6495ED"
+  secondary: "#40E0D0"
+  muted: "#778899"
+  success: "#3CB371"
+  error: "#DC143C"
+  warning: "#FFA500"
+  flag: "#64C8FF"
+  highlight-fg: "#FFFFFF"
+  chart-value-fg: "#0F172A"
+components:
+  panel-focused:
+    textColor: "{colors.title}"
+  panel-unfocused:
+    textColor: "{colors.muted}"
+  table-selected-row:
+    backgroundColor: "{colors.border}"
+    textColor: "{colors.highlight-fg}"
+  chart-value:
+    backgroundColor: "{colors.primary}"
+    textColor: "{colors.chart-value-fg}"
+  flag-chip:
+    textColor: "{colors.flag}"
+  badge-production:
+    backgroundColor: "{colors.error}"
+  badge-non-production:
+    backgroundColor: "{colors.warning}"
+  status-online:
+    backgroundColor: "{colors.success}"
+  status-offline:
+    backgroundColor: "{colors.error}"
+  hash-text:
+    textColor: "{colors.secondary}"
+---
+# DESIGN — TUI look & feel
 
-**SSOT for TUI look & feel:** tabs, layout splits, focus, scrolling, modals, keybindings, colors, loading, and ratatui building blocks.
+What is **seen and operated**. Behavior, poll, and submit: [`docs/architecture.md`](docs/architecture.md). Guards: [`docs/security.md`](docs/security.md). Tokens: `src/components/shared/theme.rs`.
 
-Doc map (progressive disclosure): [`AGENTS.md`](AGENTS.md) only — not duplicated here.
-
-Invariants (I-1〜I-11) and review findings: [`docs/security.md`](docs/security.md) — not duplicated here.
+Doc map: [`AGENTS.md`](AGENTS.md).
 
 ---
 
-## Tab map (4 tabs, I-9)
+## 1. Overview
 
-```mermaid
-flowchart LR
-  subgraph T0 [Tab 0 Overview]
-    SRV[ServerPanel]
-    COR[CombinedOracle + FXRP C1]
-  end
-  subgraph T1 [Tab 1 Account]
-    WAL[WalletPanel + composer]
-    ACC[AccountPanel]
-    TXH[TxHistoryPanel]
-  end
-  subgraph T2 [Tab 2 Market]
-    BK[Book]
-    PF[PathFind]
-    AMM[AMM]
-    TL[TrustLines]
-    FTSO[Flare FTSO]
-    ORA[Oracle]
-  end
-  subgraph T3 [Tab 3 Assets]
-    NFT[NftTab]
-    LO[LedgerObjects]
-  end
-```
+Dense XRPL dashboard in the terminal. Royal-blue chrome + turquoise metadata. Focus is a bright border; everything else stays slate-muted. No shadows, no page canvas — the terminal background is the canvas.
 
-| Tab | Title | Primary panels | Layout notes |
-|-----|-------|----------------|--------------|
-| 0 | Overview | Server, Combined oracle/FTSO/FXRP | **44% / 56%** horizontal split (Off: server full width). `[flare] display`: full / compact / off — see architecture §6.7 |
-| 1 | Account | Wallet, Account, Tx history | Wallet + composer top; account + history below |
-| 2 | Market | Book, PathFind, AMM, Lines, FTSO, Oracle | Book left **62%**; path/AMM/lines stack right **38%**; FTSO + Oracle bottom **30%** |
-| 3 | Assets | NFT, Ledger objects | NFT + image preview; objects / pay channels / escrows |
+Mood: trading-terminal, not marketing site. One accent family (dodger/cornflower/royal). Green/red are **ledger semantics** (bid/in, ask/out, tesSUCCESS/error), not decoration.
+
+---
+
+## 2. Colors (`theme.rs`)
+
+| Token | RGB | Hex | Role |
+|-------|-----|-----|------|
+| `ACCENT` | 30,144,255 | `#1E90FF` | Focused border, values, table header, selected-row intent |
+| `BORDER` / `HIGHLIGHT_BG` | 65,105,225 | `#4169E1` | Selected row background (focused) |
+| `TITLE` | 100,149,237 | `#6495ED` | Focused panel title |
+| `SECONDARY` | 64,224,208 | `#40E0D0` | Hashes, metadata |
+| `MUTED` | 119,136,153 | `#778899` | Unfocused chrome, dim labels, footer |
+| `SUCCESS` | 60,179,113 | `#3CB371` | Bid, inbound ▲, tesSUCCESS, valid preview, ONLINE |
+| `ERROR` | 220,20,60 | `#DC143C` | Ask, outbound ▼, errors, OFFLINE, **mainnet/xahau** badge |
+| `WARNING` | 255,165,0 | `#FFA500` | Incomplete preview, CONNECTING, **test/dev/xahau-test** badge |
+| `FLAG` | 100,200,255 | `#64C8FF` | Account flag chips |
+| `HIGHLIGHT_FG` | 255,255,255 | `#FFFFFF` | Text on selected row |
+| `CHART_VALUE_FG` | 15,23,42 | `#0F172A` | Text on `ACCENT` fills |
+
+**Frontmatter mapping:** `primary` = `ACCENT`; `border` = `BORDER` = `HIGHLIGHT_BG` (identical RGB). `panel-*` の `textColor` はタイトル色。focused border = `ACCENT` / unfocused = `MUTED`（`borderColor` は非標準プロパティのため frontmatter 外 — Components 表を参照）。
+
+---
+
+## 3. Typography
+
+No shipped font — the terminal provides it. Hierarchy is ratatui modifiers only: header `bold+underlined` (`header_row_style`); focused title `bold`; selected row `bold`; splash connecting line `italic`; unfocused chrome `MUTED`; help keys `ACCENT+bold`.
+
+---
+
+## 4. Layout
+
+**Shell** (`app.rs` draw): tabs 1 row → main `Fill` → hints 1 row → status 1 row. FPS counter: 10×1 at top-right of main.
+
+| Tab | Title (shipped) | Split | Focus targets |
+|-----|-----------------|-------|---------------|
+| 0 | `󰖟 Overview` | Flare on: **44 / 56** horizontal; right = combined `Fill` + Flare wallet **7 rows** (not a focus target). Flare off: server full width | 2 (server, combined) or 1 |
+| 1 | `󰀉 Account` | **46 / 54** vertical. Top = wallet **or** account (seed present → wallet). Bottom = tx history | 2 (top / history) |
+| 2 | `󰠿 Market` | Top **70%**: book **62%** \| path/AMM/lines **38%** (34/33/33). Bottom **30%**: FTSO+oracle 50/50, or oracle full when Flare off | 6, or 5 (FTSO skipped; index 4 → oracle) |
+| 3 | `󰒍 Assets` | Vertical **30 / 30 / 20 / 20** (NFT, objects, pay channels, escrows) | 4 |
 
 Guard: `TAB_TITLES.len() == panels.len() == 4` (`app.rs`, TC-060).
 
-**Tab switching:** `Tab` / `Shift+Tab` (next/prev), number keys **`1`–`4`** (`TabJump`). Status bar shows active tab context hints where applicable.
+**Flare `[flare] display`** (pixels only; poll rules: architecture §6.7):
 
-### Flare `[flare] display` layouts (Overview / Market)
+| Level | Overview | Market |
+|-------|----------|--------|
+| `full` | 44/56 + full FTSO/FXRP tables + wallet strip | Full FTSO table + oracle |
+| `compact` | Same split; 1-line FTSO + 1-line FXRP | 1-line FTSO + oracle |
+| `off` | Server only | FTSO hidden; oracle keeps the bottom strip |
 
-Behavioral poll rules: [`docs/architecture.md`](docs/architecture.md) §6.7.
+## 5. Components
 
-```mermaid
-flowchart TB
-  subgraph full [display = full]
-    OV_F[Overview 44% server | 56% combined oracle+FTSO+FXRP tables]
-    MK_F[Market: full FTSO table + oracle row]
-  end
-  subgraph compact [display = compact]
-    OV_C[Overview 44/56: oracle table + 1-line FTSO + 1-line FXRP]
-    MK_C[Market: 1-line FTSO + oracle]
-  end
-  subgraph off [display = off]
-    OV_O[Overview: server full width]
-    MK_O[Market: FTSO hidden; oracle only; focus index 4 → oracle]
-  end
-```
+| Piece | Source | States |
+|-------|--------|--------|
+| Panel chrome | `panel_block` / `titled_block` | Focused: `ACCENT` rounded border + `TITLE`. Unfocused: `MUTED`. Optional `(i/n)` count via `titled_block_with_count` |
+| Tabs | `app.rs` `TAB_TITLES` | 4 titles with nerd-font glyphs. Active: `HIGHLIGHT_BG` bold underline. Index prefix `MUTED`. Divider ` │ ` muted |
+| Table | `render_selectable_table` | Header accent underline. Focused selection: white on royal. Unfocused selection: muted reversed |
+| TX row | `tx_table_row` | Hash `SECONDARY` (16-char + `…`); ▼ `ERROR` / ▲ `SUCCESS` / · `MUTED`; type `ACCENT`; ledger muted; result success/error |
+| Status bar | `status_bar.rs` | Left: connection chip reversed (`● ONLINE` green / `✖ OFFLINE` red / `○ CONNECTING` orange) + `acct:` / `srv:` / `acc:` / `bk:` freshness + optional mid price + spinner while refresh. Right: `format!(" {} ", display_name())` reversed bold — `ERROR` if `is_production()` (mainnet **or** xahau), else `WARNING` |
+| Footer hints | `footer_line` | Keys bold, labels dim. Always `?` `Tab` `1-4` `jk` `hl` `^Z` `q`. Tab extras: Overview `t` `g` `r` `Enter`; Account `t` `f` `r`; Market `b`; Assets `o` |
+| Loading | `render_loading` | Accent braille spinner (`⠋…`) + muted message |
+| Empty | `render_empty` | Muted paragraph in titled block |
+| Error | `render_error` | `error: ` in `ERROR` + message |
+| Help overlay | `help_overlay.rs` | Centered ~58-col popup, `Clear` + `panel_block("Keybindings", true)` |
+| TX / dUNL overlay | `centered_popup_rect` | ~80% of area, clamped; never panics on tiny terminals |
+| Composer preview | `payment_preview` | Green `▸ Send/Pay …` when valid; orange need-/invalid copy when not |
+| Splash | `splash.rs` | Focused `LazyXRP` block; spinner + italic `Connecting` |
 
-| Level | Overview focus targets | Market focus targets |
-|-------|------------------------|----------------------|
-| `full` / `compact` | 2 (server, combined) | 6 |
-| `off` | 1 (server) | 5 (FTSO slot skipped) |
-
----
-
-## Global keymap
-
-Defaults live in [`config.json5`](config.json5) under `keybindings.Splash`. User overrides merge in `~/.config/lazyxrp/config.toml` (`Config::new`, TC-026/033).
-
-| Key | Action | Notes |
-|-----|--------|-------|
-| `q` | Quit | Bare `q` disabled when `keymap_suppressed` (composer/forms) |
-| `Ctrl-c`, `Ctrl-d` | Quit | Always honored |
-| `Ctrl-z` | Suspend | Terminal suspend |
-| `Ctrl-n` | `NetworkSwitchCycle` | mainnet→testnet→devnet→xahau→xahau-test→… (session only; see architecture §6.1) |
-| `r` | RefreshAccount | Debounced poll |
-| `b` | RefreshBook | Debounced poll |
-| `o` | RefreshLedgerObjects | Debounced poll |
-| `j` / `k`, `↓` / `↑` | SelectNext / SelectPrev | Table row selection |
-| `h` / `l`, `←` / `→` | FocusPrev / FocusNext | Panel focus within tab |
-| `Enter` | TxDetailToggle | Opens TX detail overlay when a row is selected |
-| `?` | Help | Toggles help overlay; `Esc` or `?` closes |
-| `Tab` / `Shift+Tab` | TabNext / TabPrev | Hard-coded in `app.rs` (not config) |
-| `1`–`4` | TabJump | Hard-coded in `app.rs` |
-
-New global bindings: add to `config.json5` + `Action` + `app.rs` dispatch; document here and in [`docs/test.md`](docs/test.md) when user-visible.
+**Surface stack (front → back):** help / TX detail / composer modal → focused panel → unfocused panels → tab strip / footer / status. Overlay `Clear`s its rect. While overlay or composer is open, background tables must not change selection.
 
 ---
 
-## Panel-local keys
+## 6. Keys (operated)
 
-Keys below are **not** in `config.json5` unless noted. They apply when the panel has focus (or modal state as stated).
+Defaults: [`config.json5`](config.json5) `keybindings.Splash`. User merge: `~/.config/lazyxrp/config.toml`. `Tab` / `Shift+Tab` / `1`–`4` are hard-coded in `app.rs`.
 
-### Wallet + composer (`wallet.rs`, `wallet_composer.rs`)
+| Key | Action |
+|-----|--------|
+| `q` | Quit (disabled while `keymap_suppressed`) |
+| `Ctrl-c`, `Ctrl-d` | Quit (always) |
+| `Ctrl-z` | Suspend |
+| `Ctrl-n` | Cycle network badge: mainnet→testnet→devnet→xahau→xahau-test (session only) |
+| `r` / `b` / `o` | Refresh account / book / ledger objects |
+| `j` `k` / arrows | Row select |
+| `h` `l` / arrows | Panel focus in tab |
+| `Enter` | TX detail overlay (dUNL detail on Overview server) |
+| `?` | Help overlay; `Esc` or `?` closes |
+| `1`–`4` | Jump tab |
+
+### Panel-local (focus / modal)
+
+**Wallet + composer** (`wallet.rs`, `wallet_composer.rs`)
 
 | Context | Key | Effect |
 |---------|-----|--------|
-| Wallet table (modal closed) | `j`/`k`, arrows | Row select + scrollbar |
-| Wallet table | `Enter` | TX detail overlay |
-| Wallet | `t` | Open composer picker (Payment, AccountSet, SetRegularKey, OfferCreate, TrustSet, FXRP Mint, Execute) |
-| Composer picker | `Tab`, `j`/`k`, arrows | Phase select (table `j`/`k` disabled while modal open) |
-| AccountSet form | `Tab`, `[` `]` | Field navigation |
-| AccountSet form | `e` | Edit field |
-| AccountSet form | `s` | Submit queue |
-| Payment form | `i` | Toggle XRP ↔ IOU |
-| Payment form | `Tab`, `[` `]`, `Enter` | Field navigation |
-| Payment form | `s`, `Ctrl-s` | Submit queue |
-| Any submit | — | Preview: green = valid, orange = incomplete/invalid |
+| Table, modal closed | `j`/`k`, arrows | Row + scrollbar |
+| Table | `Enter` | TX detail |
+| Wallet | `t` | Composer picker: Payment, AccountSet, SetRegularKey, OfferCreate, TrustSet, FXRP Mint, Execute |
+| Picker | `Tab`, `j`/`k`, arrows, `1`–`7` | Phase select |
+| Forms | `Tab`, `[` `]`, `Enter` | Field nav; AccountSet `e` edits |
+| Payment | `i` | XRP ↔ IOU |
+| Submit | `s`, `Ctrl-s` | Queue; preview color as in §5 |
 
-Column colors (wallet recent tx): hash `SECONDARY`, direction ▼ red / ▲ green / · gray, type accent, ledger muted, result success/error.
+**Tx history:** `f` filter (`Enter` confirm, `Esc` cancel); `m` next page when marker.
 
-### Tx history (`tx_history.rs`)
+**NFT:** `j`/`k` select (URI → image fetch).
 
-| Key | Effect |
-|-----|--------|
-| `f` | Filter mode (hash or type substring); `Enter` confirm, `Esc` cancel |
-| `m` | Next page when `marker` present (`TxHistoryMore`) |
-| `Enter` | TX detail overlay |
+**Tables** (book, lines, objects, path find): `j`/`k` + `Enter` → overlay.
 
-### NFT (`nft.rs`)
+**TX detail:** `j`/`k` scroll; `Enter`/`Esc` close. Consumes actions so tables underneath stay put.
 
-| Key | Effect |
-|-----|--------|
-| `j`/`k` | Select NFT; with URI → image fetch |
-| `Enter` | TX/detail as applicable |
-
-### Tables (book, trust lines, ledger objects, path find)
-
-| Key | Effect |
-|-----|--------|
-| `j`/`k`, arrows | `SelectableTableState` row select |
-| `Enter` | TX detail overlay (raw JSON via `ArcValue`) |
-
-### TX detail overlay (`tx_detail/mod.rs`)
-
-Parser pipeline (29 types, fallback, cache): [`docs/architecture.md`](docs/architecture.md) §5.2.1.
-
-| Key | Effect |
-|-----|--------|
-| `j`/`k`, arrows | Scroll detail text |
-| `Enter`, `Esc` | Close overlay |
-| While open | Consumes actions so background tables do not change selection underneath |
-
-### Server / dUNL
-
-| Key | Effect |
-|-----|--------|
-| `Enter` | dUNL detail when server panel focused (Overview) |
+New global binding: `config.json5` + `Action` + `app.rs` dispatch; document here and in [`docs/test.md`](docs/test.md) when user-visible.
 
 ---
 
-## Wallet composer phases
+## 7. Do's and Don'ts
 
-Picker **`t`** → numeric / arrow selection.
+**Do**
 
-```mermaid
-stateDiagram-v2
-  [*] --> Picker
-  Picker --> Payment: 1
-  Picker --> AccountSet: 2
-  Picker --> SetRegularKey: 3
-  Picker --> OfferCreate: 4
-  Picker --> TrustSet: 5
-  Picker --> FxrpMintPay: 6
-  Picker --> FxrpExecute: 7
-  Payment --> Confirm: s
-  AccountSet --> Confirm: s
-  SetRegularKey --> Confirm: s
-  OfferCreate --> Confirm: s
-  TrustSet --> Confirm: s
-  FxrpMintPay --> Confirm: s
-  FxrpExecute --> Confirm: s
-  Confirm --> PollQueue: Action Submit
-  PollQueue --> FlashOk: Ok
-  PollQueue --> FlashErr: Err
-  FlashOk --> [*]
-  FlashErr --> [*]
-```
+- Draw chrome through `theme.rs` helpers.
+- Put values on `ACCENT` fills with `chart_value_style()` (`CHART_VALUE_FG`).
+- Keep composer/forms behind `SetKeymapSuppression(true)` so bare `q` does not quit.
+- Treat mainnet **and** xahau as the red network badge (`Network::is_production()`).
 
-| Phase | Action variant | Mainnet guard | Simulate-first |
-|-------|----------------|---------------|----------------|
-| Payment | `PaymentSubmit` | I-2 `--yes` | I-3 |
-| AccountSet | `AccountSetSubmit` | I-2 | I-3 |
-| SetRegularKey | `SetRegularKeySubmit` | I-2 | I-3 |
-| OfferCreate | `OfferCreateSubmit` | I-2 | I-3 |
-| TrustSet | `TrustSetSubmit` | I-2 | I-3 |
-| FXRP C2 payment | `FxrpDirectMintPaymentSubmit` | I-2 | I-3 + 32-byte memo |
-| FXRP C3 execute | `FxrpExecuteDirectMintSubmit` | I-2 + `flare.fassets.execute` | proof JSON paste |
+**Don't**
 
-Source: `wallet_composer.rs`, `action.rs`, `poll.rs`. Submit pipeline diagram below; network/signing rules: [`docs/architecture.md`](docs/architecture.md) §6.
+- Hardcode `Color::Black` or raw RGB in panels.
+- Invent a fifth tab or `1`–`5` jump (runtime is `1`–`4`).
+- Draw Account as three stacked panels — top is wallet **xor** account.
+- Persist `Ctrl-n` into `config.toml` from the TUI.
+- Change selection under an open overlay.
 
 ---
 
-## Submit pipeline (all wallet TX)
+## 8. Agent prompt (when drawing TUI)
 
-```mermaid
-sequenceDiagram
-  participant UI as WalletPanel
-  participant App
-  participant Poll as poll task
-  participant RPC as RpcClient
-  UI->>App: Action Submit
-  App->>Poll: PollCommand
-  Poll->>Poll: mainnet guard I-2
-  Poll->>RPC: simulate_tx
-  RPC-->>Poll: tesSUCCESS
-  Poll->>Poll: sign + encode
-  Poll->>RPC: submit
-  RPC-->>Poll: hash or error
-  Poll->>App: Action Ok or Err
-  App->>UI: flash + refresh
-```
-
-FXRP C3: `execute_direct_minting` via alloy when `flare.fassets.execute=true`.
-
----
-
-## FXRP direct mint (visual)
-
-```mermaid
-flowchart TB
-  C1[C1 Read AssetManagerFXRP] --> OV[Overview panel]
-  C2[C2 Payment + 32B memo] --> VAULT[Core Vault]
-  PROOF[Pasted proof JSON] --> C3[C3 executeDirectMinting]
-  FLAG[execute=true] --> C3
-  C3 --> FLARE[Flare contract]
-```
-
-Detail: [`.agents/skills/flare-fassets/direct-minting-guide.md`](.agents/skills/flare-fassets/direct-minting-guide.md).
-
----
-
-## Visual language (`theme.rs`)
-
-Royal-blue palette + turquoise secondary. **Do not** hardcode `Color::Black` on accent fills — use `CHART_VALUE_FG`.
-
-| Token | RGB | Use |
-|-------|-----|-----|
-| `BORDER` / focus border | 65,105,225 | Focused panel border |
-| `TITLE` | 100,149,237 | Focused panel title |
-| `ACCENT` | 30,144,255 | Values, headers, selected row bg |
-| `SECONDARY` | 64,224,208 | Hashes, metadata |
-| `MUTED` | 119,136,153 | Unfocused chrome, dim labels |
-| `SUCCESS` | 60,179,113 | Bid, inbound, tesSUCCESS |
-| `ERROR` | 220,20,60 | Ask, outbound errors |
-| `WARNING` | 255,165,0 | Connecting, stale |
-| `FLAG` | 100,200,255 | Account flag chips |
-
-**Panels:** `panel_block(title, is_focused)` — rounded border; focused = accent border + cornflower title; unfocused = muted.
-
-**Tables:** `render_selectable_table` + `SelectableTableState` — header row `header_row_style()`; selected row `selected_row_style(is_focused)`.
-
-**Status bar:** Left = connection state + freshness + optional mid price; right = network badge `format!(" {} ", name)` with reversed bold (mainnet/xahau warning coloring).
-
----
-
-## Layout & focus
-
-- **Elm-style loop:** `Event` → `Action` → `Component::update` → `draw` when `App::needs_draw` (TC-106–108).
-- **Focus within tab:** `FocusNext` / `FocusPrev` cycle sub-panels; each panel sets `is_focused` on its chrome.
-- **Overview:** max focus 1 when `[flare] display=off` (server only); else server + combined (2).
-- **Market:** 6 focus targets (5 when Flare Off — FTSO skipped, index 4 → oracle).
-- **Modal priority:** `SetKeymapSuppression(true)` while composer/forms active — global `q` does not quit (TC in `app.rs` keymap tests).
-
----
-
-## Loading & empty states
-
-| Pattern | Helper | When |
-|---------|--------|------|
-| Spinner + message | `render_loading` (`widgets.rs`) | Empty data, waiting on poll |
-| “Not configured” | Plain `Paragraph` | Missing oracles / seed |
-| Compact Flare line | `render_compact` on FTSO/FXRP panels | `[flare] display=compact` |
-| Help overlay | `HelpOverlay` | `?` — lists global keys from config |
-
-Tick-driven spinners use `Action::Tick` counter in panel state.
-
----
-
-## Shared render policy
-
-| Consumer | Helper |
-|----------|--------|
-| trust_lines, ledger, path_find, nft, book, dUNL, tx_history, oracle, FTSO | `render_selectable_table` |
-| Dirty gating | `App::needs_draw` — user actions + data + tick (splash); actual draw clears dirty and counts FPS |
-
-[Showing lines 1-300 of 302. Use :301 to continue]
+Royal-blue ratatui dashboard. Rounded panels. Focus = dodger-blue border + cornflower title; idle = slate. Selected row = white on royal. Hashes turquoise. Bid/in green, ask/out crimson. Status: reversed ONLINE/OFFLINE/CONNECTING chip left; reversed network name right (crimson on mainnet/xahau, orange otherwise). Tabs: `1 󰖟 Overview` … `4 󰒍 Assets`. Spinner `⠋` in accent. Valid composer line green `▸`; incomplete orange. Never black text on blue fills — use slate `#0F172A`.

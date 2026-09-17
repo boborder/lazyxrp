@@ -4,7 +4,7 @@
 
 Generated: 2026-05-01 | Scope: Full codebase (`src/`, `install.sh`, `docs/`)
 
-**SSOT split:** This file tracks **security review findings (S-xxx)** and **implementation risks (R-xxx)** (table below). Invariant IDs (I-1〜I-11) are referenced across `docs/` and defined by the code guards they name (simulate-first, mainnet `--yes`, …).
+This file tracks **security review findings (S-xxx)** and **implementation risks (R-xxx)** (table below). Invariant IDs (I-1〜I-11) are referenced across `docs/` and defined by the code guards they name (simulate-first, mainnet `--yes`, …).
 
 ## S-xxx ↔ R-xxx cross-reference
 
@@ -47,13 +47,19 @@ Risks without a matching S entry (e.g. R-006 mainnet guard bypass, R-008 RPC 429
 
 ## 2026-08-06 再レビュー対応
 
-- **S-012 NFT外部URIのDNS SSRF**: 修正済み。`src/xrpl/nft_image.rs` は各URIのDNS応答を全件検査し、private/loopback/link-local/unique-local IPを拒否する。自動redirectを無効化し、redirectごとに解決・検査・接続先固定を行う。
+- **S-012 NFT外部URIのDNS SSRF**: 修正済み。`src/xrpl/nft_image.rs` は各URIのDNS応答を全件検査し、private/loopback/link-local/unique-local に加え unspecified (`0.0.0.0`)・broadcast・IPv4-mapped IPv6 (`::ffff:` 形) も拒否する。自動redirectを無効化し、redirectごとに解決・検査・接続先固定を行う (上限6ホップ・4 MiB — TC-146/147)。
 - **S-013 NFT metadata再帰DoS**: 修正済み。metadata探索に深さ32・ノード数10,000の上限を設けた。レスポンス上限4 MiBも維持。
 - **S-014 ウォレット同時送信**: 修正済み。poll task内の `account_info → simulate → sign → submit` を `PollContext.submit_lock` で直列化。blind retryは追加していない。submit失敗後は次操作でaccount_infoを再取得する。
 - **S-015 insecure RPCでの署名**: 修正済み。署名seed保持中に `http://` または `ws://` endpointを使用すると起動を拒否する。読み取り専用利用はseed未設定時に限り許可。
 - **S-016 取引入力のissuer・数値検証**: 修正済み。TrustSet、RegularKey、OfferCreateのclassic address checksum、IOU currency形式、有限かつ正数のIOU値、正のXRP dropsを検証する。
 
 未完了の構造課題（`poll.rs`分割、Actionエラー型移行、fake RPC/WebSocket統合試験、Watch/Operate UI分離）は今回の安全修正の範囲外。次回変更ではlive testを補助扱いにし、ローカルfixtureを追加する。
+
+## 2026-09-17 依存監査対応（`mise run audit` 整備で検知）
+
+- **RUSTSEC-2026-0253: lru 0.16.4 `LruCache::pop()` unsound（use-after-free）**: `alloy-provider` → `lru` の実行時依存。0.16.x 系に修正版が無く、alloy 1.8.3（1.x 最終）も古い lru のままだったため **alloy 1.8.3 → 2.4.2 にメジャーアップ**（`Cargo.toml` `alloy = "2"`）。API 使用面は primitives + `ProviderBuilder` + `EthereumWallet` のみで変更不要。alloy 2.4.2 の MSRV に合わせ `rust-version` 1.91 → 1.94.1 — **`rust-version` を 1.94.1 未満へ戻すと lru 0.16.4 が復活するので戻さない**。`cargo tree -i lru` = 単一 0.18.4。
+- **RUSTSEC-2026-0285: rustls 0.23.44 TLS 1.3 handshake 暗号化レベル検証不備（2026-09-14 公表, Medium）**: `cargo update -p rustls` で **0.23.45** に更新（0.23.x 系内パッチ）。
+- いずれも ignore 追加ではなく依存更新で解決。`mise run audit`（cargo-audit + cargo-deny）が CI の security-advisories と同一基準でローカル検知できるようになった初回実行で発見。
 
 ## 未対応・確認事項
 
@@ -74,7 +80,7 @@ Risks without a matching S entry (e.g. R-006 mainnet guard bypass, R-008 RPC 429
 | ID | 内容 | 修正 |
 | --- | --- | --- |
 | S-001 | `RawSigningConfig` の `Debug` derive がシードを平文でログ出力 | `impl fmt::Debug` で `[REDACTED]` にマスク |
-| S-002 | `SigningConfig::load()` が環境変数を読み取り後に削除しない | `unsafe { env::remove_var(SEED_ENV) }` で除去 |
+| S-002 | `Config::new()` が環境変数を読み取り後に削除しない | `unsafe { env::remove_var(SEED_ENV) }` で除去 |
 | S-003 | 設定ファイルに署名資格情報（seed / mnemonic）が保存される場合のファイル権限チェックなし | Unix でグループ/ワールド読取時に `tracing::warn!`（`warn_if_config_world_readable`） |
 | S-004 | env var 経由のパスに対するパス検証なし | `validated_path` で `..` を拒否。`canonicalize()` + ホーム外拒否は Phase 3 前に推奨 |
 | S-006 | `tui.rs` の `Drop` 実装で `unwrap()` を使用 | `if let Err(e) = self.exit() { eprintln!(...) }` |

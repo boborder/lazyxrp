@@ -6,25 +6,25 @@
 
 - 言語: Rust
 - Edition: 2024
-- ツールチェーン: `rust-toolchain.toml` で `channel = "stable"`（components: `rustfmt`, `clippy`）。MSRV 相当は `Cargo.toml` の `rust-version = "1.91"`（依存クレート・エディションに追従する下限）。
-- 非同期ランタイム: Tokio（`Cargo.toml` は `1`、`Cargo.lock` 解決 `1.52.3`、`features = ["macros", "rt-multi-thread", "sync", "time", "net", "io-util"]`。`full` は使わない）
-- 対象OS（現確認）: macOS arm64
+- ツールチェーン: `rust-toolchain.toml` で `channel = "stable"`（components: `rustfmt`, `clippy`）。MSRV 相当は `Cargo.toml` の `rust-version = "1.94.1"`（alloy 2.4.2 の MSRV に追従。実ビルドは stable 強制のため参考値）。
+- 非同期ランタイム: Tokio（`Cargo.toml` は `1`、`Cargo.lock` 解決 `1.53.1`、`features = ["macros", "rt-multi-thread", "sync", "time", "net", "io-util"]`。`full` は使わない）
+- 対象OS: リリース対象は [`.github/workflows/cd.yml`](../.github/workflows/cd.yml)（README Requirements が引用）。現確認は macOS arm64。
 
 ## 2. 主要ライブラリ
 
 ### UI / CLI
 
-- `ratatui`（`Cargo.toml` `0.30`、`Cargo.lock` `0.30.0`; `serde`, `macros`）
+- `ratatui`（`Cargo.toml` `0.30`、`Cargo.lock` `0.30.2`; `serde`, `macros`）
 - `crossterm`（`Cargo.toml` `0.29`、`Cargo.lock` `0.29.0`; `serde`, `event-stream`）
 - `strum`（`Cargo.toml` `0.28`、`Cargo.lock` `0.28.0`; `derive` — `Action` 表示など）
 - `signal-hook`（`Cargo.toml` `0.4`、`Cargo.lock` `0.4.4` — `SIGTSTP` 処理）
-- `clap`（`Cargo.toml` `4`、`Cargo.lock` `4.6.1`; `derive`, `cargo`, `wrap_help`, `unicode`, `string`）
+- `clap`（`Cargo.toml` `4`、`Cargo.lock` `4.6.6`; `derive`, `cargo`, `wrap_help`, `unicode`, `string`）
 - `ratatui-image`（`Cargo.toml` `11`、`crossterm`, `image-defaults`）— Kitty / Sixel / iTerm2 / halfblocks image preview。
 - `image`（`Cargo.toml` `0.25`、PNG/JPEG/GIF/WebP）— NFT image decode。
 
 ### XRPL / 通信
-- `reqwest`（`Cargo.toml` `0.13`、`Cargo.lock` 直接依存 `0.13.3`; `features = ["json", "stream"]` — JSON-RPC と bounded NFT metadata/image streaming）。`xrpl-rust` 経路では **`reqwest 0.12.x` がロックに併存**しうる（解像は `Cargo.lock` を正とする）。
-- `xrpl-rust = 1.1`
+- `reqwest`（`Cargo.toml` `0.13`、`Cargo.lock` 直接依存 `0.13.5`; `features = ["json", "stream"]` — JSON-RPC と bounded NFT metadata/image streaming）。`xrpl-rust` 経路では **`reqwest 0.12.x` がロックに併存**しうる（解像は `Cargo.lock` を正とする）。
+- `xrpl-rust`（`Cargo.toml` `1.1`、`Cargo.lock` `1.3.0`）
 - `kobe-xrpl = 3.4` / `kobe-primitives = 3.4` — BIP39 secp256k1 mnemonic → BIP44 `m/44'/144'/0'/0/0` account derivation。
 - `tokio-tungstenite = (xrpl-rust 経由)`
 - `url = 2`
@@ -34,7 +34,7 @@
 - Payment 署名はクレート公開 API の `wallet::Wallet` + `transaction::sign`（`models::transactions::payment::Payment`）を利用し、送信時は `binarycodec::encode` した `tx_blob` に変換する。既存の XRPL family seed と BIP39 mnemonic（secp256k1 only）は `SigningCredential` に統合する。
 ### Flare / EVM
 
-- `alloy`（`Cargo.toml` `1`; `features = ["essentials"]` — HTTP provider + local signer。`full` は使わない）
+- `alloy`（`Cargo.toml` `2`; `features = ["essentials"]` — HTTP provider + local signer。`full` は使わない）
   - `ContractRegistry` 経由で `FtsoV2` / `AssetManagerFXRP` アドレスを解決。
   - FTSOv2: `getFeedById(bytes21)`（`src/flare.rs` → `fetch_ftso_prices`）。
   - FXRP Direct Mint: `getCoreVault()` / `getDirectMintingExecutorFeeUBA()`（`fetch_fxrp_direct_mint_info`）。
@@ -43,11 +43,11 @@
 
 ### 設定・シリアライズ
 
-- `config`（`Cargo.toml` `0.15`、`Cargo.lock` `0.15.22`; default-features off, `toml`/`json`/`json5`/`yaml`/`ini`/`convert-case` — `ron`/`async` なし）
+- `config`（`Cargo.toml` `0.15`、`Cargo.lock` `0.15.25`; default-features off, `toml`/`convert-case` — `ron`/`async` なし）
 - `directories`（`Cargo.toml` `6`、`Cargo.lock` `6.0.0` — `ProjectDirs`）
-- `serde`（`Cargo.toml` `1`、`Cargo.lock` `1.0.228`、`derive`）
-- `serde_json`（`Cargo.toml` `1`、`Cargo.lock` `1.0.149`）
-- `json5`（`Cargo.toml` `1`、`Cargo.lock` 直接依存 `1.3.1` — リポジトリ直下の埋め込み `config.json5` のパース。`config` クレート経由などトランジティブに **`json5 0.4.x` が併存**しうる）
+- `serde`（`Cargo.toml` `1`、`Cargo.lock` `1.0.229`、`derive`）
+- `serde_json`（`Cargo.toml` `1`、`Cargo.lock` `1.0.151`）
+- `json5`（`Cargo.toml` `1`、`Cargo.lock` 直接依存 `1.3.1` — リポジトリ直下の埋め込み `config.json5` のパース）
 
 ### 監視性・障害対応
 
@@ -72,7 +72,7 @@
 
 - ビルドスクリプト: `build.rs`
 - build-dependencies:
-  - `anyhow`（`Cargo.toml` `1`、`Cargo.lock` `1.0.102`）
+  - `anyhow`（`Cargo.toml` `1`、`Cargo.lock` `1.0.104`）
   - `vergen-gix`（`Cargo.toml` `9`、`Cargo.lock` `9.1.0`; `build`）
 - Release profile:
   - `codegen-units = 1`
@@ -123,8 +123,9 @@ TUI セッション内の `<Ctrl-n>` は `Network::next_network()` で XRPL ネ�
 ## 5. 開発コマンド
 
 - 依存解決: `cargo build`
+- タスクランナー: ルート `mise.toml`（`mise run <task>`）。`check` / `fmt` / `lint`（fmt+clippy が CI 基準）/ `test` / `test-serial` / `doc` / `audit`（cargo-audit は CLI フラグで RUSTSEC-2026-0235 を無視 — CI と同一、cargo-deny の無視リストは `deny.toml`）/ `update`（`cargo update` 後に check + audit 再掃討）/ `clean`（target/ と benchmark 出力を削除）/ `bench*` / `tag-push`（タグ作成前に 4 ゲート実行）。ツール実体は `[tools]`（rust は [`rust-toolchain.toml`](../rust-toolchain.toml) と同一チャンネル `stable`、`hyperfine`、`cargo-audit`、`cargo-deny`、`cargo-bloat`）。
 - コンパイルチェック: `cargo check`
-- ローカルインストール（任意）: ルート `./install.sh`（**HTTP 取得には `curl` または `wget` のいずれかが必須**）。英語プロンプト。`--help` でオプション確認（`--method cargo|binary`、`--install-rust` / `--no-install-rust` など）。ソースビルドはクローン済みツリーのルートから（`Cargo.toml` / `rust-toolchain.toml` と同階）。`curl | bash` だけのとき rustup で入れる既定ツールチェーンは **リポにある `rust-toolchain.toml` の `channel` を読めるかぎりそれ**で揃える（読めずに素のstdin経路なら **`stable`** フォールバック）。GitHub Releases REST は **公開 API の無認証だと環境によりレート制限**になりうるので、任意で **`GITHUB_TOKEN` / `GITHUB_API_TOKEN`**。バイナリ配置は INSTALL_DIR 上の **`*.partial.*` にコピーしてから `mv`（失敗や中断時の掃除は EXIT の `cleanup`）。**手動アンインストール**は `./install.sh --uninstall-help`（**PATH 上のバイナリから** `lazyxrp --self-uninstall` / `--yes` も可。バイナリ／`cargo uninstall` に加え、任意でユーザ設定・データ directory の削除例 Linux/macOS 別、`LAZYXRP_CONFIG` / `LAZYXRP_DATA` と `config.toml` の `data_dir` / `config_dir` 上書きの注意。README の Uninstall と同様）。TTY は対話 + アニメ; `-q` または非 TTY は非対話。ダウンロードは `curl` 優先（無ければ `wget`）でリトライ／タイムアウトあり。GitHub のタグ／コミット SHA 解決は **`jq` があれば優先**（無ければ従来の grep/sed）。`BINARY_INSTALL=1 ./install.sh -q` でプリビルト優先の例は従来どおり。または **[mise](https://mise.jdx.dev/)** `mise run install`（`.mise.toml` のタスク経由; 詳細は `README.md`）
+- ローカルインストール（任意）: ルート `./install.sh`（**HTTP 取得には `curl` または `wget` のいずれかが必須**）。英語プロンプト。`--help` でオプション確認（`--method cargo|binary`、`--install-rust` / `--no-install-rust` など）。ソースビルドはクローン済みツリーのルートから（`Cargo.toml` / `rust-toolchain.toml` と同階）。`curl | bash` だけのとき rustup で入れる既定ツールチェーンは **リポにある `rust-toolchain.toml` の `channel` を読めるかぎりそれ**で揃える（読めずに素のstdin経路なら **`stable`** フォールバック）。GitHub Releases REST は **公開 API の無認証だと環境によりレート制限**になりうるので、任意で **`GITHUB_TOKEN` / `GITHUB_API_TOKEN`**。バイナリ配置は INSTALL_DIR 上の **`*.partial.*` にコピーしてから `mv`（失敗や中断時の掃除は EXIT の `cleanup`）。**手動アンインストール**は `./install.sh --uninstall-help`（**PATH 上のバイナリから** `lazyxrp --self-uninstall` / `--yes` も可。バイナリ／`cargo uninstall` に加え、任意でユーザ設定・データ directory の削除例 Linux/macOS 別、`LAZYXRP_CONFIG` / `LAZYXRP_DATA` と `config.toml` の `data_dir` / `config_dir` 上書きの注意。README の Uninstall と同様）。TTY は対話 + アニメ; `-q` または非 TTY は非対話。ダウンロードは `curl` 優先（無ければ `wget`）でリトライ／タイムアウトあり。GitHub のタグ／コミット SHA 解決は **`jq` があれば優先**（無ければ従来の grep/sed）。`BINARY_INSTALL=1 ./install.sh -q` でプリビルト優先の例は従来どおり。または **[mise](https://mise.jdx.dev/)** `mise run install`（`mise.toml` のタスク経由; 詳細は `README.md`）
 - 実行（TUI）: `cargo run --bin lazyxrp -- --account <r-address>`
 - seed / mnemonic 指定実行（非推奨 — argv/history に露出。`XRPL_SEED` / `XRPL_MNEMONIC` か `config.toml` を推奨）: `cargo run --bin lazyxrp -- --account <r-address> --mnemonic "abandon ... about"`
 - スクリプト CLI（例）:

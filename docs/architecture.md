@@ -1,8 +1,10 @@
+graphify: Knowledge graph exists. Read graphify-out/GRAPH_REPORT.md for god nodes and community structure before searching raw files. Graph may be stale because files changed; after inspecting it, run `graphify update .` before relying on modified areas.
+
 # architecture.md — System & behavioral design
 
 **Role:** 詳細設計・スキーマ設計（ネットワーク・設定・データフロー・パネル契約の SSOT）。UI キー／レイアウトは [`DESIGN.md`](../DESIGN.md)。
 
-Extended product design derived from [`requirements.md`](requirements.md). Describes **how the system behaves** (boundaries, network, config precedence, data flow, panel contracts). Test cases in [`test.md`](test.md) trace back here and to requirements FR/NFR ids.
+From [`requirements.md`](requirements.md). Tests in [`test.md`](test.md) trace here and to FR/NFR ids.
 
 **Not here:** keybindings, colors, layout splits, scroll/modal interaction — SSOT is root [`DESIGN.md`](../DESIGN.md).
 
@@ -15,7 +17,7 @@ Extended product design derived from [`requirements.md`](requirements.md). Descr
 | Directory layout | [`directory.md`](directory.md) |
 | TX detail parser registry | §5.2.1 below, `src/components/shared/tx_detail/` |
 | Security audit S-xxx / risks R-xxx | [`security.md`](security.md) |
-| Doc index | [`AGENTS.md`](../AGENTS.md) progressive disclosure |
+| Doc index | [`AGENTS.md`](../AGENTS.md) |
 | Graphify | [`graphify-out/GRAPH_REPORT.md`](../graphify-out/GRAPH_REPORT.md) |
 
 ## System boundary
@@ -32,7 +34,7 @@ lazyxrp is a **single Rust binary** run locally. It connects to public **XRP Led
 | Config & signing | Merged `config.toml`, credentials | `config.rs`, `signing.rs` |
 | Flare | FTSO / FXRP read (+ optional execute) | `flare.rs`, `poll.rs` |
 
-Module wiring summary: [`directory.md`](directory.md) §3. Tab/composer **diagrams**: [`DESIGN.md`](../DESIGN.md).
+Module wiring summary: [`directory.md`](directory.md) §3. Tab splits and keys: [`DESIGN.md`](../DESIGN.md).
 
 ## 1. 起動モードとスタック（要約）
 
@@ -50,11 +52,11 @@ Module wiring summary: [`directory.md`](directory.md) §3. Tab/composer **diagra
 
 ## 2. ウォレット（行動契約）
 
-`WalletPanel` + `wallet_composer.rs` on Account tab. **Interaction keys and colors:** [`DESIGN.md`](../DESIGN.md) § Wallet.
+`WalletPanel` + `wallet_composer.rs` on Account tab. **Interaction keys:** [`DESIGN.md`](../DESIGN.md) (Keys). **Composer preview colors:** (Components).
 
 Behavioral contract:
 
-- Credential resolution: `Config::new()` merges `XRPL_SEED` / `XRPL_MNEMONIC`, then `credential_from_secrets` → `PollContext.signing_seed` (`Option<SigningCredential>`).
+- Credential resolution: `Config::new()` merges `XRPL_SEED` / `XRPL_MNEMONIC`, then `credential_from_secrets` → `PollContext.signing_credential` (`Option<SigningCredential>`).
 - All wallet TX: **simulate → sign → submit** (I-3). Mainnet / Xahau mainnet writes require CLI **`--yes`** (I-2).
 - Composer phases shipped: Payment, AccountSet, SetRegularKey, OfferCreate, TrustSet, FXRP Mint (C2), FXRP Execute (C3). EscrowCreate: signing path exists; UI unwired (P-003).
 - Payment validation: destination shape, positive amount, IOU issuer `r…`, currency non-empty.
@@ -85,7 +87,7 @@ WebSocket ledger close coalesces poll triggers (`MIN_POLL_INTERVAL`). Scheduled 
 | `--network` | `mainnet` \| `testnet` \| `devnet` \| `xahau` \| `xahau-test` |
 | `--server`, `--ws-server` | Custom RPC/WS (highest priority) |
 | `--allow-insecure-rpc` | Allow `http://` / `ws://` |
-| `--tick-rate`, `--frame-rate` | TUI loop rates |
+| `--tick-rate` | TUI loop tick rate |
 | `--seed` / `--mnemonic` | Override credentials (**non-preferred** — use env/config) |
 | `--account` | Watch address override |
 | `-x` / `--exec` | Script CLI mode |
@@ -108,22 +110,22 @@ WebSocket ledger close coalesces poll triggers (`MIN_POLL_INTERVAL`). Scheduled 
 
 ## 5. Read APIs & panels (FR-08–FR-11)
 
-Types, RPC methods, `Action` variants: `src/xrpl/types.rs`. UX layout: [`DESIGN.md`](../DESIGN.md).
+Types, RPC methods, `Action` variants: `src/xrpl/types.rs`. UX layout: [`DESIGN.md`](../DESIGN.md) §4.
 
 ### 5.1 Panel inventory
 
 | Tab | Components | Primary RPC / source |
 |-----|------------|----------------------|
 | Overview | `ServerPanel`, `CombinedOraclePanel`, `FlareWalletPanel` | `server_info`, `fee`, `get_aggregate_price`, Flare FTSO, FXRP AssetManager, `eth_getBalance` + FXRP `balanceOf` (Overview tab only) |
-| Account | `WalletPanel`, `AccountPanel`, `TxHistoryPanel` | `account_info`, `account_tx`, wallet submit |
+| Account | `WalletPanel`, `AccountPanel`, `TxHistoryPanel` (top is wallet **xor** account; layout: [`DESIGN.md`](../DESIGN.md) §4) | `account_info`, `account_tx`, wallet submit |
 | Market | Book, PathFind, AMM, TrustLines, FTSO, Oracle | `book_offers`, `ripple_path_find`, `amm_info`, `account_lines`, oracles |
-| Assets | `NftTab`, `LedgerObjectsPanel` | `account_nfts`, `account_objects` |
+| Assets | `NftTab` + 3× `LedgerObjectsPanel` (objects / pay channels / escrows; layout: [`DESIGN.md`](../DESIGN.md) §4) | `account_nfts`, `account_objects` |
 
 Poll skips heavy market fetches when tab inactive (`should_poll_market_book`, `should_poll_asset_panels` in `poll.rs`).
 
 ### 5.2 Shared behaviors
 
-- **TX detail:** Any table row with `ArcValue` tx/meta can open unified overlay (`tx_detail::render_tx_detail`). Parser contract: §5.2.1. Overlay **keys**: [`DESIGN.md`](../DESIGN.md) § TX detail overlay.
+- **TX detail:** Any table row with `ArcValue` tx/meta can open unified overlay (`tx_detail::render_tx_detail`). Parser contract: §5.2.1. Overlay **keys**: [`DESIGN.md`](../DESIGN.md) §6.
 - **Tx history pagination:** `marker` → `PollCommand::TxHistoryMore` → `XrplTxHistoryAppend`.
 - **Tx history filter:** In-panel filter state; does not change RPC query (client-side).
 - **Path find:** Self-payment preview via `ripple_path_find` using configured book pair amount.
@@ -193,7 +195,7 @@ No `DESIGN.md` change unless overlay interaction changes.
 | xahau | `https://xahau.network` | `wss://xahau.network` |
 | xahau-test | `https://xahau-test.net` | `wss://xahau-test.net` |
 
-**TUI session switch:** `<Ctrl-n>` cycles networks (see DESIGN.md). Poll/WS rebound via `network_watch`; panels refresh. **Not persisted** to config. Custom `--server` / `XRPL_RPC_SERVER` → `custom_rpc`: endpoint unchanged on switch. **Mainnet guard** applies to `mainnet` and `xahau`.
+**TUI session switch:** `<Ctrl-n>` cycles networks ([`DESIGN.md`](../DESIGN.md) §6). Poll/WS rebound via `network_watch`; panels refresh. **Not persisted** to config. Custom `--server` / `XRPL_RPC_SERVER` → `custom_rpc`: endpoint unchanged on switch. **Mainnet guard** applies to `mainnet` and `xahau`.
 
 ### 6.2 Resolution precedence
 
@@ -219,7 +221,7 @@ display = "full"      # full | compact | off
 
 ### 6.5 StatusBar network indicator
 
-Right-aligned badge `format!(" {} ", display_name())`; mainnet/xahau use warning styling. Updates on `Action::NetworkChange` (TC-115).
+Right-aligned badge `format!(" {} ", display_name())`. Chrome: [`DESIGN.md`](../DESIGN.md) §5. Updates on `Action::NetworkChange` (TC-115).
 
 ### 6.6 Secrets (FR-13)
 
@@ -229,20 +231,22 @@ Load order (seed **xor** mnemonic):
 2. `XRPL_SEED` / `XRPL_MNEMONIC`
 3. `[xrpl.signing]` in config
 
-`SecretString` + `SigningCredential`; mainnet prompt via `prompt_mainnet_confirmation` unless `--yes`.
+`SecretString` + `SigningCredential`; production write prompt via `prompt_production_confirmation` unless `--yes`.
 
 ### 6.7 Flare display levels
 
-| Level | Overview | Market | Poll |
-|-------|----------|--------|------|
-| `full` | 44/56 split, full FTSO/FXRP panels | Full FTSO table | FTSO + FXRP fetch on Overview tab |
-| `compact` | 44/56, one-line FTSO/FXRP summaries | One-line FTSO | Same as full |
-| `off` | Server full width | FTSO hidden; oracle remains | Skip FTSO/FXRP **read** fetch; C3 execute URL kept |
+Pixels / focus counts: [`DESIGN.md`](../DESIGN.md) §4.
+
+| Level | Poll |
+|-------|------|
+| `full` | FTSO + FXRP fetch on Overview tab |
+| `compact` | Same as full |
+| `off` | Skip FTSO/FXRP **read** fetch; C3 execute URL kept |
 
 ### 6.8 Flare wallet read panel (FR-16)
 
 - Config: `[flare.wallet] address` (optional EVM `0x…`).
-- Overview right column: `CombinedOraclePanel` (top) + `FlareWalletPanel` (~6 lines, bottom) when `display != off`.
+- Overview right column: `CombinedOraclePanel` (top) + `FlareWalletPanel` (bottom) when `display != off`. Split: [`DESIGN.md`](../DESIGN.md) §4.
 - Poll: `fetch_flare_wallet_balance` on Overview tab only; emits `Action::FlareWalletBalance`. Unconfigured address → in-panel setup guidance (no RPC).
 - Read-only: shows native FLR, FXRP ERC20 balance, `[flare.fassets] execute` gate, executor env key indicator. No Flare writes.
 

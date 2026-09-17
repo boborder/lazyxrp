@@ -1,6 +1,6 @@
 # AGENTS.md
 
-**lazyxrp** — Rust TUI for XRPL. Elm-style unidirectional flow (`Action` → `App` → panels); network I/O under `xrpl/`, UI under `components/`.
+**lazyxrp** — Elm-style unidirectional flow (`Action` → `App` → panels); network I/O under `xrpl/`, UI under `components/`. Human door: [`README.md`](README.md).
 
 ## Progressive disclosure
 
@@ -19,18 +19,6 @@
 | [`docs/references.md`](docs/references.md) | **調べる前に見る** — 参考文献・サンプル |
 | [`DESIGN.md`](DESIGN.md) | **どう見える・操作するか** — UI/UX |
 | **AGENTS.md** *(here)* | **どう作る・運用するか** — Agent 指示（最小） |
-
-## Quick reference
-
-| Topic | Command / note |
-|---|---|
-| Rust pin | `rust-toolchain.toml` + `Cargo.toml` `rust-version` (see `docs/tech.md`) |
-| Domain skills | [`.agents/skills/xrpl-rust/`](.agents/skills/xrpl-rust/SKILL.md) · Flare: `flare-general` / `flare-ftso` / `flare-fassets` |
-| Human docs | Progressive disclosure table above (SSOT) |
-| Verify | `cargo check` (minimum after code changes) |
-| Format | `cargo fmt` |
-| Install | `./install.sh` or `mise run install` (see `.mise.toml`) |
-| Tests | [`docs/test.md`](docs/test.md) |
 
 ## Optional: OpenSpec
 
@@ -66,3 +54,4 @@ If assumptions are unavoidable, state them explicitly before proceeding.
 ## Detailed instructions
 
 - Graphify: [`graphify-out/GRAPH_REPORT.md`](graphify-out/GRAPH_REPORT.md) — if `HEAD` differs or `graphify-out/needs_update` exists, run `graphify update .` before structure queries.
+- Domain skills: [`.agents/skills/xrpl-rust/`](.agents/skills/xrpl-rust/SKILL.md) · Flare: `flare-general` / `flare-ftso` / `flare-fassets`
