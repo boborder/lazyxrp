@@ -122,3 +122,48 @@ impl Component for AccountWalletTab {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use secrecy::SecretString;
+
+    fn tab_with_signing(seed: Option<&str>, mnemonic: Option<&str>) -> AccountWalletTab {
+        let mut tab = AccountWalletTab::new(false);
+        let mut config = Config::default();
+        config.xrpl.signing.secret_seed = seed.map(|s| SecretString::from(s.to_string()));
+        config.xrpl.signing.secret_mnemonic = mnemonic.map(|m| SecretString::from(m.to_string()));
+        tab.register_config_handler(Arc::new(config)).unwrap();
+        tab
+    }
+
+    #[test]
+    fn account_wallet_tab_detects_wallet_when_seed_configured() {
+        assert!(
+            tab_with_signing(Some("sEdSkooMk31MeTjbHVE7vLvgCpEMAdB"), None).has_wallet,
+            "family seed config must set has_wallet"
+        );
+    }
+
+    #[test]
+    fn account_wallet_tab_detects_wallet_when_mnemonic_configured() {
+        assert!(
+            tab_with_signing(
+                None,
+                Some(
+                    "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
+                )
+            )
+            .has_wallet,
+            "mnemonic config must set has_wallet"
+        );
+    }
+
+    #[test]
+    fn account_wallet_tab_reports_no_wallet_without_signing_config() {
+        assert!(
+            !tab_with_signing(None, None).has_wallet,
+            "no seed/mnemonic config must leave has_wallet false"
+        );
+    }
+}

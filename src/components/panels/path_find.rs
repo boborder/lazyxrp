@@ -60,7 +60,6 @@ impl PathFindPanel {
         ]
     }
 }
-
 fn path_find_table_row(rank: usize, row: &PathFindRow) -> Row<'_> {
     Row::new(vec![
         Cell::from(format!("{rank}")).style(theme::dim_style()),
@@ -191,5 +190,38 @@ impl Component for PathFindPanel {
 
         render_tx_detail(frame, area, &mut self.detail);
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::xrpl::PathFindSnapshot;
+
+    #[test]
+    fn path_find_panel_renders_loading_empty_and_route_summary() {
+        let mut panel = PathFindPanel::default();
+        let loading = crate::test_support::render_to_string(100, 12, |frame| {
+            panel.draw(frame, frame.area()).unwrap()
+        });
+        assert!(loading.contains("finding payment routes"));
+
+        panel
+            .update(&Action::XrplPathFind(PathFindSnapshot {
+                dest_summary: "100 USD".into(),
+                rows: vec![PathFindRow {
+                    send: "2 XRP".into(),
+                    hops: "XRP → USD".into(),
+                    path: "rIssuer".into(),
+                    raw_json: ArcValue::default(),
+                }],
+            }))
+            .unwrap();
+        let out = crate::test_support::render_to_string(100, 12, |frame| {
+            panel.draw(frame, frame.area()).unwrap()
+        });
+        assert!(out.contains("Receive 100 USD"));
+        assert!(out.contains("2 XRP"));
+        assert!(out.contains("XRP"));
     }
 }

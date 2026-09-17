@@ -29,7 +29,7 @@ impl AssetsTab {
         nft.is_focused = true;
         Self {
             nft,
-            objects: LedgerObjectsPanel::new("Objects", LedgerObjectFilter::ObjectsTab),
+            objects: LedgerObjectsPanel::new("Objects", LedgerObjectFilter::MiscObjects),
             pay: LedgerObjectsPanel::new("Pay channels", LedgerObjectFilter::PayChannelOnly),
             escrow: LedgerObjectsPanel::new("Escrows", LedgerObjectFilter::EscrowOnly),
             focus_index: 0,
@@ -107,6 +107,42 @@ impl Component for AssetsTab {
         self.objects.draw(frame, b)?;
         self.pay.draw(frame, c)?;
         self.escrow.draw(frame, d)?;
+        Ok(())
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn focus_next_cycles_nft_objects_pay_and_escrow() -> color_eyre::Result<()> {
+        let mut tab = AssetsTab::new();
+        let expected = [
+            (0, true, false, false, false),
+            (1, false, true, false, false),
+            (2, false, false, true, false),
+            (3, false, false, false, true),
+            (0, true, false, false, false),
+        ];
+
+        for (index, nft, objects, pay, escrow) in expected {
+            assert_eq!(tab.focus_index, index);
+            assert_eq!(tab.nft.is_focused, nft);
+            assert_eq!(tab.objects.is_focused, objects);
+            assert_eq!(tab.pay.is_focused, pay);
+            assert_eq!(tab.escrow.is_focused, escrow);
+            tab.update(&Action::FocusNext)?;
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn focus_prev_wraps_from_nft_to_escrow() -> color_eyre::Result<()> {
+        let mut tab = AssetsTab::new();
+        tab.update(&Action::FocusPrev)?;
+        assert_eq!(tab.focus_index, 3);
+        assert!(!tab.nft.is_focused);
+        assert!(tab.escrow.is_focused);
         Ok(())
     }
 }

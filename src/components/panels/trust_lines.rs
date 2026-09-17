@@ -118,3 +118,40 @@ impl Component for TrustLinesPanel {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::xrpl::ArcValue;
+
+    #[test]
+    fn trust_lines_panel_renders_loading_empty_and_rows() {
+        let mut panel = TrustLinesPanel::default();
+        let loading = crate::test_support::render_to_string(90, 10, |frame| {
+            panel.draw(frame, frame.area()).unwrap()
+        });
+        assert!(loading.contains("loading trust lines"));
+
+        panel.update(&Action::XrplTrustLines(Vec::new())).unwrap();
+        let empty = crate::test_support::render_to_string(90, 10, |frame| {
+            panel.draw(frame, frame.area()).unwrap()
+        });
+        assert!(empty.contains("(no trust lines)"));
+
+        panel
+            .update(&Action::XrplTrustLines(vec![TrustLineRow {
+                currency: "USD".into(),
+                account: "rIssuer".into(),
+                balance: "-2".into(),
+                limit: "100".into(),
+                raw_json: ArcValue::default(),
+            }]))
+            .unwrap();
+        let out = crate::test_support::render_to_string(90, 10, |frame| {
+            panel.draw(frame, frame.area()).unwrap()
+        });
+        assert!(out.contains("USD"));
+        assert!(out.contains("rIssuer"));
+        assert!(out.contains("-2"));
+    }
+}

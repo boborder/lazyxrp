@@ -132,28 +132,16 @@ impl Component for FlareWalletPanel {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ratatui::Terminal;
-    use ratatui::backend::TestBackend;
 
-    fn render_panel(panel: &mut FlareWalletPanel) -> String {
-        let mut terminal = Terminal::new(TestBackend::new(80, 10)).unwrap();
-        terminal
-            .draw(|frame| panel.draw(frame, frame.area()).unwrap())
-            .unwrap();
-        terminal
-            .backend()
-            .buffer()
-            .content
-            .iter()
-            .map(|cell| cell.symbol())
-            .collect()
+    fn render_flare_wallet_panel(panel: &mut FlareWalletPanel) -> String {
+        crate::test_support::render_to_string(80, 10, |f| panel.draw(f, f.area()).unwrap())
     }
 
     /// TC-121: unconfigured wallet shows setup guidance.
     #[test]
     fn flare_wallet_guidance_when_unconfigured() {
         let mut panel = FlareWalletPanel::default();
-        let out = render_panel(&mut panel);
+        let out = render_flare_wallet_panel(&mut panel);
         assert!(out.contains("not configured"));
         assert!(out.contains("[flare.wallet]"));
     }
@@ -174,7 +162,7 @@ mod tests {
                 executor_key_configured: false,
             })))
             .unwrap();
-        let out = render_panel(&mut panel);
+        let out = render_flare_wallet_panel(&mut panel);
         assert!(out.contains("12.5000"));
         assert!(out.contains("100.000000"));
         assert!(out.contains("execute"));

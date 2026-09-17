@@ -194,3 +194,81 @@ impl Component for SplashScreen {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn art_lines() -> Vec<&'static str> {
+        ASCII_ART.trim_start_matches('\n').lines().collect()
+    }
+
+    #[test]
+    fn trailing_dots_cycles_through_empty_one_two_three_dots() {
+        assert_eq!(trailing_dots(0), "");
+        assert_eq!(trailing_dots(1), ".");
+        assert_eq!(trailing_dots(2), "..");
+        assert_eq!(trailing_dots(3), "...");
+        assert_eq!(trailing_dots(4), "");
+        assert_eq!(trailing_dots(7), "...");
+    }
+
+    #[test]
+    fn splash_art_column_centers_art_width_in_wide_area() {
+        let col = splash_art_column(Rect::new(0, 5, 120, 12));
+        let art_w = ascii_art_max_width();
+        assert_eq!(col.width, art_w, "wide area must show the full art width");
+        assert_eq!(
+            col.x,
+            (120 - art_w) / 2,
+            "art must be centered horizontally"
+        );
+        assert_eq!((col.y, col.height), (5, 12), "y/height must pass through");
+    }
+
+    #[test]
+    fn splash_art_column_fills_narrow_area_without_centering() {
+        let col = splash_art_column(Rect::new(3, 0, 10, 8));
+        assert_eq!(
+            (col.x, col.width, col.y, col.height),
+            (3, 10, 0, 8),
+            "narrow area must be used as-is, no centering"
+        );
+    }
+
+    #[test]
+    fn splash_art_column_keeps_single_column_when_area_has_no_width() {
+        let col = splash_art_column(Rect::new(4, 2, 0, 6));
+        assert_eq!(
+            (col.x, col.width, col.height),
+            (4, 1, 6),
+            "zero-width area must clamp to one column"
+        );
+    }
+
+    #[test]
+    fn splash_ascii_lines_show_every_art_line_when_height_allows() {
+        for tick in [0usize, 5, 9] {
+            let lines = splash_ascii_lines_for_height(tick, 12);
+            let art = art_lines();
+            assert_eq!(lines.len(), art.len(), "full height must show all lines");
+            for (line, expected) in lines.iter().zip(art) {
+                assert_eq!(line.spans[0].content.to_string(), expected);
+            }
+        }
+    }
+
+    #[test]
+    fn splash_ascii_lines_show_bottom_lines_when_height_is_tight() {
+        let art = art_lines();
+        let lines = splash_ascii_lines_for_height(0, 5);
+        assert_eq!(lines.len(), 5, "tight height must show exactly 5 lines");
+        for (i, line) in lines.iter().enumerate() {
+            assert_eq!(
+                line.spans[0].content.to_string(),
+                art[art.len() - 5 + i],
+                "tight height must keep the bottom (logo lower half)"
+            );
+        }
+    }
+}

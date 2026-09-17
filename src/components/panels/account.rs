@@ -221,3 +221,46 @@ impl Component for AccountPanel {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::xrpl::AccountSummary;
+
+    fn rendered(panel: &mut AccountPanel) -> String {
+        crate::test_support::render_to_string(100, 12, |f| panel.draw(f, f.area()).unwrap())
+    }
+
+    #[test]
+    fn account_panel_renders_loading_then_balance_and_reserve() {
+        let mut panel = AccountPanel::default();
+        assert!(rendered(&mut panel).contains("loading account"));
+
+        panel
+            .update(&Action::XrplAccount(Box::new(AccountSummary {
+                account: "rTest".into(),
+                balance_xrp: "10.000000".into(),
+                sequence: 7,
+                owner_count: 1,
+                flags: 0,
+                regular_key: None,
+                domain_hex: None,
+            })))
+            .unwrap();
+        panel
+            .update(&Action::XrplLedgerClose {
+                ledger_index: 1,
+                base_fee: 12,
+                reserve_base: 1_000_000,
+                reserve_inc: 200_000,
+            })
+            .unwrap();
+
+        let out = rendered(&mut panel);
+        assert!(out.contains("rTest"));
+        assert!(out.contains("10 XRP"));
+        assert!(out.contains("Reserve:"));
+        assert!(out.contains("1.2 XRP"));
+        assert!(!out.contains("loading account"));
+    }
+}

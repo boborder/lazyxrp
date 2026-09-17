@@ -384,3 +384,41 @@ impl Component for ServerPanel {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::xrpl::FeeSummary;
+
+    fn output(panel: &mut ServerPanel) -> String {
+        crate::test_support::render_to_string(110, 18, |f| panel.draw(f, f.area()).unwrap())
+    }
+
+    #[test]
+    fn server_panel_renders_loading_then_metrics() {
+        let mut panel = ServerPanel::new("http://local-rpc".into());
+        assert!(output(&mut panel).contains("loading server info"));
+
+        panel
+            .update(&Action::XrplServerInfo(Box::new(ServerInfoSummary {
+                ledger_index: 80_000_000,
+                hostid: "local-host".into(),
+                build_version: "2.5.0".into(),
+                validation_quorum: Some(28),
+                validator_list: None,
+            })))
+            .unwrap();
+        panel
+            .update(&Action::XrplFee(FeeSummary {
+                open_ledger_fee_drops: 15,
+            }))
+            .unwrap();
+
+        let out = output(&mut panel);
+        assert!(out.contains("local-rpc"));
+        assert!(out.contains("2.5.0"));
+        assert!(out.contains("80,000,000"));
+        assert!(out.contains("15 drops"));
+        assert!(out.contains("Quorum:"));
+    }
+}

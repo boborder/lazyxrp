@@ -207,5 +207,6 @@ mod sanitize_tests {
     fn sanitize_display_strips_controls_and_truncates() {
         assert_eq!(sanitize_display("ab\u{1b}c\nd", 10), "abcd");
         assert_eq!(sanitize_display("hello-world", 5), "hello");
+        assert_eq!(sanitize_display("あいうえお", 3), "あいう");
     }
 }

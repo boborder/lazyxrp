@@ -309,3 +309,116 @@ pub(super) fn render_validator_detail(frame: &mut Frame, area: Rect, state: &mut
         &mut sb_state,
     );
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn detail_rendered(state: &mut ValidatorDetail) -> String {
+        crate::test_support::render_to_string(100, 30, |frame| {
+            render_validator_detail(frame, frame.area(), state)
+        })
+    }
+
+    fn row(domain: Option<&str>, master: Option<&str>) -> DunlValidatorRow {
+        DunlValidatorRow {
+            validation_public_key: "EDFB01CA58D69A2B".into(),
+            has_manifest: true,
+            domain: domain.map(str::to_string),
+            sequence: Some(7),
+            master_public_key: master.map(str::to_string),
+        }
+    }
+
+    fn dunl() -> DunlSummary {
+        DunlSummary {
+            validator_count: 2,
+            sequence: 123,
+            expiration_ripple: 0,
+            expiration_utc: "2026-01-01".into(),
+            validators: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn validator_detail_renders_identity_dunl_and_fetching_state() {
+        let row = row(Some("xrplf.org"), None);
+        let mut state = ValidatorDetail {
+            visible: true,
+            lines: validator_detail_lines(&row, 0, &dunl(), &None, None, 200, Some("text/plain")),
+            ..Default::default()
+        };
+
+        let out = detail_rendered(&mut state);
+        assert!(out.contains("Validator #1"));
+        assert!(out.contains("xrplf.org"));
+        assert!(out.contains("present"));
+        assert!(out.contains("Signing key"));
+        assert!(out.contains("EDFB01CA58D69A2B"));
+        assert!(out.contains("dUNL list"));
+        assert!(out.contains("seq 123"));
+        assert!(out.contains("2 validators"));
+        assert!(out.contains("expires in"));
+        assert!(out.contains("HTTP status:200"));
+        assert!(out.contains("fetching..."));
+        assert!(out.contains("Content-Type:"));
+        assert!(out.contains("text/plain"));
+        assert!(!out.contains("Raw TOML"));
+    }
+
+    #[test]
+    fn validator_detail_renders_verified_toml_rotated_master_and_raw_dump() {
+        let row = row(Some("xrplf.org"), Some("EDFFFF0099AABBCC"));
+        let toml: Option<Result<XrplTomlData, String>> = Some(Ok(XrplTomlData {
+            domain: "xrplf.org".into(),
+            validator_found: true,
+            attestation: Some("sig 0xAB".into()),
+            validator_count: 3,
+        }));
+        let mut state = ValidatorDetail {
+            visible: true,
+            lines: validator_detail_lines(
+                &row,
+                1,
+                &dunl(),
+                &toml,
+                Some("[SERVER]\nnode = \"wss://a.b\""),
+                200,
+                None,
+            ),
+            ..Default::default()
+        };
+
+        let out = detail_rendered(&mut state);
+        assert!(out.contains("Validator #2"));
+        assert!(out.contains("Master key"));
+        assert!(out.contains("EDFFFF0099AABBCC"));
+        assert!(out.contains("rotated or dual-key setup"));
+        assert!(out.contains("Domain verified:Yes"));
+        assert!(out.contains("Validators listed:"));
+        assert!(out.contains("Attestation:"));
+        assert!(out.contains("sig 0xAB"));
+        assert!(out.contains("Raw TOML"));
+        assert!(out.contains("node = \"wss://a.b\""));
+    }
+
+    #[test]
+    fn validator_detail_renders_missing_manifest_and_toml_error_state() {
+        let row = DunlValidatorRow {
+            has_manifest: false,
+            ..row(None, None)
+        };
+        let toml: Option<Result<XrplTomlData, String>> = Some(Err("boom".to_string()));
+        let mut state = ValidatorDetail {
+            visible: true,
+            lines: validator_detail_lines(&row, 0, &dunl(), &toml, None, 404, None),
+            ..Default::default()
+        };
+
+        let out = detail_rendered(&mut state);
+        assert!(out.contains("missing"));
+        assert!(out.contains("HTTP status:404"));
+        assert!(out.contains("Error: boom"));
+        assert!(!out.contains("Domain verified:"));
+    }
+}

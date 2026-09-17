@@ -19,7 +19,7 @@ use crate::{
     },
     config::Config,
     network::Network,
-    xrpl::{AccountSummary, WalletProposeResult},
+    xrpl::{AccountSummary, GeneratedWalletKeys},
 };
 
 /// Dropdown options for SetFlag / ClearFlag (must match [`crate::signing::parse_account_set_flag_choice`]).
@@ -129,8 +129,8 @@ pub struct WalletPanel {
     submit_flash: Option<SubmitFlash>,
     /// Last AssetManager C1 snapshot (Core Vault address for Direct Mint).
     fxrp_direct_mint: Option<crate::xrpl::FxrpDirectMintInfo>,
-    /// Key generation result overlay (WalletProposeOk → show, Esc to dismiss).
-    keygen_result: Option<WalletProposeResult>,
+    /// Key generation result overlay (GenerateWalletKeysOk → show, Esc to dismiss).
+    keygen_result: Option<GeneratedWalletKeys>,
 }
 
 impl Default for WalletPanel {
@@ -301,10 +301,10 @@ impl Component for WalletPanel {
             Action::FxrpExecuteDirectMintSubmitErr(msg) => {
                 self.set_submit_flash(SubmitFlash::Error(format!("FXRP Execute · {msg}")));
             }
-            Action::WalletProposeOk(result) => {
+            Action::GenerateWalletKeysOk(result) => {
                 self.keygen_result = Some(result.clone());
             }
-            Action::WalletProposeErr(msg) => {
+            Action::GenerateWalletKeysErr(msg) => {
                 self.set_submit_flash(SubmitFlash::Error(format!("Keygen · {msg}")));
             }
             Action::NetworkChange(net) => {
@@ -727,7 +727,7 @@ impl Component for WalletPanel {
             && !key.modifiers.contains(KeyModifiers::CONTROL)
         {
             self.keygen_result = None;
-            return Ok(Some(Action::WalletPropose));
+            return Ok(Some(Action::GenerateWalletKeys));
         }
 
         Ok(None)
@@ -1116,10 +1116,23 @@ mod tests {
             }
             other => panic!("expected TrustSet, got {other:?}"),
         }
+        // Rewrite the composer fields, then observe the queue conversion.
+        if let Some(ComposerPhase::TrustSet {
+            currency,
+            issuer,
+            limit,
+            ..
+        }) = &mut panel.composer
+        {
+            *currency = "usd".into();
+            *issuer = "rRewrittenIssuer".into();
+            *limit = "42".into();
+        }
         match panel.queue_submit_trust_set() {
             Action::TrustSetSubmit(p) => {
-                assert_eq!(p.currency, "USD");
-                assert_eq!(p.limit, "1000");
+                assert_eq!(p.currency, "USD", "currency must be uppercased");
+                assert_eq!(p.issuer, "rRewrittenIssuer");
+                assert_eq!(p.limit, "42");
                 assert!(p.skip_mainnet_prompt);
             }
             other => panic!("expected TrustSetSubmit, got {other:?}"),
@@ -1141,9 +1154,20 @@ mod tests {
             }
             other => panic!("expected OfferCreate, got {other:?}"),
         }
+        // Rewrite the composer fields, then observe the queue pass-through.
+        if let Some(ComposerPhase::OfferCreate {
+            taker_gets,
+            taker_pays,
+            ..
+        }) = &mut panel.composer
+        {
+            *taker_gets = "XRP:250".into();
+            *taker_pays = "JPY:rPaysRewritten:7".into();
+        }
         match panel.queue_submit_offer_create() {
             Action::OfferCreateSubmit(p) => {
-                assert_eq!(p.taker_gets, "XRP:1000000");
+                assert_eq!(p.taker_gets, "XRP:250");
+                assert_eq!(p.taker_pays, "JPY:rPaysRewritten:7");
                 assert!(p.skip_mainnet_prompt);
             }
             other => panic!("expected OfferCreateSubmit, got {other:?}"),
@@ -1231,5 +1255,17 @@ mod tests {
             }
             other => panic!("expected AccountSetSubmit, got {other:?}"),
         }
+    }
+
+    /// TC-129: proof_json preview must truncate by chars — byte slicing panicked on multibyte JSON.
+    #[test]
+    fn fxrp_proof_preview_survives_multibyte_proof_json() {
+        let mut panel = WalletPanel::new(false);
+        panel.is_focused = true;
+        panel.composer = Some(ComposerPhase::FxrpExecuteDirectMint {
+            proof_json: "証拠{json}".repeat(40),
+        });
+        let area = ratatui::layout::Rect::new(0, 0, 80, 24);
+        crate::test_support::render_to_string(80, 24, |f| panel.render_composer(f, area));
     }
 }

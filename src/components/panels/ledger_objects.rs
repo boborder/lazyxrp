@@ -15,16 +15,14 @@ use crate::{
             widgets::{render_empty, render_loading, titled_block_with_count},
         },
     },
-    xrpl::{
-        ArcValue, LedgerObjectRow, is_escrow_type, is_objects_tab_ledger_type, is_pay_channel_type,
-    },
+    xrpl::{ArcValue, LedgerObjectRow, is_escrow_type, is_misc_ledger_type, is_pay_channel_type},
 };
 
 #[derive(Clone, Copy, Default)]
 pub enum LedgerObjectFilter {
     /// Check, Ticket, MPT, DepositPreauth, SignerList, DID (credential / XLS-40), …
     #[default]
-    ObjectsTab,
+    MiscObjects,
     PayChannelOnly,
     EscrowOnly,
 }
@@ -32,7 +30,7 @@ pub enum LedgerObjectFilter {
 impl LedgerObjectFilter {
     fn keep(&self, r: &LedgerObjectRow) -> bool {
         match self {
-            LedgerObjectFilter::ObjectsTab => is_objects_tab_ledger_type(&r.ledger_type),
+            LedgerObjectFilter::MiscObjects => is_misc_ledger_type(&r.ledger_type),
             LedgerObjectFilter::PayChannelOnly => is_pay_channel_type(&r.ledger_type),
             LedgerObjectFilter::EscrowOnly => is_escrow_type(&r.ledger_type),
         }
@@ -150,5 +148,59 @@ impl Component for LedgerObjectsPanel {
 
         render_tx_detail(frame, area, &mut self.detail);
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::xrpl::ArcValue;
+
+    fn row(ledger_type: &str) -> LedgerObjectRow {
+        LedgerObjectRow {
+            ledger_type: ledger_type.into(),
+            index: "IDX".into(),
+            detail: "detail".into(),
+            raw_json: ArcValue::default(),
+        }
+    }
+
+    /// TC-151: ledger object filters classify rows without rendering.
+    #[test]
+    fn ledger_object_filter_keep_classifies_rows() {
+        let misc = LedgerObjectFilter::MiscObjects;
+        let pay = LedgerObjectFilter::PayChannelOnly;
+        let escrow = LedgerObjectFilter::EscrowOnly;
+
+        assert!(misc.keep(&row("Check")));
+        assert!(misc.keep(&row("Ticket")));
+        assert!(!misc.keep(&row("PayChannel")));
+        assert!(!misc.keep(&row("Escrow")));
+
+        assert!(pay.keep(&row("PayChannel")));
+        assert!(!pay.keep(&row("Escrow")));
+        assert!(!pay.keep(&row("Check")));
+
+        assert!(escrow.keep(&row("Escrow")));
+        assert!(!escrow.keep(&row("PayChannel")));
+        assert!(!escrow.keep(&row("Ticket")));
+    }
+
+    #[test]
+    fn apply_filter_keeps_only_matching_rows() {
+        let mut panel = LedgerObjectsPanel::new("objects", LedgerObjectFilter::PayChannelOnly);
+        let all = vec![
+            row("PayChannel"),
+            row("Escrow"),
+            row("Check"),
+            row("PayChannel"),
+        ];
+        panel.update(&Action::XrplLedgerObjects(all)).unwrap();
+        let out = crate::test_support::render_to_string(80, 10, |frame| {
+            panel.draw(frame, frame.area()).unwrap()
+        });
+        assert_eq!(out.matches("PayChannel").count(), 2);
+        assert!(!out.contains("Escrow"));
+        assert!(!out.contains("Check"));
     }
 }

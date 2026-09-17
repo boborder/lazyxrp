@@ -15,7 +15,7 @@ use crate::{
         shared::{fmt, theme},
     },
     network::Network,
-    xrpl::XrplRlusdPrice,
+    xrpl::BookMidPrice,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -66,7 +66,7 @@ pub struct StatusBar {
     refreshing_account: bool,
     refreshing_book: bool,
     tick: usize,
-    price: Option<XrplRlusdPrice>,
+    price: Option<BookMidPrice>,
     cached_price_spans: Vec<Span<'static>>,
     // freshness caches: (last_elapsed_secs, formatted_string)
     freshness_srv: Option<(u64, String)>,
@@ -112,14 +112,7 @@ impl StatusBar {
                     .as_ref()
                     .is_none_or(|(cached_secs, _)| *cached_secs != secs)
                 {
-                    let freshness_label = if secs < 60 {
-                        format!("{secs}s")
-                    } else if secs < 3600 {
-                        format!("{}m", secs / 60)
-                    } else {
-                        format!("{}h", secs / 3600)
-                    };
-                    *cache = Some((secs, freshness_label));
+                    *cache = Some((secs, freshness_label(secs)));
                 }
                 cache
                     .as_ref()
@@ -166,7 +159,7 @@ impl Component for StatusBar {
                 self.last_any_update_wall = Some(SystemTime::now());
                 self.refreshing_book = false;
             }
-            Action::XrplRlusdPrice(p) => {
+            Action::BookMidPrice(p) => {
                 self.price = Some(p.clone());
                 self.last_any_update_wall = Some(SystemTime::now());
                 self.last_error = None;
@@ -256,7 +249,7 @@ impl Component for StatusBar {
             spans.push(Span::raw("  "));
             spans.push(Span::styled(err_display.as_str(), theme::error_style()));
         }
-        let net_color = if self.network.is_mainnet() {
+        let net_color = if self.network.is_production() {
             theme::ERROR
         } else {
             theme::WARNING
@@ -276,5 +269,40 @@ impl Component for StatusBar {
             right_area,
         );
         Ok(())
+    }
+}
+
+/// "59s" / "1m" / "59m" / "1h" freshness bucket for an elapsed-secs value.
+/// The `None` (never updated) case renders `-` in the caller, not here.
+fn freshness_label(secs: u64) -> String {
+    if secs < 60 {
+        format!("{secs}s")
+    } else if secs < 3600 {
+        format!("{}m", secs / 60)
+    } else {
+        format!("{}h", secs / 3600)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// TC-136: freshness_label bucket boundaries — 59s/1m/59m/1h.
+    #[test]
+    fn freshness_label_boundaries() {
+        assert_eq!(freshness_label(0), "0s");
+        assert_eq!(freshness_label(59), "59s");
+        assert_eq!(freshness_label(60), "1m");
+        assert_eq!(freshness_label(3599), "59m");
+        assert_eq!(freshness_label(3600), "1h");
+    }
+
+    /// TC-136: cached_freshness_label keeps the `-` path when no update was seen.
+    #[test]
+    fn cached_freshness_label_none_uses_dash() {
+        let mut cache = None;
+        assert_eq!(StatusBar::cached_freshness_label(&mut cache, None), "-");
+        assert!(cache.is_none());
     }
 }

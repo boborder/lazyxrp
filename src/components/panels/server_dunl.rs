@@ -140,3 +140,59 @@ pub(super) fn draw_dunl_panel(
 
     render_selectable_table(frame, table_area, table, dunl_table, focused);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn row(domain: Option<&str>, has_manifest: bool) -> DunlValidatorRow {
+        DunlValidatorRow {
+            validation_public_key: "ED01AB".into(),
+            has_manifest,
+            domain: domain.map(str::to_string),
+            sequence: None,
+            master_public_key: None,
+        }
+    }
+
+    #[test]
+    fn validator_row_label_prefers_domain_when_short_enough_to_fit() {
+        assert_eq!(
+            validator_row_label(&row(Some("xrplf.org"), true), 36),
+            "xrplf.org"
+        );
+    }
+
+    #[test]
+    fn validator_row_label_middle_truncates_long_domain_to_fit_column() {
+        assert_eq!(
+            validator_row_label(&row(Some("validator.example.com"), true), 20),
+            "validator…ample.com"
+        );
+    }
+
+    #[test]
+    fn validator_row_label_leaves_domain_untouched_when_max_chars_is_three_or_less() {
+        assert_eq!(
+            validator_row_label(&row(Some("validator.example.com"), true), 3),
+            "validator.example.com"
+        );
+    }
+
+    #[test]
+    fn validator_row_label_reports_no_domain_when_manifest_lacks_domain() {
+        assert_eq!(validator_row_label(&row(None, true), 36), "(no domain)");
+    }
+
+    #[test]
+    fn validator_row_label_shortens_public_key_when_no_domain_and_no_manifest() {
+        let long_key = "EDFB01CA58D69A2B8F4D1F1E3D2C2B2A2F1E3D2C2B2A2F1E3D2C2B2A2F1E3D2C2";
+        let mut no_identity = row(None, false);
+        no_identity.validation_public_key = long_key.to_string();
+        assert_eq!(
+            validator_row_label(&no_identity, 36),
+            format!("{}…{}", &long_key[..8], &long_key[long_key.len() - 6..])
+        );
+        assert_eq!(validator_row_label(&row(None, false), 36), "ED01AB");
+    }
+}

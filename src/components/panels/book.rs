@@ -159,3 +159,36 @@ impl Component for BookPanel {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::xrpl::ArcValue;
+
+    fn rendered(panel: &mut BookPanel) -> String {
+        crate::test_support::render_to_string(100, 14, |f| panel.draw(f, f.area()).unwrap())
+    }
+
+    #[test]
+    fn book_panel_renders_loading_empty_and_offer_states() {
+        let mut panel = BookPanel::default();
+        assert!(rendered(&mut panel).contains("loading order book"));
+
+        panel.update(&Action::XrplBookOffers(Vec::new())).unwrap();
+        assert!(rendered(&mut panel).contains("(no offers)"));
+
+        panel
+            .update(&Action::XrplBookOffers(vec![OfferRow {
+                quality: "0.5".into(),
+                price: "500000.000000".into(),
+                taker_gets: "1.000000".into(),
+                taker_pays: "2 USD".into(),
+                raw_json: ArcValue::default(),
+            }]))
+            .unwrap();
+        let out = rendered(&mut panel);
+        assert!(out.contains("Book Offers"));
+        assert!(out.contains("500000"));
+        assert!(out.contains("2 USD"));
+    }
+}

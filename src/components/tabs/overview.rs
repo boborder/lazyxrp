@@ -113,28 +113,30 @@ impl Component for OverviewTab {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ratatui::Terminal;
-    use ratatui::backend::TestBackend;
 
     fn render_tab(tab: &mut OverviewTab) -> String {
-        let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
-        terminal
-            .draw(|frame| tab.draw(frame, frame.area()).unwrap())
-            .unwrap();
-        terminal
-            .backend()
-            .buffer()
-            .content
-            .iter()
-            .map(|cell| cell.symbol())
-            .collect()
+        crate::test_support::render_to_string(120, 30, |f| tab.draw(f, f.area()).unwrap())
     }
 
     /// TC-116: Overview Off omits the combined Flare panel.
     #[test]
     fn overview_off_omits_combined_flare_panel() {
         let mut tab = OverviewTab::new("wss://example".into(), FlareDisplay::Off);
+        tab.update(&Action::XrplServerInfo(Box::new(
+            crate::xrpl::ServerInfoSummary {
+                ledger_index: 100,
+                hostid: "rippled-test".into(),
+                build_version: "1.2.3".into(),
+                validation_quorum: None,
+                validator_list: None,
+            },
+        )))
+        .unwrap();
         let out = render_tab(&mut tab);
+        assert!(
+            out.contains("rippled-test"),
+            "server panel must still render"
+        );
         assert!(!out.contains("Oracle / FTSO / FXRP"));
         assert!(!out.contains("FTSO"));
     }
@@ -155,6 +157,7 @@ mod tests {
         let out = render_tab(&mut tab);
         assert!(out.contains("Oracle / FTSO / FXRP"));
         assert!(out.contains("XRP/USD 0.52"));
-        assert!(!out.contains("Pair"));
+        // "Source" is FTSO-table-header-only vocabulary (XRPL oracle header has none).
+        assert!(!out.contains("Source"));
     }
 }

@@ -164,21 +164,9 @@ impl Component for MarketOracleTab {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ratatui::Terminal;
-    use ratatui::backend::TestBackend;
 
     fn render_tab(tab: &mut MarketOracleTab) -> String {
-        let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
-        terminal
-            .draw(|frame| tab.draw(frame, frame.area()).unwrap())
-            .unwrap();
-        terminal
-            .backend()
-            .buffer()
-            .content
-            .iter()
-            .map(|cell| cell.symbol())
-            .collect()
+        crate::test_support::render_to_string(120, 40, |f| tab.draw(f, f.area()).unwrap())
     }
 
     /// TC-118: Market Off omits the FTSO panel but keeps XRPL oracle.
@@ -205,6 +193,7 @@ mod tests {
         .unwrap();
         let out = render_tab(&mut tab);
         assert!(out.contains("FLR/USD 0.03"));
-        assert!(!out.contains("Pair"));
+        // "Source" is FTSO-table-header-only vocabulary (XRPL oracle header has none).
+        assert!(!out.contains("Source"));
     }
 }

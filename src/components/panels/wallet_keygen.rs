@@ -63,3 +63,52 @@ impl WalletPanel {
         frame.render_widget(body, inner);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::action::Action;
+    use crate::components::Component;
+    use crate::xrpl::GeneratedWalletKeys;
+
+    fn popup_rendered(panel: &WalletPanel, width: u16, height: u16) -> String {
+        crate::test_support::render_to_string(width, height, |frame| {
+            panel.render_keygen_popup(frame, frame.area())
+        })
+    }
+
+    fn keygen_result() -> GeneratedWalletKeys {
+        GeneratedWalletKeys {
+            master_seed: "sEdTestOnlySeedValue".into(),
+            master_seed_hex: "DEADBEEF01".into(),
+            account_id: "rTestAccountAddress123".into(),
+            public_key: "aTestPublicKey99".into(),
+            public_key_hex: "CAFEBABE".into(),
+            key_type: "ed25519".into(),
+        }
+    }
+
+    #[test]
+    fn keygen_popup_renders_nothing_when_no_keygen_result() {
+        let panel = WalletPanel::new(false);
+        assert!(popup_rendered(&panel, 80, 24).trim().is_empty());
+    }
+
+    #[test]
+    fn keygen_popup_renders_seed_address_pubkey_and_offline_warning() {
+        let mut panel = WalletPanel::new(false);
+        panel
+            .update(&Action::GenerateWalletKeysOk(keygen_result()))
+            .unwrap();
+
+        let out = popup_rendered(&panel, 100, 24);
+        assert!(out.contains("New Key (local)"));
+        assert!(out.contains("Seed:   sEdTestOnlySeedValue"));
+        assert!(out.contains("Addr:   rTestAccountAddress123"));
+        assert!(out.contains("PubKey: aTestPublicKey99"));
+        assert!(out.contains("Type:   ed25519  Seed hex: DEADBEEF01"));
+        assert!(out.contains("Save the seed offline!"));
+        assert!(out.contains("Set XRPL_SEED=<seed>"));
+        assert!(out.contains("Esc / g to dismiss"));
+    }
+}

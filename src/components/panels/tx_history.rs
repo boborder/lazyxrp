@@ -232,7 +232,7 @@ mod tests {
     use super::*;
     use crate::xrpl::ArcValue;
 
-    fn dummy_tx_row(hash: &str, tx_type: &str) -> TxRow {
+    fn fixture_tx_row(hash: &str, tx_type: &str) -> TxRow {
         TxRow {
             hash: hash.to_string(),
             tx_type: tx_type.to_string(),
@@ -249,9 +249,9 @@ mod tests {
     fn filter_by_tx_type() {
         let mut panel = TxHistoryPanel {
             txs: vec![
-                dummy_tx_row("aaa", "Payment"),
-                dummy_tx_row("bbb", "OfferCreate"),
-                dummy_tx_row("ccc", "Payment"),
+                fixture_tx_row("aaa", "Payment"),
+                fixture_tx_row("bbb", "OfferCreate"),
+                fixture_tx_row("ccc", "Payment"),
             ],
             filter_input: "pay".to_string(),
             ..Default::default()
@@ -266,8 +266,8 @@ mod tests {
     fn filter_by_hash_partial() {
         let mut panel = TxHistoryPanel {
             txs: vec![
-                dummy_tx_row("deadbeef", "Payment"),
-                dummy_tx_row("cafebabe", "AccountSet"),
+                fixture_tx_row("deadbeef", "Payment"),
+                fixture_tx_row("cafebabe", "AccountSet"),
             ],
             filter_input: "cafe".to_string(),
             ..Default::default()
@@ -282,8 +282,8 @@ mod tests {
     fn filter_empty_shows_all() {
         let mut panel = TxHistoryPanel {
             txs: vec![
-                dummy_tx_row("aaa", "Payment"),
-                dummy_tx_row("bbb", "TrustSet"),
+                fixture_tx_row("aaa", "Payment"),
+                fixture_tx_row("bbb", "TrustSet"),
             ],
             ..Default::default()
         };
@@ -292,8 +292,11 @@ mod tests {
         assert!(panel.filtered.is_none());
     }
 
-    #[test]
-    fn cached_rows_follow_filter_append_and_selected_detail() {
+    fn render_tx_history_panel(panel: &mut TxHistoryPanel) -> String {
+        crate::test_support::render_to_string(100, 20, |f| panel.draw(f, f.area()).unwrap())
+    }
+
+    fn panel_with_payment_rows() -> TxHistoryPanel {
         let mut panel = TxHistoryPanel {
             is_focused: true,
             ..Default::default()
@@ -301,14 +304,16 @@ mod tests {
         panel
             .update(&Action::XrplTxHistory(
                 vec![
-                    dummy_tx_row("first", "Payment"),
-                    dummy_tx_row("excluded", "OfferCreate"),
+                    fixture_tx_row("first", "Payment"),
+                    fixture_tx_row("excluded", "OfferCreate"),
                 ],
                 None,
             ))
             .unwrap();
-        let mut terminal =
-            ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 20)).unwrap();
+        panel
+    }
+
+    fn apply_payment_filter(panel: &mut TxHistoryPanel) {
         panel
             .on_key_event(KeyEvent::from(KeyCode::Char('f')))
             .unwrap();
@@ -318,45 +323,69 @@ mod tests {
                 .unwrap();
         }
         panel.on_key_event(KeyEvent::from(KeyCode::Enter)).unwrap();
+    }
+
+    /// TC-153: filter input renders matching rows only
+    #[test]
+    fn filter_input_renders_matching_rows_only() {
+        let mut panel = panel_with_payment_rows();
+        apply_payment_filter(&mut panel);
+        let rendered = render_tx_history_panel(&mut panel);
+        assert!(rendered.contains("first"));
+        assert!(!rendered.contains("excluded"));
+    }
+
+    /// TC-154: append preserves filtered cache through redraw
+    #[test]
+    fn append_preserves_filtered_cache() {
+        let mut panel = panel_with_payment_rows();
+        apply_payment_filter(&mut panel);
         panel
             .update(&Action::XrplTxHistoryAppend(
-                vec![dummy_tx_row("second", "Payment")],
+                vec![fixture_tx_row("second", "Payment")],
+                None,
+            ))
+            .unwrap();
+        let rendered = render_tx_history_panel(&mut panel);
+        assert!(rendered.contains("first"));
+        assert!(rendered.contains("second"));
+        assert!(!rendered.contains("excluded"));
+    }
+
+    /// TC-155: tx detail toggle shows the selected transaction JSON
+    #[test]
+    fn tx_detail_toggle_shows_selected_tx_json() {
+        let mut panel = panel_with_payment_rows();
+        apply_payment_filter(&mut panel);
+        panel
+            .update(&Action::XrplTxHistoryAppend(
+                vec![fixture_tx_row("second", "Payment")],
                 None,
             ))
             .unwrap();
         panel.update(&Action::SelectNext).unwrap();
-        terminal
-            .draw(|frame| panel.draw(frame, frame.area()).unwrap())
-            .unwrap();
-        let rendered = terminal
-            .backend()
-            .buffer()
-            .content
-            .iter()
-            .map(|cell| cell.symbol())
-            .collect::<String>();
-        assert!(rendered.contains("first"));
-        assert!(rendered.contains("second"));
-        assert!(!rendered.contains("excluded"));
         panel.update(&Action::TxDetailToggle).unwrap();
         assert_eq!(panel.detail.tx_json.0["hash"], "second");
-        panel.update(&Action::TxDetailToggle).unwrap();
+    }
+
+    /// TC-156: full history replace invalidates cached rows
+    #[test]
+    fn full_history_replace_invalidates_cached_rows() {
+        let mut panel = panel_with_payment_rows();
+        apply_payment_filter(&mut panel);
         panel
-            .update(&Action::XrplTxHistory(
-                vec![dummy_tx_row("replacement", "Payment")],
+            .update(&Action::XrplTxHistoryAppend(
+                vec![fixture_tx_row("second", "Payment")],
                 None,
             ))
             .unwrap();
-        terminal
-            .draw(|frame| panel.draw(frame, frame.area()).unwrap())
+        panel
+            .update(&Action::XrplTxHistory(
+                vec![fixture_tx_row("replacement", "Payment")],
+                None,
+            ))
             .unwrap();
-        let rendered = terminal
-            .backend()
-            .buffer()
-            .content
-            .iter()
-            .map(|cell| cell.symbol())
-            .collect::<String>();
+        let rendered = render_tx_history_panel(&mut panel);
         assert!(rendered.contains("replacement"));
         assert!(!rendered.contains("first"));
         assert!(!rendered.contains("second"));

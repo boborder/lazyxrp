@@ -101,3 +101,34 @@ impl Component for AmmPanel {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn amm_panel_renders_loading_and_pool_summary() {
+        let mut panel = AmmPanel::default();
+        let loading = crate::test_support::render_to_string(80, 10, |frame| {
+            panel.draw(frame, frame.area()).unwrap()
+        });
+        assert!(loading.contains("loading AMM info"));
+
+        panel
+            .update(&Action::XrplAmmInfo(Box::new(AmmSummary {
+                asset1: "XRP".into(),
+                asset2: "USD".into(),
+                lp_token: "42 USD".into(),
+                trading_fee: 12,
+                pool1: "2.000000".into(),
+                pool2: "3 USD".into(),
+            })))
+            .unwrap();
+        let out = crate::test_support::render_to_string(80, 10, |frame| {
+            panel.draw(frame, frame.area()).unwrap()
+        });
+        assert!(out.contains("XRP"));
+        assert!(out.contains("3 USD"));
+        assert!(out.contains("Trading Fee"));
+    }
+}

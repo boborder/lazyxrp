@@ -549,30 +549,63 @@ mod tests {
         );
     }
 
-    /// TC-093: opening a new tx clears cached render lines
+    /// TC-093: opening a new tx clears cached render lines and shows the new tx on draw.
     #[test]
     fn tx_detail_cache_invalidated_on_open() {
         let mut state = TxDetailState::default();
-        let tx1 = json!({"TransactionType":"Payment","Account":"rA","Amount":"1000000"});
-        let meta1 = json!({});
-        state.open(arc(tx1), arc(meta1));
-
-        // Cache should be None after open (invalidated)
-        assert!(state.cached_lines.is_none());
-
-        // Populate cache as draw path would, then reopen to prove invalidation.
+        let tx1 = json!({"TransactionType":"Payment","Account":"rPaymentOnly","Amount":"1000000"});
+        state.open(arc(tx1), arc(json!({})));
+        // Simulate a stale draw cache from the first tx.
         let lines = detail_lines_for(&state.tx_json.0, &state.meta_json.0);
         state.cached_lines = Some(to_static_lines(lines));
+
+        let tx2 = json!({"TransactionType":"AccountSet","Account":"rAccountSetOnly","SetFlag":8});
+        state.open(arc(tx2), arc(json!({})));
+
+        let out = crate::test_support::render_to_string(80, 24, |frame| {
+            render_tx_detail(frame, frame.area(), &mut state)
+        });
+        assert!(out.contains("AccountSet"));
+        assert!(out.contains("rAccountSetOnly"));
+        assert!(!out.contains("rPaymentOnly"));
+    }
+
+    /// TC-134: while open, Select/SelectPrev become scroll +/- and block the
+    /// table underneath; while hidden the state lets actions pass through.
+    #[test]
+    fn tx_detail_open_consumes_row_select_as_scroll() {
+        let mut state = TxDetailState::default();
         assert!(
-            state
-                .cached_lines
-                .as_ref()
-                .is_some_and(|lines| !lines.is_empty())
+            !state.handle_action(&Action::SelectNext),
+            "hidden overlay must not consume actions"
         );
 
-        let tx2 = json!({"TransactionType":"AccountSet","Account":"rB","SetFlag":8});
-        let meta2 = json!({});
-        state.open(arc(tx2), arc(meta2));
-        assert!(state.cached_lines.is_none());
+        state.open(arc(json!({"hash": "a"})), arc(json!({})));
+        assert!(state.handle_action(&Action::SelectNext));
+        assert_eq!(state.scroll, 1);
+        assert!(state.handle_action(&Action::SelectPrev));
+        assert_eq!(state.scroll, 0);
+        assert!(state.handle_action(&Action::SelectPrev));
+        assert_eq!(state.scroll, 0, "scroll saturates at 0");
+
+        state.close();
+        assert!(!state.handle_action(&Action::SelectNext));
+    }
+
+    /// TC-135: TxDetailToggle opens the overlay when a row can supply detail
+    /// JSON, and is ignored when there is nothing to open.
+    #[test]
+    fn tx_detail_toggle_opens_overlay() {
+        let mut state = TxDetailState::default();
+        assert!(!state.handle_panel_action(&Action::TxDetailToggle, None));
+        assert!(!state.visible);
+
+        assert!(state.handle_panel_action(
+            &Action::TxDetailToggle,
+            Some((arc(json!({"hash": "a"})), arc(json!({}))))
+        ));
+        assert!(state.visible);
+        assert_eq!(state.scroll, 0);
+        assert_eq!(state.tx_json.0["hash"], "a");
     }
 }

@@ -144,3 +144,107 @@ impl WalletPanel {
         None
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn key(c: char) -> KeyEvent {
+        KeyEvent::new(KeyCode::Char(c), KeyModifiers::empty())
+    }
+
+    /// TC-130: payment_edit_keys filter table — destination is ascii_graphic
+    /// only, IOU currency caps at 3 alphabetic chars, amounts accept digits and
+    /// at most one '.' (row 3 in IOU mode).
+    #[test]
+    fn payment_edit_keys_filter_table() {
+        // (field, is_iou, row, key, initial, expected_accept, expected_after)
+        let cases: &[(&str, bool, usize, char, &str, bool, &str)] = &[
+            ("dest", false, 0, 'a', "", true, "a"),
+            ("dest", false, 0, ' ', "", false, ""),
+            ("dest", false, 0, 'あ', "", false, ""),
+            ("dest", true, 0, 'a', "rX", true, "rXa"),
+            ("amt", false, 1, '1', "", true, "1"),
+            ("amt", false, 1, 'x', "", false, ""),
+            ("amt", false, 1, '.', "1.", false, "1."),
+            ("cur", true, 1, 'U', "", true, "U"),
+            ("cur", true, 1, '4', "", false, ""),
+            ("cur", true, 1, 'd', "US", true, "USd"),
+            ("cur", true, 1, 'd', "USD", false, "USD"),
+            ("iss", true, 2, 'r', "", true, "r"),
+            ("iss", true, 2, ' ', "", false, ""),
+            ("amt", true, 3, '.', "1.", false, "1."),
+            ("amt", true, 3, '5', "1", true, "15"),
+        ];
+        for (field, is_iou, row, c, initial, accept, after) in cases {
+            let mut dest = String::new();
+            let mut amt = String::new();
+            let mut currency = String::new();
+            let mut issuer = String::new();
+            match *field {
+                "dest" => dest.push_str(initial),
+                "amt" => amt.push_str(initial),
+                "cur" => currency.push_str(initial),
+                _ => issuer.push_str(initial),
+            }
+            let got = WalletPanel::payment_edit_keys(
+                &mut dest,
+                &mut amt,
+                &mut currency,
+                &mut issuer,
+                *is_iou,
+                *row,
+                &key(*c),
+            );
+            let result = match *field {
+                "dest" => dest.as_str(),
+                "amt" => amt.as_str(),
+                "cur" => currency.as_str(),
+                _ => issuer.as_str(),
+            };
+            assert_eq!(got, *accept, "{field} row={row} c={c}");
+            assert_eq!(result, *after, "{field} row={row} c={c}");
+        }
+    }
+
+    /// TC-131: account_set_edit_keys only edits field_row 2-4 while editing;
+    /// tick_size / transfer_rate accept digits only, domain accepts any char.
+    #[test]
+    fn account_set_edit_keys_contract() {
+        let mut panel = WalletPanel::new(false);
+        panel.open_account_set_composer();
+        panel.is_form_editing = true;
+
+        // Flag rows 0/1 are navigated, not typed into.
+        panel.field_row = 0;
+        assert!(!panel.account_set_edit_keys(&key('a')));
+        panel.field_row = 1;
+        assert!(!panel.account_set_edit_keys(&key('a')));
+        assert!(panel.domain.is_empty());
+
+        // Domain row accepts arbitrary characters.
+        panel.field_row = 2;
+        assert!(panel.account_set_edit_keys(&key('a')));
+        assert_eq!(panel.domain, "a");
+
+        // Numeric rows reject non-digits but still report "editing".
+        panel.field_row = 3;
+        assert!(panel.account_set_edit_keys(&key('x')));
+        assert!(panel.tick_size.is_empty());
+        assert!(panel.account_set_edit_keys(&key('7')));
+        assert_eq!(panel.tick_size, "7");
+
+        panel.field_row = 4;
+        assert!(panel.account_set_edit_keys(&key('2')));
+        assert_eq!(panel.transfer_rate, "2");
+        assert!(
+            panel.account_set_edit_keys(&KeyEvent::new(KeyCode::Backspace, KeyModifiers::empty()))
+        );
+        assert!(panel.transfer_rate.is_empty());
+
+        // Not editing → no field mutation.
+        panel.is_form_editing = false;
+        panel.field_row = 3;
+        assert!(!panel.account_set_edit_keys(&key('1')));
+    }
+}

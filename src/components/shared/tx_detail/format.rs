@@ -82,8 +82,9 @@ pub(crate) fn format_value(key: &str, value: &Value) -> String {
                 return fmt_xrpl_amount_from_value(value);
             }
             let s = value.to_string();
-            if s.len() > 80 {
-                format!("{}…", &s[..80])
+            if s.chars().count() > 80 {
+                let truncated: String = s.chars().take(80).collect();
+                format!("{truncated}…")
             } else {
                 s
             }
@@ -169,11 +170,24 @@ mod tests {
     fn format_value_long_object_truncated() {
         let v = json!({"a":"x".repeat(100)});
         let full = v.to_string();
-        assert!(full.len() > 80, "fixture must exceed truncate threshold");
+        assert!(
+            full.chars().count() > 80,
+            "fixture must exceed truncate threshold"
+        );
         let result = format_value("Foo", &v);
         assert!(result.ends_with('…'));
-        assert_eq!(&result.as_bytes()[..80], &full.as_bytes()[..80]);
-        assert_eq!(result.len(), 80 + '…'.len_utf8());
+        let prefix: String = full.chars().take(80).collect();
+        assert_eq!(result, format!("{prefix}…"));
+    }
+
+    #[test]
+    fn format_value_long_object_truncates_on_char_boundary() {
+        // Multibyte field values must not panic when the 80-char cut lands mid-codepoint.
+        let v = json!({"note":"あ".repeat(90)});
+        let result = format_value("Foo", &v);
+        assert!(result.ends_with('…'));
+        assert_eq!(result.chars().count(), 81, "80 chars + ellipsis");
+        assert!(result.contains('あ'));
     }
 
     #[test]

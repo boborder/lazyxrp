@@ -121,3 +121,34 @@ pub fn render_selectable_table<'a>(
     );
     table
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// TC-133: selection bounds — select_next stops at the last row, reset_len
+    /// clamps a stale selection to the new length, and len=0 clears selection.
+    #[test]
+    fn selectable_table_state_bounds() {
+        let mut st = SelectableTableState::default();
+
+        // select_next from no selection enters row 0, then stops at the end.
+        for _ in 0..10 {
+            st.select_next(5);
+        }
+        assert_eq!(st.selected(), Some(4));
+        st.select_prev(5);
+        assert_eq!(st.selected(), Some(3));
+
+        // Shrinking reset_len clamps the stale selection.
+        st.reset_len(2);
+        assert_eq!(st.selected(), Some(1));
+
+        // Empty reset_len and navigation on an empty table deselect cleanly.
+        st.reset_len(0);
+        assert_eq!(st.selected(), None);
+        st.select_next(0);
+        st.select_prev(0);
+        assert_eq!(st.selected(), None);
+    }
+}

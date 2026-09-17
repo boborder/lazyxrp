@@ -138,10 +138,17 @@ mod popup_tests {
 
     #[test]
     fn centered_popup_small_area_no_panic() {
-        let area = Rect::new(0, 0, 10, 5);
-        let popup = centered_popup_rect(area, 40, 12);
-        assert!(popup.width > 0 && popup.height > 0);
-        assert!(popup.x + popup.width <= area.right());
-        assert!(popup.y + popup.height <= area.bottom());
+        for area in [
+            Rect::new(0, 0, 10, 5),
+            Rect::new(0, 0, 1, 1),
+            Rect::new(0, 0, 0, 0),
+        ] {
+            let popup = centered_popup_rect(area, 40, 12);
+            assert!(popup.width > 0 && popup.height > 0);
+            if area.width > 0 && area.height > 0 {
+                assert!(popup.x + popup.width <= area.right());
+                assert!(popup.y + popup.height <= area.bottom());
+            }
+        }
     }
 }
