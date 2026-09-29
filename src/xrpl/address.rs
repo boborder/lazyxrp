@@ -81,28 +81,21 @@ mod tests {
     const CLASSIC: &str = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh";
 
     #[test]
-    fn resolve_empty_destination_is_rejected() {
+    fn resolve_payment_destination_rejects_invalid() {
         assert!(resolve_payment_destination("").is_err());
         assert!(resolve_payment_destination("   ").is_err());
-    }
-
-    #[test]
-    fn resolve_invalid_destination_is_rejected() {
         let err = resolve_payment_destination("not-an-address").expect_err("invalid shape");
         assert!(err.to_string().contains("invalid destination"), "{err}");
     }
 
     #[test]
-    fn resolve_xaddress_preserves_destination_tag() {
+    fn resolve_payment_destination_classification() {
         let xaddr = classic_address_to_xaddress(CLASSIC, Some(42), false).expect("xaddr");
         let resolved = resolve_payment_destination(&xaddr).expect("resolve");
         assert_eq!(resolved.classic, CLASSIC);
         assert_eq!(resolved.destination_tag, Some(42));
         assert_eq!(resolved.xaddress_is_test, Some(false));
-    }
 
-    #[test]
-    fn resolve_classic_address_has_no_tag() {
         let resolved = resolve_payment_destination(CLASSIC).expect("resolve");
         assert_eq!(resolved.classic, CLASSIC);
         assert!(resolved.destination_tag.is_none());
@@ -110,10 +103,11 @@ mod tests {
     }
 
     #[test]
-    fn xaddress_network_mismatch_is_rejected_in_both_directions() {
+    fn xaddress_network_guard_branches() {
         let mainnet_xaddr = classic_address_to_xaddress(CLASSIC, None, false).expect("xaddr");
         let testnet_xaddr = classic_address_to_xaddress(CLASSIC, None, true).expect("xaddr");
 
+        // Mismatches are rejected in both directions.
         let resolved = resolve_payment_destination(&testnet_xaddr).expect("resolve");
         let err = ensure_xaddress_matches_network(&resolved, &Network::Mainnet)
             .expect_err("test X-address on mainnet");
@@ -123,15 +117,11 @@ mod tests {
         let err = ensure_xaddress_matches_network(&resolved, &Network::Testnet)
             .expect_err("mainnet X-address on testnet");
         assert!(err.to_string().contains("production network"), "{err}");
-    }
 
-    #[test]
-    fn xaddress_and_classic_pass_network_check_on_matching_networks() {
-        let mainnet_xaddr = classic_address_to_xaddress(CLASSIC, None, false).expect("xaddr");
+        // Matching networks pass; classic addresses bypass the check.
         let resolved = resolve_payment_destination(&mainnet_xaddr).expect("resolve");
         ensure_xaddress_matches_network(&resolved, &Network::Mainnet).expect("matches mainnet");
 
-        let testnet_xaddr = classic_address_to_xaddress(CLASSIC, None, true).expect("xaddr");
         let resolved = resolve_payment_destination(&testnet_xaddr).expect("resolve");
         ensure_xaddress_matches_network(&resolved, &Network::Testnet).expect("matches testnet");
 

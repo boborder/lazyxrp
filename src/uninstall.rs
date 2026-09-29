@@ -160,16 +160,6 @@ mod tests {
     use crate::test_support::{TempRootGuard, TestEnvGuard, env_lock};
 
     #[test]
-    fn is_safe_uninstall_dir_requires_lazyxrp_basename() {
-        assert!(is_safe_uninstall_dir(Path::new("/tmp/lazyxrp")));
-        assert!(is_safe_uninstall_dir(Path::new(
-            "/tmp/com.kdheepak.lazyxrp"
-        )));
-        assert!(!is_safe_uninstall_dir(Path::new("/tmp")));
-        assert!(!is_safe_uninstall_dir(Path::new("/")));
-    }
-
-    #[test]
     fn backup_candidate_appends_bak_suffix() {
         let p = PathBuf::from("/opt/bin/lazyxrp");
         assert_eq!(
@@ -210,6 +200,14 @@ mod tests {
         let other = root.join("unrelated-stuff");
         std::fs::create_dir_all(&other).expect("create unrelated dir");
         assert!(!is_safe_uninstall_dir(&other));
+
+        // Basename contract, including the / and /tmp guard branches.
+        assert!(is_safe_uninstall_dir(Path::new("/tmp/lazyxrp")));
+        assert!(is_safe_uninstall_dir(Path::new(
+            "/tmp/com.kdheepak.lazyxrp"
+        )));
+        assert!(!is_safe_uninstall_dir(Path::new("/tmp")));
+        assert!(!is_safe_uninstall_dir(Path::new("/")));
     }
 
     /// TC-150: `perform_self_uninstall(assume_yes)` deletes only the safe,

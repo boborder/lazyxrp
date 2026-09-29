@@ -100,37 +100,44 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn fmt_xrpl_amount_from_value_xrp() {
+    fn fmt_xrpl_amount_from_value_branches() {
         assert_eq!(fmt_xrpl_amount_from_value(&json!("1000000")), "1.000000");
         assert_eq!(fmt_xrpl_amount_from_value(&json!(1_000_000)), "1.000000");
+        let issued = json!({"value":"100","currency":"USD","issuer":"rsA2LpG"});
+        assert_eq!(
+            fmt_xrpl_amount_from_value(&issued),
+            "100 USD (issuer: rsA2LpG)"
+        );
     }
 
-    #[test]
-    fn fmt_xrpl_amount_from_value_issued() {
-        let v = json!({"value":"100","currency":"USD","issuer":"rsA2LpG"});
-        assert_eq!(fmt_xrpl_amount_from_value(&v), "100 USD (issuer: rsA2LpG)");
-    }
-
-    #[test]
-    fn push_common_lines_from_value_account_only() {
-        let mut lines = Vec::new();
-        push_common_lines_from_value(&mut lines, &json!({"Account":"rTest"}));
-        assert_eq!(lines.len(), 1);
-        assert!(lines[0].to_string().contains("rTest"));
-    }
-
+    /// Account-only TX renders one Account line; all-field TX renders 3 lines.
     #[test]
     fn push_common_lines_from_value_all_fields() {
-        let mut lines = Vec::new();
-        push_common_lines_from_value(
-            &mut lines,
-            &json!({"Account":"rTest","Sequence":42,"Fee":"1000"}),
-        );
-        assert_eq!(lines.len(), 3);
-        let text: Vec<String> = lines.iter().map(|l| l.to_string()).collect();
-        assert!(text[0].contains("rTest"));
-        assert!(text[1].contains("42"));
-        assert!(text[2].contains("0.001000"));
+        let cases: [(&str, Value, usize, [&str; 3]); 2] = [
+            (
+                "account_only",
+                json!({"Account":"rTest"}),
+                1,
+                ["rTest", "", ""],
+            ),
+            (
+                "all_fields",
+                json!({"Account":"rTest","Sequence":42,"Fee":"1000"}),
+                3,
+                ["rTest", "42", "0.001000"],
+            ),
+        ];
+        for (_name, tx, count, expect) in cases {
+            let mut lines = Vec::new();
+            push_common_lines_from_value(&mut lines, &tx);
+            assert_eq!(lines.len(), count);
+            for (i, needle) in expect.iter().enumerate() {
+                if needle.is_empty() {
+                    break;
+                }
+                assert!(lines[i].to_string().contains(needle));
+            }
+        }
     }
 
     #[test]
@@ -178,6 +185,12 @@ mod tests {
         assert!(result.ends_with('…'));
         let prefix: String = full.chars().take(80).collect();
         assert_eq!(result, format!("{prefix}…"));
+
+        // Short object passes through untouched.
+        let short = json!({"a":"accent"});
+        let result = format_value("Foo", &short);
+        assert!(!result.ends_with('…'));
+        assert_eq!(result, short.to_string());
     }
 
     #[test]
@@ -188,13 +201,5 @@ mod tests {
         assert!(result.ends_with('…'));
         assert_eq!(result.chars().count(), 81, "80 chars + ellipsis");
         assert!(result.contains('あ'));
-    }
-
-    #[test]
-    fn format_value_short_object_not_truncated() {
-        let v = json!({"a":"accent"});
-        let result = format_value("Foo", &v);
-        assert!(!result.ends_with('…'));
-        assert_eq!(result, v.to_string());
     }
 }

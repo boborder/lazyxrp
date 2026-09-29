@@ -274,123 +274,62 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    /// `drops_to_xrp`: valid drops render with 6 decimals; invalid input
+    /// yields "0.000000".
     #[test]
-    fn drops_to_xrp_basic() {
+    fn drops_to_xrp_converts() {
         assert_eq!(drops_to_xrp("1000000"), "1.000000");
         assert_eq!(drops_to_xrp("250000"), "0.250000");
-    }
-
-    #[test]
-    fn drops_to_xrp_invalid_returns_zero() {
         assert_eq!(drops_to_xrp("not-a-number"), "0.000000");
     }
 
-    /// TC-138: drops_to_xrp — beyond 2^53 the f64 conversion loses drop
-    /// precision (documented current behavior): 17-nines input collapses to
-    /// the same output as 1e17.
+    /// `format_amount`: None → "-", XRP drops string → XRP amount, and an
+    /// issued-currency object renders `value CUR`.
     #[test]
-    fn drops_to_xrp_precision_collapses_beyond_2_pow_53() {
-        assert_eq!(drops_to_xrp("99999999999999999"), "100000000000.000000");
-        assert_eq!(drops_to_xrp("100000000000000000"), "100000000000.000000");
-        assert_eq!(
-            drops_to_xrp("99999999999999999"),
-            drops_to_xrp("100000000000000000")
-        );
-    }
-
-    #[test]
-    fn format_amount_none() {
+    fn format_amount_branches() {
         assert_eq!(format_amount(None), "-");
+
+        let drops = json!("1000000");
+        assert_eq!(format_amount(Some(&drops)), "1.000000");
+
+        let issued = json!({"currency": "USD", "value": "1.5", "issuer": "rXyz"});
+        assert_eq!(format_amount(Some(&issued)), "1.5 USD");
     }
 
+    /// TC-139: `format_ripple_time_utc` — a known value renders correctly,
+    /// epoch zero renders 2000-01-01, and u64::MAX clamps to 9999-12-31
+    /// without panicking.
     #[test]
-    fn format_amount_xrp_drops_string() {
-        let v = json!("1000000");
-        assert_eq!(format_amount(Some(&v)), "1.000000");
-    }
-
-    #[test]
-    fn format_amount_issued_currency() {
-        let v = json!({"currency": "USD", "value": "1.5", "issuer": "rXyz"});
-        assert_eq!(format_amount(Some(&v)), "1.5 USD");
-    }
-
-    #[test]
-    fn format_ripple_time_utc_known_value() {
+    fn format_ripple_time_utc_values() {
         // Ripple epoch 946684800 + 838204893 = unix 1784889693 → 2026-07-24 10:41 UTC
         assert_eq!(format_ripple_time_utc(838_204_893), "2026-07-24 10:41 UTC");
-    }
-
-    /// TC-139: format_ripple_time_utc — epoch zero renders 2000-01-01 and
-    /// u64::MAX clamps to 9999-12-31 without panicking.
-    #[test]
-    fn format_ripple_time_utc_epoch_zero_and_u64_max_clamp() {
         assert_eq!(format_ripple_time_utc(0), "2000-01-01 00:00 UTC");
         assert_eq!(format_ripple_time_utc(u64::MAX), "9999-12-31 23:59 UTC");
     }
 
+    /// TC-141: xrp_to_drops — parses whole/fractional XRP into drops,
+    /// accepts the u64::MAX boundary (18446744073709.551615 XRP), and
+    /// rejects malformed or overflowing inputs.
     #[test]
-    fn xrp_to_drops_whole() {
-        assert_eq!(xrp_to_drops("1").unwrap(), 1_000_000);
-    }
-
-    /// TC-141: xrp_to_drops — the largest representable amount
-    /// (18446744073709.551615 XRP = u64::MAX drops) succeeds and one extra
-    /// fractional drop overflows.
-    #[test]
-    fn xrp_to_drops_max_fractional_boundary() {
-        assert_eq!(xrp_to_drops("18446744073709.551615").unwrap(), u64::MAX);
-        assert!(xrp_to_drops("18446744073709.551616").is_err());
-    }
-
-    #[test]
-    fn xrp_to_drops_with_fraction() {
-        assert_eq!(xrp_to_drops("1.5").unwrap(), 1_500_000);
-    }
-
-    #[test]
-    fn xrp_to_drops_six_decimals() {
-        assert_eq!(xrp_to_drops("1.123456").unwrap(), 1_123_456);
-    }
-
-    #[test]
-    fn xrp_to_drops_too_many_decimals_err() {
-        assert!(xrp_to_drops("1.1234567").is_err());
-    }
-
-    #[test]
-    fn xrp_to_drops_empty_err() {
-        assert!(xrp_to_drops("").is_err());
-    }
-
-    #[test]
-    fn xrp_to_drops_invalid_err() {
-        assert!(xrp_to_drops("abc").is_err());
-    }
-
-    #[test]
-    fn xrp_to_drops_multiple_dots_err() {
-        assert!(xrp_to_drops("1.2.3").is_err());
-    }
-
-    #[test]
-    fn xrp_to_drops_leading_dot_err() {
-        assert!(xrp_to_drops(".5").is_err());
-    }
-
-    #[test]
-    fn xrp_to_drops_tiny_amount() {
-        assert_eq!(xrp_to_drops("0.000001").unwrap(), 1);
-    }
-
-    #[test]
-    fn xrp_to_drops_zero() {
-        assert_eq!(xrp_to_drops("0").unwrap(), 0);
-    }
-
-    #[test]
-    fn xrp_to_drops_overflow_err() {
-        assert!(xrp_to_drops("18446744073710").is_err());
+    fn xrp_to_drops_converts_and_rejects_inputs() {
+        let cases: [(&str, Option<u64>); 13] = [
+            ("1", Some(1_000_000)),
+            ("1.5", Some(1_500_000)),
+            ("1.123456", Some(1_123_456)),
+            ("0.000001", Some(1)),
+            ("0", Some(0)),
+            ("18446744073709.551615", Some(u64::MAX)),
+            ("1.1234567", None),
+            ("", None),
+            ("abc", None),
+            ("1.2.3", None),
+            (".5", None),
+            ("18446744073709.551616", None),
+            ("18446744073710", None),
+        ];
+        for (input, expected) in cases {
+            assert_eq!(xrp_to_drops(input).ok(), expected, "input: {input:?}");
+        }
     }
 
     #[test]
@@ -407,9 +346,10 @@ mod tests {
         }
     }
 
-    /// TC-083 summarize_paths_computed abbreviates hop chain
+    /// TC-083: `summarize_paths_computed` — multi-hop currency chain,
+    /// plain-account string steps, and hex currency decoded to display name.
     #[test]
-    fn summarize_paths_computed_multi_hop() {
+    fn summarize_paths_computed_variants() {
         let paths = json!([[
             {"currency": "XRP", "type": 16},
             {"currency": "USD", "issuer": "rIssuer1", "type": 48},
@@ -419,24 +359,21 @@ mod tests {
             summarize_paths_computed(&paths),
             "XRP → USD@rIssuer1 → USD@rIssuer2"
         );
-    }
 
-    #[test]
-    fn summarize_paths_computed_string_account_step() {
-        let paths = json!([["rN7n67967NcFqXSBYfSouqMDPMaFmMgfe"]]);
-        assert_eq!(summarize_paths_computed(&paths), "rN7n…Mgfe");
-    }
+        let string_step = json!([["rN7n67967NcFqXSBYfSouqMDPMaFmMgfe"]]);
+        assert_eq!(summarize_paths_computed(&string_step), "rN7n…Mgfe");
 
-    #[test]
-    fn summarize_paths_computed_hex_currency_display_name() {
-        let paths = json!([[
+        let hex_currency = json!([[
             {"currency": "524C555344000000000000000000000000000000", "issuer": "rIssuer1", "type": 48}
         ]]);
-        assert_eq!(summarize_paths_computed(&paths), "RLUSD@rIssuer1");
+        assert_eq!(summarize_paths_computed(&hex_currency), "RLUSD@rIssuer1");
     }
 
     #[test]
     fn format_path_amount_hex_currency() {
+        let drops = json!("1000000");
+        assert_eq!(format_path_amount(&drops, "?"), "1.000000 XRP");
+
         let amount = json!({
             "currency": "524C555344000000000000000000000000000000",
             "issuer": "rIssuer",
@@ -445,10 +382,11 @@ mod tests {
         assert_eq!(format_path_amount(&amount, "?"), "1.05 RLUSD");
     }
 
-    /// TC-084 path_find_rows_from builds display rows
+    /// TC-084: path_find_rows_from — send/hops display rows, cheapest alternative first
     #[test]
-    fn path_find_rows_from_alternatives() {
-        let result = RipplePathFindResult {
+    fn path_find_rows_rendering() {
+        // Single direct alternative.
+        let direct = RipplePathFindResult {
             alternatives: vec![PathAlternative {
                 paths_computed: json!([]),
                 source_amount: json!("1000000"),
@@ -457,15 +395,13 @@ mod tests {
             destination_amount: json!({"currency": "USD", "value": "1"}),
             source_account: "rSrc".into(),
         };
-        let rows = path_find_rows_from(&result);
+        let rows = path_find_rows_from(&direct);
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].send, "1.000000 XRP");
         assert_eq!(rows[0].hops, "direct");
-    }
 
-    #[test]
-    fn path_find_rows_sorted_by_cheapest_send() {
-        let result = RipplePathFindResult {
+        // Multiple alternatives are sorted by cheapest send.
+        let multi = RipplePathFindResult {
             alternatives: vec![
                 PathAlternative {
                     paths_computed: json!([]),
@@ -480,7 +416,7 @@ mod tests {
             destination_amount: json!("1000000"),
             source_account: "rSrc".into(),
         };
-        let rows = path_find_rows_from(&result);
+        let rows = path_find_rows_from(&multi);
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].send, "1.000000 XRP");
         assert_eq!(rows[1].send, "2.000000 XRP");

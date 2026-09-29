@@ -250,7 +250,7 @@ mod tests {
     }
 
     #[test]
-    fn finds_common_metadata_image_fields_with_limits() {
+    fn finds_common_metadata_image_fields() {
         let metadata =
             serde_json::json!({"properties": {"image_url": "ipfs://QmExample/image.png"}});
         assert_eq!(
@@ -302,6 +302,24 @@ mod tests {
         move |_url: &_| {
             use std::sync::atomic::Ordering;
             hops.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async {
+                Ok::<_, color_eyre::Report>(
+                    reqwest::Client::builder()
+                        .redirect(reqwest::redirect::Policy::none())
+                        .build()?,
+                )
+            })
+        }
+    }
+
+    /// Same as [`mock_client_for`] but without per-hop instrumentation, for
+    /// tests that only observe fetch outcomes.
+    fn plain_client_for() -> impl for<'a> Fn(
+        &'a Url,
+    ) -> Pin<
+        Box<dyn Future<Output = color_eyre::Result<reqwest::Client>> + Send + 'a>,
+    > {
+        move |_url: &_| {
             Box::pin(async {
                 Ok::<_, color_eyre::Report>(
                     reqwest::Client::builder()
@@ -415,13 +433,12 @@ mod tests {
             }
         }));
 
-        let hops = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let url = Url::parse(&format!("http://{address}/huge.png")).unwrap();
-        let err = fetch_via(url.clone(), mock_client_for(hops.clone()))
+        let err = fetch_via(url.clone(), plain_client_for())
             .await
             .expect_err("declared over-cap body must fail");
         assert!(err.to_string().contains("4 MiB"), "{err}");
-        let err = fetch_via(url, mock_client_for(hops.clone()))
+        let err = fetch_via(url, plain_client_for())
             .await
             .expect_err("streamed over-cap body must fail");
         assert!(err.to_string().contains("4 MiB"), "{err}");

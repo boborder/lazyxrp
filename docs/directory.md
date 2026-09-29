@@ -12,7 +12,7 @@ lazyxrp/
 ├── build.rs
 ├── README.md
 ├── DESIGN.md              # UI/UX SSOT (keys, layout, theme, modals)
-├── ROADMAP.md             # milestones / backlog SSOT
+├── ROADMAP.md             # goal / milestone SSOT (docs/roadmap-log.md: cautions, pivots)
 ├── config.json5
 ├── .env.example
 ├── install.sh
@@ -115,7 +115,7 @@ lazyxrp/
 - `build.rs`: ビルド時の補助処理。
 - `README.md`: 利用者向けの概要と起動手順。
 - `DESIGN.md`: UI/UX SSOT（キー・レイアウト・テーマ）。
-- `ROADMAP.md`: マイルストーンとバックログ（進捗 SSOT）。
+- `ROADMAP.md`: ゴール階層（最終ゴール / 長期 / 中期 / 短期）とマイルストーン（進捗 SSOT）。注意点・進路変更記録は `roadmap-log.md`。
 - `.env.example`: `XRPL_*` 環境変数の例（任意。一覧は `docs/tech.md` と実装を参照）。
 - `install.sh`: インタラクティブインストーラ（必須は `curl` **または** `wget`）。プロンプトとメッセージは英語。`--help` で CLI 一覧（`--method cargo|binary`、`--install-rust` / `--no-install-rust`、`--install-mise` / `--no-install-mise`、`-q`）。`CI=1` は `-q` 相当。PATH 未設定時は shell profile へ追記可。リリースアーカイブに `rp` があればそれを入れ、無ければ `rp` → `lazyxrp` symlink。**手動アンインストール**は `--uninstall-help`（`lazyxrp --self-uninstall`、`INSTALL_DIR/rp` 削除など）。
 - `mise.toml`: [mise](https://mise.jdx.dev/) タスク（`install`、`tags`（一覧）、`tag-push`（緊急時の手動タグフォールバック）、`bench` / `bench-fast` / `bench-ci`（ベンチマーク））。公開フロー（CI の `Cargo.toml` version 検知 → auto-tag → CD 公開）の詳細は [`maintenance.md`](maintenance.md)。
@@ -188,7 +188,8 @@ lazyxrp/
 | `architecture.md` | How (system) | Network, config precedence, data flow, behavioral contracts |
 | `../DESIGN.md` | Look & feel | Keys, layout splits, theme, modals, loading |
 | `test.md` | Verify | TC catalog → traces to requirements + architecture |
-| [`ROADMAP.md`](../ROADMAP.md) | When | Milestones, cross-cutting backlog |
+| [`ROADMAP.md`](../ROADMAP.md) | When | Goal hierarchy (final / long / mid / short), shipped milestones |
+| `roadmap-log.md` | Why | Pivot log, planning cautions |
 | `tech.md` | Stack | Dependencies, versions, dev commands |
 | `maintenance.md` | Ops | Release pipeline (CI version detection → auto-tag → CD), publish flow |
 | `directory.md` | Index | This file |

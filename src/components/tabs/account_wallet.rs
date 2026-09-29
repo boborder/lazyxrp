@@ -137,33 +137,37 @@ mod tests {
         tab
     }
 
+    /// has_wallet reflects any signing config (seed or mnemonic), not chain selection.
     #[test]
-    fn account_wallet_tab_detects_wallet_when_seed_configured() {
-        assert!(
-            tab_with_signing(Some("sEdSkooMk31MeTjbHVE7vLvgCpEMAdB"), None).has_wallet,
-            "family seed config must set has_wallet"
-        );
-    }
-
-    #[test]
-    fn account_wallet_tab_detects_wallet_when_mnemonic_configured() {
-        assert!(
-            tab_with_signing(
+    fn account_wallet_tab_has_wallet_matches_signing_config() {
+        let cases: &[(&str, Option<&str>, Option<&str>, bool)] = &[
+            (
+                "family seed config sets has_wallet",
+                Some("sEdSkooMk31MeTjbHVE7vLvgCpEMAdB"),
+                None,
+                true,
+            ),
+            (
+                "mnemonic config sets has_wallet",
                 None,
                 Some(
-                    "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
-                )
-            )
-            .has_wallet,
-            "mnemonic config must set has_wallet"
-        );
-    }
-
-    #[test]
-    fn account_wallet_tab_reports_no_wallet_without_signing_config() {
-        assert!(
-            !tab_with_signing(None, None).has_wallet,
-            "no seed/mnemonic config must leave has_wallet false"
-        );
+                    "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+                ),
+                true,
+            ),
+            (
+                "no seed/mnemonic config leaves has_wallet false",
+                None,
+                None,
+                false,
+            ),
+        ];
+        for (desc, seed, mnemonic, expected) in cases {
+            assert_eq!(
+                tab_with_signing(*seed, *mnemonic).has_wallet,
+                *expected,
+                "{desc}"
+            );
+        }
     }
 }

@@ -940,9 +940,11 @@ mod tests {
     }
 
     #[test]
-    fn open_payment_composer_defaults_amount() {
+    fn payment_composer_defaults_amount_1_and_i_toggles_iou_then_clears_fields_on_xrp() {
         let mut panel = WalletPanel::new(false);
+        panel.is_focused = true;
         panel.open_payment_composer();
+        // Defaults: amount prefilled "1", everything else empty.
         match &panel.composer {
             Some(ComposerPhase::Payment {
                 amount,
@@ -961,13 +963,6 @@ mod tests {
             }
             _ => panic!("expected payment composer"),
         }
-    }
-
-    #[test]
-    fn payment_i_toggles_iou_and_clears_fields_on_xrp() {
-        let mut panel = WalletPanel::new(false);
-        panel.is_focused = true;
-        panel.open_payment_composer();
         panel.on_key_event(key('i')).expect("toggle to iou");
         match &panel.composer {
             Some(ComposerPhase::Payment { is_iou, .. }) => assert!(*is_iou),

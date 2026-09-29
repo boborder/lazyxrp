@@ -244,52 +244,63 @@ mod tests {
         }
     }
 
+    /// TC-077-079: filter matches by field; empty filter shows all
     #[test]
-    /// TC-077
-    fn filter_by_tx_type() {
-        let mut panel = TxHistoryPanel {
-            txs: vec![
-                fixture_tx_row("aaa", "Payment"),
-                fixture_tx_row("bbb", "OfferCreate"),
-                fixture_tx_row("ccc", "Payment"),
-            ],
-            filter_input: "pay".to_string(),
-            ..Default::default()
-        };
-        panel.reapply_filter();
-        assert_eq!(panel.row_count(), 2);
-        assert_eq!(panel.display_row(0).unwrap().tx_type, "Payment");
-    }
-
-    #[test]
-    /// TC-078
-    fn filter_by_hash_partial() {
-        let mut panel = TxHistoryPanel {
-            txs: vec![
-                fixture_tx_row("deadbeef", "Payment"),
-                fixture_tx_row("cafebabe", "AccountSet"),
-            ],
-            filter_input: "cafe".to_string(),
-            ..Default::default()
-        };
-        panel.reapply_filter();
-        assert_eq!(panel.row_count(), 1);
-        assert_eq!(panel.display_row(0).unwrap().hash, "cafebabe");
-    }
-
-    #[test]
-    /// TC-079
-    fn filter_empty_shows_all() {
-        let mut panel = TxHistoryPanel {
-            txs: vec![
-                fixture_tx_row("aaa", "Payment"),
-                fixture_tx_row("bbb", "TrustSet"),
-            ],
-            ..Default::default()
-        };
-        panel.reapply_filter();
-        assert_eq!(panel.row_count(), 2);
-        assert!(panel.filtered.is_none());
+    #[allow(clippy::type_complexity)]
+    fn history_filter_matches_by_field_and_empty_shows_all() {
+        /// Some(hashes) = expected displayed rows in order; None = filtered cache stays empty
+        enum Expected {
+            Rows(&'static [&'static str]),
+            NoFilter,
+        }
+        let cases: [(&str, Vec<(&str, &str)>, Expected); 3] = [
+            (
+                "pay",
+                vec![
+                    ("aaa", "Payment"),
+                    ("bbb", "OfferCreate"),
+                    ("ccc", "Payment"),
+                ],
+                Expected::Rows(&["aaa", "ccc"]),
+            ),
+            (
+                "cafe",
+                vec![("deadbeef", "Payment"), ("cafebabe", "AccountSet")],
+                Expected::Rows(&["cafebabe"]),
+            ),
+            (
+                "",
+                vec![("aaa", "Payment"), ("bbb", "TrustSet")],
+                Expected::NoFilter,
+            ),
+        ];
+        for (filter_input, rows, expected) in cases {
+            let mut panel = TxHistoryPanel {
+                txs: rows
+                    .into_iter()
+                    .map(|(hash, tx_type)| fixture_tx_row(hash, tx_type))
+                    .collect(),
+                filter_input: filter_input.to_string(),
+                ..Default::default()
+            };
+            panel.reapply_filter();
+            match expected {
+                Expected::Rows(hashes) => {
+                    assert_eq!(panel.row_count(), hashes.len(), "filter {filter_input:?}");
+                    for (i, hash) in hashes.iter().enumerate() {
+                        assert_eq!(
+                            panel.display_row(i).unwrap().hash,
+                            *hash,
+                            "filter {filter_input:?}"
+                        );
+                    }
+                }
+                Expected::NoFilter => {
+                    assert!(panel.filtered.is_none(), "filter {filter_input:?}");
+                    assert_eq!(panel.row_count(), 2, "filter {filter_input:?}");
+                }
+            }
+        }
     }
 
     fn render_tx_history_panel(panel: &mut TxHistoryPanel) -> String {

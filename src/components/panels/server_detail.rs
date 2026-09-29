@@ -312,6 +312,8 @@ pub(super) fn render_validator_detail(frame: &mut Frame, area: Rect, state: &mut
 
 #[cfg(test)]
 mod tests {
+    use std::time::SystemTime;
+
     use super::*;
 
     fn detail_rendered(state: &mut ValidatorDetail) -> String {
@@ -332,11 +334,12 @@ mod tests {
 
     fn dunl() -> DunlSummary {
         DunlSummary {
+            fetched_at: SystemTime::now(),
             validator_count: 2,
             sequence: 123,
             expiration_ripple: 0,
-            expiration_utc: "2026-01-01".into(),
-            validators: Vec::new(),
+            expiration_utc: "2026-01-01T00:00:00Z".into(),
+            validators: vec![],
         }
     }
 

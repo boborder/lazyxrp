@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 use tokio::sync::Mutex;
 
 /// Seconds between Unix epoch (1970-01-01) and Ripple epoch (2000-01-01).
@@ -103,6 +103,9 @@ pub struct DunlSummary {
     pub expiration_ripple: u64,
     /// Human-readable UTC expiry (from blob `expiration` ripple time).
     pub expiration_utc: String,
+    /// When this summary was parsed from the dUNL blob — data generation time,
+    /// not receive time (the poll task re-serves the cached summary on errors).
+    pub fetched_at: SystemTime,
     pub validators: Vec<DunlValidatorRow>,
 }
 
@@ -732,8 +735,9 @@ mod tests {
     }
 
     /// TC-085: asset_display_name maps known hex codes to readable names
+    /// TC-086: asset_display_name passes through unknown values
     #[test]
-    fn asset_display_name_maps_hex() {
+    fn asset_display_name_mapping() {
         assert_eq!(
             asset_display_name("524C555344000000000000000000000000000000"),
             "RLUSD"
@@ -742,21 +746,12 @@ mod tests {
             asset_display_name("5553444300000000000000000000000000000000"),
             "USDC"
         );
-        assert_eq!(asset_display_name("BTC"), "BTC");
-    }
-
-    /// TC-086: asset_display_name passes through unknown values
-    #[test]
-    fn asset_display_name_unknown_passthrough() {
-        assert_eq!(asset_display_name("UNKNOWN"), "UNKNOWN");
-    }
-
-    #[test]
-    fn asset_display_name_decodes_standard_hex_usd() {
         assert_eq!(
             asset_display_name("5553440000000000000000000000000000000000"),
             "USD"
         );
+        assert_eq!(asset_display_name("BTC"), "BTC");
+        assert_eq!(asset_display_name("UNKNOWN"), "UNKNOWN");
     }
 }
 

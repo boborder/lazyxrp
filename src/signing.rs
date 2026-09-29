@@ -784,50 +784,46 @@ pub fn create_and_sign_account_set(
 mod tests {
     use super::*;
 
-    #[test]
-    fn credential_from_secrets_returns_none_when_no_source() {
-        let result = credential_from_secrets(None, None).expect("no source is ok");
-        assert!(result.is_none());
+    fn sample_mnemonic() -> String {
+        "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
+            .to_string()
     }
 
+    fn sample_family_seed() -> String {
+        "sEdSkooMk31MeTjbHVE7vLvgCpEMAdB".to_string()
+    }
+
+    /// TC-045/TC-046: credential source selection — none, seed, mnemonic, both-rejected
     #[test]
-    fn credential_from_secrets_wraps_family_seed() {
-        let seed = SecretString::from("sEdSkooMk31MeTjbHVE7vLvgCpEMAdB".to_string());
+    fn credential_from_secrets_selects_source() {
+        assert!(
+            credential_from_secrets(None, None)
+                .expect("no source is ok")
+                .is_none()
+        );
+
+        let seed = SecretString::from(sample_family_seed());
         let cred = credential_from_secrets(Some(&seed), None)
             .expect("seed only")
             .expect("credential");
         match cred {
             SigningCredential::FamilySeed(s) => {
-                assert_eq!(s.expose_secret(), "sEdSkooMk31MeTjbHVE7vLvgCpEMAdB");
+                assert_eq!(s.expose_secret(), sample_family_seed());
             }
             other => panic!("expected FamilySeed, got {other:?}"),
         }
-    }
 
-    #[test]
-    fn credential_from_secrets_wraps_bip39_mnemonic() {
-        let mnemonic = SecretString::from(
-            "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
-                .to_string(),
-        );
+        let mnemonic = SecretString::from(sample_mnemonic());
         let cred = credential_from_secrets(None, Some(&mnemonic))
             .expect("mnemonic only")
             .expect("credential");
         match cred {
             SigningCredential::Bip39Mnemonic(s) => {
-                assert!(s.expose_secret().starts_with("abandon"));
+                assert_eq!(s.expose_secret(), &sample_mnemonic());
             }
             other => panic!("expected Bip39Mnemonic, got {other:?}"),
         }
-    }
 
-    #[test]
-    fn credential_from_secrets_rejects_seed_and_mnemonic_together() {
-        let seed = SecretString::from("sEdSkooMk31MeTjbHVE7vLvgCpEMAdB".to_string());
-        let mnemonic = SecretString::from(
-            "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
-                .to_string(),
-        );
         let err =
             credential_from_secrets(Some(&seed), Some(&mnemonic)).expect_err("both configured");
         assert!(format!("{err}").contains("only one"));
@@ -881,8 +877,9 @@ mod tests {
         assert_eq!(v["Amount"]["value"], "12.5");
     }
 
+    /// TC: payment simulate JSON carries optional DestinationTag and Memo when provided
     #[test]
-    fn build_payment_tx_json_for_simulate_includes_destination_tag() {
+    fn build_payment_tx_json_for_simulate_includes_optional_fields() {
         let v = build_payment_tx_json_for_simulate(
             "rSender",
             "rDest",
@@ -895,6 +892,22 @@ mod tests {
         )
         .expect("tagged payment json");
         assert_eq!(v["DestinationTag"], 12345);
+
+        let memo =
+            build_direct_mint_memo_data("0xabcdef0123456789abcdef0123456789abcdef01").unwrap();
+        let v = build_payment_tx_json_for_simulate(
+            "rSender",
+            "rDest",
+            "1",
+            None,
+            None,
+            None,
+            Some(memo.as_str()),
+            9,
+        )
+        .unwrap();
+        let data = v["Memos"][0]["Memo"]["MemoData"].as_str().unwrap();
+        assert_eq!(data, memo);
     }
 
     #[test]
@@ -929,27 +942,9 @@ mod tests {
         assert!(build_direct_mint_memo_data("not-hex-zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz").is_err());
     }
 
+    /// TC: prompt skipped for non-mainnet networks and when skip_prompt is set
     #[test]
-    fn build_payment_tx_json_for_simulate_includes_memo() {
-        let memo =
-            build_direct_mint_memo_data("0xabcdef0123456789abcdef0123456789abcdef01").unwrap();
-        let v = build_payment_tx_json_for_simulate(
-            "rSender",
-            "rDest",
-            "1",
-            None,
-            None,
-            None,
-            Some(memo.as_str()),
-            9,
-        )
-        .unwrap();
-        let data = v["Memos"][0]["Memo"]["MemoData"].as_str().unwrap();
-        assert_eq!(data, memo);
-    }
-
-    #[test]
-    fn confirm_non_mainnet_skips_prompt() {
+    fn prompt_production_confirmation_skips_when_safe() {
         assert!(prompt_production_confirmation(
             "Payment",
             &Network::Testnet,
@@ -960,10 +955,6 @@ mod tests {
             &Network::Devnet,
             false
         ));
-    }
-
-    #[test]
-    fn confirm_mainnet_with_yes_flag_skips_prompt() {
         assert!(prompt_production_confirmation(
             "Payment",
             &Network::Mainnet,
@@ -1001,10 +992,8 @@ mod tests {
     }
     #[test]
     fn bip39_secp256k1_derives_known_xrpl_wallet() {
-        let credential = SigningCredential::from_bip39_mnemonic(
-            "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
-        )
-        .expect("valid BIP39 mnemonic");
+        let credential = SigningCredential::from_bip39_mnemonic(sample_mnemonic())
+            .expect("valid BIP39 mnemonic");
         let wallet = credential.wallet().expect("XRPL wallet");
 
         assert_eq!(
@@ -1024,10 +1013,8 @@ mod tests {
     fn bip39_secp256k1_can_sign_payment() {
         use xrpl::core::binarycodec::decode;
 
-        let credential = SigningCredential::from_bip39_mnemonic(
-            "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
-        )
-        .expect("valid BIP39 mnemonic");
+        let credential = SigningCredential::from_bip39_mnemonic(sample_mnemonic())
+            .expect("valid BIP39 mnemonic");
         let wallet = credential.wallet().expect("XRPL wallet");
         let account = wallet.classic_address.clone();
         let blob = create_and_sign_payment(
@@ -1060,18 +1047,16 @@ mod tests {
         assert_eq!(decoded["Account"], serde_json::json!(account));
     }
 
+    /// TC: ed25519 family-seed wallet derives the known address, trimming whitespace
     #[test]
-    fn ed25519_family_seed_wallet_new_ok() {
-        let seed = "sEdSkooMk31MeTjbHVE7vLvgCpEMAdB";
-        let w = wallet_from_family_seed(seed, 0).expect("ed25519 wallet");
-        assert_eq!(w.classic_address, "rU3Cw9Vezt3m3E7EonCnfGN1raFdudq4QQ");
-    }
-
-    #[test]
-    fn ed25519_seed_trims_whitespace() {
-        let seed = "sEdSkooMk31MeTjbHVE7vLvgCpEMAdB  \n";
-        let w = wallet_from_family_seed(seed, 0).expect("trimmed ed25519");
-        assert_eq!(w.classic_address, "rU3Cw9Vezt3m3E7EonCnfGN1raFdudq4QQ");
+    fn ed25519_family_seed_wallet() {
+        for seed in [
+            sample_family_seed(),
+            format!("{}  \n", sample_family_seed()),
+        ] {
+            let w = wallet_from_family_seed(&seed, 0).expect("ed25519 wallet");
+            assert_eq!(w.classic_address, "rU3Cw9Vezt3m3E7EonCnfGN1raFdudq4QQ");
+        }
     }
 
     #[test]
@@ -1082,8 +1067,9 @@ mod tests {
         assert_eq!(wallet.classic_address, "rJrRMgiRgrU6hDF4pgu5DXQdWyPbY35ErN");
     }
 
+    /// TC: SetRegularKey simulate JSON reflects the regular_key option (set vs clear)
     #[test]
-    fn build_set_regular_key_tx_json_for_simulate_sets_key() {
+    fn build_set_regular_key_tx_json_for_simulate_reflects_option() {
         let account = "rU3Cw9Vezt3m3E7EonCnfGN1raFdudq4QQ";
         let regular_key = "rJrRMgiRgrU6hDF4pgu5DXQdWyPbY35ErN";
         let v = build_set_regular_key_tx_json_for_simulate(account, Some(regular_key), 11)
@@ -1092,10 +1078,7 @@ mod tests {
         assert_eq!(v["Sequence"], 11);
         assert_eq!(v["Account"], account);
         assert_eq!(v["RegularKey"], regular_key);
-    }
 
-    #[test]
-    fn build_set_regular_key_tx_json_for_simulate_clear_omits_regular_key() {
         let v =
             build_set_regular_key_tx_json_for_simulate("rSenderxxxxxxxxxxxxxxxxxxxxxxxXX", None, 2)
                 .expect("clear regular key");
@@ -1168,23 +1151,27 @@ mod tests {
     fn require_classic_address_shape_accepts_valid_classic_address() {
         let a = require_classic_address_shape("acct", "rN7n7otQDd6FczFgLdSqtcsAUxDkw6fzRH")
             .expect("ok");
-        assert!(a.starts_with('r'));
+        assert_eq!(a, "rN7n7otQDd6FczFgLdSqtcsAUxDkw6fzRH");
     }
 
     /// TC-098: IOU issuer checksum and finite positive value validation
-    #[test]
-    fn iou_validation_rejects_invalid_issuer_and_nonfinite_value() {
-        assert!(validate_iou_fields("USD", "rInvalid", "1").is_err());
-        assert!(validate_iou_fields("USD", "rJrRMgiRgrU6hDF4pgu5DXQdWyPbY35ErN", "NaN").is_err());
-        assert!(validate_iou_fields("USD", "rJrRMgiRgrU6hDF4pgu5DXQdWyPbY35ErN", "0").is_err());
-    }
-
     /// TC-099: IOU currency code validation
     #[test]
-    fn iou_validation_rejects_invalid_currency_code() {
+    fn validate_iou_fields_rejects_invalid() {
         let issuer = "rJrRMgiRgrU6hDF4pgu5DXQdWyPbY35ErN";
-        assert!(validate_iou_fields("XRP", issuer, "1").is_err());
-        assert!(validate_iou_fields("TOOLONG", issuer, "1").is_err());
+        let bad_rows: &[(&str, &str, &str)] = &[
+            ("USD", "rInvalid", "1"), // bad issuer
+            ("USD", issuer, "NaN"),   // non-finite value
+            ("USD", issuer, "0"),     // non-positive value
+            ("XRP", issuer, "1"),     // XRP is not an IOU currency
+            ("TOOLONG", issuer, "1"), // wrong currency shape
+        ];
+        for (currency, issuer, value) in bad_rows {
+            assert!(
+                validate_iou_fields(currency, issuer, value).is_err(),
+                "expected rejection for ({currency}, {issuer}, {value})"
+            );
+        }
         assert!(validate_iou_fields("USD", issuer, "1").is_ok());
     }
 }

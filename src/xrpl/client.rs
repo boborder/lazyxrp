@@ -4,7 +4,8 @@ use serde_json::{Value, json};
 use xrpl::asynch::clients::{AsyncJsonRpcClient, XRPLClient};
 
 use super::dunl::{
-    XRPLF_DUNL_URL, dunl_cache_get_if_fresh, dunl_cache_store, parse_xrplf_dunl_json,
+    DUNL_RETRY_BACKOFF, XRPLF_DUNL_URL, dunl_cache_get_if_fresh, dunl_cache_mark_failed,
+    dunl_cache_stale_in_cooldown, dunl_cache_store, parse_xrplf_dunl_json,
 };
 use super::format::drops_to_xrp;
 pub use super::format::{path_find_snapshot, xrp_to_drops};
@@ -147,14 +148,41 @@ impl RpcClient {
         if let Some(cached) = dunl_cache_get_if_fresh() {
             return Ok(cached);
         }
-        let resp = tokio::time::timeout(RPC_TIMEOUT, self.http.get(XRPLF_DUNL_URL).send())
-            .await
-            .map_err(|_| color_eyre::eyre::eyre!("dUNL fetch timeout"))?
-            .map_err(|e| color_eyre::eyre::eyre!("dUNL fetch error: {e}"))?;
-        let text = read_response_text_capped(resp, "dUNL").await?;
-        let summary = parse_xrplf_dunl_json(&text)?;
-        dunl_cache_store(summary.clone());
-        Ok(summary)
+        // Stale-on-error: a failed refresh keeps serving the cached summary for
+        // DUNL_RETRY_BACKOFF instead of erroring / re-hitting the mirror every poll.
+        if let Some(stale) = dunl_cache_stale_in_cooldown() {
+            return Ok(stale);
+        }
+        // ponytail: a first-ever fetch failure has no cache to serve and errors every
+        // poll until the first success — acceptable; a failure cache for the empty case
+        // would add state for a transient startup window.
+        let attempt = async {
+            let resp = tokio::time::timeout(RPC_TIMEOUT, self.http.get(XRPLF_DUNL_URL).send())
+                .await
+                .map_err(|_| color_eyre::eyre::eyre!("dUNL fetch timeout"))?
+                .map_err(|e| color_eyre::eyre::eyre!("dUNL fetch error: {e}"))?;
+            let text = read_response_text_capped(resp, "dUNL").await?;
+            parse_xrplf_dunl_json(&text)
+        };
+        match attempt.await {
+            Ok(summary) => {
+                dunl_cache_store(summary.clone());
+                Ok(summary)
+            }
+            Err(e) => {
+                dunl_cache_mark_failed();
+                // Warn only when a cached summary will actually be served —
+                // first-ever failure has no entry (mark_failed is a no-op) and
+                // errors every poll until the first success.
+                if dunl_cache_stale_in_cooldown().is_some() {
+                    tracing::warn!(
+                        "dUNL refresh failed; serving cached manifest for up to {}s",
+                        DUNL_RETRY_BACKOFF.as_secs()
+                    );
+                }
+                Err(e)
+            }
+        }
     }
 
     pub async fn fee(&self) -> color_eyre::Result<FeeSummary> {

@@ -12,6 +12,7 @@
 | [`docs/architecture.md`](docs/architecture.md) | **どう動くか** — 詳細設計・スキーマ設計 |
 | [`docs/test.md`](docs/test.md) | **どう検証するか** — テスト設計・テストガイド |
 | [`ROADMAP.md`](ROADMAP.md) | **何を・いつ・どこまで** — 進捗・目標・バージョン |
+| [`docs/roadmap-log.md`](docs/roadmap-log.md) | **なぜ方向が変わったか** — 進路変更記録・計画上の注意点 |
 | [`docs/tech.md`](docs/tech.md) | **何で作るか** — 技術選定・依存・API 連携 |
 | [`docs/maintenance.md`](docs/maintenance.md) | **どう公開・運用するか** — リリース・公開フロー |
 | [`docs/directory.md`](docs/directory.md) | **どこにあるか** — ディレクトリ構成・命名 |

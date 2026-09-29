@@ -121,37 +121,51 @@ pub fn parse_xrpl_toml(
 mod tests {
     use super::*;
 
+    /// TC-142: parse_xrpl_toml — a validator whose public_key matches
+    /// (case-insensitive) carries its attestation through to the result.
+    ///
+    /// parse_xrpl_toml — a VALIDATORS table whose public_key matches
+    /// (case-insensitive) is reported as found; a non-matching key is
+    /// reported as not found.
     #[test]
-    fn parse_finds_matching_validator() {
-        let text = r#"
+    fn parse_xrpl_toml_matches_or_misses_validator() {
+        struct Case {
+            desc: &'static str,
+            text: &'static str,
+            key: &'static str,
+            expected_found: bool,
+            expected_count: usize,
+            expected_attestation: Option<&'static str>,
+        }
+        let cases = [
+            Case {
+                desc: "matching validator is found among multiple",
+                text: r#"
 [[VALIDATORS]]
 public_key = "n9KMm3w8EjqN3qzWGg2xZy Deactivated"
 attestation = "Test"
 
 [[VALIDATORS]]
 public_key = "ABCDEF123456"
-"#;
-        let toml_data = parse_xrpl_toml(text, "abcdef123456", "example.com").unwrap();
-        assert!(toml_data.validator_found);
-        assert_eq!(toml_data.validator_count, 2);
-        assert!(toml_data.attestation.is_none());
-    }
-
-    #[test]
-    fn parse_reports_not_found() {
-        let text = r#"[[VALIDATORS]]
+"#,
+                key: "abcdef123456",
+                expected_found: true,
+                expected_count: 2,
+                expected_attestation: None,
+            },
+            Case {
+                desc: "non-matching validator is not found",
+                text: r#"[[VALIDATORS]]
 public_key = "OTHER"
-"#;
-        let toml_data = parse_xrpl_toml(text, "MISMATCH", "example.com").unwrap();
-        assert!(!toml_data.validator_found);
-        assert_eq!(toml_data.validator_count, 1);
-    }
-
-    /// TC-142: parse_xrpl_toml — a validator whose public_key matches
-    /// (case-insensitive) carries its attestation through to the result.
-    #[test]
-    fn parse_xrpl_toml_returns_attestation_for_matching_validator() {
-        let text = r#"
+"#,
+                key: "MISMATCH",
+                expected_found: false,
+                expected_count: 1,
+                expected_attestation: None,
+            },
+            Case {
+                desc: "matching validator carries its attestation",
+                text: r#"
 [[VALIDATORS]]
 public_key = "KEY1"
 attestation = "sig-bytes"
@@ -159,11 +173,32 @@ attestation = "sig-bytes"
 [[VALIDATORS]]
 public_key = "KEY2"
 attestation = "other-sig"
-"#;
-        let data = parse_xrpl_toml(text, "key2", "example.com").unwrap();
-        assert!(data.validator_found);
-        assert_eq!(data.attestation.as_deref(), Some("other-sig"));
-        assert_eq!(data.validator_count, 2);
+"#,
+                key: "key2",
+                expected_found: true,
+                expected_count: 2,
+                expected_attestation: Some("other-sig"),
+            },
+        ];
+        for case in &cases {
+            let toml_data = parse_xrpl_toml(case.text, case.key, "example.com").unwrap();
+            assert_eq!(
+                toml_data.validator_found, case.expected_found,
+                "{}",
+                case.desc
+            );
+            assert_eq!(
+                toml_data.validator_count, case.expected_count,
+                "{}",
+                case.desc
+            );
+            assert_eq!(
+                toml_data.attestation.as_deref(),
+                case.expected_attestation,
+                "{}",
+                case.desc
+            );
+        }
     }
 
     /// TC-143: parse_xrpl_toml — malformed TOML is an error and a document

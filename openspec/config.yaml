@@ -13,7 +13,7 @@ context: |
   - docs/architecture.md — system & behavioral design (how; feeds test.md)
   - DESIGN.md — UI/UX SSOT (keys, layout, theme, modals); link, do not copy tables
   - docs/test.md — TC catalog (traces to requirements + architecture)
-  - ROADMAP.md (root) — portfolio / milestones / cross-cutting backlog
+  - ROADMAP.md (root) — goal hierarchy (final / long / mid / short) + milestones; docs/roadmap-log.md for cautions & pivots
 
   Optional OpenSpec (when this workflow is used):
   - openspec/specs/<cap>/spec.md — agent-oriented contracts (mirror docs/; not linked from docs/)

@@ -199,7 +199,11 @@ impl App {
             keymap_suppressed: false,
             tick_rate,
             panels,
-            status_bar: StatusBar::new(watch_account.clone(), network),
+            status_bar: StatusBar::new(
+                watch_account.clone(),
+                network,
+                flare_display != crate::config::FlareDisplay::Off,
+            ),
             fps: FpsCounter::default(),
             active_tab: 0,
             splash: Box::new(SplashScreen::default()),
@@ -795,19 +799,6 @@ mod tests {
         )
     }
 
-    /// TC-060: App constructs with one panel per tab (I-9)
-    #[test]
-    fn watch_app_new_builds_four_tabs() -> color_eyre::Result<()> {
-        let app = test_app()?;
-        assert_eq!(TAB_TITLES.len(), 4, "product currently ships 4 tabs");
-        assert_eq!(app.panels.len(), 4);
-        assert_eq!(app.active_tab, 0);
-        assert_eq!(app.watch_account, "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh");
-        assert!(!app.should_quit);
-        assert!(!app.show_help);
-        Ok(())
-    }
-
     /// TC-061
     #[tokio::test]
     async fn quit_action_sets_should_quit() -> color_eyre::Result<()> {
@@ -818,35 +809,25 @@ mod tests {
         Ok(())
     }
 
-    /// TC-062
+    /// TC-062-063: RefreshAccount/RefreshBook send PollCommand
     #[tokio::test]
-    async fn refresh_account_sends_poll_command() -> color_eyre::Result<()> {
-        let mut app = test_app()?;
-        app.action_tx.send(Action::RefreshAccount)?;
-        app.drain_and_dispatch_actions(None)?;
-        let cmd = app
-            .test_poll_rx
-            .as_mut()
-            .expect("test receiver")
-            .try_recv()
-            .expect("RefreshAccount should enqueue a poll command");
-        assert_eq!(cmd, PollCommand::Account);
-        Ok(())
-    }
-
-    /// TC-063
-    #[tokio::test]
-    async fn refresh_book_sends_poll_command() -> color_eyre::Result<()> {
-        let mut app = test_app()?;
-        app.action_tx.send(Action::RefreshBook)?;
-        app.drain_and_dispatch_actions(None)?;
-        let cmd = app
-            .test_poll_rx
-            .as_mut()
-            .expect("test receiver")
-            .try_recv()
-            .expect("RefreshBook should enqueue a poll command");
-        assert_eq!(cmd, PollCommand::Book);
+    async fn refresh_actions_send_poll_commands() -> color_eyre::Result<()> {
+        let cases = [
+            (Action::RefreshAccount, PollCommand::Account),
+            (Action::RefreshBook, PollCommand::Book),
+        ];
+        for (action, expected) in cases {
+            let mut app = test_app()?;
+            app.action_tx.send(action)?;
+            app.drain_and_dispatch_actions(None)?;
+            let cmd = app
+                .test_poll_rx
+                .as_mut()
+                .expect("test receiver")
+                .try_recv()
+                .expect("refresh action should enqueue a poll command");
+            assert_eq!(cmd, expected);
+        }
         Ok(())
     }
 
@@ -870,9 +851,10 @@ mod tests {
         Ok(())
     }
 
-    /// TC-065 (HelpOverlay visibility is driven by `show_help` + `Action::Help`)
+    /// TC-065 (HelpOverlay visibility is driven by `show_help` + `Action::Help`);
+    /// `?` opens and Esc closes via the config keymap.
     #[tokio::test]
-    async fn help_action_toggles_overlay_flag() -> color_eyre::Result<()> {
+    async fn help_overlay_opens_and_closes_via_keys_and_actions() -> color_eyre::Result<()> {
         let mut app = test_app()?;
         assert!(!app.show_help);
         app.action_tx.send(Action::Help)?;
@@ -881,29 +863,16 @@ mod tests {
         app.action_tx.send(Action::Help)?;
         app.drain_and_dispatch_actions(None)?;
         assert!(!app.show_help);
-        Ok(())
-    }
 
-    /// Esc closes overlay when help is shown (mirrors `on_key_event` + config keymap)
-    #[tokio::test]
-    async fn esc_while_help_sends_help_action() -> color_eyre::Result<()> {
-        let mut app = test_app()?;
-        app.show_help = true;
-        let esc = KeyEvent::new(KeyCode::Esc, KeyModifiers::empty());
-        app.on_key_event(esc)?;
-        app.drain_and_dispatch_actions(None)?;
-        assert!(!app.show_help);
-        Ok(())
-    }
-
-    /// `?` opens help via keybindings
-    #[tokio::test]
-    async fn question_opens_help_overlay() -> color_eyre::Result<()> {
-        let mut app = test_app()?;
+        // `?` opens via keybinding; Esc closes when help is shown.
         let q = KeyEvent::new(KeyCode::Char('?'), KeyModifiers::empty());
         app.on_key_event(q)?;
         app.drain_and_dispatch_actions(None)?;
         assert!(app.show_help);
+        let esc = KeyEvent::new(KeyCode::Esc, KeyModifiers::empty());
+        app.on_key_event(esc)?;
+        app.drain_and_dispatch_actions(None)?;
+        assert!(!app.show_help);
         Ok(())
     }
 

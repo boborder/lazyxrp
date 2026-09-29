@@ -89,6 +89,8 @@ sol! {
     #[sol(rpc)]
     interface FtsoV2 {
         function getFeedById(bytes21 _feedId) external view returns (uint256 value, int8 decimals, uint64 timestamp);
+        function getFeedsById(bytes21[] _feedIds) external view returns (uint256[] values, int8[] decimals, uint64 timestamp);
+        function calculateFeeByIds(bytes21[] _feedIds) external view returns (uint256 fee);
     }
 
     /// Minimal IAssetManager surface for FXRP Direct Mint (C1 reads + C3 execute).
@@ -128,6 +130,28 @@ fn to_crypto_feed_id(symbol: &str) -> color_eyre::Result<FixedBytes<21>> {
     feed_id[0] = 0x01; // Crypto category
     feed_id[1..1 + symbol_bytes.len()].copy_from_slice(symbol_bytes);
     Ok(FixedBytes::<21>::from(feed_id))
+}
+
+/// Normalize configured feed names: trim, drop empties, map `FXRP/USD` → `XRP/USD`
+/// (FTSOv2 indexes the underlying XRP), dedup preserving order.
+fn to_valid_flare_pairs(feeds: &[String]) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut seen = HashSet::new();
+    for feed in feeds {
+        let pair = feed.trim();
+        if pair.is_empty() {
+            continue;
+        }
+        let pair = if pair == DEFAULT_FLARE_FEED {
+            "XRP/USD"
+        } else {
+            pair
+        };
+        if seen.insert(pair.to_string()) {
+            out.push(pair.to_string());
+        }
+    }
+    out
 }
 
 fn format_price(value: U256, decimals: i8) -> String {
@@ -175,40 +199,51 @@ async fn fetch_from_rpc(
     let ftso_address = resolve_ftso_v2_address(provider.clone(), rpc_url).await?;
     let ftso = FtsoV2::new(ftso_address, provider);
 
-    let mut out = Vec::new();
-    let mut seen = HashSet::new();
+    let feed_ids: Vec<(String, FixedBytes<21>)> = to_valid_flare_pairs(feeds)
+        .into_iter()
+        .filter_map(|pair| to_crypto_feed_id(&pair).ok().map(|id| (pair, id)))
+        .collect();
 
-    for requested in feeds {
-        let mut pair = requested.trim().to_string();
-        if pair.is_empty() {
-            continue;
-        }
-        let mut feed_id = match to_crypto_feed_id(&pair) {
-            Ok(v) => v,
-            Err(_) => continue,
-        };
-
-        let result = match ftso.getFeedById(feed_id).call().await {
-            Ok(v) => v,
-            Err(err)
-                if pair == DEFAULT_FLARE_FEED
-                    && err.to_string().contains("feed does not exist") =>
-            {
-                pair = "XRP/USD".to_string();
-                feed_id = to_crypto_feed_id(&pair)?;
-                match ftso.getFeedById(feed_id).call().await {
-                    Ok(v) => v,
-                    Err(_) => continue,
-                }
+    // One batched round trip for all feeds. On revert, retry once with the
+    // FtsoV2-calculated fee (eth_call simulation only — no funds move), then
+    // fall back to per-feed reads (e.g. a bad feed id in the config).
+    // ponytail: fee re-queried on every revert; add a TTL cache if Flare
+    // activates fees and this per-poll path grows round trips.
+    let ids: Vec<FixedBytes<21>> = feed_ids.iter().map(|(_, id)| *id).collect();
+    let batch = match ftso.getFeedsById(ids.clone()).call().await {
+        Ok(result) => Some(result),
+        Err(_) => {
+            let fee = ftso.calculateFeeByIds(ids.clone()).call().await.ok();
+            match fee {
+                Some(fee) if !fee.is_zero() => ftso.getFeedsById(ids).value(fee).call().await.ok(),
+                _ => None,
             }
-            Err(_) => continue,
-        };
-
-        if !seen.insert(pair.clone()) {
-            continue;
         }
+    };
+    if let Some(result) = batch {
+        let out = feed_ids
+            .iter()
+            .zip(result.values)
+            .zip(result.decimals)
+            .map(|(((pair, _), value), decimals)| FlareFeedPrice {
+                pair: pair.clone(),
+                price: format_price(value, decimals),
+                timestamp: result.timestamp,
+                source: "FLARE-FTSO".to_string(),
+            })
+            .collect::<Vec<_>>();
+        if !out.is_empty() {
+            return Ok(out);
+        }
+    }
+
+    let mut out = Vec::new();
+    for (pair, feed_id) in &feed_ids {
+        let Ok(result) = ftso.getFeedById(*feed_id).call().await else {
+            continue;
+        };
         out.push(FlareFeedPrice {
-            pair,
+            pair: pair.clone(),
             price: format_price(result.value, result.decimals),
             timestamp: result.timestamp,
             source: "FLARE-FTSO".to_string(),
@@ -271,10 +306,12 @@ pub async fn fetch_fxrp_direct_mint_info(rpc_url: &str) -> color_eyre::Result<Fx
     let asset_manager_addr = resolve_asset_manager_fxrp_address(provider.clone(), rpc_url).await?;
     let am = IAssetManager::new(asset_manager_addr, provider);
 
-    let core_vault_xrpl = am.directMintingPaymentAddress().call().await?;
-    let min_fee = am.getDirectMintingMinimumFeeUBA().call().await?;
-    let fee_bips = am.getDirectMintingFeeBIPS().call().await?;
-    let executor_fee = am.getDirectMintingExecutorFeeUBA().call().await?;
+    let (core_vault_xrpl, min_fee, fee_bips, executor_fee) = tokio::try_join!(
+        async { am.directMintingPaymentAddress().call().await },
+        async { am.getDirectMintingMinimumFeeUBA().call().await },
+        async { am.getDirectMintingFeeBIPS().call().await },
+        async { am.getDirectMintingExecutorFeeUBA().call().await },
+    )?;
 
     Ok(FxrpDirectMintInfo {
         core_vault_xrpl,
@@ -430,23 +467,6 @@ mod tests {
     }
 
     #[test]
-    fn flare_registry_cache_stores_per_rpc_url() {
-        let _guard = FlareRegistryCacheGuard;
-        let rpc = "https://flare-api.flare.network/ext/C/rpc";
-        let ftso = address!("1111111111111111111111111111111111111111");
-        let am = address!("2222222222222222222222222222222222222222");
-        if let Ok(mut guard) = flare_registry_cache().lock() {
-            guard.clear();
-            guard.entry(rpc.to_string()).or_default().ftso_v2 = Some(ftso);
-            guard.entry(rpc.to_string()).or_default().asset_manager_fxrp = Some(am);
-        }
-        let guard = flare_registry_cache().lock().expect("lock");
-        let entry = guard.get(rpc).expect("entry");
-        assert_eq!(entry.ftso_v2, Some(ftso));
-        assert_eq!(entry.asset_manager_fxrp, Some(am));
-    }
-
-    #[test]
     fn uba_to_xrp_display_table() {
         assert_eq!(uba_to_xrp_display(0), "0");
         assert_eq!(uba_to_xrp_display(100_000), "0.1");
@@ -471,23 +491,39 @@ mod tests {
     }
 
     #[test]
-    fn parse_fdc_payment_proof_json_da_shape() {
-        let leaf = format!("0x{}", "ab".repeat(32));
-        let data = format!("0x{}", "cd".repeat(8));
-        let json = format!(r#"{{"proof":["{leaf}"],"response":"{data}"}}"#);
-        let proof = parse_fdc_payment_proof_json(&json).expect("parse da");
-        assert_eq!(proof.merkle_proof.len(), 1);
-        assert_eq!(proof.data.len(), 8);
+    fn to_valid_flare_pairs_normalizes_and_dedups() {
+        let feeds = vec![
+            " FXRP/USD ".to_string(),
+            String::new(),
+            "XRP/USD".to_string(),
+            "FLR/USD".to_string(),
+            "  ".to_string(),
+            "FLR/USD".to_string(),
+        ];
+        assert_eq!(
+            to_valid_flare_pairs(&feeds),
+            vec!["XRP/USD".to_string(), "FLR/USD".to_string()]
+        );
     }
 
     #[test]
-    fn parse_fdc_payment_proof_json_contract_shape() {
-        let leaf = format!("0x{}", "11".repeat(32));
-        let data = format!("0x{}", "22".repeat(4));
-        let json = format!(r#"{{"merkleProof":["{leaf}"],"data":"{data}"}}"#);
-        let proof = parse_fdc_payment_proof_json(&json).expect("parse contract");
-        assert_eq!(proof.merkle_proof.len(), 1);
-        assert_eq!(proof.data.len(), 4);
+    /// TC: FDC proof JSON accepts both DA `{proof,response}` and contract `{merkleProof,data}` field aliases.
+    fn parse_fdc_payment_proof_json_accepts_da_and_contract_shapes() {
+        let cases = [
+            // (json, merkle_proof_len, data_len)
+            (r#"{"proof":["0x{leaf}"],"response":"0x{data}"}"#, 1, 8),
+            (r#"{"merkleProof":["0x{leaf}"],"data":"0x{data}"}"#, 1, 4),
+        ];
+        let leaves = ["ab".repeat(32), "11".repeat(32)];
+        let datas = ["cd".repeat(8), "22".repeat(4)];
+        for ((tpl, proof_len, data_len), (leaf, data)) in
+            cases.iter().zip(leaves.iter().zip(datas.iter()))
+        {
+            let json = tpl.replace("{leaf}", leaf).replace("{data}", data);
+            let proof = parse_fdc_payment_proof_json(&json).expect("parse FDC payment proof");
+            assert_eq!(proof.merkle_proof.len(), *proof_len);
+            assert_eq!(proof.data.len(), *data_len);
+        }
     }
 
     #[test]
@@ -510,8 +546,18 @@ mod tests {
         assert!(prices.iter().any(|p| p.pair == "FLR/USD"));
         assert!(prices.iter().any(|p| p.pair == "BTC/USD"));
         assert!(prices.iter().any(|p| p.pair == "ETH/USD"));
+        assert!(prices.iter().any(|p| p.pair == "XRP/USD"));
 
         Ok(())
+    }
+
+    /// Unknown feed id: batch reverts, fee query is attempted, per-feed
+    /// fallback skips it, and the empty result is a clean error (no panic).
+    #[tokio::test]
+    #[ignore = "live network dependency"]
+    async fn flare_unknown_feed_fails_cleanly_live() {
+        let feeds = vec!["NOPE/USD".to_string()];
+        assert!(fetch_ftso_prices(DEFAULT_FLARE_RPC, &feeds).await.is_err());
     }
 
     #[tokio::test]

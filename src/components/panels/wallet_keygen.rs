@@ -89,13 +89,11 @@ mod tests {
     }
 
     #[test]
-    fn keygen_popup_renders_nothing_when_no_keygen_result() {
-        let panel = WalletPanel::new(false);
-        assert!(popup_rendered(&panel, 80, 24).trim().is_empty());
-    }
-
-    #[test]
     fn keygen_popup_renders_seed_address_pubkey_and_offline_warning() {
+        // No keygen result yet: nothing renders.
+        let empty_panel = WalletPanel::new(false);
+        assert!(popup_rendered(&empty_panel, 80, 24).trim().is_empty());
+
         let mut panel = WalletPanel::new(false);
         panel
             .update(&Action::GenerateWalletKeysOk(keygen_result()))

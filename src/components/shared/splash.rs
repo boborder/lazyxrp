@@ -214,7 +214,8 @@ mod tests {
     }
 
     #[test]
-    fn splash_art_column_centers_art_width_in_wide_area() {
+    fn splash_art_column_geometry() {
+        // Wide area shows full art width, centered horizontally.
         let col = splash_art_column(Rect::new(0, 5, 120, 12));
         let art_w = ascii_art_max_width();
         assert_eq!(col.width, art_w, "wide area must show the full art width");
@@ -224,20 +225,16 @@ mod tests {
             "art must be centered horizontally"
         );
         assert_eq!((col.y, col.height), (5, 12), "y/height must pass through");
-    }
 
-    #[test]
-    fn splash_art_column_fills_narrow_area_without_centering() {
+        // Narrow area is used as-is, no centering.
         let col = splash_art_column(Rect::new(3, 0, 10, 8));
         assert_eq!(
             (col.x, col.width, col.y, col.height),
             (3, 10, 0, 8),
             "narrow area must be used as-is, no centering"
         );
-    }
 
-    #[test]
-    fn splash_art_column_keeps_single_column_when_area_has_no_width() {
+        // Zero-width area clamps to one column.
         let col = splash_art_column(Rect::new(4, 2, 0, 6));
         assert_eq!(
             (col.x, col.width, col.height),

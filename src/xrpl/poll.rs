@@ -40,6 +40,7 @@ pub fn start_poll_task(
 const MIN_POLL_INTERVAL: Duration = Duration::from_secs(10);
 
 /// Tab indices mirrored from `app::TAB_TITLES` (Overview, Account, Market, Assets).
+pub(crate) const TAB_ACCOUNT: usize = 1;
 pub(crate) const TAB_MARKET: usize = 2;
 pub(crate) const TAB_ASSETS: usize = 3;
 
@@ -51,6 +52,11 @@ pub(crate) fn should_poll_market_book(active_tab: usize) -> bool {
 #[must_use]
 pub(crate) fn should_poll_asset_panels(active_tab: usize) -> bool {
     active_tab == TAB_ASSETS
+}
+
+#[must_use]
+pub(crate) fn should_poll_account_panels(active_tab: usize) -> bool {
+    active_tab == TAB_ACCOUNT
 }
 
 pub(crate) fn drain_poll_trigger_burst(rx: &mut UnboundedReceiver<()>) {
@@ -328,7 +334,12 @@ async fn maybe_account_tx(
     Some(tokio::time::timeout(RPC_TIMEOUT, rpc.account_tx(watch_address, 20, None)).await)
 }
 
-async fn poll_batch(inputs: PollBatchInputs<'_>, action_tx: &UnboundedSender<Action>) -> bool {
+async fn poll_batch(
+    inputs: PollBatchInputs<'_>,
+    action_tx: &UnboundedSender<Action>,
+    flare_backoff_secs: &mut u64,
+    flare_backoff_until: &mut Option<Instant>,
+) -> bool {
     let PollBatchInputs {
         rpc,
         watch_address,
@@ -345,6 +356,7 @@ async fn poll_batch(inputs: PollBatchInputs<'_>, action_tx: &UnboundedSender<Act
         active_tab,
     } = inputs;
     let skip_market = !should_poll_market_book(active_tab);
+    let skip_account_tx = skip_account_tx || !should_poll_account_panels(active_tab);
     let skip_assets = !should_poll_asset_panels(active_tab);
     let dest_amount = (!skip_market).then(|| book_pair.path_find_destination_amount_preview());
     let (
@@ -440,7 +452,25 @@ async fn poll_batch(inputs: PollBatchInputs<'_>, action_tx: &UnboundedSender<Act
         |v| Action::XrplServerInfo(Box::new(v)),
         "server_info"
     );
-    send_rpc_outcome!(dunl_result, Action::XrplDunl, "dUNL");
+    // dUNL is a different host (unl.xrplf.org): its outcome must not key the
+    // XRPL RPC backoff below — excluded from `any_rpc_succeeded`.
+    match dunl_result {
+        Ok(Ok(summary)) => {
+            if let Err(e) = action_tx.send(Action::XrplDunl(summary)) {
+                warn!(?e, "action channel closed (dUNL)");
+            }
+        }
+        Ok(Err(e)) => {
+            if let Err(e2) = action_tx.send(Action::XrplError(format!("dUNL: {e}"))) {
+                warn!(?e2, "action channel closed (dUNL)");
+            }
+        }
+        Err(_) => {
+            if let Err(e) = action_tx.send(Action::XrplError("dUNL: timeout".into())) {
+                warn!(?e, "action channel closed (dUNL)");
+            }
+        }
+    }
     send_rpc_outcome!(fee_result, Action::XrplFee, "fee");
     send_rpc_outcome!(
         account_info_result,
@@ -546,68 +576,85 @@ async fn poll_batch(inputs: PollBatchInputs<'_>, action_tx: &UnboundedSender<Act
         }
     }
 
-    // FTSO + FXRP AssetManager are shown on Overview; skip when another tab is focused.
-    // Failures stay non-fatal so XRPL polling continues.
+    // FTSO + FXRP AssetManager are shown on Overview; skip when another tab is
+    // focused or a flare-specific backoff window is open. Failures stay
+    // non-fatal (warn only) so XRPL polling continues; flare health never
+    // feeds the XRPL backoff decision.
     if active_tab == 0
         && flare_display != crate::config::FlareDisplay::Off
+        && !is_backoff_active(*flare_backoff_until)
         && let Some(flare_rpc) = flare_rpc_url
     {
-        match tokio::time::timeout(
-            RPC_TIMEOUT,
-            crate::flare::fetch_ftso_prices(flare_rpc, flare_feeds),
-        )
-        .await
-        {
+        // Concurrent: worst-case arm occupancy is one RPC_TIMEOUT, not three.
+        let (ftso_result, mint_result, wallet_result) = tokio::join!(
+            tokio::time::timeout(
+                RPC_TIMEOUT,
+                crate::flare::fetch_ftso_prices(flare_rpc, flare_feeds),
+            ),
+            tokio::time::timeout(
+                RPC_TIMEOUT,
+                crate::flare::fetch_fxrp_direct_mint_info(flare_rpc),
+            ),
+            async {
+                match flare_wallet_address {
+                    Some(wallet_addr) => Some(
+                        tokio::time::timeout(
+                            RPC_TIMEOUT,
+                            crate::flare::fetch_flare_wallet_balance(
+                                flare_rpc,
+                                wallet_addr,
+                                flare_fassets_execute,
+                                flare_evm_key_env,
+                            ),
+                        )
+                        .await,
+                    ),
+                    None => None,
+                }
+            },
+        );
+
+        let mut flare_ok = false;
+        match ftso_result {
             Ok(Ok(prices)) if !prices.is_empty() => {
-                any_rpc_succeeded = true;
+                flare_ok = true;
                 if let Err(e) = action_tx.send(Action::FlareOraclePrices(prices)) {
                     warn!(?e, "action channel closed (flare ftso)");
                 }
             }
-            Ok(Ok(_)) | Ok(Err(_)) | Err(_) => {
-                // Keep Oracle tab non-blocking when Flare endpoint/feed is unavailable.
-            }
+            Ok(Ok(_)) => warn!("flare ftso fetch returned no feeds (non-fatal)"),
+            Ok(Err(e)) => warn!(?e, "flare ftso fetch failed (non-fatal)"),
+            Err(_) => warn!("flare ftso fetch timed out (non-fatal)"),
         }
-
-        match tokio::time::timeout(
-            RPC_TIMEOUT,
-            crate::flare::fetch_fxrp_direct_mint_info(flare_rpc),
-        )
-        .await
-        {
+        match mint_result {
             Ok(Ok(info)) => {
-                any_rpc_succeeded = true;
+                flare_ok = true;
                 if let Err(e) = action_tx.send(Action::FxrpDirectMintInfo(Box::new(info))) {
                     warn!(?e, "action channel closed (fxrp direct mint)");
                 }
             }
-            Ok(Err(_)) | Err(_) => {
-                // Non-fatal: AssetManager read must not break XRPL poll.
+            Ok(Err(e)) => warn!(?e, "fxrp direct mint fetch failed (non-fatal)"),
+            Err(_) => warn!("fxrp direct mint fetch timed out (non-fatal)"),
+        }
+        match wallet_result {
+            Some(Ok(Ok(summary))) => {
+                flare_ok = true;
+                if let Err(e) = action_tx.send(Action::FlareWalletBalance(Box::new(summary))) {
+                    warn!(?e, "action channel closed (flare wallet)");
+                }
             }
+            Some(Ok(Err(e))) => warn!(?e, "flare wallet fetch failed (non-fatal)"),
+            Some(Err(_)) => warn!("flare wallet fetch timed out (non-fatal)"),
+            None => {}
         }
 
-        if let Some(wallet_addr) = flare_wallet_address {
-            match tokio::time::timeout(
-                RPC_TIMEOUT,
-                crate::flare::fetch_flare_wallet_balance(
-                    flare_rpc,
-                    wallet_addr,
-                    flare_fassets_execute,
-                    flare_evm_key_env,
-                ),
-            )
-            .await
-            {
-                Ok(Ok(summary)) => {
-                    any_rpc_succeeded = true;
-                    if let Err(e) = action_tx.send(Action::FlareWalletBalance(Box::new(summary))) {
-                        warn!(?e, "action channel closed (flare wallet)");
-                    }
-                }
-                Ok(Err(_)) | Err(_) => {
-                    // Non-fatal: wallet read must not break XRPL poll.
-                }
-            }
+        // Flare-only cooldown: escalate on total failure, reset on any success.
+        // Independent state from the XRPL backoff above (same schedule).
+        update_backoff(flare_ok, flare_backoff_secs, flare_backoff_until);
+        // Health visibility: a total flare failure arms the status-bar flare
+        // dot; the next successful flare fetch clears it.
+        if !flare_ok {
+            send_action(action_tx, Action::FlareFetchFailed);
         }
     }
 
@@ -1404,6 +1451,7 @@ async fn submit_fxrp_execute_direct_mint(
     };
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_scheduled_poll<'a>(
     rpc: &'a RpcClient,
     tab_watch: &tokio::sync::watch::Receiver<usize>,
@@ -1412,6 +1460,8 @@ async fn run_scheduled_poll<'a>(
     action_tx: &UnboundedSender<Action>,
     backoff_secs: &mut u64,
     backoff_until: &mut Option<Instant>,
+    flare_backoff_secs: &mut u64,
+    flare_backoff_until: &mut Option<Instant>,
 ) -> Option<Instant> {
     let active_tab = *tab_watch.borrow();
     Some(
@@ -1419,9 +1469,12 @@ async fn run_scheduled_poll<'a>(
             rpc,
             build_batch(active_tab),
             seed_address,
+            active_tab,
             action_tx,
             backoff_secs,
             backoff_until,
+            flare_backoff_secs,
+            flare_backoff_until,
         )
         .await,
     )
@@ -1439,23 +1492,31 @@ fn update_backoff(succeeded: bool, backoff_secs: &mut u64, backoff_until: &mut O
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn execute_scheduled_poll(
     rpc: &RpcClient,
     inputs: PollBatchInputs<'_>,
     seed_address: Option<&str>,
+    active_tab: usize,
     action_tx: &UnboundedSender<Action>,
     backoff_secs: &mut u64,
     backoff_until: &mut Option<Instant>,
+    flare_backoff_secs: &mut u64,
+    flare_backoff_until: &mut Option<Instant>,
 ) -> Instant {
     // Overlap wallet overview with the main batch (same RpcClient, independent RPCs).
     let wallet_fut = async {
         match seed_address {
-            Some(addr) => poll_wallet_overview(rpc, addr, action_tx).await,
-            None => false,
+            Some(addr) if should_poll_account_panels(active_tab) => {
+                poll_wallet_overview(rpc, addr, action_tx).await
+            }
+            _ => false,
         }
     };
-    let (batch_succeeded, wallet_overview_succeeded) =
-        tokio::join!(poll_batch(inputs, action_tx), wallet_fut);
+    let (batch_succeeded, wallet_overview_succeeded) = tokio::join!(
+        poll_batch(inputs, action_tx, flare_backoff_secs, flare_backoff_until),
+        wallet_fut
+    );
     update_backoff(
         batch_succeeded || wallet_overview_succeeded,
         backoff_secs,
@@ -1516,6 +1577,8 @@ async fn drive_poll_loop(
     // NOTE: rpc is threaded through explicitly to allow live re-binding on switch.
     let mut backoff_secs: u64 = 0;
     let mut backoff_until: Option<Instant> = None;
+    let mut flare_backoff_secs: u64 = 0;
+    let mut flare_backoff_until: Option<Instant> = None;
     let mut tick = tokio::time::interval(poll_interval.max(Duration::from_millis(500)));
     let mut price_tick = tokio::time::interval(Duration::from_secs(90));
     let mut last_poll: Option<Instant> = None;
@@ -1578,6 +1641,8 @@ async fn drive_poll_loop(
                     &action_tx,
                     &mut backoff_secs,
                     &mut backoff_until,
+                    &mut flare_backoff_secs,
+                    &mut flare_backoff_until,
                 )
                 .await;
             }
@@ -1609,6 +1674,8 @@ async fn drive_poll_loop(
                     &action_tx,
                     &mut backoff_secs,
                     &mut backoff_until,
+                    &mut flare_backoff_secs,
+                    &mut flare_backoff_until,
                 )
                 .await;
             }
@@ -1751,6 +1818,33 @@ mod tests {
         TrustSetSubmitParams,
     };
 
+    /// Poll gates are tab-scoped: each predicate polls only on its own tab.
+    #[test]
+    fn should_poll_tab_gates() {
+        let cases = [
+            (
+                "account panels poll only on the account tab",
+                should_poll_account_panels as fn(usize) -> bool,
+                TAB_ACCOUNT,
+            ),
+            (
+                "market book polls only on the market tab",
+                should_poll_market_book as _,
+                TAB_MARKET,
+            ),
+            (
+                "asset panels poll only on the assets tab",
+                should_poll_asset_panels as _,
+                TAB_ASSETS,
+            ),
+        ];
+        for (name, poll, on_tab) in cases {
+            for tab in [0, TAB_ACCOUNT, TAB_MARKET, TAB_ASSETS] {
+                assert_eq!(poll(tab), tab == on_tab, "{name}: tab {tab}");
+            }
+        }
+    }
+
     /// TC-087: poll trigger burst drain
     #[test]
     fn drain_poll_trigger_burst_coalesces_pending_triggers() {
@@ -1764,49 +1858,45 @@ mod tests {
     }
 
     #[test]
-    fn should_poll_market_book_only_on_market_tab() {
-        assert!(!should_poll_market_book(0));
-        assert!(!should_poll_market_book(1));
-        assert!(should_poll_market_book(TAB_MARKET));
-        assert!(!should_poll_market_book(TAB_ASSETS));
-    }
-
-    #[test]
-    fn should_poll_asset_panels_only_on_assets_tab() {
-        assert!(!should_poll_asset_panels(0));
-        assert!(should_poll_asset_panels(TAB_ASSETS));
-        assert!(!should_poll_asset_panels(TAB_MARKET));
-    }
-
-    #[test]
-    fn should_skip_poll_trigger_within_min_interval() {
-        assert!(should_skip_poll_trigger(Some(Instant::now())));
-        assert!(!should_skip_poll_trigger(None));
-    }
-
-    #[test]
     fn should_skip_poll_trigger_after_min_interval() {
-        let last = Instant::now() - MIN_POLL_INTERVAL - Duration::from_millis(1);
-        assert!(!should_skip_poll_trigger(Some(last)));
+        let cases: [(&str, Option<Instant>, bool); 3] = [
+            (
+                "recent poll within the min interval is skipped",
+                Some(Instant::now()),
+                true,
+            ),
+            ("no previous poll is never skipped", None, false),
+            (
+                "poll older than the min interval is allowed",
+                Some(Instant::now() - MIN_POLL_INTERVAL - Duration::from_millis(1)),
+                false,
+            ),
+        ];
+        for (name, last, expected) in cases {
+            assert_eq!(should_skip_poll_trigger(last), expected, "{name}");
+        }
     }
 
+    /// deadline matrix: no window is inactive, a future deadline is active, a
+    /// past deadline has already expired.
     #[test]
-    fn is_backoff_active_none_is_inactive() {
-        assert!(!is_backoff_active(None));
-    }
-
-    #[test]
-    fn is_backoff_active_future_deadline() {
-        assert!(is_backoff_active(Some(
-            Instant::now() + Duration::from_secs(30)
-        )));
-    }
-
-    #[test]
-    fn is_backoff_active_past_deadline() {
-        assert!(!is_backoff_active(Some(
-            Instant::now() - Duration::from_millis(1)
-        )));
+    fn is_backoff_active_deadline_matrix() {
+        let cases: [(&str, Option<Instant>, bool); 3] = [
+            ("absent window is inactive", None, false),
+            (
+                "future deadline is active",
+                Some(Instant::now() + Duration::from_secs(30)),
+                true,
+            ),
+            (
+                "past deadline is expired",
+                Some(Instant::now() - Duration::from_millis(1)),
+                false,
+            ),
+        ];
+        for (name, deadline, expected) in cases {
+            assert_eq!(is_backoff_active(deadline), expected, "{name}");
+        }
     }
 
     /// TC-107: closed action channel returns failure without panicking
@@ -1829,25 +1919,103 @@ mod tests {
         assert!(matches!(rx.try_recv().unwrap(), Action::RefreshAccount));
     }
 
-    /// TC-089 (I-7): account_tx not-found in poll batch → empty history, not error
+    /// TC-089/TC-144: not-found → empty history (I-7); action follows append flag
     #[test]
-    fn action_from_account_tx_result_not_found_returns_empty_history() {
-        let err = color_eyre::eyre::eyre!("actNotFound");
-        match action_from_account_tx_result(Err(err), false) {
-            Action::XrplTxHistory(rows, marker) => {
-                assert!(rows.is_empty());
-                assert!(marker.is_none());
-            }
-            other => panic!("expected empty history, got {other:?}"),
-        }
-    }
+    fn action_from_account_tx_result_maps_all_outcomes() {
+        use crate::xrpl::types::AccountTxPage;
 
-    #[test]
-    fn action_from_account_tx_result_other_error_is_xrpl_error() {
-        let err = color_eyre::eyre::eyre!("timeout");
-        match action_from_account_tx_result(Err(err), false) {
-            Action::XrplError(msg) => assert!(msg.contains("account_tx")),
-            other => panic!("expected XrplError, got {other:?}"),
+        #[derive(Debug)]
+        enum Expect {
+            History {
+                append: bool,
+                marker: Option<serde_json::Value>,
+            },
+            Error(&'static str),
+        }
+        let page = AccountTxPage {
+            rows: Vec::new(),
+            marker: Some(serde_json::json!({"ledger_index": 1})),
+        };
+        let marker_expected = page.marker.clone();
+        let cases: Vec<(
+            &str,
+            Result<AccountTxPage, color_eyre::Report>,
+            bool,
+            Expect,
+        )> = vec![
+            (
+                "not-found without append yields an empty history",
+                Err(color_eyre::eyre::eyre!("actNotFound")),
+                false,
+                Expect::History {
+                    append: false,
+                    marker: None,
+                },
+            ),
+            (
+                "non-not-found error without append is an XrplError",
+                Err(color_eyre::eyre::eyre!("timeout")),
+                false,
+                Expect::Error("account_tx"),
+            ),
+            (
+                "success without append follows the flag as XrplTxHistory",
+                Ok(page.clone()),
+                false,
+                Expect::History {
+                    append: false,
+                    marker: marker_expected.clone(),
+                },
+            ),
+            (
+                "success with append follows the flag as XrplTxHistoryAppend",
+                Ok(page.clone()),
+                true,
+                Expect::History {
+                    append: true,
+                    marker: marker_expected,
+                },
+            ),
+            (
+                "not-found with append yields an empty append",
+                Err(color_eyre::eyre::eyre!("actNotFound")),
+                true,
+                Expect::History {
+                    append: true,
+                    marker: None,
+                },
+            ),
+        ];
+        for (name, result, append, expected) in cases {
+            let action = action_from_account_tx_result(result, append);
+            match (action, expected) {
+                (
+                    Action::XrplTxHistory(rows, marker),
+                    Expect::History {
+                        append: false,
+                        marker: want,
+                    },
+                ) => {
+                    assert!(rows.is_empty(), "{name}");
+                    assert_eq!(marker, want, "{name}");
+                }
+                (
+                    Action::XrplTxHistoryAppend(rows, marker),
+                    Expect::History {
+                        append: true,
+                        marker: want,
+                    },
+                ) => {
+                    assert!(rows.is_empty(), "{name}");
+                    assert_eq!(marker, want, "{name}");
+                }
+                (Action::XrplError(msg), Expect::Error(needle)) => {
+                    assert!(msg.contains(needle), "{name}: {msg}");
+                }
+                (other, expected) => {
+                    panic!("{name}: unexpected action {other:?} for expectation {expected:?}")
+                }
+            }
         }
     }
 
@@ -2044,103 +2212,82 @@ mod tests {
         }
     }
 
+    /// Mainnet submit paths with `--yes` bypass the production-write guard and
+    /// then fail on the missing seed, not on the guard.
     #[tokio::test]
-    async fn payment_submit_mainnet_with_yes_skips_mainnet_guard() {
+    async fn mainnet_submit_with_yes_skips_guard_across_tx_types() {
         let _env_lock = env_lock_async().await;
         let _test_env = TestEnvGuard::new(&[SEED_ENV]);
         _test_env.remove(SEED_ENV);
-        let (action_tx, mut action_rx) = mpsc::unbounded_channel();
         let rpc = RpcClient::connect("http://127.0.0.1:1").expect("rpc client");
-        let params = PaymentSubmitParams {
-            destination: "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh".into(),
-            amount: "0.001".into(),
-            iou_currency: None,
-            iou_issuer: None,
-            destination_tag: None,
-            skip_mainnet_prompt: true,
-        };
-        submit_payment_transaction(&rpc, &Network::Mainnet, params, &action_tx, None).await;
-        let action = action_rx.recv().await.expect("action");
-        match action {
-            Action::PaymentSubmitErr(msg) => {
-                assert!(
-                    !msg.contains("restart lazyxrp with --yes"),
-                    "mainnet guard should be skipped when --yes is set: {msg}"
-                );
-                assert!(
-                    msg.contains("no signing credential"),
-                    "expected seed error after guard skip, got: {msg}"
-                );
+        const GENESIS: &str = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh";
+        type SubmitCase = Box<
+            dyn for<'r> FnOnce(
+                &'r RpcClient,
+                mpsc::UnboundedSender<Action>,
+            ) -> std::pin::Pin<
+                Box<dyn std::future::Future<Output = ()> + Send + 'r>,
+            >,
+        >;
+        let cases: Vec<(&str, SubmitCase)> = vec![
+            (
+                "payment",
+                Box::new(|rpc, tx| {
+                    Box::pin(async move {
+                        submit_payment_transaction(
+                            rpc,
+                            &Network::Mainnet,
+                            PaymentSubmitParams {
+                                destination: GENESIS.into(),
+                                amount: "0.001".into(),
+                                iou_currency: None,
+                                iou_issuer: None,
+                                destination_tag: None,
+                                skip_mainnet_prompt: true,
+                            },
+                            &tx,
+                            None,
+                        )
+                        .await;
+                    })
+                }),
+            ),
+            (
+                "set_regular_key",
+                Box::new(|rpc, tx| {
+                    Box::pin(async move {
+                        submit_set_regular_key_transaction(
+                            rpc,
+                            &Network::Mainnet,
+                            SetRegularKeySubmitParams {
+                                regular_key: String::new(), // clear
+                                skip_mainnet_prompt: true,
+                            },
+                            &tx,
+                            None,
+                        )
+                        .await;
+                    })
+                }),
+            ),
+        ];
+        for (name, run) in cases {
+            let (tx, mut rx) = mpsc::unbounded_channel();
+            run(&rpc, tx).await;
+            let action = rx.recv().await.expect("action");
+            match action {
+                Action::PaymentSubmitErr(msg) | Action::SetRegularKeySubmitErr(msg) => {
+                    assert!(
+                        !msg.contains("restart lazyxrp with --yes"),
+                        "{name}: mainnet guard should be skipped when --yes is set: {msg}"
+                    );
+                    assert!(
+                        msg.contains("no signing credential"),
+                        "{name}: expected seed error after guard skip, got: {msg}"
+                    );
+                }
+                other => panic!("{name}: expected submit error after guard skip, got {other:?}"),
             }
-            other => panic!("expected PaymentSubmitErr after guard skip, got {other:?}"),
-        }
-    }
-
-    #[tokio::test]
-    async fn set_regular_key_submit_mainnet_with_yes_skips_mainnet_guard() {
-        let _env_lock = env_lock_async().await;
-        let _test_env = TestEnvGuard::new(&[SEED_ENV]);
-        _test_env.remove(SEED_ENV);
-        let (action_tx, mut action_rx) = mpsc::unbounded_channel();
-        let rpc = RpcClient::connect("http://127.0.0.1:1").expect("rpc client");
-        let params = SetRegularKeySubmitParams {
-            regular_key: String::new(), // clear
-            skip_mainnet_prompt: true,
-        };
-        submit_set_regular_key_transaction(&rpc, &Network::Mainnet, params, &action_tx, None).await;
-        let action = action_rx.recv().await.expect("action");
-        match action {
-            Action::SetRegularKeySubmitErr(msg) => {
-                assert!(
-                    !msg.contains("restart lazyxrp with --yes"),
-                    "mainnet guard should be skipped when --yes is set: {msg}"
-                );
-                assert!(
-                    msg.contains("no signing credential"),
-                    "expected seed error after guard skip, got: {msg}"
-                );
-            }
-            other => panic!("expected SetRegularKeySubmitErr after guard skip, got {other:?}"),
-        }
-    }
-
-    /// TC-144: `account_tx` success mapping follows the append flag, and a
-    /// not-found page on the append path still yields `XrplTxHistoryAppend`.
-    #[test]
-    fn action_from_account_tx_result_follows_append_flag() {
-        use crate::xrpl::types::AccountTxPage;
-        let page = AccountTxPage {
-            rows: Vec::new(),
-            marker: Some(serde_json::json!({"ledger_index": 1})),
-        };
-        match action_from_account_tx_result(Ok(page.clone()), false) {
-            Action::XrplTxHistory(rows, marker) => {
-                assert!(rows.is_empty());
-                assert_eq!(marker, page.marker);
-            }
-            other => panic!("expected XrplTxHistory, got {other:?}"),
-        }
-        let marker_expected = page.marker.clone();
-        match action_from_account_tx_result(Ok(page), true) {
-            Action::XrplTxHistoryAppend(rows, marker) => {
-                assert!(rows.is_empty());
-                assert_eq!(marker, marker_expected);
-            }
-            other => panic!("expected XrplTxHistoryAppend, got {other:?}"),
-        }
-    }
-
-    /// TC-144: not-found error on the append path becomes an empty
-    /// `XrplTxHistoryAppend`, not `XrplError`.
-    #[test]
-    fn action_from_account_tx_result_not_found_append_yields_empty_append() {
-        let err = color_eyre::eyre::eyre!("actNotFound");
-        match action_from_account_tx_result(Err(err), true) {
-            Action::XrplTxHistoryAppend(rows, marker) => {
-                assert!(rows.is_empty());
-                assert!(marker.is_none());
-            }
-            other => panic!("expected empty XrplTxHistoryAppend, got {other:?}"),
         }
     }
 

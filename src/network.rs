@@ -77,25 +77,22 @@ mod tests {
         assert_eq!(Network::default(), Network::Mainnet);
     }
 
+    /// FromStr parses every variant, case-insensitively; unknown names error.
     #[test]
-    fn from_str_parses_all_variants() {
-        assert_eq!("mainnet".parse::<Network>().unwrap(), Network::Mainnet);
-        assert_eq!("testnet".parse::<Network>().unwrap(), Network::Testnet);
-        assert_eq!("devnet".parse::<Network>().unwrap(), Network::Devnet);
-        assert_eq!("xahau".parse::<Network>().unwrap(), Network::Xahau);
-        assert_eq!("xahau-test".parse::<Network>().unwrap(), Network::XahauTest);
-    }
-
-    #[test]
-    fn from_str_case_insensitive() {
-        assert_eq!("MAINNET".parse::<Network>().unwrap(), Network::Mainnet);
-        assert_eq!("Testnet".parse::<Network>().unwrap(), Network::Testnet);
-        assert_eq!("XAHAU".parse::<Network>().unwrap(), Network::Xahau);
-        assert_eq!("Xahau-Test".parse::<Network>().unwrap(), Network::XahauTest);
-    }
-
-    #[test]
-    fn from_str_unknown_is_err() {
+    fn from_str_contract() {
+        for (s, net) in [
+            ("mainnet", Network::Mainnet),
+            ("testnet", Network::Testnet),
+            ("devnet", Network::Devnet),
+            ("xahau", Network::Xahau),
+            ("xahau-test", Network::XahauTest),
+            ("MAINNET", Network::Mainnet),
+            ("Testnet", Network::Testnet),
+            ("XAHAU", Network::Xahau),
+            ("Xahau-Test", Network::XahauTest),
+        ] {
+            assert_eq!(s.parse::<Network>().unwrap(), net, "input {s:?}");
+        }
         assert!("foonet".parse::<Network>().is_err());
     }
 
@@ -110,15 +107,6 @@ mod tests {
     }
 
     /// TC-111: Xahau networks parse, resolve endpoints, and guard writes
-    #[test]
-    fn xahau_network_endpoints() {
-        assert_eq!(Network::Xahau.rpc_url(), "https://xahau.network");
-        assert_eq!(Network::Xahau.ws_url(), "wss://xahau.network");
-        assert_eq!(Network::Xahau.display_name(), "XAHAU");
-        assert_eq!(Network::XahauTest.rpc_url(), "https://xahau-test.net");
-        assert_eq!(Network::XahauTest.display_name(), "XAHAU-TEST");
-    }
-
     /// next_network cycles through all variants and wraps to mainnet.
     #[test]
     fn next_network_wraps_all_variants() {

@@ -127,8 +127,14 @@ mod tests {
         let out = crate::test_support::render_to_string(80, 10, |frame| {
             panel.draw(frame, frame.area()).unwrap()
         });
-        assert!(out.contains("XRP"));
+        assert!(out.contains("Asset1:") && out.contains("Asset2:"));
+        assert!(out.contains("Pool1:"));
+        assert!(out.contains("2.000000"));
+        assert!(out.contains("Pool2:"));
         assert!(out.contains("3 USD"));
-        assert!(out.contains("Trading Fee"));
+        assert!(out.contains("LP Token:"));
+        assert!(out.contains("42 USD"));
+        assert!(out.contains("Trading Fee:"));
+        assert!(out.contains("12 (× 0.001%)"));
     }
 }

@@ -345,7 +345,7 @@ mod tests {
         let err = r.expect_err("invalid classic address must fail");
         let msg = err.to_string().to_lowercase();
         assert!(
-            msg.contains("invalid") || msg.contains("address") || msg.contains("classic"),
+            msg.contains("expected valid classic address"),
             "error should reflect address validation, got: {err}"
         );
     }

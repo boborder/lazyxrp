@@ -288,6 +288,15 @@ network = "mainnet"
 "#
     }
 
+    /// Temp dir with a minimal `config.toml`; caller sets `LAZYXRP_CONFIG`.
+    fn temp_config_root(tag: &str) -> std::path::PathBuf {
+        let root = std::env::temp_dir().join(format!("lazyxrp-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("config.toml"), minimal_config_toml()).unwrap();
+        root
+    }
+
     /// TC-043
     #[test]
     fn resolve_rpc_url_uses_network_default() -> color_eyre::Result<()> {
@@ -299,10 +308,7 @@ network = "mainnet"
             config::XRPL_WS_SERVER_ENV,
         ]);
 
-        let root = std::env::temp_dir().join(format!("lazyxrp-tc043-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(&root)?;
-        std::fs::write(root.join("config.toml"), minimal_config_toml())?;
+        let root = temp_config_root("tc043");
         _test_env.remove("XDG_CONFIG_HOME");
         _test_env.remove(config::XRPL_RPC_SERVER_ENV);
         _test_env.remove(config::XRPL_WS_SERVER_ENV);
@@ -326,10 +332,7 @@ network = "mainnet"
             config::XRPL_RPC_SERVER_ENV,
             config::XRPL_WS_SERVER_ENV,
         ]);
-        let root = std::env::temp_dir().join(format!("lazyxrp-tc044-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(&root)?;
-        std::fs::write(root.join("config.toml"), minimal_config_toml())?;
+        let root = temp_config_root("tc044");
         _env.remove("XDG_CONFIG_HOME");
         _env.remove(config::XRPL_RPC_SERVER_ENV);
         _env.set(config::XRPL_WS_SERVER_ENV, "wss://custom");
@@ -349,21 +352,23 @@ network = "mainnet"
 mod endpoint_security_tests {
     use super::*;
 
+    /// Insecure endpoint schemes are rejected unless the --allow-insecure flag is set
     #[test]
-    fn ensure_secure_endpoint_rejects_http_without_flag() {
-        let err =
-            ensure_secure_endpoint("http://example.com", EndpointKind::Http, false).unwrap_err();
-        assert!(err.to_string().contains("refusing insecure"));
-        assert!(ensure_secure_endpoint("https://example.com", EndpointKind::Http, false).is_ok());
-        assert!(ensure_secure_endpoint("http://example.com", EndpointKind::Http, true).is_ok());
-    }
-
-    #[test]
-    fn ensure_secure_endpoint_rejects_ws_without_flag() {
-        let err = ensure_secure_endpoint("ws://example.com", EndpointKind::Ws, false).unwrap_err();
-        assert!(err.to_string().contains("refusing insecure"));
-        assert!(ensure_secure_endpoint("wss://example.com", EndpointKind::Ws, false).is_ok());
-        assert!(ensure_secure_endpoint("ws://example.com", EndpointKind::Ws, true).is_ok());
+    fn insecure_endpoint_schemes_rejected_without_flag() {
+        let cases = [
+            (
+                "http://example.com",
+                EndpointKind::Http,
+                "https://example.com",
+            ),
+            ("ws://example.com", EndpointKind::Ws, "wss://example.com"),
+        ];
+        for (insecure_url, kind, secure_url) in cases {
+            let err = ensure_secure_endpoint(insecure_url, kind, false).unwrap_err();
+            assert!(err.to_string().contains("refusing insecure"));
+            assert!(ensure_secure_endpoint(secure_url, kind, false).is_ok());
+            assert!(ensure_secure_endpoint(insecure_url, kind, true).is_ok());
+        }
     }
 
     /// TC-101: signing seed refuses plaintext RPC or WebSocket endpoints
@@ -396,20 +401,14 @@ mod command_resolve_tests {
         ));
     }
 
+    /// Exec mode (-x) resolution: without a subcommand, or with watch, is rejected;
+    /// with info it resolves to Cmd::Info.
     #[test]
-    fn exec_without_subcommand_errors() {
-        let args = Cli::try_parse_from(["lazyxrp", "-x"]).unwrap();
-        assert!(resolve_lazyxrp_command(&args).is_err());
-    }
-
-    #[test]
-    fn exec_with_watch_errors() {
-        let args = Cli::try_parse_from(["lazyxrp", "-x", "watch"]).unwrap();
-        assert!(resolve_lazyxrp_command(&args).is_err());
-    }
-
-    #[test]
-    fn exec_with_info_resolves() {
+    fn exec_mode_resolution() {
+        for args in [vec!["lazyxrp", "-x"], vec!["lazyxrp", "-x", "watch"]] {
+            let args = Cli::try_parse_from(args).unwrap();
+            assert!(resolve_lazyxrp_command(&args).is_err());
+        }
         let args = Cli::try_parse_from(["lazyxrp", "-x", "info"]).unwrap();
         assert!(matches!(resolve_lazyxrp_command(&args).unwrap(), Cmd::Info));
     }

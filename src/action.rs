@@ -59,6 +59,8 @@ pub enum Action {
     FxrpDirectMintInfo(Box<FxrpDirectMintInfo>),
     /// Flare EVM wallet native + FXRP balances (read-only).
     FlareWalletBalance(Box<FlareWalletSummary>),
+    /// A flare poll attempt failed entirely — arms the status-bar flare health dot.
+    FlareFetchFailed,
     /// Oracle tab shown but no oracles configured.
     XrplOracleNotConfigured,
     /// `account_objects` snapshot; Assets panels filter rows by `LedgerEntryType`.

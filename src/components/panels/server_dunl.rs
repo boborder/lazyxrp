@@ -156,23 +156,12 @@ mod tests {
     }
 
     #[test]
-    fn validator_row_label_prefers_domain_when_short_enough_to_fit() {
-        assert_eq!(
-            validator_row_label(&row(Some("xrplf.org"), true), 36),
-            "xrplf.org"
-        );
-    }
-
-    #[test]
     fn validator_row_label_middle_truncates_long_domain_to_fit_column() {
         assert_eq!(
             validator_row_label(&row(Some("validator.example.com"), true), 20),
             "validator…ample.com"
         );
-    }
-
-    #[test]
-    fn validator_row_label_leaves_domain_untouched_when_max_chars_is_three_or_less() {
+        // max_chars <= 3: domain returned untouched.
         assert_eq!(
             validator_row_label(&row(Some("validator.example.com"), true), 3),
             "validator.example.com"
@@ -180,12 +169,14 @@ mod tests {
     }
 
     #[test]
-    fn validator_row_label_reports_no_domain_when_manifest_lacks_domain() {
+    fn validator_row_label_reports_no_domain_or_shortens_public_key_when_identity_missing() {
+        // Short domain fits: returned as-is (prefers domain over pubkey).
+        assert_eq!(
+            validator_row_label(&row(Some("xrplf.org"), true), 36),
+            "xrplf.org"
+        );
         assert_eq!(validator_row_label(&row(None, true), 36), "(no domain)");
-    }
 
-    #[test]
-    fn validator_row_label_shortens_public_key_when_no_domain_and_no_manifest() {
         let long_key = "EDFB01CA58D69A2B8F4D1F1E3D2C2B2A2F1E3D2C2B2A2F1E3D2C2B2A2F1E3D2C2";
         let mut no_identity = row(None, false);
         no_identity.validation_public_key = long_key.to_string();

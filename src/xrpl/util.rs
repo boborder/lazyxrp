@@ -32,55 +32,39 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    /// TC: backoff starts at 2, doubles each step, and caps at 60 secs.
     #[test]
-    fn backoff_from_zero() {
+    fn next_backoff_secs_progression() {
         assert_eq!(next_backoff_secs(0), 2);
-    }
-
-    #[test]
-    fn backoff_doubles() {
         assert_eq!(next_backoff_secs(2), 4);
         assert_eq!(next_backoff_secs(4), 8);
         assert_eq!(next_backoff_secs(8), 16);
         assert_eq!(next_backoff_secs(16), 32);
-    }
-
-    #[test]
-    fn backoff_caps_at_60() {
         assert_eq!(next_backoff_secs(32), 60);
         assert_eq!(next_backoff_secs(60), 60);
         assert_eq!(next_backoff_secs(100), 60);
     }
 
+    /// TC: json_str returns the string at the nested path, or "" when missing.
     #[test]
-    fn json_str_returns_nested_string() {
-        let v = json!({"a": {"b": "hello"}});
-        assert_eq!(json_str(&v, &["a", "b"]), "hello");
+    fn json_str_path_access() {
+        let present = json!({"a": {"b": "hello"}});
+        assert_eq!(json_str(&present, &["a", "b"]), "hello");
+
+        let missing = json!({"a": {}});
+        assert_eq!(json_str(&missing, &["a", "b"]), "");
+        assert_eq!(json_str(&missing, &["x"]), "");
     }
 
+    /// TC: json_u32 coerces numbers and string numbers, else returns 0.
     #[test]
-    fn json_str_missing_path_returns_empty() {
-        let v = json!({"a": {}});
-        assert_eq!(json_str(&v, &["a", "b"]), "");
-        assert_eq!(json_str(&v, &["x"]), "");
-    }
-
-    #[test]
-    fn json_u32_returns_number() {
-        let v = json!({"a": 42});
-        assert_eq!(json_u32(&v, &["a"]), 42);
-    }
-
-    #[test]
-    fn json_u32_missing_or_non_numeric_returns_zero() {
-        let v = json!({"a": "foo"});
-        assert_eq!(json_u32(&v, &["a"]), 0);
-        assert_eq!(json_u32(&v, &["x"]), 0);
-    }
-
-    #[test]
-    fn json_u32_parses_string_number() {
-        let v = json!({"a": "42"});
-        assert_eq!(json_u32(&v, &["a"]), 42);
+    fn json_u32_coercion() {
+        let number = json!({"a": 42});
+        assert_eq!(json_u32(&number, &["a"]), 42);
+        let string_number = json!({"a": "42"});
+        assert_eq!(json_u32(&string_number, &["a"]), 42);
+        let non_numeric = json!({"a": "foo"});
+        assert_eq!(json_u32(&non_numeric, &["a"]), 0);
+        assert_eq!(json_u32(&non_numeric, &["x"]), 0);
     }
 }

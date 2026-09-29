@@ -392,18 +392,14 @@ mod tests {
     }
 
     #[test]
-    fn detail_lines_empty_returns_minimal() {
-        let tx = json!({});
-        let meta = json!({});
-        let lines = detail_lines_for(&tx, &meta);
-        // Result line is always present
-        assert!(!lines.is_empty());
-        let text = lines[0].to_string();
-        assert!(text.contains("Result"));
-    }
-
-    #[test]
     fn detail_lines_shows_hash_and_result() {
+        // Empty tx/meta: result line is always present.
+        let empty = json!({});
+        let lines = detail_lines_for(&empty, &empty);
+        assert!(!lines.is_empty());
+        assert!(lines[0].to_string().contains("Result"));
+
+        // Hash and result values are shown when present.
         let tx = json!({"hash":"DEADBEEF","TransactionResult":"tesSUCCESS"});
         let meta = json!({});
         let lines = detail_lines_for(&tx, &meta);
@@ -427,43 +423,23 @@ mod tests {
         assert!(text.iter().any(|s| s.contains("tecPATH_DRY")));
     }
 
+    /// Ledger index renders comma-separated whether JSON is number or string.
     #[test]
     fn detail_lines_ledger_index_as_u64() {
-        let tx = json!({"ledger_index":12345});
-        let meta = json!({});
-        let lines = detail_lines_for(&tx, &meta);
-        let text: Vec<String> = lines.iter().map(|l| l.to_string()).collect();
-        assert!(
-            text.iter()
-                .any(|s| s.contains("Ledger") && s.contains("12,345"))
-        );
-    }
-
-    #[test]
-    fn detail_lines_ledger_index_as_string() {
-        let tx = json!({"ledger_index":"67890"});
-        let meta = json!({});
-        let lines = detail_lines_for(&tx, &meta);
-        let text: Vec<String> = lines.iter().map(|l| l.to_string()).collect();
-        assert!(
-            text.iter()
-                .any(|s| s.contains("Ledger") && s.contains("67,890"))
-        );
-    }
-
-    #[test]
-    fn detail_lines_date_converts_ripple_epoch() {
-        let tx = json!({"date":0});
-        let meta = json!({});
-        let lines = detail_lines_for(&tx, &meta);
-        let text: Vec<String> = lines.iter().map(|l| l.to_string()).collect();
-        // date:0 → unix RIPPLE_EPOCH, then local formatting — assert exact wiring
-        let expected = crate::components::shared::fmt::fmt_local_datetime(RIPPLE_EPOCH);
-        assert!(
-            text.iter()
-                .any(|s| s.contains("Date") && s.contains(&expected)),
-            "expected Date line with {expected}, got {text:?}"
-        );
+        let cases: Vec<serde_json::Value> = vec![
+            json!({"ledger_index":12345}),
+            json!({"ledger_index":"67890"}),
+        ];
+        let expected = ["12,345", "67,890"];
+        for (tx, exp) in cases.iter().zip(expected) {
+            let meta = json!({});
+            let lines = detail_lines_for(tx, &meta);
+            let text: Vec<String> = lines.iter().map(|l| l.to_string()).collect();
+            assert!(
+                text.iter().any(|s| s.contains("Ledger") && s.contains(exp)),
+                "expected Ledger line with {exp}, got {text:?}"
+            );
+        }
     }
 
     #[test]

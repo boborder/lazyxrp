@@ -308,9 +308,9 @@ mod tests {
         Ok(tab)
     }
 
-    /// TC-109: selected NFT with URI emits `NftImageRequest`.
+    /// TC-109, TC-110: URI present emits `NftImageRequest`; absent emits none.
     #[test]
-    fn account_nfts_with_uri_emits_image_request() -> color_eyre::Result<()> {
+    fn account_nfts_emits_image_request_iff_uri() -> color_eyre::Result<()> {
         let mut tab = focused_tab()?;
         let action = tab.update(&Action::XrplAccountNfts(vec![sample_nft(
             "NFT_A",
@@ -323,13 +323,6 @@ mod tests {
                 uri: "ipfs://image-a".into(),
             })
         );
-        Ok(())
-    }
-
-    /// TC-110: NFT without URI emits no preview request.
-    #[test]
-    fn account_nfts_without_uri_emits_no_image_request() -> color_eyre::Result<()> {
-        let mut tab = focused_tab()?;
         let action = tab.update(&Action::XrplAccountNfts(vec![sample_nft("NFT_B", "")]))?;
         assert_eq!(action, None);
         Ok(())

@@ -4,7 +4,7 @@ use base64::Engine as _;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use super::format::format_ripple_time_utc;
 use super::types::{DunlSummary, DunlValidatorRow};
@@ -15,8 +15,13 @@ pub const XRPLF_DUNL_URL: &str = "https://unl.xrplf.org";
 /// dUNL manifest changes infrequently; avoid fetching on every poll tick.
 pub const DUNL_CACHE_TTL: Duration = Duration::from_secs(600);
 
+/// After a failed refresh, wait this long before retrying the network;
+/// meanwhile stale-on-error serves the cached summary.
+pub const DUNL_RETRY_BACKOFF: Duration = Duration::from_secs(60);
+
 struct DunlCacheEntry {
     fetched_at: Instant,
+    last_failed_at: Option<Instant>,
     summary: DunlSummary,
 }
 
@@ -37,10 +42,36 @@ pub(crate) fn dunl_cache_get_if_fresh() -> Option<DunlSummary> {
     })
 }
 
+/// Serve the cached summary while a failed refresh is still in cooldown.
+/// The caller has already checked [`dunl_cache_get_if_fresh`], so no TTL check here.
+pub(crate) fn dunl_cache_stale_in_cooldown() -> Option<DunlSummary> {
+    let guard = dunl_summary_cache().lock().ok()?;
+    guard.as_ref().and_then(|entry| {
+        if entry
+            .last_failed_at
+            .is_some_and(|failed_at| failed_at.elapsed() < DUNL_RETRY_BACKOFF)
+        {
+            Some(entry.summary.clone())
+        } else {
+            None
+        }
+    })
+}
+
+/// Record a failed refresh (existing entry only — no entry means nothing to serve stale).
+pub(crate) fn dunl_cache_mark_failed() {
+    if let Ok(mut guard) = dunl_summary_cache().lock()
+        && let Some(entry) = guard.as_mut()
+    {
+        entry.last_failed_at = Some(Instant::now());
+    }
+}
+
 pub(crate) fn dunl_cache_store(summary: DunlSummary) {
     if let Ok(mut guard) = dunl_summary_cache().lock() {
         *guard = Some(DunlCacheEntry {
             fetched_at: Instant::now(),
+            last_failed_at: None,
             summary,
         });
     }
@@ -266,6 +297,7 @@ pub(crate) fn parse_xrplf_dunl_json(text: &str) -> color_eyre::Result<DunlSummar
         .unwrap_or_default();
     let validator_count = validators.len().min(u32::MAX as usize) as u32;
     Ok(DunlSummary {
+        fetched_at: SystemTime::now(),
         validator_count,
         sequence,
         expiration_ripple: expiration,
@@ -286,10 +318,14 @@ fn base64_decode(input: &str) -> color_eyre::Result<Vec<u8>> {
 mod tests {
     use super::*;
 
+    /// Minimal valid dUNL JSON: one validator, sequence 1.
+    fn dunl_sample() -> &'static str {
+        r#"{"blob":"eyJzZXF1ZW5jZSI6MSwiZXhwaXJhdGlvbiI6MCwidmFsaWRhdG9ycyI6W3sidmFsaWRhdGlvbl9wdWJsaWNfa2V5IjoibiIsIm1hbmlmZXN0IjoibSJ9XX0="}"#
+    }
+
     #[test]
     fn parse_xrplf_dunl_fixture() {
-        let sample = r#"{"blob":"eyJzZXF1ZW5jZSI6MSwiZXhwaXJhdGlvbiI6MCwidmFsaWRhdG9ycyI6W3sidmFsaWRhdGlvbl9wdWJsaWNfa2V5IjoibiIsIm1hbmlmZXN0IjoibSJ9XX0="}"#;
-        let dunl = parse_xrplf_dunl_json(sample).expect("parse dUNL");
+        let dunl = parse_xrplf_dunl_json(dunl_sample()).expect("parse dUNL");
         assert_eq!(dunl.validator_count, 1);
         assert_eq!(dunl.sequence, 1);
         assert_eq!(dunl.expiration_utc, "2000-01-01 00:00 UTC");
@@ -297,16 +333,28 @@ mod tests {
         assert_eq!(dunl.validators[0].validation_public_key, "n");
     }
 
+    /// TC-123: dUNL cache — fresh hit within TTL, stale entry served during failure cooldown,
+    /// none after clear.
     #[test]
-    fn dunl_cache_hit_within_ttl() {
+    fn dunl_cache_fresh_and_stale_reads() {
         let _guard = DunlSummaryCacheGuard;
+        let dunl = parse_xrplf_dunl_json(dunl_sample()).expect("parse dUNL");
+
+        // Fresh within TTL: hit; cleared: miss.
         dunl_summary_cache_clear();
-        let sample = r#"{"blob":"eyJzZXF1ZW5jZSI6MSwiZXhwaXJhdGlvbiI6MCwidmFsaWRhdG9ycyI6W3sidmFsaWRhdGlvbl9wdWJsaWNfa2V5IjoibiIsIm1hbmlmZXN0IjoibSJ9XX0="}"#;
-        let dunl = parse_xrplf_dunl_json(sample).expect("parse dUNL");
         dunl_cache_store(dunl.clone());
         assert_eq!(dunl_cache_get_if_fresh().expect("cache hit"), dunl);
         dunl_summary_cache_clear();
         assert!(dunl_cache_get_if_fresh().is_none());
+
+        // Failure cooldown serves the stale entry; cleared: none.
+        dunl_summary_cache_clear();
+        dunl_cache_store(dunl.clone());
+        dunl_cache_mark_failed();
+        assert_eq!(dunl_cache_stale_in_cooldown().expect("stale served"), dunl);
+        dunl_summary_cache_clear();
+        dunl_cache_mark_failed();
+        assert!(dunl_cache_stale_in_cooldown().is_none());
     }
 
     /// Drops with the test: clears the shared manifest decode cache even if an assert panics.

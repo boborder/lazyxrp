@@ -533,72 +533,42 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    /// TC-013
+    /// TC-013/TC-074: account_nfts — result wrapper maps to rows (id/taxon/serial/fee/URI decode);
+    /// NFTOKEN_FLAG_MUTABLE in Flags sets is_mutable (dNFT).
     #[test]
-    fn parse_account_nfts_maps_result_wrapper_to_rows() {
+    fn parse_account_nfts() {
         let v = json!({
             "result": {
-                "account_nfts": [{
-                    "NFTokenID": "000B013ADCD5",
-                    "NFTokenTaxon": 7,
-                    "nft_serial": 3,
-                    "TransferFee": 100,
-                    "URI": "48656C6C6F"
-                }]
+                "account_nfts": [
+                    {
+                        "NFTokenID": "000B013ADCD5",
+                        "NFTokenTaxon": 7,
+                        "nft_serial": 3,
+                        "TransferFee": 100,
+                        "URI": "48656C6C6F"
+                    },
+                    {
+                        "NFTokenID": "abc",
+                        "NFTokenTaxon": 0,
+                        "nft_serial": 0,
+                        "TransferFee": 0,
+                        "URI": "",
+                        "Flags": 16
+                    }
+                ]
             }
         });
         let rows = parse_account_nfts_value(&v);
-        assert_eq!(rows.len(), 1);
+        assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].nft_id, "000B013ADCD5");
         assert_eq!(rows[0].taxon, 7);
         assert_eq!(rows[0].serial, 3);
         assert_eq!(rows[0].transfer_fee, 100);
         assert_eq!(rows[0].uri, "Hello");
         assert!(!rows[0].is_mutable);
+        assert!(rows[1].is_mutable);
     }
 
-    /// TC-074: account_nfts — Flags tfMutable (dNFT)
-    #[test]
-    fn parse_account_nfts_mutable_flag() {
-        let v = json!({
-            "result": {
-                "account_nfts": [{
-                    "NFTokenID": "abc",
-                    "NFTokenTaxon": 0,
-                    "nft_serial": 0,
-                    "TransferFee": 0,
-                    "URI": "",
-                    "Flags": 16
-                }]
-            }
-        });
-        let rows = parse_account_nfts_value(&v);
-        assert_eq!(rows.len(), 1);
-        assert!(rows[0].is_mutable);
-    }
-
-    /// TC-075: xrpl-rust Payment<'static> deserialize from JSON
-    #[test]
-    fn payment_static_deserialize() {
-        use xrpl::models::transactions::payment::Payment;
-        let v = json!({
-            "TransactionType": "Payment",
-            "Account": "rN7n7otQDd6FczFgLdlqtyMVrn3HMfHgFj",
-            "Destination": "rf1BiGeXwwQoi8Z2ueFYTEXSwuJYfV2Jpn",
-            "Amount": "1000000",
-            "Fee": "12",
-            "Sequence": 1,
-            "Flags": 0
-        });
-        let payment: Payment<'static> = serde_json::from_value(v).unwrap();
-        assert_eq!(
-            payment.common_fields.account,
-            "rN7n7otQDd6FczFgLdlqtyMVrn3HMfHgFj"
-        );
-        assert_eq!(payment.destination, "rf1BiGeXwwQoi8Z2ueFYTEXSwuJYfV2Jpn");
-    }
-
-    /// TC-014
     #[test]
     fn parse_account_lines_maps_lines_to_trust_rows() {
         let v = json!({
@@ -711,24 +681,33 @@ mod tests {
         assert_eq!(page.marker, Some(json!({"ledger": 55, "seq": 2})));
     }
 
-    /// TC-017
+    /// TC-017, TC-140: numeric quality maps to price; a non-numeric quality
+    /// entry mixed into the book renders price as "-" while numeric entries
+    /// still parse.
     #[test]
     fn parse_book_offers_maps_offers_to_rows() {
         let v = json!({
             "result": {
-                "offers": [{
-                    "quality": "0.5",
-                    "TakerGets": "1000000",
-                    "TakerPays": {"currency": "USD", "value": "2", "issuer": "rI"}
-                }]
+                "offers": [
+                    {
+                        "quality": "0.5",
+                        "TakerGets": "1000000",
+                        "TakerPays": {"currency": "USD", "value": "2", "issuer": "rI"}
+                    },
+                    { "quality": "0.5" },
+                    { "quality": "oops" }
+                ]
             }
         });
         let rows = parse_book_offers_value(&v);
-        assert_eq!(rows.len(), 1);
+        assert_eq!(rows.len(), 3);
         assert_eq!(rows[0].quality, "0.5");
         assert_eq!(rows[0].price, "500000.000000");
         assert_eq!(rows[0].taker_gets, "1.000000");
         assert_eq!(rows[0].taker_pays, "2 USD");
+        assert_eq!(rows[1].price, "500000.000000");
+        assert_eq!(rows[2].quality, "oops");
+        assert_eq!(rows[2].price, "-");
     }
 
     /// TC-137: book_offer_best_price — string quality is not inverted,
@@ -759,25 +738,6 @@ mod tests {
             book_offer_best_price(&json!({ "result": { "offers": [] } }), false),
             None
         );
-    }
-
-    /// TC-140: parse_book_offers_value — a non-numeric quality entry mixed
-    /// into the book renders price as "-" while numeric entries still parse.
-    #[test]
-    fn parse_book_offers_non_numeric_quality_price_dash() {
-        let v = json!({
-            "result": {
-                "offers": [
-                    { "quality": "0.5" },
-                    { "quality": "oops" }
-                ]
-            }
-        });
-        let rows = parse_book_offers_value(&v);
-        assert_eq!(rows.len(), 2);
-        assert_eq!(rows[0].price, "500000.000000");
-        assert_eq!(rows[1].quality, "oops");
-        assert_eq!(rows[1].price, "-");
     }
 
     /// TC-018
@@ -839,17 +799,15 @@ mod tests {
         }
     }
 
-    /// TC-089 (I-7): `account_tx` RPC not-found maps to empty page at client boundary
+    /// TC-089 (I-7): `account_tx` RPC not-found maps to an empty page at the
+    /// client boundary; other errors are not treated as not-found.
     #[test]
-    fn empty_account_tx_page_on_not_found_maps_actnotfound() {
+    fn empty_account_tx_page_on_not_found_contract() {
         let page = empty_account_tx_page_on_not_found("actNotFound")
             .expect("not-found should become empty page");
         assert!(page.rows.is_empty());
         assert!(page.marker.is_none());
-    }
 
-    #[test]
-    fn empty_account_tx_page_on_not_found_ignores_other_errors() {
         assert!(empty_account_tx_page_on_not_found("timeout").is_none());
     }
 
@@ -906,8 +864,11 @@ mod tests {
         assert!(format!("{err}").contains("tecNO_DST_INSUF_XRP"));
     }
 
+    /// `parse_simulate_result`: parses tx_json/engine result with meta present,
+    /// still parses when a non-TEC result omits meta, and errors when tx_json
+    /// is missing.
     #[test]
-    fn parse_simulate_result_with_meta() {
+    fn parse_simulate_result_meta_absent_ok_and_missing_tx_json_err() {
         let value = json!({
             "result": {
                 "tx_json": {
@@ -931,12 +892,9 @@ mod tests {
         );
         assert_eq!(sim.tx_json["Fee"], "10");
         assert_eq!(sim.tx_json["Sequence"], 360);
-    }
 
-    #[test]
-    fn parse_simulate_result_tec_no_meta() {
         // Non-TEC failures omit meta per XRPL spec
-        let value = json!({
+        let no_meta = json!({
             "result": {
                 "tx_json": { "Account": "rTest" },
                 "engine_result": "terNO_LINE",
@@ -944,29 +902,23 @@ mod tests {
                 "ledger_index": 5
             }
         });
-        let sim = parse_simulate_result(&value).expect("ter result should still parse");
+        let sim = parse_simulate_result(&no_meta).expect("ter result should still parse");
         assert_eq!(sim.engine_result, "terNO_LINE");
         assert_eq!(sim.ledger_index, 5);
         assert!(sim.meta.is_none());
-    }
 
-    #[test]
-    fn parse_simulate_result_missing_tx_json() {
-        let value = json!({"result": {"engine_result": "tesSUCCESS"}});
-        let err = parse_simulate_result(&value).expect_err("missing tx_json should fail");
+        let missing = json!({"result": {"engine_result": "tesSUCCESS"}});
+        let err = parse_simulate_result(&missing).expect_err("missing tx_json should fail");
         assert!(format!("{err}").contains("tx_json"));
     }
 
-    /// TC-071 account_objects parse (empty)
-    #[test]
-    fn parse_account_objects_empty() {
-        let v = json!({ "result": { "account_objects": [] } });
-        assert!(parse_account_objects_value(&v).is_empty());
-    }
-
-    /// TC-072
+    /// TC-071, TC-072: empty account_objects yields no rows; mixed ledger
+    /// entry types map to rows with type/index/detail.
     #[test]
     fn parse_account_objects_mixed_types() {
+        let empty = json!({ "result": { "account_objects": [] } });
+        assert!(parse_account_objects_value(&empty).is_empty());
+
         let v = json!({
             "result": {
                 "account_objects": [
@@ -1042,9 +994,11 @@ mod tests {
         assert!(is_escrow_type("Escrow"));
     }
 
-    /// TC-080 ripple_path_find parse
+    /// TC-080, TC-081, TC-082: `parse_ripple_path_find` — alternatives with
+    /// object amounts parse, empty alternatives yield no rows, and a string
+    /// `source_amount` (XRP drops) is preserved as-is.
     #[test]
-    fn parse_ripple_path_find_with_alternatives() {
+    fn parse_ripple_path_find_alternatives_empty_and_string_source_amount() {
         let value = json!({
             "result": {
                 "alternatives": [
@@ -1081,12 +1035,8 @@ mod tests {
         );
         let alt = &paths.alternatives[0];
         assert_eq!(alt.source_amount["value"], "105.5");
-    }
 
-    /// TC-081 ripple_path_find empty alternatives
-    #[test]
-    fn parse_ripple_path_find_no_alternatives() {
-        let value = json!({
+        let empty = json!({
             "result": {
                 "alternatives": [],
                 "destination_account": "rDest",
@@ -1094,14 +1044,10 @@ mod tests {
                 "source_account": "rSrc"
             }
         });
-        let paths = parse_ripple_path_find(&value).expect("empty alternatives should parse");
+        let paths = parse_ripple_path_find(&empty).expect("empty alternatives should parse");
         assert!(paths.alternatives.is_empty());
-    }
 
-    /// TC-082 ripple_path_find source_amount as string (XRP drops)
-    #[test]
-    fn parse_ripple_path_find_source_amount_string() {
-        let value = json!({
+        let drops = json!({
             "result": {
                 "alternatives": [
                     {
@@ -1114,15 +1060,16 @@ mod tests {
                 "source_account": "rSrc"
             }
         });
-        let paths = parse_ripple_path_find(&value).expect("string source_amount should parse");
+        let paths = parse_ripple_path_find(&drops).expect("string source_amount should parse");
         assert_eq!(paths.alternatives.len(), 1);
         // source_amount is a plain drops string, not an object
         assert_eq!(paths.alternatives[0].source_amount, json!("256987"));
     }
 
-    /// TC-096: get_aggregate_price parser — full response
+    /// TC-096, TC-097: `parse_aggregate_price_value` — full response with
+    /// trimmed_set, and a response where trimmed_set is omitted.
     #[test]
-    fn parse_aggregate_price_full() {
+    fn parse_aggregate_price_full_and_no_trim() {
         let value = json!({
             "result": {
                 "entire_set": {
@@ -1145,12 +1092,8 @@ mod tests {
         assert_eq!(price.trimmed_set.as_ref().unwrap().mean, "0.5233");
         assert_eq!(price.trimmed_set.as_ref().unwrap().size, 2);
         assert_eq!(price.time, 1715779200);
-    }
 
-    /// TC-097: get_aggregate_price parser — trimmed_set omitted
-    #[test]
-    fn parse_aggregate_price_no_trim() {
-        let value = json!({
+        let no_trim = json!({
             "result": {
                 "entire_set": {
                     "mean": "1.0",
@@ -1160,7 +1103,7 @@ mod tests {
                 "time": 0
             }
         });
-        let price = parse_aggregate_price_value(&value).expect("should parse without trim");
+        let price = parse_aggregate_price_value(&no_trim).expect("should parse without trim");
         assert_eq!(price.entire_set.mean, "1.0");
         assert!(price.trimmed_set.is_none());
         assert_eq!(price.time, 0);

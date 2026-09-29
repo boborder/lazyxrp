@@ -14,6 +14,7 @@ mod util;
 mod ws;
 
 pub use cli_exec::{execute_cli_command, execute_rp_lookup};
+pub(crate) use dunl::DUNL_CACHE_TTL;
 pub(crate) use format::{JsonAmount, hex_to_ascii, json_amount};
 pub use format::{drops_to_xrp, xrp_to_drops};
 pub(crate) use nft_image::fetch_nft_image;

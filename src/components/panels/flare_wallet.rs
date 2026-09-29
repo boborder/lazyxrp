@@ -137,18 +137,17 @@ mod tests {
         crate::test_support::render_to_string(80, 10, |f| panel.draw(f, f.area()).unwrap())
     }
 
-    /// TC-121: unconfigured wallet shows setup guidance.
+    /// TC-121/TC-122: unconfigured wallet shows setup guidance; configured wallet
+    /// renders balance rows after the poll action.
     #[test]
-    fn flare_wallet_guidance_when_unconfigured() {
+    fn flare_wallet_renders_guidance_then_balances() {
+        // Unconfigured: setup guidance.
         let mut panel = FlareWalletPanel::default();
         let out = render_flare_wallet_panel(&mut panel);
         assert!(out.contains("not configured"));
         assert!(out.contains("[flare.wallet]"));
-    }
 
-    /// TC-122: configured wallet shows balance rows after poll action.
-    #[test]
-    fn flare_wallet_shows_balances_when_configured() {
+        // Configured: balance rows from the poll action.
         let mut panel = FlareWalletPanel {
             wallet_address: Some("0xabcdef0123456789abcdef0123456789abcdef01".into()),
             ..Default::default()

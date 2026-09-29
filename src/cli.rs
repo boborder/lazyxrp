@@ -276,16 +276,13 @@ mod tests {
         assert!(Cli::try_parse_from(["lazyxrp", "--self-uninstall", "-x", "info"]).is_err());
     }
 
+    /// `--self-uninstall` resolves both as flag-only and alongside a subcommand.
     #[test]
-    fn self_uninstall_accepts_optional_yes_flag() {
+    fn self_uninstall_parses() {
         let c = Cli::try_parse_from(["lazyxrp", "--self-uninstall", "--yes"]).expect("parses");
         assert!(c.self_uninstall);
-        assert!(c.yes);
-    }
-
-    #[test]
-    fn self_uninstall_plus_subcommand_parses() {
-        let c = Cli::try_parse_from(["lazyxrp", "--self-uninstall", "info"]).unwrap();
+        assert!(c.yes, "--yes flag must be captured");
+        let c = Cli::try_parse_from(["lazyxrp", "--self-uninstall", "info"]).expect("parses");
         assert!(c.self_uninstall);
         assert!(matches!(c.command, Some(super::Cmd::Info)));
     }
@@ -300,23 +297,24 @@ mod tests {
         assert!(Cli::try_parse_from(["lazyxrp", "--network", "xahau-testnet"]).is_err());
     }
 
-    /// TC-126: `--allow-insecure-rpc` defaults off and the flag enables it
+    /// TC-126: --allow-insecure-rpc defaults off; flag enables TUI and rp
     #[test]
-    fn allow_insecure_rpc_defaults_false_and_flag_enables_it() {
-        let off = Cli::try_parse_from(["lazyxrp"]).expect("parses");
-        assert!(!off.allow_insecure_rpc);
-        let on = Cli::try_parse_from(["lazyxrp", "--allow-insecure-rpc"]).expect("parses");
-        assert!(on.allow_insecure_rpc);
-    }
-
-    /// TC-126: `rp --allow-insecure-rpc` parses
-    #[test]
-    fn rp_allow_insecure_rpc_flag_parses() {
-        let off = RpCli::try_parse_from(["rp", "-t", "abcd"]).expect("parses");
-        assert!(!off.allow_insecure_rpc);
-        let on =
-            RpCli::try_parse_from(["rp", "--allow-insecure-rpc", "-t", "abcd"]).expect("parses");
-        assert!(on.allow_insecure_rpc);
+    fn allow_insecure_rpc_defaults_off_and_flag_enables_it() {
+        let cases: &[(&[&str], bool)] = &[
+            (&["lazyxrp"], false),
+            (&["lazyxrp", "--allow-insecure-rpc"], true),
+            (&["rp", "-t", "abcd"], false),
+            (&["rp", "--allow-insecure-rpc", "-t", "abcd"], true),
+        ];
+        for &(args, expected) in cases {
+            if args[0] == "rp" {
+                let c = RpCli::try_parse_from(args).expect("parses");
+                assert_eq!(c.allow_insecure_rpc, expected, "{args:?}");
+            } else {
+                let c = Cli::try_parse_from(args).expect("parses");
+                assert_eq!(c.allow_insecure_rpc, expected, "{args:?}");
+            }
+        }
     }
 
     #[test]

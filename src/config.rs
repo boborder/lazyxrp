@@ -873,20 +873,22 @@ mod tests {
         assert!(toml::from_str::<FlareConfig>(bad).is_err());
     }
 
+    /// TC-019-022: parse_style — empty yields default, fg/bg mapping, modifiers combined, gray==grey
     #[test]
-    fn parse_style_maps_named_color_to_foreground_index() {
-        let style = parse_style("red");
-        assert_eq!(style.fg, Some(Color::Indexed(1)));
-    }
+    fn parse_style_spec_mapping() {
+        // Empty spec yields the default style.
+        assert_eq!(parse_style(""), Style::default(), "empty style spec");
 
-    #[test]
-    fn parse_style_maps_on_color_to_background_index() {
-        let style = parse_style("on blue");
-        assert_eq!(style.bg, Some(Color::Indexed(4)));
-    }
+        let cases = [
+            ("red", Some(Color::Indexed(1)), None),
+            ("on blue", None, Some(Color::Indexed(4))),
+        ];
+        for (input, fg, bg) in cases {
+            let style = parse_style(input);
+            assert_eq!(style.fg, fg, "fg for {input:?}");
+            assert_eq!(style.bg, bg, "bg for {input:?}");
+        }
 
-    #[test]
-    fn parse_style_treats_gray_and_grey_identically() {
         let gray = parse_style("underline bold inverse gray");
         let grey = parse_style("underline bold inverse grey");
         assert_eq!(gray.fg, grey.fg, "gray and grey must map to the same color");
@@ -898,17 +900,13 @@ mod tests {
         }
     }
 
+    /// TC-024/TC-025: parse_color — RGB shorthand → indexed palette, unknown → None
     #[test]
-    fn parse_color_maps_rgb_triplet_to_indexed_palette() {
+    fn parse_color_contract() {
         let color = parse_color("rgb123");
         let expected = 16 + 36 + 2 * 6 + 3;
         assert_eq!(color, Some(Color::Indexed(expected)));
-    }
-
-    #[test]
-    fn parse_color_returns_none_for_unknown_name() {
-        let color = parse_color("unknown");
-        assert_eq!(color, None);
+        assert_eq!(parse_color("unknown"), None);
     }
 
     #[test]
@@ -936,58 +934,41 @@ mod tests {
         Ok(())
     }
 
+    /// TC-027-029/TC-031/TC-032: parse_key_event — modifier composition, case-insensitivity, unknown keys error
     #[test]
-    fn parse_key_event_maps_plain_and_named_keys() {
-        assert_eq!(
-            parse_key_event("a").unwrap(),
-            KeyEvent::new(KeyCode::Char('a'), KeyModifiers::empty())
-        );
-
-        assert_eq!(
-            parse_key_event("enter").unwrap(),
-            KeyEvent::new(KeyCode::Enter, KeyModifiers::empty())
-        );
-
-        assert_eq!(
-            parse_key_event("esc").unwrap(),
-            KeyEvent::new(KeyCode::Esc, KeyModifiers::empty())
-        );
+    fn parse_key_event_contract() {
+        let cases = [
+            ("a", Some((KeyCode::Char('a'), KeyModifiers::empty()))),
+            ("enter", Some((KeyCode::Enter, KeyModifiers::empty()))),
+            ("esc", Some((KeyCode::Esc, KeyModifiers::empty()))),
+            ("ctrl-a", Some((KeyCode::Char('a'), KeyModifiers::CONTROL))),
+            ("alt-enter", Some((KeyCode::Enter, KeyModifiers::ALT))),
+            ("shift-esc", Some((KeyCode::Esc, KeyModifiers::SHIFT))),
+            ("CTRL-a", Some((KeyCode::Char('a'), KeyModifiers::CONTROL))),
+            ("AlT-eNtEr", Some((KeyCode::Enter, KeyModifiers::ALT))),
+            (
+                "ctrl-alt-a",
+                Some((
+                    KeyCode::Char('a'),
+                    KeyModifiers::CONTROL | KeyModifiers::ALT,
+                )),
+            ),
+            (
+                "ctrl-shift-enter",
+                Some((KeyCode::Enter, KeyModifiers::CONTROL | KeyModifiers::SHIFT)),
+            ),
+            ("invalid-key", None),
+            ("ctrl-invalid-key", None),
+        ];
+        for (input, expected) in cases {
+            let parsed = parse_key_event(input)
+                .ok()
+                .map(|ev| (ev.code, ev.modifiers));
+            assert_eq!(parsed, expected, "key event for {input:?}");
+        }
     }
 
-    #[test]
-    fn parse_key_event_applies_single_modifier() {
-        assert_eq!(
-            parse_key_event("ctrl-a").unwrap(),
-            KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL)
-        );
-
-        assert_eq!(
-            parse_key_event("alt-enter").unwrap(),
-            KeyEvent::new(KeyCode::Enter, KeyModifiers::ALT)
-        );
-
-        assert_eq!(
-            parse_key_event("shift-esc").unwrap(),
-            KeyEvent::new(KeyCode::Esc, KeyModifiers::SHIFT)
-        );
-    }
-
-    #[test]
-    fn parse_key_event_applies_multiple_modifiers() {
-        assert_eq!(
-            parse_key_event("ctrl-alt-a").unwrap(),
-            KeyEvent::new(
-                KeyCode::Char('a'),
-                KeyModifiers::CONTROL | KeyModifiers::ALT
-            )
-        );
-
-        assert_eq!(
-            parse_key_event("ctrl-shift-enter").unwrap(),
-            KeyEvent::new(KeyCode::Enter, KeyModifiers::CONTROL | KeyModifiers::SHIFT)
-        );
-    }
-
+    /// TC-030: key_event_to_string — modifiers listed before key
     #[test]
     fn key_event_to_string_lists_modifiers_before_key() {
         assert_eq!(
@@ -996,25 +977,6 @@ mod tests {
                 KeyModifiers::CONTROL | KeyModifiers::ALT
             )),
             "ctrl-alt-a".to_string()
-        );
-    }
-
-    #[test]
-    fn parse_key_event_rejects_unknown_keys() {
-        assert!(parse_key_event("invalid-key").is_err());
-        assert!(parse_key_event("ctrl-invalid-key").is_err());
-    }
-
-    #[test]
-    fn parse_key_event_accepts_uppercase_modifiers() {
-        assert_eq!(
-            parse_key_event("CTRL-a").unwrap(),
-            KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL)
-        );
-
-        assert_eq!(
-            parse_key_event("AlT-eNtEr").unwrap(),
-            KeyEvent::new(KeyCode::Enter, KeyModifiers::ALT)
         );
     }
 
@@ -1032,34 +994,20 @@ network = "mainnet"
         )
     }
 
-    /// TC-033
-    #[test]
-    fn config_merge_user_poll_interval_overrides_default() -> color_eyre::Result<()> {
-        let _env_lock = env_lock();
-        let _test_env = TestEnvGuard::new(&["LAZYXRP_CONFIG", "XDG_CONFIG_HOME"]);
-        let root = std::env::temp_dir().join(format!("lazyxrp-tc033-{}", std::process::id()));
+    /// Creates a temp config dir containing `toml`, returning the root and its cleanup guard.
+    fn write_config_dir(
+        tag: &str,
+        toml: &str,
+    ) -> color_eyre::Result<(std::path::PathBuf, TempRootGuard)> {
+        let root = std::env::temp_dir().join(format!("lazyxrp-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
-        let _root_guard = TempRootGuard::new(root.clone());
+        let guard = TempRootGuard::new(root.clone());
         std::fs::create_dir_all(&root)?;
-        std::fs::write(root.join("config.toml"), sample_xrpl_config_toml(88_888))?;
-        _test_env.remove("XDG_CONFIG_HOME");
-        _test_env.set("LAZYXRP_CONFIG", root.to_str().unwrap());
-        let c = Config::new()?;
-        assert_eq!(c.xrpl.poll_interval_ms, 88_888);
-        Ok(())
+        std::fs::write(root.join("config.toml"), toml)?;
+        Ok((root, guard))
     }
 
-    /// TC-092: Config merge — XRPL_RPC_SERVER overrides rpc_server from file
-    #[test]
-    fn config_merge_rpc_server_env_overrides_file() -> color_eyre::Result<()> {
-        let _env_lock = env_lock();
-        let _test_env =
-            TestEnvGuard::new(&["LAZYXRP_CONFIG", "XDG_CONFIG_HOME", XRPL_RPC_SERVER_ENV]);
-        let root = std::env::temp_dir().join(format!("lazyxrp-tc092-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
-        let _root_guard = TempRootGuard::new(root.clone());
-        std::fs::create_dir_all(&root)?;
-        let toml = r#"[xrpl]
+    const TOML_WITH_RPC_SERVER: &str = r#"[xrpl]
 account = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
 issuer = "rMxCKbEDwqr76QuheSUMdEGf4B9xJ8m5De"
 currency = "RLUSD"
@@ -1069,8 +1017,29 @@ poll_interval_ms = 5000
 network = "mainnet"
 rpc_server = "https://from-file.example"
 "#;
-        std::fs::write(root.join("config.toml"), toml)?;
+
+    /// TC-033/TC-034/TC-035/TC-092: config source precedence —
+    /// file overrides built-in defaults; env var overrides file value;
+    /// XDG_CONFIG_HOME resolves the file location; bare HOME is the fallback.
+    #[test]
+    fn config_source_precedence() -> color_eyre::Result<()> {
+        let _env_lock = env_lock();
+        let _test_env = TestEnvGuard::new(&[
+            "LAZYXRP_CONFIG",
+            "XDG_CONFIG_HOME",
+            "HOME",
+            XRPL_RPC_SERVER_ENV,
+        ]);
+
+        // File value overrides built-in default.
+        let (root, _guard1) = write_config_dir("tc033", &sample_xrpl_config_toml(88_888))?;
         _test_env.remove("XDG_CONFIG_HOME");
+        _test_env.set("LAZYXRP_CONFIG", root.to_str().unwrap());
+        let c = Config::new()?;
+        assert_eq!(c.xrpl.poll_interval_ms, 88_888);
+
+        // Env var overrides the file's value.
+        let (root, _guard2) = write_config_dir("tc092", TOML_WITH_RPC_SERVER)?;
         _test_env.set("LAZYXRP_CONFIG", root.to_str().unwrap());
         _test_env.set(XRPL_RPC_SERVER_ENV, "https://from-env.example");
         let c = Config::new()?;
@@ -1078,39 +1047,27 @@ rpc_server = "https://from-file.example"
             c.xrpl.rpc_server.as_deref(),
             Some("https://from-env.example")
         );
-        Ok(())
-    }
 
-    /// TC-034
-    #[test]
-    fn config_loads_from_xdg_config_home() -> color_eyre::Result<()> {
-        let _env_lock = env_lock();
-        let _test_env = TestEnvGuard::new(&["LAZYXRP_CONFIG", "XDG_CONFIG_HOME"]);
+        // XDG_CONFIG_HOME resolves the file location.
         let root = std::env::temp_dir().join(format!("lazyxrp-tc034-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
-        let _root_guard = TempRootGuard::new(root.clone());
+        let _guard3 = TempRootGuard::new(root.clone());
         let xdg = root.join("xdg");
         let lazy = xdg.join("lazyxrp");
         std::fs::create_dir_all(&lazy)?;
         std::fs::write(lazy.join("config.toml"), sample_xrpl_config_toml(77_777))?;
         _test_env.remove("LAZYXRP_CONFIG");
+        _test_env.remove(XRPL_RPC_SERVER_ENV);
         _test_env.set("XDG_CONFIG_HOME", xdg.to_str().unwrap());
         let c = Config::new()?;
         assert_eq!(c.xrpl.poll_interval_ms, 77_777);
-        Ok(())
-    }
 
-    /// TC-035
-    #[test]
-    fn config_loads_when_only_home_is_set() -> color_eyre::Result<()> {
-        let _env_lock = env_lock();
-        let _test_env = TestEnvGuard::new(&["LAZYXRP_CONFIG", "XDG_CONFIG_HOME", "HOME"]);
+        // Bare HOME is the fallback.
         let root = std::env::temp_dir().join(format!("lazyxrp-tc035-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
-        let _root_guard = TempRootGuard::new(root.clone());
+        let _guard4 = TempRootGuard::new(root.clone());
         let home = root.join("home");
         std::fs::create_dir_all(&home)?;
-        _test_env.remove("LAZYXRP_CONFIG");
         _test_env.remove("XDG_CONFIG_HOME");
         _test_env.set("HOME", home.to_str().unwrap());
         let dir = config_dir();
@@ -1118,6 +1075,48 @@ rpc_server = "https://from-file.example"
         std::fs::write(dir.join("config.toml"), sample_xrpl_config_toml(66_666))?;
         let c = Config::new()?;
         assert_eq!(c.xrpl.poll_interval_ms, 66_666);
+        Ok(())
+    }
+
+    /// TC-049: env `XRPL_SEED` overrides the file's plain seed; the plain field is cleared.
+    #[test]
+    fn config_env_seed_overrides_file_seed() -> color_eyre::Result<()> {
+        use secrecy::ExposeSecret;
+        let _env_lock = env_lock();
+        let _test_env = TestEnvGuard::new(&[
+            "LAZYXRP_CONFIG",
+            "XDG_CONFIG_HOME",
+            crate::signing::SEED_ENV,
+        ]);
+        let toml = r#"[xrpl]
+account = "r3kmLJN5D28dHuH8vZNUZpMC43pEHpaocV"
+issuer = "rMxCKbEDwqr76QuheSUMdEGf4B9xJ8m5De"
+currency = "RLUSD"
+currency_code = "524C555344000000000000000000000000000000"
+offer_limit = 5
+poll_interval_ms = 5000
+network = "mainnet"
+
+[xrpl.signing]
+seed = "sEdFileSeedValueNotReal1234567890"
+"#;
+        let (root, _guard) = write_config_dir("tc049", toml)?;
+        _test_env.remove("XDG_CONFIG_HOME");
+        _test_env.set("LAZYXRP_CONFIG", root.to_str().unwrap());
+        _test_env.set(crate::signing::SEED_ENV, "sEdEnvSeedOverride9876543210");
+        let c = Config::new()?;
+        assert_eq!(
+            c.xrpl
+                .signing
+                .secret_seed
+                .as_ref()
+                .map(|s| s.expose_secret()),
+            Some("sEdEnvSeedOverride9876543210")
+        );
+        assert!(
+            c.xrpl.signing.seed.is_none(),
+            "plain file seed must be cleared"
+        );
         Ok(())
     }
 
@@ -1132,10 +1131,6 @@ rpc_server = "https://from-file.example"
     fn config_file_network_xahau_test_loads() -> color_eyre::Result<()> {
         let _env_lock = env_lock();
         let _test_env = TestEnvGuard::new(&["LAZYXRP_CONFIG", "XDG_CONFIG_HOME"]);
-        let root = std::env::temp_dir().join(format!("lazyxrp-tc127-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
-        let _root_guard = TempRootGuard::new(root.clone());
-        std::fs::create_dir_all(&root)?;
         let toml = r#"[xrpl]
 account = "r3kmLJN5D28dHuH8vZNUZpMC43pEHpaocV"
 issuer = "rMxCKbEDwqr76QuheSUMdEGf4B9xJ8m5De"
@@ -1145,7 +1140,7 @@ offer_limit = 5
 poll_interval_ms = 5000
 network = "xahau-test"
 "#;
-        std::fs::write(root.join("config.toml"), toml)?;
+        let (root, _root_guard) = write_config_dir("tc127", toml)?;
         _test_env.remove("XDG_CONFIG_HOME");
         _test_env.set("LAZYXRP_CONFIG", root.to_str().unwrap());
         let c = Config::new()?;
