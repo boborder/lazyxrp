@@ -456,16 +456,6 @@ pub async fn execute_direct_minting(
 mod tests {
     use super::*;
 
-    /// Drops with the test: clears the shared registry cache even if an assert panics.
-    struct FlareRegistryCacheGuard;
-    impl Drop for FlareRegistryCacheGuard {
-        fn drop(&mut self) {
-            if let Ok(mut guard) = flare_registry_cache().lock() {
-                guard.clear();
-            }
-        }
-    }
-
     #[test]
     fn uba_to_xrp_display_table() {
         assert_eq!(uba_to_xrp_display(0), "0");

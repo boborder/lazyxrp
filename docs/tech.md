@@ -19,11 +19,11 @@
 - `strum`（`Cargo.toml` `0.28`、`Cargo.lock` `0.28.0`; `derive` — `Action` 表示など）
 - `signal-hook`（`Cargo.toml` `0.4`、`Cargo.lock` `0.4.4` — `SIGTSTP` 処理）
 - `clap`（`Cargo.toml` `4`、`Cargo.lock` `4.6.6`; `derive`, `cargo`, `wrap_help`, `unicode`, `string`）
-- `ratatui-image`（`Cargo.toml` `11`、`crossterm`, `image-defaults`）— Kitty / Sixel / iTerm2 / halfblocks image preview。
-- `image`（`Cargo.toml` `0.25`、PNG/JPEG/GIF/WebP）— NFT image decode。
+- `ratatui-image`（`Cargo.toml` `11`、`default-features = false`; `crossterm`。`image-defaults` は `image/default`（AVIF エンコーダ `ravif`・rayon・bmp/tiff 等）を引き込みビルドが遅くなるため使わない）— Kitty / Sixel / iTerm2 / halfblocks image preview。
+- `image`（`Cargo.toml` `0.25`、`default-features = false`; PNG/JPEG/GIF/WebP のみ）— NFT image decode。
 
 ### XRPL / 通信
-- `reqwest`（`Cargo.toml` `0.13`、`Cargo.lock` 直接依存 `0.13.5`; `features = ["json", "stream"]` — JSON-RPC と bounded NFT metadata/image streaming）。`xrpl-rust` 経路では **`reqwest 0.12.x` がロックに併存**しうる（解像は `Cargo.lock` を正とする）。
+- `reqwest`（`Cargo.toml` `0.13`、`Cargo.lock` 直接依存 `0.13.5`; `default-features = false`, `features = ["json", "stream", "native-tls", "charset", "http2", "system-proxy"]` — JSON-RPC と bounded NFT metadata/image streaming）。TLS は既定の rustls/`aws-lc-rs` ではなく **native-tls**（`aws-lc-sys` の C ビルドだけでクリーンビルドの大半を占めたため。`xrpl-rust` 経路の `reqwest 0.12.x` も native-tls）。`xrpl-rust` 経路では **`reqwest 0.12.x` がロックに併存**しうる（解像は `Cargo.lock` を正とする）。
 - `xrpl-rust`（`Cargo.toml` `1.1`、`Cargo.lock` `1.3.0`）
 - `kobe-xrpl = 3.4` / `kobe-primitives = 3.4` — BIP39 secp256k1 mnemonic → BIP44 `m/44'/144'/0'/0/0` account derivation。
 - `tokio-tungstenite = (xrpl-rust 経由)`
@@ -34,7 +34,7 @@
 - Payment 署名はクレート公開 API の `wallet::Wallet` + `transaction::sign`（`models::transactions::payment::Payment`）を利用し、送信時は `binarycodec::encode` した `tx_blob` に変換する。既存の XRPL family seed と BIP39 mnemonic（secp256k1 only）は `SigningCredential` に統合する。
 ### Flare / EVM
 
-- `alloy`（`Cargo.toml` `2`; `features = ["essentials"]` — HTTP provider + local signer。`full` は使わない）
+- `alloy`（`Cargo.toml` `2`; `default-features = false`, `features = ["std", "reqwest", "reqwest-native-tls", "essentials"]` — HTTP provider + local signer。`full` は使わない。既定の `reqwest-rustls-tls` は `aws-lc-sys` を引くため避ける）
   - `ContractRegistry` 経由で `FtsoV2` / `AssetManagerFXRP` アドレスを解決。
   - FTSOv2: `getFeedsById(bytes21[])` を 1 往復で一括取得（`fetch_from_rpc`）。batch revert 時は `calculateFeeByIds` の fee 付きリトライ（eth_call のみ・資金移動なし）→ `getFeedById` 逐次フォールバック。`FXRP/USD` 設定は `XRP/USD` フィードに正規化。
   - FXRP Direct Mint: `directMintingPaymentAddress()` / `getDirectMinting*Fee*` view を `try_join!` 並列読み取り（`fetch_fxrp_direct_mint_info`）。

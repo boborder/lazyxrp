@@ -3,7 +3,8 @@
 # provisions the same channel via mise (its shims shadow rustup's).
 [tools]
 rust = "stable"
-hyperfine = "latest"
+# cargo backend: the prebuilt GitHub asset resolves to x86_64 on arm64 macOS (no Rosetta → "Bad CPU type").
+"cargo:hyperfine" = "latest"
 # CI security-advisories parity (`.github/workflows/ci.yml`): cargo-audit uses
 # CLI flag --ignore RUSTSEC-2026-0235 (same as ci.yml); cargo-deny reads deny.toml.
 "cargo:cargo-audit" = "latest"

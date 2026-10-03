@@ -11,6 +11,7 @@
 - This file is an **important-case roster**: a TC is added only for cross-module contracts, regression-prone logic, or user-visible behavior. Unannotated helper/unit tests are intentionally outside the catalog.
 - Reference the `TC-xxx` ID in commit messages (e.g. `test(xrpl): add NFT parse case (TC-013)`).
 - Inline `#[cfg(test)]` modules preferred; live-network cases are `#[ignore]` and run explicitly.
+- Tests live in the lib (`src/lib.rs`) and `tests/cli_smoke.rs`. `[lib] doctest = false` and `test = false` on both `[[bin]]` targets (`Cargo.toml`) skip empty test targets to keep `cargo test` rebuilds fast — put unit tests in lib modules, not `main.rs` / `bin/rp.rs`, or drop `test = false` first.
 - **Traceability:** User-visible TCs should map to `docs/requirements.md` FR/NFR and/or `docs/architecture.md` §. Keys/layout TCs trace to `DESIGN.md`. See [Traceability](#traceability) for network/Flare rows.
 
 ## Commands
@@ -101,10 +102,10 @@ cargo deny check
 | TC-102 | P1 | `src/xrpl/client.rs` | Rate-limited RPC errors retryable; permanent XRPL errors not |
 | TC-103 | P2 | `src/xrpl/ws.rs`, `src/components/shared/fps.rs` | Duplicate ledger-close emits one trigger; FPS counts draws not ticks |
 | TC-104 | P1 | `src/xrpl/parse.rs`, `src/components/shared/fps.rs` | account_tx marker survives parsing; tick-rate label refreshes after 1s |
-| TC-105 | P2 | `src/xrpl/client.rs`, `src/app.rs` | Local HTTP 429 retried; dirty-render skips no-op Render |
+| TC-105 | P2 | `src/xrpl/client.rs` | Local HTTP 429 retried before success |
 | TC-106 | P1 | `src/xrpl/poll.rs`, `src/app.rs` | Submit failure emits error + account resync; user actions mark dirty |
 | TC-107 | P1 | `src/xrpl/poll.rs`, `src/app.rs` | Closed action channel returns failure without panic; ticks redraw |
-| TC-108 | P1 | `src/app.rs` | Dirty-render — actual draw clears dirty, counts toward FPS |
+| TC-108 | P1 | `src/app.rs` | Dirty-render — `run()` draws once per loop iteration when `needs_draw` (`draw_frame`: clears dirty, counts toward FPS). No automated test (needs a real terminal): smoke via PTY — splash and main UI must appear without a resize |
 | TC-109 | P2 | `src/components/tabs/nft.rs` | NFT with URI emits `NftImageRequest` |
 | TC-110 | P2 | `src/components/tabs/nft.rs` | NFT without URI emits no preview request |
 | TC-111 | P1 | `src/network.rs` | Xahau networks parse, resolve endpoints, and guard writes |

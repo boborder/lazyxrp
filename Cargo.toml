@@ -27,13 +27,19 @@ include = [
 autobins = false
 build = "build.rs"
 
+# No doctests, and bins hold no unit tests (cli_smoke covers them): skip those test targets.
+[lib]
+doctest = false
+
 [[bin]]
 name = "lazyxrp"
 path = "src/main.rs"
+test = false
 
 [[bin]]
 name = "rp"
 path = "src/bin/rp.rs"
+test = false
 
 [dependencies]
 base64 = "0.23"
@@ -76,9 +82,10 @@ kobe-xrpl = "3.4"
 kobe-primitives = { version = "3.4", default-features = false, features = ["bip32", "encoding"] }
 xrpl-rust = "1.1"
 url = "2"
-reqwest = { version = "0.13", features = ["json", "stream"] }
-alloy = { version = "2", features = ["essentials"] }
-ratatui-image = { version = "11", default-features = false, features = ["crossterm", "image-defaults"] }
+# native-tls (not default rustls/aws-lc-rs): aws-lc-sys alone is ~7 min of a clean build.
+reqwest = { version = "0.13", default-features = false, features = ["json", "stream", "native-tls", "charset", "http2", "system-proxy"] }
+alloy = { version = "2", default-features = false, features = ["std", "reqwest", "reqwest-native-tls", "essentials"] }
+ratatui-image = { version = "11", default-features = false, features = ["crossterm"] }
 image = { version = "0.25", default-features = false, features = ["gif", "jpeg", "png", "webp"] }
 # Linux GNU only: vendored OpenSSL so `cross` targets (i686/aarch64) do not need target
 # OpenSSL dev packages. Omit on Windows/macOS — MSVC+vendored needs Perl modules GitHub

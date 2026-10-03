@@ -323,6 +323,9 @@ impl App {
         loop {
             self.forward_tui_events(&mut tui).await?;
             self.drain_and_dispatch_actions(Some(&mut tui))?;
+            if self.needs_draw && !self.should_suspend && !self.should_quit {
+                self.draw_frame(&mut tui)?;
+            }
             if self.should_suspend {
                 tui.suspend()?;
                 action_tx.send(Action::Resume)?;
@@ -448,17 +451,14 @@ impl App {
 
     fn drain_and_dispatch_actions(&mut self, mut tui: Option<&mut Tui>) -> color_eyre::Result<()> {
         while let Ok(action) = self.action_rx.try_recv() {
-            if !matches!(
-                &action,
-                Action::Tick | Action::Render | Action::NftImageLoaded { .. }
-            ) {
+            if !matches!(&action, Action::Tick | Action::NftImageLoaded { .. }) {
                 debug!("{action:?}");
             }
-            // Dirty policy (ratatui plan Phase 3):
-            // keys/resize/data/UI => always; Tick => splash only here;
-            // FPS label refresh marks dirty after fps.note_action; Render never marks.
+            // Dirty policy: keys/resize/data/UI => always; Tick => splash only here;
+            // FPS label refresh marks dirty after fps.note_action. `run()` draws once
+            // per loop iteration when dirty (`draw_frame`), coalescing queued actions.
+            // `Action::Render` is only the FPS counter's frame signal, never dispatched.
             match &action {
-                Action::Render => {}
                 Action::Tick => {
                     self.last_tick_key_events.drain(..);
                     if !self.startup_done {
@@ -484,15 +484,6 @@ impl App {
                         self.on_resize(tui, *w, *h)?;
                     }
                 }
-                Action::Render if self.needs_draw => {
-                    if let Some(tui) = tui.as_deref_mut() {
-                        self.render(tui)?;
-                        self.needs_draw = false;
-                        // Count actual draws for the FPS label (not raw Render events).
-                        let _ = self.fps.note_action(&Action::Render);
-                    }
-                }
-                Action::Render => {}
                 Action::TabNext => {
                     self.active_tab = (self.active_tab + 1) % TAB_TITLES.len();
                     let _ = self.tab_tx.send(self.active_tab);
@@ -677,7 +668,14 @@ impl App {
 
     fn on_resize(&mut self, tui: &mut Tui, w: u16, h: u16) -> color_eyre::Result<()> {
         tui.terminal.resize(Rect::new(0, 0, w, h))?;
+        self.draw_frame(tui)?;
+        Ok(())
+    }
+
+    /// Draw once and clear the dirty flag; the FPS label counts real draws only.
+    fn draw_frame(&mut self, tui: &mut Tui) -> color_eyre::Result<()> {
         self.render(tui)?;
+        self.needs_draw = false;
         let _ = self.fps.note_action(&Action::Render);
         Ok(())
     }

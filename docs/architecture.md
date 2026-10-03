@@ -71,7 +71,7 @@ Implementation: `src/xrpl/poll.rs`, `src/app.rs`.
 | Input | Keyboard → `tui::Event` → `Action`; XRPL RPC/WS → `Action` |
 | Manual refresh | `Action::Refresh*` → `PollCommand` → poll task |
 | Submit | `Action::*Submit` → `PollCommand` → simulate/sign/submit in poll |
-| Output | `Component::update` → `draw` (gated by `needs_draw`) |
+| Output | `Component::update` → `draw`; `App::run` calls `draw_frame` once per loop iteration when `needs_draw` (no fixed frame timer) |
 
 WebSocket ledger close coalesces poll triggers (`MIN_POLL_INTERVAL`). Scheduled poll uses `poll_interval_ms` from config (default **5000** ms for interactive use; **15000–30000** ms recommended for long-running / always-on sessions to reduce public RPC load).
 
