@@ -39,7 +39,7 @@
   - FTSOv2: `getFeedsById(bytes21[])` を 1 往復で一括取得（`fetch_from_rpc`）。batch revert 時は `calculateFeeByIds` の fee 付きリトライ（eth_call のみ・資金移動なし）→ `getFeedById` 逐次フォールバック。`FXRP/USD` 設定は `XRP/USD` フィードに正規化。
   - FXRP Direct Mint: `directMintingPaymentAddress()` / `getDirectMinting*Fee*` view を `try_join!` 並列読み取り（`fetch_fxrp_direct_mint_info`）。
   - Flare wallet read: `eth_getBalance` + `IAssetManager.fAsset()` → `IERC20.balanceOf` / `decimals`（`fetch_flare_wallet_balance`）。
-  - RPC 解決: `FLARE_RPC_URL` env > `[flare] network` preset（`flare` / `songbird` / `coston2`）。実装: `app.rs::resolve_flare_rpc_url`。
+  - RPC 解決: `FLARE_RPC_URL` env > `[flare] network` preset（`flare` / `songbird` / `coston2`）。実装: `app.rs::resolve_flare_rpc_url`。https 強制・http 署名拒否: `lib.rs::check_flare_endpoint`（XRPL エンドポイントと同規則）。
 
 ### 設定・シリアライズ
 

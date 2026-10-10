@@ -156,13 +156,13 @@ fn to_valid_flare_pairs(feeds: &[String]) -> Vec<String> {
 
 fn format_price(value: U256, decimals: i8) -> String {
     let divisor = 10_f64.powi(decimals as i32);
-    let human = value.to::<u128>() as f64 / divisor;
+    let human = value.saturating_to::<u128>() as f64 / divisor;
     format!("{human:.6}")
 }
 
 fn format_token_balance(value: U256, decimals: u8) -> String {
     let divisor = 10_f64.powi(decimals as i32);
-    let human = value.to::<u128>() as f64 / divisor;
+    let human = value.saturating_to::<u128>() as f64 / divisor;
     if decimals <= 6 {
         format!("{human:.6}")
     } else {
@@ -313,12 +313,16 @@ pub async fn fetch_fxrp_direct_mint_info(rpc_url: &str) -> color_eyre::Result<Fx
         async { am.getDirectMintingExecutorFeeUBA().call().await },
     )?;
 
+    // Remote values: a checked conversion, never a panicking one (the panic hook exits the TUI).
+    let too_big = |what: &str| color_eyre::eyre::eyre!("Flare RPC returned out-of-range {what}");
     Ok(FxrpDirectMintInfo {
         core_vault_xrpl,
         asset_manager: format!("{asset_manager_addr:#x}"),
-        min_fee_uba: min_fee.to::<u128>(),
-        fee_bips: fee_bips.to::<u64>(),
-        executor_fee_uba: executor_fee.to::<u128>(),
+        min_fee_uba: min_fee.try_into().map_err(|_| too_big("minimum fee"))?,
+        fee_bips: fee_bips.try_into().map_err(|_| too_big("fee bips"))?,
+        executor_fee_uba: executor_fee
+            .try_into()
+            .map_err(|_| too_big("executor fee"))?,
     })
 }
 
@@ -455,6 +459,14 @@ pub async fn execute_direct_minting(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An oversized uint256 from the RPC must not panic the display formatters.
+    #[test]
+    fn oversized_uint256_does_not_panic_formatters() {
+        assert!(format_price(U256::MAX, 6).parse::<f64>().is_ok());
+        assert!(format_token_balance(U256::MAX, 18).parse::<f64>().is_ok());
+        assert_eq!(format_price(U256::from(1_500_000_u64), 6), "1.500000");
+    }
 
     #[test]
     fn uba_to_xrp_display_table() {

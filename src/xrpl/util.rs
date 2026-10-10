@@ -8,6 +8,12 @@ pub(crate) fn next_backoff_secs(current: u64) -> u64 {
     }
 }
 
+/// Strip control characters (and cap length) from remote-supplied text before it is put
+/// in an error report or printed by the CLI, so a hostile node cannot inject escape sequences.
+pub(crate) fn sanitize_remote(s: &str) -> String {
+    s.chars().filter(|c| !c.is_control()).take(512).collect()
+}
+
 fn json_node_at<'a>(value: &'a Value, path: &[&str]) -> &'a Value {
     let mut node = value;
     for key in path {

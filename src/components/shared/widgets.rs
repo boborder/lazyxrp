@@ -22,8 +22,9 @@ fn tx_table_row(t: &TxRow) -> Row<'static> {
         "▲" => theme::success_style(),
         _ => theme::dim_style(),
     };
-    let hash_cell = if t.hash.len() > 16 {
-        Cell::from(format!("{}…", &t.hash[..16])).style(theme::secondary_style())
+    let hash_cell = if t.hash.chars().count() > 16 {
+        let head: String = t.hash.chars().take(16).collect();
+        Cell::from(format!("{head}…")).style(theme::secondary_style())
     } else {
         Cell::from(t.hash.clone()).style(theme::secondary_style())
     };

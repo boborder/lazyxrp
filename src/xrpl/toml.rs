@@ -1,8 +1,13 @@
 use std::time::Duration;
 
 use tracing::debug;
+use url::Url;
 
+use super::nft_image::{client_for_url, fetch_via};
 use super::types::XrplTomlData;
+
+/// Real `xrp-ledger.toml` files are a few KiB.
+const MAX_TOML_BYTES: usize = 1024 * 1024;
 
 /// Result of fetching `/.well-known/xrp-ledger.toml`.
 #[derive(Debug, Clone)]
@@ -13,58 +18,57 @@ pub struct XrplTomlFetch {
     pub result: Result<XrplTomlData, String>,
 }
 
+fn fetch_error(status: u16, content_type: Option<String>, msg: impl Into<String>) -> XrplTomlFetch {
+    XrplTomlFetch {
+        status,
+        content_type,
+        raw: None,
+        result: Err(msg.into()),
+    }
+}
+
+/// The domain comes from a remote validator manifest: accept only a plain ASCII
+/// hostname (or IP literal, which the fetch guard then rejects if non-public) so
+/// it cannot smuggle userinfo, port, path, or query into the URL.
+fn is_plain_hostname(domain: &str) -> bool {
+    !domain.is_empty()
+        && domain.len() <= 253
+        && domain
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-')
+        && !domain.starts_with(['.', '-'])
+        && !domain.ends_with(['.', '-'])
+}
+
 /// Fetch xrp-ledger.toml and check whether `expected_pubkey` appears under `[[VALIDATORS]]`.
+/// Uses the same SSRF-guarded fetch as NFT images: private/loopback hosts rejected, DNS
+/// pinned, every redirect hop re-checked, no proxy, body capped at 1 MiB.
 pub async fn fetch_xrpl_toml_with_meta(
     domain: &str,
     expected_pubkey: &str,
     timeout: Duration,
 ) -> XrplTomlFetch {
-    let url = format!("https://{domain}/.well-known/xrp-ledger.toml");
+    if !is_plain_hostname(domain) {
+        return fetch_error(0, None, "invalid validator domain");
+    }
+    let Ok(url) = Url::parse(&format!("https://{domain}/.well-known/xrp-ledger.toml")) else {
+        return fetch_error(0, None, "invalid validator domain");
+    };
     debug!(%url, %expected_pubkey, "fetching xrp-ledger.toml");
 
-    let client = match reqwest::Client::builder().timeout(timeout).build() {
-        Ok(c) => c,
-        Err(e) => {
-            return XrplTomlFetch {
-                status: 0,
-                content_type: None,
-                raw: None,
-                result: Err(e.to_string()),
-            };
-        }
+    let fetched = match tokio::time::timeout(
+        timeout,
+        fetch_via(url, MAX_TOML_BYTES, |u| Box::pin(client_for_url(u))),
+    )
+    .await
+    {
+        Ok(Ok(f)) => f,
+        Ok(Err(e)) => return fetch_error(0, None, e.to_string()),
+        Err(_) => return fetch_error(0, None, "timeout"),
     };
 
-    let resp = match client.get(&url).send().await {
-        Ok(r) => r,
-        Err(e) => {
-            return XrplTomlFetch {
-                status: 0,
-                content_type: None,
-                raw: None,
-                result: Err(e.to_string()),
-            };
-        }
-    };
-
-    let status = resp.status().as_u16();
-    let content_type = resp
-        .headers()
-        .get("content-type")
-        .and_then(|v| v.to_str().ok())
-        .map(|s| s.to_string());
-
-    let text = match resp.text().await {
-        Ok(t) => t,
-        Err(e) => {
-            return XrplTomlFetch {
-                status,
-                content_type,
-                raw: None,
-                result: Err(format!("HTTP {status}, body err: {e}")),
-            };
-        }
-    };
-
+    let status = fetched.status;
+    let text = String::from_utf8_lossy(&fetched.bytes).into_owned();
     let result = if (200..300).contains(&status) {
         parse_xrpl_toml(&text, expected_pubkey, domain).map_err(|e| e.to_string())
     } else {
@@ -73,7 +77,7 @@ pub async fn fetch_xrpl_toml_with_meta(
 
     XrplTomlFetch {
         status,
-        content_type,
+        content_type: fetched.content_type,
         raw: Some(text),
         result,
     }
@@ -120,6 +124,49 @@ pub fn parse_xrpl_toml(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A manifest-supplied domain cannot smuggle userinfo, port, path or query into the URL.
+    #[test]
+    fn plain_hostname_rejects_url_metacharacters() {
+        for bad in [
+            "",
+            "x@127.0.0.1:80/p?",
+            "a.com:8443",
+            "a.com/path",
+            "a.com?x=1",
+            "a.com#f",
+            "a b.com",
+            ".a.com",
+            "a.com.",
+            "-a.com",
+            "müller.de",
+        ] {
+            assert!(!is_plain_hostname(bad), "accepted {bad:?}");
+        }
+        assert!(is_plain_hostname("example.com"));
+        assert!(is_plain_hostname("val-1.example.co.uk"));
+    }
+
+    /// Non-public hosts are refused before any request (no DNS or network needed for literals).
+    #[tokio::test]
+    async fn fetch_refuses_private_and_invalid_domains() {
+        for domain in [
+            "127.0.0.1",
+            "169.254.169.254",
+            "10.0.0.1",
+            "100.100.100.200",
+            "x@127.0.0.1",
+        ] {
+            let r = fetch_xrpl_toml_with_meta(domain, "ED00", Duration::from_secs(2)).await;
+            assert_eq!(r.status, 0, "{domain}");
+            assert!(r.raw.is_none(), "{domain}");
+            let err = r.result.expect_err(domain);
+            assert!(
+                err.contains("private") || err.contains("invalid"),
+                "{domain}: {err}"
+            );
+        }
+    }
 
     /// TC-142: parse_xrpl_toml — a validator whose public_key matches
     /// (case-insensitive) carries its attestation through to the result.

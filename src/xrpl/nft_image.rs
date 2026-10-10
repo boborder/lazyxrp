@@ -42,46 +42,50 @@ pub(crate) async fn fetch_nft_image(uri: &str) -> color_eyre::Result<NftImageByt
     Ok(NftImageBytes { bytes })
 }
 
-/// Fetch one resource over (possibly redirecting) HTTP hops. Each hop derives
-/// its client through `client_for` — in production [`client_for_url`], which
-/// re-runs the SSRF guard for every redirect target.
-async fn fetch_via(
+#[derive(Debug)]
+/// Result of one guarded fetch. Non-2xx statuses are returned, not turned into errors.
+pub(crate) struct Fetched {
+    pub status: u16,
+    pub content_type: Option<String>,
+    pub bytes: Vec<u8>,
+}
+
+/// Fetch one untrusted URL over (possibly redirecting) HTTP hops, reading at most
+/// `max_bytes`. Each hop derives its client through `client_for` — in production
+/// [`client_for_url`], which re-runs the SSRF guard for every redirect target.
+/// Shared by NFT image and `xrp-ledger.toml` fetches.
+pub(crate) async fn fetch_via(
     mut current: Url,
+    max_bytes: usize,
     client_for: impl for<'a> Fn(
         &'a Url,
     ) -> Pin<
         Box<dyn Future<Output = color_eyre::Result<reqwest::Client>> + Send + 'a>,
     >,
-) -> color_eyre::Result<(Vec<u8>, Option<String>)> {
+) -> color_eyre::Result<Fetched> {
+    let limit_msg = || format!("resource exceeds {} MiB limit", max_bytes / (1024 * 1024));
     for redirect_count in 0..=5 {
         let client = client_for(&current).await?;
         let response = client.get(current.clone()).send().await?;
         if response.status().is_redirection() {
             if redirect_count == 5 {
-                return Err(color_eyre::eyre::eyre!(
-                    "NFT resource exceeded redirect limit"
-                ));
+                return Err(color_eyre::eyre::eyre!("resource exceeded redirect limit"));
             }
             let location = response
                 .headers()
                 .get(reqwest::header::LOCATION)
-                .ok_or_else(|| color_eyre::eyre::eyre!("NFT redirect has no location"))?
+                .ok_or_else(|| color_eyre::eyre::eyre!("redirect has no location"))?
                 .to_str()
-                .map_err(|_| color_eyre::eyre::eyre!("NFT redirect location is invalid"))?;
+                .map_err(|_| color_eyre::eyre::eyre!("redirect location is invalid"))?;
             current = current.join(location)?;
             continue;
         }
-        let status = response.status();
-        if !status.is_success() {
-            return Err(color_eyre::eyre::eyre!(
-                "NFT resource returned HTTP {status}"
-            ));
-        }
+        let status = response.status().as_u16();
         if response
             .content_length()
-            .is_some_and(|length| length > MAX_RESPONSE_BYTES as u64)
+            .is_some_and(|length| length > max_bytes as u64)
         {
-            return Err(color_eyre::eyre::eyre!("NFT resource exceeds 4 MiB limit"));
+            return Err(color_eyre::eyre::eyre!(limit_msg()));
         }
         let content_type = response
             .headers()
@@ -92,25 +96,39 @@ async fn fetch_via(
         let mut bytes = Vec::new();
         while let Some(chunk) = stream.next().await {
             let chunk = chunk?;
-            if bytes.len().saturating_add(chunk.len()) > MAX_RESPONSE_BYTES {
-                return Err(color_eyre::eyre::eyre!("NFT resource exceeds 4 MiB limit"));
+            if bytes.len().saturating_add(chunk.len()) > max_bytes {
+                return Err(color_eyre::eyre::eyre!(limit_msg()));
             }
             bytes.extend_from_slice(&chunk);
         }
-        return Ok((bytes, content_type));
+        return Ok(Fetched {
+            status,
+            content_type,
+            bytes,
+        });
     }
     unreachable!("redirect loop returns on every iteration")
 }
 
 async fn fetch_resource(uri: &str) -> color_eyre::Result<(Vec<u8>, Option<String>)> {
     let url = resolve_uri(uri)?;
-    fetch_via(url, |url| Box::pin(client_for_url(url))).await
+    let fetched = fetch_via(url, MAX_RESPONSE_BYTES, |url| Box::pin(client_for_url(url))).await?;
+    if !(200..300).contains(&fetched.status) {
+        return Err(color_eyre::eyre::eyre!(
+            "NFT resource returned HTTP {}",
+            fetched.status
+        ));
+    }
+    Ok((fetched.bytes, fetched.content_type))
 }
 
-async fn client_for_url(url: &Url) -> color_eyre::Result<reqwest::Client> {
+/// Client for one hop of an untrusted URL: resolves the host, rejects non-public
+/// addresses, and pins the connection to the checked address. Proxies are disabled:
+/// a proxy would re-resolve the hostname itself and bypass the pin (DNS rebinding).
+pub(crate) async fn client_for_url(url: &Url) -> color_eyre::Result<reqwest::Client> {
     let host = url
         .host_str()
-        .ok_or_else(|| color_eyre::eyre::eyre!("NFT URI has no host"))?;
+        .ok_or_else(|| color_eyre::eyre::eyre!("URL has no host"))?;
     let port = url.port_or_known_default().unwrap_or(443);
     let addresses: Vec<SocketAddr> = if let Ok(ip) = host.parse::<IpAddr>() {
         vec![SocketAddr::new(ip, port)]
@@ -122,14 +140,13 @@ async fn client_for_url(url: &Url) -> color_eyre::Result<reqwest::Client> {
             .iter()
             .any(|address| is_private_or_loopback(address.ip()))
     {
-        return Err(color_eyre::eyre::eyre!(
-            "NFT URI resolves to a private host"
-        ));
+        return Err(color_eyre::eyre::eyre!("URL resolves to a private host"));
     }
     Ok(reqwest::Client::builder()
         .connect_timeout(std::time::Duration::from_secs(5))
         .timeout(std::time::Duration::from_secs(15))
         .redirect(reqwest::redirect::Policy::none())
+        .no_proxy()
         .resolve(host, addresses[0])
         .build()?)
 }
@@ -165,14 +182,19 @@ fn resolve_uri(uri: &str) -> color_eyre::Result<Url> {
     Ok(url)
 }
 
-fn is_private_or_loopback(ip: IpAddr) -> bool {
+pub(crate) fn is_private_or_loopback(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(ip) => {
+            let o = ip.octets();
             ip.is_private()
                 || ip.is_loopback()
                 || ip.is_link_local()
                 || ip.is_unspecified()
                 || ip.is_broadcast()
+                || (o[0] == 100 && (o[1] & 0xc0) == 64) // 100.64.0.0/10 shared (CGNAT)
+                || (o[0] == 192 && o[1] == 0 && o[2] == 0) // 192.0.0.0/24 IETF protocol
+                || (o[0] == 198 && (o[1] & 0xfe) == 18) // 198.18.0.0/15 benchmarking
+                || o[0] >= 240 // 240.0.0.0/4 reserved
         }
         IpAddr::V6(ip) => {
             if let Some(v4) = ip.to_ipv4_mapped() {
@@ -240,6 +262,11 @@ mod tests {
             "::",
             "::ffff:127.0.0.1",
             "::ffff:169.254.169.254",
+            "100.64.0.1",
+            "100.100.100.200",
+            "192.0.0.8",
+            "198.18.0.1",
+            "240.0.0.1",
         ] {
             assert!(
                 is_private_or_loopback(ip.parse().unwrap()),
@@ -247,6 +274,8 @@ mod tests {
             );
         }
         assert!(!is_private_or_loopback("8.8.8.8".parse().unwrap()));
+        assert!(!is_private_or_loopback("100.128.0.1".parse().unwrap()));
+        assert!(!is_private_or_loopback("198.20.0.1".parse().unwrap()));
     }
 
     #[test]
@@ -364,11 +393,11 @@ mod tests {
             }));
             let hops = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
             let url = Url::parse(&format!("http://{address}/start.png")).unwrap();
-            let (bytes, content_type) = fetch_via(url, mock_client_for(hops.clone()))
+            let fetched = fetch_via(url, MAX_RESPONSE_BYTES, mock_client_for(hops.clone()))
                 .await
                 .expect("within limit");
-            assert_eq!(bytes, b"ok");
-            assert_eq!(content_type.as_deref(), Some("image/png"));
+            assert_eq!(fetched.bytes, b"ok");
+            assert_eq!(fetched.content_type.as_deref(), Some("image/png"));
             assert_eq!(
                 hops.load(std::sync::atomic::Ordering::SeqCst),
                 6,
@@ -393,7 +422,7 @@ mod tests {
             }));
             let hops = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
             let url = Url::parse(&format!("http://{address}/start.png")).unwrap();
-            let err = fetch_via(url, mock_client_for(hops.clone()))
+            let err = fetch_via(url, MAX_RESPONSE_BYTES, mock_client_for(hops.clone()))
                 .await
                 .expect_err("redirect chain beyond the limit must fail");
             assert!(err.to_string().contains("redirect limit"), "{err}");
@@ -434,11 +463,11 @@ mod tests {
         }));
 
         let url = Url::parse(&format!("http://{address}/huge.png")).unwrap();
-        let err = fetch_via(url.clone(), plain_client_for())
+        let err = fetch_via(url.clone(), MAX_RESPONSE_BYTES, plain_client_for())
             .await
             .expect_err("declared over-cap body must fail");
         assert!(err.to_string().contains("4 MiB"), "{err}");
-        let err = fetch_via(url, plain_client_for())
+        let err = fetch_via(url, MAX_RESPONSE_BYTES, plain_client_for())
             .await
             .expect_err("streamed over-cap body must fail");
         assert!(err.to_string().contains("4 MiB"), "{err}");

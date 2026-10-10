@@ -281,21 +281,28 @@ fetch_soft() {
 }
 
 # Authenticated GitHub REST (optional; lowers risk of REST rate-limit on NAT/CI-ish IPs).
+# The token goes through a config channel (curl `-K -` on stdin, wget `--config` on a
+# process-substitution fd), never argv, so other local users cannot read it via `ps`.
 curl_github_rest() {
     local url="$1"
     local token="${GITHUB_TOKEN:-${GITHUB_API_TOKEN:-}}"
+    case "$token" in
+        *[!A-Za-z0-9_.-]*)
+            warn "ignoring GITHUB_TOKEN: unexpected characters (expected a GitHub token)"
+            token=""
+            ;;
+    esac
     if [ -n "$token" ]; then
         if has curl; then
-            curl -sSL "${CURL_RETRY[@]}" \
+            printf 'header = "Authorization: Bearer %s"\n' "$token" | curl -K - -sSL "${CURL_RETRY[@]}" \
                 -H "Accept: application/vnd.github+json" \
-                -H "Authorization: Bearer ${token}" \
                 -H "User-Agent: ${UA}" \
                 -H "X-GitHub-Api-Version: 2022-11-28" \
                 "$url"
         else
             wget -q --user-agent="${UA}" \
+                --config=<(printf 'header = Authorization: Bearer %s\n' "$token") \
                 --header="Accept: application/vnd.github+json" \
-                --header="Authorization: Bearer ${token}" \
                 --header="X-GitHub-Api-Version: 2022-11-28" \
                 -O - "$url"
         fi

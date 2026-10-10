@@ -81,10 +81,14 @@ pub fn truncate_middle(s: &str, max_chars: usize) -> String {
 
 /// Middle-ellipsis for long hex strings (e.g. validator pubkeys).
 pub fn short_hex(hex: &str, head: usize, tail: usize) -> String {
-    if hex.len() <= head + tail + 1 {
+    // Char-based: remote strings (e.g. dUNL keys) may contain multibyte characters.
+    let n = hex.chars().count();
+    if n <= head + tail + 1 {
         return hex.to_string();
     }
-    format!("{}…{}", &hex[..head], &hex[hex.len() - tail..])
+    let head_part: String = hex.chars().take(head).collect();
+    let tail_part: String = hex.chars().skip(n - tail).collect();
+    format!("{head_part}…{tail_part}")
 }
 
 #[cfg(unix)]
