@@ -60,6 +60,22 @@ fn refuses_insecure_signing(rpc_url: &str, ws_url: &str, has_signing_credential:
     has_signing_credential && (is_insecure_endpoint(rpc_url) || is_insecure_endpoint(ws_url))
 }
 
+/// Flare RPC answers choose the Core Vault Payment destination and the EVM tx
+/// target/fees, so the XRPL endpoint rules apply to it too.
+fn check_flare_endpoint(
+    url: &str,
+    allow_insecure: bool,
+    has_signing_credential: bool,
+) -> color_eyre::Result<String> {
+    let url = ensure_secure_endpoint(url, EndpointKind::Http, allow_insecure)?;
+    if has_signing_credential && is_insecure_endpoint(&url) {
+        color_eyre::eyre::bail!(
+            "refusing signing operations over insecure Flare RPC; use an https:// endpoint"
+        );
+    }
+    Ok(url)
+}
+
 fn sanitize_rate(rate: f64, default: f64) -> f64 {
     if rate.is_finite() && rate > 0.0 {
         rate.clamp(0.1, 120.0)
@@ -195,54 +211,49 @@ pub async fn run() -> color_eyre::Result<()> {
     }
     let tick_rate = sanitize_rate(args.tick_rate, 4.0);
     let yes = args.yes;
-    let cmd = resolve_lazyxrp_command(&args)?;
-    match cmd {
-        Cmd::Watch { account } => {
+    match resolve_lazyxrp_command(&args)? {
+        None => {
+            if let Some(url) = app::resolve_flare_rpc_url(&config.flare) {
+                let evm_key_set = env::var(&config.flare.fassets.evm_key_env).is_ok();
+                check_flare_endpoint(
+                    &url,
+                    args.allow_insecure_rpc,
+                    credential.is_some() || evm_key_set,
+                )?;
+            }
             let mut app = app::App::new(
-                tick_rate, rpc_url, ws_url, account, network, config, None, yes,
+                tick_rate,
+                rpc_url,
+                ws_url,
+                args.account.clone(),
+                network,
+                config,
+                None,
+                yes,
             )?;
             app.run().await?;
         }
-        other => {
-            xrpl::execute_cli_command(other, &rpc_url, &network, credential, yes).await?;
+        Some(cmd) => {
+            xrpl::execute_cli_command(cmd, &rpc_url, &network, credential, yes).await?;
         }
     }
     Ok(())
 }
 
-fn resolve_lazyxrp_command(args: &Cli) -> color_eyre::Result<Cmd> {
-    if args.exec && args.command.is_none() {
-        color_eyre::eyre::bail!(
+/// `None` = launch the TUI; `Some` = script subcommand (requires `-x`).
+fn resolve_lazyxrp_command(args: &Cli) -> color_eyre::Result<Option<Cmd>> {
+    match (args.command.clone(), args.exec) {
+        (None, true) => color_eyre::eyre::bail!(
             "`-x` requires a script subcommand (e.g. `lazyxrp -x info`); omit `-x` to launch the TUI"
-        );
-    }
-
-    match args.command.clone() {
-        None => Ok(Cmd::Watch {
-            account: args.account.clone(),
-        }),
-        Some(Cmd::Watch { account }) => {
-            if args.exec {
-                color_eyre::eyre::bail!(
-                    "`-x` is for script CLI only; omit `-x` to launch the TUI (`lazyxrp` or `lazyxrp --account <ADDR>`)"
-                );
-            }
-            eprintln!(
-                "lazyxrp: deprecated: `watch` subcommand; use `lazyxrp` or `lazyxrp --account <ADDR>`"
-            );
-            Ok(Cmd::Watch {
-                account: account.or_else(|| args.account.clone()),
-            })
+        ),
+        (None, false) => Ok(None),
+        (Some(cmd), false) => {
+            let name = cmd.subcommand_name();
+            color_eyre::eyre::bail!(
+                "bare `{name}` subcommand was removed; use `lazyxrp -x {name}` (alias: rc='lazyxrp -x')"
+            )
         }
-        Some(cli_cmd) => {
-            if !args.exec {
-                let name = cli_cmd.subcommand_name();
-                eprintln!(
-                    "lazyxrp: deprecated: bare `{name}` subcommand; use `lazyxrp -x {name}` or `rc {name}` (alias: rc='lazyxrp -x')"
-                );
-            }
-            Ok(cli_cmd)
-        }
+        (Some(cmd), true) => Ok(Some(cmd)),
     }
 }
 
@@ -379,6 +390,15 @@ mod endpoint_security_tests {
         assert!(!refuses_insecure_signing("http://rpc", "ws://ws", false));
         assert!(!refuses_insecure_signing("https://rpc", "wss://ws", true));
     }
+
+    /// Flare RPC follows the XRPL endpoint rules: https only, and no signing over http.
+    #[test]
+    fn flare_endpoint_requires_https_and_refuses_insecure_signing() {
+        assert!(check_flare_endpoint("http://flare.example", false, false).is_err());
+        assert!(check_flare_endpoint("https://flare.example", false, true).is_ok());
+        assert!(check_flare_endpoint("http://flare.example", true, false).is_ok());
+        assert!(check_flare_endpoint("http://flare.example", true, true).is_err());
+    }
 }
 
 #[cfg(test)]
@@ -387,29 +407,30 @@ mod command_resolve_tests {
 
     use super::*;
 
+    /// TC-189: bare `lazyxrp` → TUI (None) keeping `--account`; bare subcommand → error
+    /// pointing at `-x`; `-x` alone → error; `-x info` → Some(Info).
     #[test]
-    fn bare_lazyxrp_resolves_to_watch_with_account() {
+    fn command_resolution() {
         let args =
             Cli::try_parse_from(["lazyxrp", "--account", "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"])
                 .unwrap();
-        let cmd = resolve_lazyxrp_command(&args).unwrap();
-        assert!(matches!(
-            cmd,
-            Cmd::Watch {
-                account: Some(ref a)
-            } if a == "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
-        ));
-    }
+        assert!(resolve_lazyxrp_command(&args).unwrap().is_none());
+        assert_eq!(
+            args.account.as_deref(),
+            Some("rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh")
+        );
 
-    /// Exec mode (-x) resolution: without a subcommand, or with watch, is rejected;
-    /// with info it resolves to Cmd::Info.
-    #[test]
-    fn exec_mode_resolution() {
-        for args in [vec!["lazyxrp", "-x"], vec!["lazyxrp", "-x", "watch"]] {
-            let args = Cli::try_parse_from(args).unwrap();
-            assert!(resolve_lazyxrp_command(&args).is_err());
-        }
+        let args = Cli::try_parse_from(["lazyxrp", "info"]).unwrap();
+        let err = resolve_lazyxrp_command(&args).expect_err("bare subcommand");
+        assert!(err.to_string().contains("lazyxrp -x info"), "{err}");
+
+        let args = Cli::try_parse_from(["lazyxrp", "-x"]).unwrap();
+        assert!(resolve_lazyxrp_command(&args).is_err());
+
         let args = Cli::try_parse_from(["lazyxrp", "-x", "info"]).unwrap();
-        assert!(matches!(resolve_lazyxrp_command(&args).unwrap(), Cmd::Info));
+        assert!(matches!(
+            resolve_lazyxrp_command(&args).unwrap(),
+            Some(Cmd::Info)
+        ));
     }
 }

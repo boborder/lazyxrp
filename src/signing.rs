@@ -262,11 +262,80 @@ fn payment_amount(
     }
 }
 
+/// Shared Payment input validation (P-004). Composer preview / submit / quote and the poll
+/// submit path all call this, so "preview looks ready" ⇔ "submit accepts the inputs".
+/// Network-specific checks (X-address network, self-pay, balance) stay in the poll task.
+pub fn validate_payment_input(
+    destination: &str,
+    amount: &str,
+    iou: Option<(&str, &str)>,
+    send_max: Option<&str>,
+) -> color_eyre::Result<()> {
+    use color_eyre::eyre::{bail, eyre};
+    let destination = destination.trim();
+    if destination.is_empty() {
+        bail!("destination required");
+    }
+    crate::xrpl::resolve_payment_destination(destination)?;
+    let amount = amount.trim();
+    if amount.is_empty() {
+        bail!("amount required");
+    }
+    match iou {
+        Some((currency, issuer)) => {
+            validate_iou_fields(&currency.trim().to_ascii_uppercase(), issuer.trim(), amount)?
+        }
+        None => {
+            if crate::xrpl::xrp_to_drops(amount).map_err(|e| eyre!("amount: {e}"))? == 0 {
+                bail!("amount must be > 0");
+            }
+        }
+    }
+    if let Some(spec) = send_max.map(str::trim).filter(|s| !s.is_empty()) {
+        let parsed = parse_offer_amount_spec(spec).map_err(|e| eyre!("SendMax: {e}"))?;
+        if iou.is_none() && matches!(parsed, OfferAmountSpec::Xrp(_)) {
+            bail!("SendMax must be a different currency than Amount (XRP→XRP needs no SendMax)");
+        }
+    }
+    Ok(())
+}
+
+/// SendMax from a compact spec. XRP→XRP is rejected (rippled needs no SendMax there and the
+/// model refuses it without tfPartialPayment).
+fn payment_send_max(
+    amount: &xrpl::models::Amount<'_>,
+    send_max_spec: Option<&str>,
+) -> color_eyre::Result<Option<xrpl::models::Amount<'static>>> {
+    use xrpl::models::Amount;
+    let Some(spec) = send_max_spec else {
+        return Ok(None);
+    };
+    let send_max = parse_offer_amount(spec.trim())?;
+    if matches!(
+        (amount, &send_max),
+        (Amount::XRPAmount(_), Amount::XRPAmount(_))
+    ) {
+        color_eyre::eyre::bail!(
+            "SendMax must be a different currency than Amount (XRP→XRP needs no SendMax)"
+        );
+    }
+    Ok(Some(send_max))
+}
+
+/// XRP drops a SendMax spec may debit (0 for an IOU SendMax).
+pub(crate) fn send_max_xrp_drops(spec: &str) -> color_eyre::Result<u64> {
+    match parse_offer_amount_spec(spec.trim())? {
+        OfferAmountSpec::Xrp(drops) => Ok(drops.parse::<u64>()?),
+        OfferAmountSpec::Iou { .. } => Ok(0),
+    }
+}
+
 /// Create, sign, and encode a Payment transaction as a submit-ready blob.
 ///
 /// `amount_spec`: XRP value (XRP mode) or IOU value (IOU mode).
 /// `iou_currency`: If Some, triggers IOU mode (e.g. "USD").
 /// `iou_issuer`: If Some, issuer address for IOU mode.
+/// `send_max_spec`: optional SendMax (`XRP:drops` / `CUR:issuer:value`) → cross-currency, default paths.
 #[allow(clippy::too_many_arguments)]
 pub fn create_and_sign_payment(
     wallet: &xrpl::wallet::Wallet,
@@ -275,6 +344,7 @@ pub fn create_and_sign_payment(
     amount_spec: &str,
     iou_currency: Option<&str>,
     iou_issuer: Option<&str>,
+    send_max_spec: Option<&str>,
     destination_tag: Option<u32>,
     memo_data: Option<&str>,
     sequence: u32,
@@ -297,11 +367,13 @@ pub fn create_and_sign_payment(
     if let Some(memos) = payment_memos_from_memo_data(memo_data) {
         common = common.with_memos(memos);
     }
+    let send_max = payment_send_max(&amount, send_max_spec)?;
     let mut payment = Payment {
         common_fields: common,
         amount,
         destination: destination.to_string().into(),
         destination_tag,
+        send_max,
         ..Default::default()
     };
 
@@ -311,7 +383,7 @@ pub fn create_and_sign_payment(
     encode(&payment).map_err(|e| color_eyre::eyre::eyre!("encode error: {:?}", e))
 }
 
-/// Unsigned Payment JSON for `simulate` (XRP or IOU).
+/// Unsigned Payment JSON for `simulate` (XRP or IOU; `send_max_spec` → cross-currency via default paths).
 #[allow(clippy::too_many_arguments)]
 pub fn build_payment_tx_json_for_simulate(
     account: &str,
@@ -319,6 +391,7 @@ pub fn build_payment_tx_json_for_simulate(
     amount_spec: &str,
     iou_currency: Option<&str>,
     iou_issuer: Option<&str>,
+    send_max_spec: Option<&str>,
     destination_tag: Option<u32>,
     memo_data: Option<&str>,
     sequence: u32,
@@ -333,11 +406,13 @@ pub fn build_payment_tx_json_for_simulate(
     if let Some(memos) = payment_memos_from_memo_data(memo_data) {
         common = common.with_memos(memos);
     }
+    let send_max = payment_send_max(&amount, send_max_spec)?;
     let payment = Payment {
         common_fields: common,
         amount,
         destination: destination.to_string().into(),
         destination_tag,
+        send_max,
         ..Default::default()
     };
 
@@ -374,7 +449,11 @@ pub fn build_account_set_tx_json_for_simulate(
     serde_json::to_value(&tx).map_err(|e| color_eyre::eyre::eyre!("account_set tx_json: {e}"))
 }
 
+/// Highest `Fee` (drops) we sign when the node picks it: 2 XRP, the xrpl.js default `maxFeeXRP`.
+pub const MAX_NODE_FEE_DROPS: u32 = 2_000_000;
+
 /// Extract `Sequence`, `Fee`, and `LastLedgerSequence` from a successful simulate response.
+/// A node-chosen `Fee` above [`MAX_NODE_FEE_DROPS`] is rejected before signing.
 pub fn sequence_fee_ledger_from_simulate(tx_json: &Value) -> color_eyre::Result<(u32, u32, u32)> {
     fn field_u32(tx: &Value, key: &str) -> color_eyre::Result<u32> {
         let v = tx
@@ -386,9 +465,15 @@ pub fn sequence_fee_ledger_from_simulate(tx_json: &Value) -> color_eyre::Result<
             .ok_or_else(|| color_eyre::eyre::eyre!("simulate tx_json invalid {key}"))?;
         u32::try_from(n).map_err(|_| color_eyre::eyre::eyre!("simulate tx_json {key} out of range"))
     }
+    let fee = field_u32(tx_json, "Fee")?;
+    if fee > MAX_NODE_FEE_DROPS {
+        color_eyre::eyre::bail!(
+            "refusing to sign: node-chosen Fee {fee} drops exceeds the {MAX_NODE_FEE_DROPS} drops cap"
+        );
+    }
     Ok((
         field_u32(tx_json, "Sequence")?,
-        field_u32(tx_json, "Fee")?,
+        fee,
         field_u32(tx_json, "LastLedgerSequence")?,
     ))
 }
@@ -610,6 +695,54 @@ pub fn create_and_sign_offer_create(
         taker_gets,
         taker_pays,
         ..Default::default()
+    };
+
+    sign(&mut tx, wallet, false).map_err(|e| color_eyre::eyre::eyre!("sign error: {:?}", e))?;
+
+    encode(&tx).map_err(|e| color_eyre::eyre::eyre!("encode error: {:?}", e))
+}
+
+/// Unsigned OfferCancel JSON for `simulate`.
+pub fn build_offer_cancel_tx_json_for_simulate(
+    account: &str,
+    offer_sequence: u32,
+    sequence: u32,
+) -> color_eyre::Result<Value> {
+    use xrpl::models::transactions::offer_cancel::OfferCancel;
+    use xrpl::models::transactions::{CommonFields, TransactionType};
+
+    let tx = OfferCancel {
+        common_fields: CommonFields::from_account(account.to_string())
+            .with_transaction_type(TransactionType::OfferCancel)
+            .with_sequence(sequence),
+        offer_sequence,
+    };
+
+    serde_json::to_value(&tx).map_err(|e| color_eyre::eyre::eyre!("offer_cancel tx_json: {e}"))
+}
+
+/// Create and sign an `OfferCancel` transaction, returning the tx_blob hex.
+pub fn create_and_sign_offer_cancel(
+    wallet: &xrpl::wallet::Wallet,
+    account: &str,
+    offer_sequence: u32,
+    sequence: u32,
+    fee_drops: u32,
+    last_ledger_sequence: u32,
+) -> color_eyre::Result<String> {
+    use xrpl::core::binarycodec::encode;
+    use xrpl::models::XRPAmount;
+    use xrpl::models::transactions::offer_cancel::OfferCancel;
+    use xrpl::models::transactions::{CommonFields, TransactionType};
+    use xrpl::transaction::sign;
+
+    let mut tx = OfferCancel {
+        common_fields: CommonFields::from_account(account.to_string())
+            .with_transaction_type(TransactionType::OfferCancel)
+            .with_sequence(sequence)
+            .with_fee(XRPAmount::from(fee_drops.to_string()))
+            .with_last_ledger_sequence(last_ledger_sequence),
+        offer_sequence,
     };
 
     sign(&mut tx, wallet, false).map_err(|e| color_eyre::eyre::eyre!("sign error: {:?}", e))?;
@@ -842,11 +975,26 @@ mod tests {
         assert_eq!(lls, 9_999_999);
     }
 
+    /// A node-chosen Fee above the cap is refused before anything is signed.
+    #[test]
+    fn sequence_fee_ledger_from_simulate_rejects_excessive_fee() {
+        let at_cap = serde_json::json!({
+            "Sequence": 1, "Fee": MAX_NODE_FEE_DROPS.to_string(), "LastLedgerSequence": 10
+        });
+        assert!(sequence_fee_ledger_from_simulate(&at_cap).is_ok());
+        let over = serde_json::json!({
+            "Sequence": 1, "Fee": (MAX_NODE_FEE_DROPS + 1).to_string(), "LastLedgerSequence": 10
+        });
+        let err = sequence_fee_ledger_from_simulate(&over).expect_err("fee over cap");
+        assert!(err.to_string().contains("exceeds"));
+    }
+
     #[test]
     fn build_payment_tx_json_for_simulate_xrp() {
-        let v =
-            build_payment_tx_json_for_simulate("rSender", "rDest", "1", None, None, None, None, 7)
-                .expect("payment json");
+        let v = build_payment_tx_json_for_simulate(
+            "rSender", "rDest", "1", None, None, None, None, None, 7,
+        )
+        .expect("payment json");
         assert_eq!(v["TransactionType"], "Payment");
         assert_eq!(v["Sequence"], 7);
         assert_eq!(v["Account"], "rSender");
@@ -863,6 +1011,7 @@ mod tests {
             "12.5",
             Some("USD"),
             Some(issuer),
+            None,
             None,
             None,
             9,
@@ -886,6 +1035,7 @@ mod tests {
             "1",
             None,
             None,
+            None,
             Some(12345),
             None,
             3,
@@ -899,6 +1049,7 @@ mod tests {
             "rSender",
             "rDest",
             "1",
+            None,
             None,
             None,
             None,
@@ -917,6 +1068,7 @@ mod tests {
             "rDest",
             "1",
             Some("USD"),
+            None,
             None,
             None,
             None,
@@ -1026,6 +1178,7 @@ mod tests {
             None,
             None,
             None,
+            None,
             1,
             12,
             100,
@@ -1045,6 +1198,88 @@ mod tests {
         assert_eq!(decoded["Sequence"], serde_json::json!(1));
         assert_eq!(decoded["Fee"], serde_json::json!("12"));
         assert_eq!(decoded["Account"], serde_json::json!(account));
+    }
+
+    /// TC-184: OfferCancel simulate JSON and signed blob carry OfferSequence.
+    #[test]
+    fn offer_cancel_tx_json_and_signed_blob_carry_offer_sequence() {
+        use xrpl::core::binarycodec::decode;
+
+        let json =
+            build_offer_cancel_tx_json_for_simulate("rJrRMgiRgrU6hDF4pgu5DXQdWyPbY35ErN", 42, 5)
+                .expect("tx_json");
+        assert_eq!(json["TransactionType"], "OfferCancel");
+        assert_eq!(json["OfferSequence"], 42);
+        assert_eq!(json["Sequence"], 5);
+
+        let wallet = wallet_from_family_seed(&sample_family_seed(), 0).expect("wallet");
+        let blob = create_and_sign_offer_cancel(&wallet, &wallet.classic_address, 42, 5, 12, 100)
+            .expect("signed");
+        let decoded = decode(&blob).expect("decodes");
+        assert_eq!(decoded["TransactionType"], "OfferCancel");
+        assert_eq!(decoded["OfferSequence"], 42);
+    }
+
+    /// TC-186: Payment SendMax — set for cross-currency, no Paths, XRP→XRP rejected.
+    #[test]
+    fn payment_send_max_sets_field_and_rejects_xrp_to_xrp() {
+        const ISS: &str = "rJrRMgiRgrU6hDF4pgu5DXQdWyPbY35ErN";
+        const DEST: &str = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh";
+        let acct = "rG1QQv2nh2gr7RCZ1P8YYcBUKCCN633jCn";
+        let iou = build_payment_tx_json_for_simulate(
+            acct,
+            DEST,
+            "10",
+            Some("USD"),
+            Some(ISS),
+            Some("XRP:5000000"),
+            None,
+            None,
+            1,
+        )
+        .expect("iou with xrp sendmax");
+        assert_eq!(iou["SendMax"], "5000000");
+        assert!(iou.get("Paths").is_none_or(Value::is_null));
+
+        let xrp = build_payment_tx_json_for_simulate(
+            acct,
+            DEST,
+            "1",
+            None,
+            None,
+            Some(&format!("USD:{ISS}:3")),
+            None,
+            None,
+            1,
+        )
+        .expect("xrp with iou sendmax");
+        assert_eq!(xrp["SendMax"]["currency"], "USD");
+
+        let err = build_payment_tx_json_for_simulate(
+            acct,
+            DEST,
+            "1",
+            None,
+            None,
+            Some("XRP:5000000"),
+            None,
+            None,
+            1,
+        )
+        .expect_err("xrp→xrp sendmax");
+        assert!(err.to_string().contains("SendMax"), "{err}");
+    }
+
+    /// TC-187: send_max_xrp_drops — XRP spec → drops, IOU → 0, invalid → Err.
+    #[test]
+    fn send_max_xrp_drops_table() {
+        assert_eq!(send_max_xrp_drops("XRP:5000000").unwrap(), 5_000_000);
+        assert_eq!(
+            send_max_xrp_drops("USD:rJrRMgiRgrU6hDF4pgu5DXQdWyPbY35ErN:1").unwrap(),
+            0
+        );
+        assert!(send_max_xrp_drops("XRP:0").is_err());
+        assert!(send_max_xrp_drops("junk").is_err());
     }
 
     /// TC: ed25519 family-seed wallet derives the known address, trimming whitespace
@@ -1084,6 +1319,52 @@ mod tests {
                 .expect("clear regular key");
         assert_eq!(v["TransactionType"], "SetRegularKey");
         assert!(v.get("RegularKey").is_none() || v["RegularKey"].is_null());
+    }
+
+    /// TC-197: shared Payment input validation (composer preview/submit/quote + poll):
+    /// destination checksum, positive amount, IOU currency/issuer, SendMax spec.
+    #[test]
+    fn validate_payment_input_table() {
+        const DEST: &str = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh";
+        const ISS: &str = "rJrRMgiRgrU6hDF4pgu5DXQdWyPbY35ErN";
+        let usd = Some(("usd", ISS));
+        // (destination, amount, iou, send_max, expected error substring; None = Ok)
+        type Case<'a> = (
+            &'a str,
+            &'a str,
+            Option<(&'a str, &'a str)>,
+            Option<&'a str>,
+            Option<&'a str>,
+        );
+        let cases: &[Case] = &[
+            ("", "1", None, None, Some("destination")),
+            ("rDest", "1", None, None, Some("address")),
+            (DEST, "", None, None, Some("amount")),
+            (DEST, "0", None, None, Some("amount")),
+            (DEST, "abc", None, None, Some("amount")),
+            (DEST, " 1.5 ", None, None, None),
+            (DEST, "10", usd, None, None),
+            (DEST, "10", Some(("USDX", ISS)), None, Some("currency")),
+            (DEST, "10", Some(("USD", "rIssuer")), None, Some("issuer")),
+            (DEST, "-1", usd, None, Some("IOU value")),
+            (DEST, "10", usd, Some("XRP:5000000"), None),
+            (DEST, "1", None, Some("XRP:5"), Some("SendMax")),
+            (DEST, "1", None, Some("USD:rBad:1"), Some("issuer")),
+            (DEST, "1", None, Some("   "), None),
+        ];
+        for (dest, amount, iou, send_max, expected) in cases {
+            let got = validate_payment_input(dest, amount, *iou, *send_max);
+            match expected {
+                None => assert!(
+                    got.is_ok(),
+                    "{dest:?} {amount:?} {iou:?} {send_max:?}: {got:?}"
+                ),
+                Some(want) => {
+                    let err = got.expect_err(&format!("{dest:?} {amount:?} {send_max:?}"));
+                    assert!(err.to_string().contains(want), "want {want:?}, got {err}");
+                }
+            }
+        }
     }
 
     #[test]

@@ -4,23 +4,28 @@ use serde_json::{Value, json};
 
 use super::format::{decode_uri, format_amount, format_asset};
 use super::types::{
-    AccountTxPage, AggregatePrice, AmmSummary, ArcValue, FeeSummary, LedgerObjectRow,
-    NFTOKEN_FLAG_MUTABLE, NftRow, NodeValidatorListSummary, OfferRow, PathAlternative, PriceStats,
-    RipplePathFindResult, ServerInfoSummary, SimulateResult, TrustLineRow, TxRow, TxSummary,
+    AccountOfferRow, AccountTxPage, AggregatePrice, AmmSummary, ArcValue, FeeSummary,
+    LedgerObjectRow, NFTOKEN_FLAG_MUTABLE, NftRow, NodeValidatorListSummary, OfferRow,
+    PathAlternative, PriceStats, RipplePathFindResult, ServerInfoSummary, SimulateResult,
+    TrustLineRow, TxRow, TxSummary,
 };
 use super::util::{json_str, json_u32};
 
 pub(crate) fn parse_submit_success(value: &Value) -> color_eyre::Result<TxSummary> {
     let result = value.get("result").unwrap_or(&Value::Null);
-    let engine_result = result
-        .get("engine_result")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    if engine_result != "tesSUCCESS" {
-        let message = result
-            .get("engine_result_message")
+    let engine_result = super::util::sanitize_remote(
+        result
+            .get("engine_result")
             .and_then(Value::as_str)
-            .unwrap_or("transaction submission failed");
+            .unwrap_or_default(),
+    );
+    if engine_result != "tesSUCCESS" {
+        let message = super::util::sanitize_remote(
+            result
+                .get("engine_result_message")
+                .and_then(Value::as_str)
+                .unwrap_or("transaction submission failed"),
+        );
         return Err(color_eyre::eyre::eyre!(
             "submit failed: {engine_result} {message}"
         ));
@@ -30,16 +35,16 @@ pub(crate) fn parse_submit_success(value: &Value) -> color_eyre::Result<TxSummar
         .get("tx_json")
         .and_then(|v| v.get("hash"))
         .and_then(Value::as_str)
+        .map(super::util::sanitize_remote)
         .filter(|hash| !hash.is_empty())
-        .ok_or_else(|| color_eyre::eyre::eyre!("submit response missing transaction hash"))?
-        .to_string();
+        .ok_or_else(|| color_eyre::eyre::eyre!("submit response missing transaction hash"))?;
 
     Ok(TxSummary { hash: tx_hash })
 }
 
 pub(crate) fn parse_simulate_result(value: &Value) -> color_eyre::Result<SimulateResult> {
     let result = value.get("result").unwrap_or(&Value::Null);
-    let tx_json = result
+    let mut tx_json = result
         .get("tx_json")
         .cloned()
         .ok_or_else(|| color_eyre::eyre::eyre!("simulate response missing tx_json"))?;
@@ -57,6 +62,10 @@ pub(crate) fn parse_simulate_result(value: &Value) -> color_eyre::Result<Simulat
         .to_string();
 
     let ledger_index = json_u32(value, &["result", "ledger_index"]);
+    // rippled 3.x simulate autofills Fee/Sequence but not LastLedgerSequence; same +20 window as xrpl.js autofill.
+    if tx_json.get("LastLedgerSequence").is_none() && ledger_index > 0 {
+        tx_json["LastLedgerSequence"] = Value::from(ledger_index.saturating_add(20));
+    }
     let meta = result.get("meta").cloned();
 
     Ok(SimulateResult {
@@ -356,6 +365,25 @@ pub(crate) fn parse_book_offers_value(value: &Value) -> Vec<OfferRow> {
         .collect()
 }
 
+/// `account_offers` → rows (lowercase `seq`/`taker_gets`/`taker_pays`); entries without a u32 `seq` are skipped.
+pub(crate) fn parse_account_offers_value(value: &Value) -> Vec<AccountOfferRow> {
+    value
+        .get("result")
+        .and_then(|v| v.get("offers"))
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|offer| {
+            let seq = u32::try_from(offer.get("seq")?.as_u64()?).ok()?;
+            Some(AccountOfferRow {
+                seq,
+                taker_gets: format_amount(offer.get("taker_gets")),
+                taker_pays: format_amount(offer.get("taker_pays")),
+            })
+        })
+        .collect()
+}
+
 pub(crate) fn is_not_found_error(message: &str) -> bool {
     let lower = message.to_lowercase();
     lower.contains("actnotfound")
@@ -533,6 +561,23 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    /// Remote text in CLI-visible errors/hashes carries no terminal control characters.
+    #[test]
+    fn submit_response_strings_are_stripped_of_control_chars() {
+        let failed = json!({"result": {
+            "engine_result": "tec\u{1b}[2JFAIL",
+            "engine_result_message": "bad\u{1b}]52;c;AAAA\u{7}msg"
+        }});
+        let err = parse_submit_success(&failed).unwrap_err().to_string();
+        assert!(!err.chars().any(char::is_control), "{err:?}");
+        let ok = json!({"result": {
+            "engine_result": "tesSUCCESS",
+            "tx_json": {"hash": "AB\u{1b}[31mCD"}
+        }});
+        let summary = parse_submit_success(&ok).unwrap();
+        assert_eq!(summary.hash, "AB[31mCD");
+    }
+
     /// TC-013/TC-074: account_nfts — result wrapper maps to rows (id/taxon/serial/fee/URI decode);
     /// NFTOKEN_FLAG_MUTABLE in Flags sets is_mutable (dNFT).
     #[test]
@@ -708,6 +753,29 @@ mod tests {
         assert_eq!(rows[1].price, "500000.000000");
         assert_eq!(rows[2].quality, "oops");
         assert_eq!(rows[2].price, "-");
+    }
+
+    /// TC-183: account_offers rows use lowercase keys; entries without a u32 `seq` are skipped.
+    #[test]
+    fn parse_account_offers_maps_seq_and_amounts() {
+        let v = json!({
+            "result": {
+                "offers": [
+                    {
+                        "seq": 6577664,
+                        "taker_gets": "33687728098",
+                        "taker_pays": {"currency": "EUR", "issuer": "rI", "value": "1.5"}
+                    },
+                    { "taker_gets": "1", "taker_pays": "1" },
+                    { "seq": 99999999999u64, "taker_gets": "1", "taker_pays": "1" }
+                ]
+            }
+        });
+        let rows = parse_account_offers_value(&v);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].seq, 6577664);
+        assert_eq!(rows[0].taker_pays, "1.5 EUR");
+        assert_ne!(rows[0].taker_gets, "-");
     }
 
     /// TC-137: book_offer_best_price — string quality is not inverted,
@@ -910,6 +978,27 @@ mod tests {
         let missing = json!({"result": {"engine_result": "tesSUCCESS"}});
         let err = parse_simulate_result(&missing).expect_err("missing tx_json should fail");
         assert!(format!("{err}").contains("tx_json"));
+    }
+
+    /// TC-200: rippled 3.x `simulate` omits `LastLedgerSequence` (testnet 3.4.1) → filled from
+    /// `ledger_index` + window so every sign path gets one; a server-provided value is kept.
+    #[test]
+    fn parse_simulate_result_fills_missing_last_ledger_sequence() {
+        let live_shape = json!({"result": {
+            "applied": false,
+            "engine_result": "tesSUCCESS",
+            "ledger_index": 21_430_162,
+            "tx_json": {"Fee": "10", "Sequence": 21_430_113, "TransactionType": "OfferCancel"}
+        }});
+        let sim = parse_simulate_result(&live_shape).expect("simulate should parse");
+        let (seq, fee, lls) = crate::signing::sequence_fee_ledger_from_simulate(&sim.tx_json)
+            .expect("signing inputs present");
+        assert_eq!((seq, fee, lls), (21_430_113, 10, 21_430_162 + 20));
+
+        let mut server_filled = live_shape;
+        server_filled["result"]["tx_json"]["LastLedgerSequence"] = json!(21_430_170);
+        let sim = parse_simulate_result(&server_filled).expect("simulate should parse");
+        assert_eq!(sim.tx_json["LastLedgerSequence"], 21_430_170);
     }
 
     /// TC-071, TC-072: empty account_objects yields no rows; mixed ledger

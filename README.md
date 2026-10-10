@@ -81,8 +81,6 @@ lazyxrp --network testnet --account <r-address>
 
 TUI flags: `--tick-rate`, `--account`, `--server`, `--ws-server`, `--network`, `--yes`, `--seed`, `--mnemonic`, `--allow-insecure-rpc`.
 
-Legacy `lazyxrp watch` still works but prints a deprecation warning — prefer bare `lazyxrp`.
-
 ## Script CLI (`-x` / `rc`)
 
 Non-interactive subcommands use **`-x`** (or shell alias **`rc`**):
@@ -111,8 +109,10 @@ rc book --base XRP --quote USD --issuer <r-issuer>
 | `amm --asset1 … --asset2 …` | AMM pool info |
 | `tx-history <ADDR> [--limit N]` | Transaction history |
 | `send <DEST> [--amount AMT]` | Send XRP (requires `XRPL_SEED` or `XRPL_MNEMONIC`) |
+| `offers <ADDR>` | Open DEX offers (`seq`, TakerGets, TakerPays; first 200) |
+| `offer-cancel <SEQ>` | Cancel your offer `SEQ` (requires signing key; simulate first; `--yes` on mainnet/xahau) |
 
-Bare `lazyxrp info` (without `-x`) still works temporarily but prints a deprecation warning.
+**Migrating to 0.3.0:** bare `lazyxrp info` (without `-x`) and `lazyxrp watch` were removed; the bare form exits with an error pointing at `lazyxrp -x info` (use `lazyxrp` with no arguments for the TUI). `send` simulates before signing (same as the TUI), needs `--yes` on mainnet/xahau or an interactive confirmation, and exits non-zero when signing or submission fails.
 
 ### Short command: `rp`
 
@@ -171,7 +171,7 @@ cp .config/lazyxrp/config.toml "${XDG_CONFIG_HOME:-$HOME/.config}/lazyxrp/config
 | `XRPL_WS_SERVER` | Custom WS endpoint (overrides network preset) |
 | `XRPL_SEED` | Signing seed for write TX (prefer over config file) |
 | `XRPL_MNEMONIC` | BIP39 mnemonic (secp256k1 index 0; mutually exclusive with `XRPL_SEED`) |
-| `FLARE_RPC_URL` | Flare FTSOv2 RPC (default: Flare mainnet) |
+| `FLARE_RPC_URL` | Flare FTSOv2 RPC (default: Flare mainnet). `https://` only unless `--allow-insecure-rpc`; never used for signing over `http://` |
 | `FLARE_FEEDS` | Flare feeds for Overview / Market (e.g. `FXRP/USD,FLR/USD`) |
 | `FLARE_FEED` | Legacy single-feed override |
 | `FLARE_EVM_KEY` | Flare executor key for FXRP C3 (`[flare.fassets] execute=true` only) |

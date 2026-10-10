@@ -69,7 +69,7 @@ cargo deny check
 | TC-055 | P1 | `src/xrpl/cli_exec.rs` | CLI lines — local JSON-RPC succeeds |
 | TC-056 | P2 | `src/xrpl/cli_exec.rs` | CLI amm — local JSON-RPC succeeds |
 | TC-057 | P2 | `src/xrpl/cli_exec.rs` | CLI tx-history — local JSON-RPC succeeds |
-| TC-058 | P1 | `src/cli.rs` | CLI — invalid parameters error |
+| TC-058 | P1 | `src/cli.rs` | CLI — invalid parameters error; removed `watch` subcommand no longer parses |
 | TC-059 | P2 | `src/xrpl/cli_exec.rs` | CLI — invalid classic account address fails before RPC connect |
 | TC-060 | P3 | `src/app.rs` | Watch mode — tab cycling/quit/refresh covered by TC-061–065 (former 4-tab construction test removed: asserted constructor defaults) |
 | TC-061 | P1 | `src/app.rs` | Watch mode — Quit action stops background tasks |
@@ -170,6 +170,32 @@ cargo deny check
 | TC-172 | P2 | `src/flare.rs` | FTSO feed normalization — trims, drops empties, maps `FXRP/USD` → `XRP/USD`, dedups preserving order; batched `getFeedsById` fetch with fee-aware retry; unknown feed fails cleanly (live) |
 | TC-173 | P2 | `src/xrpl/dunl.rs`, `src/xrpl/poll.rs` | dUNL cache — stale-on-error serves cached summary during 60 s retry cooldown, none after clear; tab gates — account panels poll only on Account tab (market/assets gates unchanged) |
 | TC-174 | P2 | `src/components/shared/status_bar.rs` | Status bar health — staleness-aware XRPL chip (STALE after 30 s, `server_info` error = OFFLINE), flare dot (enabled/failed/stale), dUNL data-age marker |
+| TC-175 | P1 | `src/lib.rs` | Flare RPC URL — `http://` rejected without `--allow-insecure-rpc`; refused for signing even with it |
+| TC-176 | P1 | `src/signing.rs` | Node-chosen Fee > `MAX_NODE_FEE_DROPS` rejected before signing (cap itself accepted) |
+| TC-177 | P1 | `src/xrpl/toml.rs`, `src/xrpl/nft_image.rs` | toml domain accepts only plain hostnames; private/reserved literals (incl. `100.64/10`, `198.18/15`, `240/4`) refused with no request |
+| TC-178 | P1 | `src/components/shared/fmt.rs`, `src/xrpl/format.rs`, `src/flare.rs` | Remote multibyte strings / NaN amounts / oversized uint256 do not panic display helpers or sort |
+| TC-179 | P1 | `src/xrpl/client.rs` | Chunked body over 16 MiB is rejected while streaming |
+| TC-180 | P2 | `src/xrpl/parse.rs` | Control characters stripped from submit error text and tx hash |
+| TC-181 | P2 | `src/config.rs` | Group/world-readable credential config yields a (stderr) warning; 0600 does not |
+| TC-182 | — | `install.sh`, `.github/workflows/cd.yml` | Manual: token not in argv (stub-curl check); `cargo package` token-free then `publish --no-verify` |
+| TC-183 | P2 | `src/xrpl/parse.rs` | `account_offers` rows — lowercase keys mapped; entries without u32 `seq` skipped |
+| TC-184 | P1 | `src/signing.rs` | OfferCancel simulate JSON + signed blob carry `OfferSequence`/`Sequence` |
+| TC-185 | P1 | `src/components/panels/wallet.rs`, `src/xrpl/poll.rs` | OfferCancel composer — `8` fetches offers, `j`/`s` queue selected seq, no-selection error, fetch error rendered; mainnet without `--yes` rejected |
+| TC-186 | P1 | `src/signing.rs` | Payment SendMax — set for cross-currency (no `Paths`), XRP→XRP SendMax rejected |
+| TC-187 | P1 | `src/signing.rs`, `src/components/panels/wallet.rs`, `wallet_keys.rs` | `send_max_xrp_drops` (XRP→drops, IOU→0, invalid→Err); composer Send max row editing, trimmed/empty→`None`, preview `spend ≤` |
+| TC-188 | P1 | `src/xrpl/cli_exec.rs` | CLI `send` — local JSON-RPC sees exactly `account_info → simulate → submit` (no unsimulated signing) |
+| TC-189 | P1 | `src/lib.rs` | Command resolve — bare → TUI keeps `--account`; bare subcommand errors with `lazyxrp -x <name>`; `-x` alone errors; `-x info` → Info |
+| TC-190 | P1 | `src/cli.rs` | DEX CLI parse — `offers <ADDR>`, `offer-cancel <SEQ>`; non-numeric seq rejected |
+| TC-191 | P1 | `src/xrpl/cli_exec.rs` | DEX CLI — `offers` reads `account_offers`; `offer-cancel` without key fails before RPC, with key runs `account_info → simulate → submit` |
+| TC-192 | P1 | `src/xrpl/format.rs` | Quote source currency — Send max prefix wins, IOU Amount defaults to XRP, XRP Amount needs non-XRP prefix, IOU prefix needs issuer |
+| TC-193 | P1 | `src/xrpl/format.rs` | Quote → Send max spec — cheapest alternative, slippage rounded up (drops / 6 sig. digits), no path → Err |
+| TC-194 | P1 | `src/components/panels/wallet.rs` | Payment `p` — invalid form flashes; valid form queues `PaymentQuote` (default 100 bps); QuoteOk fills Send max; QuoteErr flashes |
+| TC-195 | P2 | `src/config.rs` | User `[keybindings.Splash]` adds keys and overrides defaults; untouched defaults kept |
+| TC-196 | P0 | `src/xrpl/cli_exec.rs` | CLI `send` — rejected submit (`tefPAST_SEQ`) returns Err → non-zero exit |
+| TC-197 | P1 | `src/signing.rs` | `validate_payment_input` — destination checksum / X-address, positive amount, IOU currency+issuer, SendMax spec (XRP→XRP rejected, blank = none) |
+| TC-198 | P1 | `src/components/panels/wallet.rs` | Payment preview + `s` share validation — bad checksum / bad Send max stay orange and submit refuses with flash |
+| TC-199 | P1 | `src/xrpl/poll.rs`, `src/test_support.rs` | Poll write paths vs local JSON-RPC — Payment / OfferCancel `account_info → simulate → submit` → Ok; quote sends `source_currencies`, returns slippage spec |
+| TC-200 | P0 | `src/xrpl/parse.rs` | `simulate` without `LastLedgerSequence` (rippled 3.4.1 shape) → filled `ledger_index + 20` so signing proceeds; server value kept |
 
 
 
@@ -205,6 +231,20 @@ cargo deny check
 | R-006 mainnet write guard bypass | TC-088 `mainnet_write_guard_blocks` | `src/xrpl/poll.rs` |
 | R-007 config merge precedence | TC-033-035/TC-092 `config_source_precedence`, TC-036 | `src/config.rs` |
 | R-001 seed priority chain | TC-045/046/049 `credential_from_secrets` + env override | `src/signing.rs`, `src/config.rs` |
+
+## Testnet E2E (manual)
+
+2026-10-10, testnet rippled 3.4.1, faucet account `r15nczQYUNYBVLws8M9zkFE2SaSkU4kkk` (offer seq 21430112 created via xrpl.js `OfferCreate` `699AA05B…`). All hashes `validated: true`, `tesSUCCESS`.
+
+| Step | Result | Tx hash |
+|------|--------|---------|
+| `lazyxrp -x send rpvyTEMx… --amount 1.5` | exit 0 | `8F3647ED55D574932C956EB81DEA093260C33F320D40C07DFEF9F1FF28CA8962` |
+| `lazyxrp -x offers r15ncz…` | lists seq 21430112 | — |
+| `lazyxrp -x offer-cancel 21430112` | exit 0; `offers` → `[]` | `4BA39A804683036C1D9B61478D3596555C1DF68FE31187577C8057AA3C8AE64D` |
+| `offer-cancel` on the already-removed offer | exit 0 (XRPL no-op `tesSUCCESS`) | `0620179B9177C20E333E7C2D85093F642BA1454C0B329D49F3BC6C62CC404173` |
+| `send` to a bad-checksum address | exit 1, no RPC write | — |
+
+First run failed every write with `simulate tx_json missing LastLedgerSequence` (mocks returned LLS; live simulate does not) → fixed, TC-200. TUI flows (OfferCreate → OfferCancel, `p` quote → cross-currency Payment) are still pending manual runs.
 
 Remaining gaps (unimplemented by design — low priority):
 

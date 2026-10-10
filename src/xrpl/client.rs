@@ -13,13 +13,13 @@ pub(crate) use super::parse::empty_account_tx_page_on_not_found;
 use super::parse::{
     book_currency, book_offer_best_price, is_not_found_error, is_rate_limited_error,
     is_transient_xrpl_error, parse_account_lines_value, parse_account_nfts_value,
-    parse_account_objects_value, parse_account_tx_page, parse_aggregate_price_value,
-    parse_amm_info_value, parse_book_offers_value, parse_fee_value, parse_ripple_path_find,
-    parse_server_info_value, parse_simulate_result, parse_submit_success,
+    parse_account_objects_value, parse_account_offers_value, parse_account_tx_page,
+    parse_aggregate_price_value, parse_amm_info_value, parse_book_offers_value, parse_fee_value,
+    parse_ripple_path_find, parse_server_info_value, parse_simulate_result, parse_submit_success,
 };
 use super::types::{
-    AccountSummary, AccountTxPage, AggregatePrice, AmmSummary, BookMidPrice, DunlSummary,
-    FeeSummary, LedgerObjectRow, NftRow, OfferRow, OracleId, RipplePathFindResult,
+    AccountOfferRow, AccountSummary, AccountTxPage, AggregatePrice, AmmSummary, BookMidPrice,
+    DunlSummary, FeeSummary, LedgerObjectRow, NftRow, OfferRow, OracleId, RipplePathFindResult,
     ServerInfoSummary, SimulateResult, TrustLineRow, TxRow, TxSummary,
 };
 use super::util::{json_str, json_u32};
@@ -50,7 +50,7 @@ pub struct RpcClient {
 }
 
 async fn read_response_text_capped(
-    resp: reqwest::Response,
+    mut resp: reqwest::Response,
     label: &str,
 ) -> color_eyre::Result<String> {
     if let Some(len) = resp.content_length()
@@ -60,17 +60,25 @@ async fn read_response_text_capped(
             "{label}: response Content-Length {len} exceeds cap {MAX_RPC_BODY_BYTES}"
         );
     }
-    let bytes = tokio::time::timeout(RPC_TIMEOUT, resp.bytes())
+    // Chunked bodies carry no Content-Length: enforce the cap while reading, not after.
+    let read = async {
+        let mut bytes: Vec<u8> = Vec::new();
+        while let Some(chunk) = resp
+            .chunk()
+            .await
+            .map_err(|e| color_eyre::eyre::eyre!("{label} response error: {e}"))?
+        {
+            if bytes.len() + chunk.len() > MAX_RPC_BODY_BYTES {
+                color_eyre::eyre::bail!("{label}: response body exceeds cap {MAX_RPC_BODY_BYTES}");
+            }
+            bytes.extend_from_slice(&chunk);
+        }
+        Ok(bytes)
+    };
+    let bytes = tokio::time::timeout(RPC_TIMEOUT, read)
         .await
-        .map_err(|_| color_eyre::eyre::eyre!("{label} response timeout"))?
-        .map_err(|e| color_eyre::eyre::eyre!("{label} response error: {e}"))?;
-    if bytes.len() > MAX_RPC_BODY_BYTES {
-        color_eyre::eyre::bail!(
-            "{label}: response body {} bytes exceeds cap {MAX_RPC_BODY_BYTES}",
-            bytes.len()
-        );
-    }
-    String::from_utf8(bytes.to_vec())
+        .map_err(|_| color_eyre::eyre::eyre!("{label} response timeout"))??;
+    String::from_utf8(bytes)
         .map_err(|e| color_eyre::eyre::eyre!("{label} response utf8 error: {e}"))
 }
 
@@ -342,6 +350,22 @@ impl RpcClient {
         Ok(parse_account_objects_value(&value))
     }
 
+    pub async fn account_offers(&self, account: &str) -> color_eyre::Result<Vec<AccountOfferRow>> {
+        // ponytail: first 200 offers only, add marker paging if accounts exceed it
+        let value = match self
+            .rpc_value(
+                "account_offers",
+                json!({ "account": account, "limit": 200 }),
+            )
+            .await
+        {
+            Ok(value) => value,
+            Err(e) if is_not_found_error(&format!("{e}")) => return Ok(vec![]),
+            Err(e) => return Err(e),
+        };
+        Ok(parse_account_offers_value(&value))
+    }
+
     pub async fn book_offers(
         &self,
         taker_gets_currency: &str,
@@ -464,22 +488,23 @@ impl RpcClient {
     /// `destination_amount` should be an object like
     /// `{"currency":"USD","issuer":"r...","value":"100"}` or
     /// a numeric-string for XRP drops (`.0` appended to canonicalise drops).
+    /// `source_currencies`: optional `[{"currency":..,"issuer"?:..}]` filter (Payment quote).
     pub async fn ripple_path_find(
         &self,
         source_account: &str,
         destination_account: &str,
         destination_amount: &Value,
+        source_currencies: Option<&[Value]>,
     ) -> color_eyre::Result<RipplePathFindResult> {
-        let value = self
-            .rpc_value(
-                "ripple_path_find",
-                json!({
-                    "source_account": source_account,
-                    "destination_account": destination_account,
-                    "destination_amount": destination_amount,
-                }),
-            )
-            .await?;
+        let mut params = json!({
+            "source_account": source_account,
+            "destination_account": destination_account,
+            "destination_amount": destination_amount,
+        });
+        if let Some(currencies) = source_currencies {
+            params["source_currencies"] = Value::from(currencies);
+        }
+        let value = self.rpc_value("ripple_path_find", params).await?;
         parse_ripple_path_find(&value)
     }
 
@@ -531,10 +556,12 @@ fn ensure_no_xrpl_rpc_error(value: &Value) -> color_eyre::Result<()> {
             .get("error_code")
             .and_then(|v| v.as_u64())
             .unwrap_or(0);
-        let error_message = result
-            .get("error_message")
-            .and_then(Value::as_str)
-            .unwrap_or(error);
+        let error_message = super::util::sanitize_remote(
+            result
+                .get("error_message")
+                .and_then(Value::as_str)
+                .unwrap_or(error),
+        );
         let kind = if is_not_found_error(error) {
             "NOT_FOUND".to_string()
         } else {
@@ -549,6 +576,41 @@ fn ensure_no_xrpl_rpc_error(value: &Value) -> color_eyre::Result<()> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// A chunked body (no Content-Length) larger than the cap is cut off while reading.
+    #[tokio::test]
+    async fn chunked_body_over_cap_is_rejected_while_streaming() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut s, _) = listener.accept().await.unwrap();
+            let mut buf = [0_u8; 1024];
+            let _ = s.read(&mut buf).await;
+            let head =
+                b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n";
+            if s.write_all(head).await.is_err() {
+                return;
+            }
+            let chunk = vec![b'x'; 1024 * 1024];
+            for _ in 0..(MAX_RPC_BODY_BYTES / (1024 * 1024) + 2) {
+                if s.write_all(b"100000\r\n").await.is_err()
+                    || s.write_all(&chunk).await.is_err()
+                    || s.write_all(b"\r\n").await.is_err()
+                {
+                    return; // client hung up at the cap
+                }
+            }
+        });
+        let http = reqwest::Client::builder().no_proxy().build().unwrap();
+        let resp = http.get(format!("http://{addr}/")).send().await.unwrap();
+        assert!(resp.content_length().is_none());
+        let err = read_response_text_capped(resp, "test").await.unwrap_err();
+        assert!(err.to_string().contains("exceeds cap"), "{err}");
+        server.abort();
+    }
 
     /// TC-068: XRPL RPC error — not found is not silently swallowed
     #[test]

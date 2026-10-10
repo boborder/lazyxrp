@@ -38,15 +38,33 @@ impl WalletPanel {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn payment_edit_keys(
         dest: &mut String,
         amt: &mut String,
         currency: &mut String,
         issuer: &mut String,
+        send_max: &mut String,
         is_iou: bool,
         row: usize,
         key: &KeyEvent,
     ) -> bool {
+        // Last row (2 XRP / 4 IOU) is the free-text SendMax spec.
+        if row == if is_iou { 4 } else { 2 } {
+            return match key.code {
+                KeyCode::Char(c)
+                    if !key.modifiers.contains(KeyModifiers::CONTROL) && c.is_ascii_graphic() =>
+                {
+                    send_max.push(c);
+                    true
+                }
+                KeyCode::Backspace => {
+                    send_max.pop();
+                    true
+                }
+                _ => false,
+            };
+        }
         // In IOU mode, rows 1 (currency) and 2 (issuer) are text fields;
         // row 3 is amount. In XRP mode, row 1 is amount.
         let target_row = if is_iou && row == 1 {
@@ -175,16 +193,20 @@ mod tests {
             ("iss", true, 2, ' ', "", false, ""),
             ("amt", true, 3, '.', "1.", false, "1."),
             ("amt", true, 3, '5', "1", true, "15"),
+            ("smax", false, 2, ':', "XRP", true, "XRP:"),
+            ("smax", true, 4, ' ', "", false, ""),
         ];
         for (field, is_iou, row, c, initial, accept, after) in cases {
             let mut dest = String::new();
             let mut amt = String::new();
             let mut currency = String::new();
             let mut issuer = String::new();
+            let mut send_max = String::new();
             match *field {
                 "dest" => dest.push_str(initial),
                 "amt" => amt.push_str(initial),
                 "cur" => currency.push_str(initial),
+                "smax" => send_max.push_str(initial),
                 _ => issuer.push_str(initial),
             }
             let got = WalletPanel::payment_edit_keys(
@@ -192,6 +214,7 @@ mod tests {
                 &mut amt,
                 &mut currency,
                 &mut issuer,
+                &mut send_max,
                 *is_iou,
                 *row,
                 &key(*c),
@@ -200,6 +223,7 @@ mod tests {
                 "dest" => dest.as_str(),
                 "amt" => amt.as_str(),
                 "cur" => currency.as_str(),
+                "smax" => send_max.as_str(),
                 _ => issuer.as_str(),
             };
             assert_eq!(got, *accept, "{field} row={row} c={c}");

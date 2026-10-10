@@ -5,11 +5,12 @@ use strum::Display;
 use crate::{
     network::Network,
     xrpl::{
-        AccountSetSubmitParams, AccountSummary, AggregatePrice, AmmSummary, BookMidPrice,
-        DunlSummary, EscrowCreateSubmitParams, FeeSummary, FlareFeedPrice, FlareWalletSummary,
-        FxrpDirectMintInfo, FxrpDirectMintPaymentParams, FxrpExecuteDirectMintParams,
-        GeneratedWalletKeys, LedgerObjectRow, NftRow, OfferCreateSubmitParams, OfferRow,
-        PathFindSnapshot, PaymentSubmitParams, ServerInfoSummary, SetRegularKeySubmitParams,
+        AccountOfferRow, AccountSetSubmitParams, AccountSummary, AggregatePrice, AmmSummary,
+        BookMidPrice, DunlSummary, EscrowCreateSubmitParams, FeeSummary, FlareFeedPrice,
+        FlareWalletSummary, FxrpDirectMintInfo, FxrpDirectMintPaymentParams,
+        FxrpExecuteDirectMintParams, GeneratedWalletKeys, LedgerObjectRow, NftRow,
+        OfferCancelSubmitParams, OfferCreateSubmitParams, OfferRow, PathFindSnapshot,
+        PaymentQuoteParams, PaymentSubmitParams, ServerInfoSummary, SetRegularKeySubmitParams,
         TrustLineRow, TrustSetSubmitParams, TxRow, TxSummary, XrplTomlData,
     },
 };
@@ -127,6 +128,11 @@ pub enum Action {
     PaymentSubmit(PaymentSubmitParams),
     PaymentSubmitOk(String),
     PaymentSubmitErr(String),
+    /// Ask the poll task for a `ripple_path_find` Send max quote (Payment composer `p`).
+    PaymentQuote(PaymentQuoteParams),
+    /// Quoted Send max spec (`XRP:drops` / `CUR:issuer:value`, slippage included).
+    PaymentQuoteOk(String),
+    PaymentQuoteErr(String),
     /// Queue FXRP Direct Mint Payment (Core Vault + 32-byte memo).
     FxrpDirectMintPaymentSubmit(FxrpDirectMintPaymentParams),
     FxrpDirectMintPaymentSubmitOk(String),
@@ -147,6 +153,13 @@ pub enum Action {
     OfferCreateSubmit(OfferCreateSubmitParams),
     OfferCreateSubmitOk(String),
     OfferCreateSubmitErr(String),
+    /// Fetch the signing account's open offers (Wallet OfferCancel composer).
+    RefreshAccountOffers,
+    XrplAccountOffers(Vec<AccountOfferRow>),
+    /// Queue OfferCancel sign+submit from Wallet composer (poll task).
+    OfferCancelSubmit(OfferCancelSubmitParams),
+    OfferCancelSubmitOk(String),
+    OfferCancelSubmitErr(String),
     /// Queue TrustSet sign+submit from Wallet form (poll task).
     TrustSetSubmit(TrustSetSubmitParams),
     TrustSetSubmitOk(String),

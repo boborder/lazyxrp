@@ -158,8 +158,12 @@ fn path_step_label(step: &Value) -> String {
 }
 
 fn shorten_r_address(addr: &str) -> String {
-    if addr.len() > 10 {
-        format!("{}…{}", &addr[..4], &addr[addr.len() - 4..])
+    // Char-based: path steps are remote JSON strings and may contain multibyte characters.
+    let n = addr.chars().count();
+    if n > 10 {
+        let head: String = addr.chars().take(4).collect();
+        let tail: String = addr.chars().skip(n - 4).collect();
+        format!("{head}…{tail}")
     } else {
         addr.to_string()
     }
@@ -183,13 +187,13 @@ pub fn format_path_hops_label(hop_count: usize) -> String {
 }
 
 fn source_amount_sort_key(value: &Value) -> f64 {
-    if let Some(s) = value.as_str() {
-        s.parse::<f64>().unwrap_or(f64::MAX)
-    } else if let Some(v) = value.get("value").and_then(Value::as_str) {
-        v.parse::<f64>().unwrap_or(f64::MAX)
-    } else {
-        f64::MAX
-    }
+    // Non-finite values (e.g. remote "NaN") sort last, like unparsable ones.
+    let parse = |s: &str| s.parse::<f64>().ok().filter(|v| v.is_finite());
+    value
+        .as_str()
+        .and_then(parse)
+        .or_else(|| value.get("value").and_then(Value::as_str).and_then(parse))
+        .unwrap_or(f64::MAX)
 }
 
 pub fn path_find_snapshot(result: &RipplePathFindResult, quote_label: &str) -> PathFindSnapshot {
@@ -203,8 +207,7 @@ pub fn path_find_rows_from(result: &RipplePathFindResult) -> Vec<PathFindRow> {
     let mut alternatives = result.alternatives.clone();
     alternatives.sort_by(|a, b| {
         source_amount_sort_key(&a.source_amount)
-            .partial_cmp(&source_amount_sort_key(&b.source_amount))
-            .unwrap_or(std::cmp::Ordering::Equal)
+            .total_cmp(&source_amount_sort_key(&b.source_amount))
             .then_with(|| path_hop_count(&a.paths_computed).cmp(&path_hop_count(&b.paths_computed)))
     });
     alternatives
@@ -222,6 +225,71 @@ pub fn path_find_rows_from(result: &RipplePathFindResult) -> Vec<PathFindRow> {
             }
         })
         .collect()
+}
+
+/// `ripple_path_find` `source_currencies` entry for a Payment quote.
+/// The Send max field's currency prefix (`XRP`, `CUR:issuer[:value]`) wins; empty field
+/// with an IOU Amount defaults to XRP. An XRP Amount needs a non-XRP source.
+pub fn quote_source_currency(send_max_field: &str, amount_is_iou: bool) -> Result<Value, String> {
+    let mut parts = send_max_field.trim().splitn(3, ':');
+    let currency = parts.next().unwrap_or_default().to_ascii_uppercase();
+    let issuer = parts.next().map(str::trim).filter(|s| !s.is_empty());
+    match (currency.as_str(), issuer) {
+        ("", _) if amount_is_iou => Ok(serde_json::json!({"currency": "XRP"})),
+        ("", _) => Err("set Send max currency first (CUR:issuer), then quote".into()),
+        ("XRP", _) if amount_is_iou => Ok(serde_json::json!({"currency": "XRP"})),
+        ("XRP", _) => Err("XRP→XRP needs no quote; set Send max to CUR:issuer".into()),
+        (cur, Some(iss)) => Ok(serde_json::json!({"currency": cur, "issuer": iss})),
+        (_, None) => Err("Send max IOU source needs CUR:issuer".into()),
+    }
+}
+
+/// Cheapest `ripple_path_find` alternative + `slippage_bps` (rounded up) → Send max spec
+/// (`XRP:drops` / `CUR:issuer:value`).
+pub fn send_max_spec_from_quote(
+    result: &RipplePathFindResult,
+    slippage_bps: u32,
+) -> Result<String, String> {
+    let best = result
+        .alternatives
+        .iter()
+        .min_by(|a, b| {
+            source_amount_sort_key(&a.source_amount)
+                .total_cmp(&source_amount_sort_key(&b.source_amount))
+        })
+        .ok_or("no payment path found")?;
+    match json_amount(&best.source_amount) {
+        Some(JsonAmount::XrpDrops(d)) => {
+            let drops: u128 = d.parse().map_err(|_| format!("bad source drops: {d}"))?;
+            let bps = u128::from(slippage_bps);
+            Ok(format!("XRP:{}", (drops * (10_000 + bps)).div_ceil(10_000)))
+        }
+        Some(JsonAmount::Issued {
+            currency,
+            value,
+            issuer: Some(issuer),
+        }) => {
+            let v: f64 = value
+                .parse()
+                .ok()
+                .filter(|v: &f64| v.is_finite() && *v > 0.0)
+                .ok_or_else(|| format!("bad source value: {value}"))?;
+            let with_slip = v * (1.0 + f64::from(slippage_bps) / 10_000.0);
+            // ponytail: round up at 6 significant digits in f64 (SendMax is a ceiling, so
+            // slight over-allowance is safe); switch to decimal math if users need exact values.
+            let decimals = (5 - with_slip.log10().floor() as i32).max(0);
+            let scale = 10f64.powi(decimals);
+            let rounded = ((with_slip * scale) - 1e-9).ceil() / scale;
+            let text = format!("{rounded:.*}", decimals as usize);
+            let text = if text.contains('.') {
+                text.trim_end_matches('0').trim_end_matches('.')
+            } else {
+                &text
+            };
+            Ok(format!("{currency}:{issuer}:{text}"))
+        }
+        _ => Err("unsupported source amount in path".into()),
+    }
 }
 /// Decoded XRPL amount JSON: a string is XRP drops; an object with
 /// `currency`+`value` is an issued-currency amount.
@@ -369,6 +437,18 @@ mod tests {
         assert_eq!(summarize_paths_computed(&hex_currency), "RLUSD@rIssuer1");
     }
 
+    /// Remote multibyte strings must not panic the byte-slicing display helpers, and a
+    /// NaN source amount must not break the sort order.
+    #[test]
+    fn remote_strings_do_not_panic_display_helpers() {
+        let multibyte = format!("a{}", "é".repeat(12));
+        assert_eq!(shorten_r_address(&multibyte), "aééé…éééé");
+
+        assert_eq!(source_amount_sort_key(&json!("NaN")), f64::MAX);
+        assert_eq!(source_amount_sort_key(&json!({"value": "inf"})), f64::MAX);
+        assert_eq!(source_amount_sort_key(&json!("1.5")), 1.5);
+    }
+
     #[test]
     fn format_path_amount_hex_currency() {
         let drops = json!("1000000");
@@ -420,5 +500,53 @@ mod tests {
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].send, "1.000000 XRP");
         assert_eq!(rows[1].send, "2.000000 XRP");
+    }
+
+    /// TC-192: quote source currency — Send max prefix wins, IOU Amount defaults to XRP,
+    /// XRP Amount needs a non-XRP prefix, IOU prefix needs an issuer.
+    #[test]
+    fn quote_source_currency_table() {
+        let xrp = json!({"currency": "XRP"});
+        let usd = json!({"currency": "USD", "issuer": "rI"});
+        assert_eq!(quote_source_currency("", true).unwrap(), xrp);
+        assert_eq!(quote_source_currency(" XRP ", true).unwrap(), xrp);
+        assert_eq!(quote_source_currency("XRP:5", true).unwrap(), xrp);
+        assert_eq!(quote_source_currency("usd:rI", false).unwrap(), usd);
+        assert_eq!(quote_source_currency("USD:rI:3", false).unwrap(), usd);
+        assert!(
+            quote_source_currency("", false)
+                .unwrap_err()
+                .contains("Send max")
+        );
+        assert!(quote_source_currency("XRP", false).is_err());
+        assert!(quote_source_currency("USD", true).is_err());
+    }
+
+    /// TC-193: quote → Send max spec — cheapest alternative, slippage rounds up, no path → Err.
+    #[test]
+    fn send_max_spec_from_quote_table() {
+        let result = |sources: Vec<Value>| RipplePathFindResult {
+            alternatives: sources
+                .into_iter()
+                .map(|source_amount| PathAlternative {
+                    paths_computed: json!([]),
+                    source_amount,
+                })
+                .collect(),
+            destination_account: "rDest".into(),
+            destination_amount: json!("1"),
+            source_account: "rSrc".into(),
+        };
+        let xrp = result(vec![json!("2000000"), json!("1000000")]);
+        assert_eq!(send_max_spec_from_quote(&xrp, 100).unwrap(), "XRP:1010000");
+        assert_eq!(
+            send_max_spec_from_quote(&result(vec![json!("1")]), 1).unwrap(),
+            "XRP:2"
+        );
+        let iou = result(vec![
+            json!({"currency": "USD", "issuer": "rI", "value": "10"}),
+        ]);
+        assert_eq!(send_max_spec_from_quote(&iou, 100).unwrap(), "USD:rI:10.1");
+        assert!(send_max_spec_from_quote(&result(vec![]), 100).is_err());
     }
 }

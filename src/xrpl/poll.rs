@@ -15,8 +15,9 @@ use super::client::{
 };
 use super::types::{
     AccountSetSubmitParams, BookPair, FxrpDirectMintPaymentParams, FxrpExecuteDirectMintParams,
-    OfferCreateSubmitParams, OracleId, PaymentSubmitParams, PollCommand, PollContext,
-    SetRegularKeySubmitParams, SimulateResult, TrustSetSubmitParams,
+    OfferCancelSubmitParams, OfferCreateSubmitParams, OracleId, PaymentQuoteParams,
+    PaymentSubmitParams, PollCommand, PollContext, SetRegularKeySubmitParams, SimulateResult,
+    TrustSetSubmitParams,
 };
 use super::util::next_backoff_secs;
 use serde_json::Value;
@@ -401,7 +402,7 @@ async fn poll_batch(
             Some(
                 tokio::time::timeout(
                     RPC_TIMEOUT,
-                    rpc.ripple_path_find(watch_address, watch_address, dest_amount),
+                    rpc.ripple_path_find(watch_address, watch_address, dest_amount, None),
                 )
                 .await,
             )
@@ -976,6 +977,62 @@ async fn submit_offer_create_transaction(
     .await;
 }
 
+async fn submit_offer_cancel_transaction(
+    rpc: &RpcClient,
+    network: &Network,
+    params: OfferCancelSubmitParams,
+    action_tx: &UnboundedSender<Action>,
+    signing_credential: Option<&crate::signing::SigningCredential>,
+) {
+    let submit_err = Action::OfferCancelSubmitErr;
+    let Some(wallet) = resolve_submit_wallet(
+        network,
+        params.skip_mainnet_prompt,
+        signing_credential,
+        "production network: restart lazyxrp with --yes to allow OfferCancel writes",
+        submit_err,
+        action_tx,
+    ) else {
+        return;
+    };
+    let account = wallet.classic_address.clone();
+
+    let Some(account_info) =
+        fetch_account_summary_for_submit(rpc, &account, submit_err, action_tx).await
+    else {
+        return;
+    };
+
+    simulate_then_finalize(
+        rpc,
+        action_tx,
+        submit_err,
+        signing::build_offer_cancel_tx_json_for_simulate(
+            &account,
+            params.offer_sequence,
+            account_info.sequence,
+        ),
+        |sequence, fee_drops, last_ledger_sequence| {
+            signing::create_and_sign_offer_cancel(
+                &wallet,
+                &account,
+                params.offer_sequence,
+                sequence,
+                fee_drops,
+                last_ledger_sequence,
+            )
+        },
+        |hash| {
+            vec![
+                Action::OfferCancelSubmitOk(hash),
+                Action::RefreshAccount,
+                Action::RefreshTxHistory,
+            ]
+        },
+    )
+    .await;
+}
+
 async fn submit_set_regular_key_transaction(
     rpc: &RpcClient,
     network: &Network,
@@ -1065,44 +1122,36 @@ async fn submit_payment_transaction(
     signing_credential: Option<&crate::signing::SigningCredential>,
 ) {
     let submit_err = Action::PaymentSubmitErr;
-    if params.amount.trim().is_empty() {
-        send_action(
-            action_tx,
-            submit_err("amount is empty — enter an amount to send".into()),
-        );
+    let iou = params
+        .iou_currency
+        .as_deref()
+        .zip(params.iou_issuer.as_deref());
+    if let Err(e) = signing::validate_payment_input(
+        &params.destination,
+        &params.amount,
+        iou,
+        params.send_max.as_deref(),
+    ) {
+        send_action(action_tx, submit_err(e.to_string()));
         return;
     }
-    let is_iou = params.iou_currency.is_some() && params.iou_issuer.is_some();
     // XRP payments debit `amount` drops; IOU payments only need XRP for the fee.
-    let amount_drops = if is_iou {
-        let Ok(v) = params.amount.trim().parse::<f64>() else {
-            send_action(action_tx, submit_err("amount must be a number".into()));
-            return;
-        };
-        if v <= 0.0 {
-            send_action(
-                action_tx,
-                submit_err("amount must be greater than zero".into()),
-            );
-            return;
-        }
+    let amount_drops = if iou.is_some() {
         0
     } else {
-        match xrp_to_drops(params.amount.trim()) {
+        xrp_to_drops(params.amount.trim()).unwrap_or(0)
+    };
+    // With SendMax the XRP debit is bounded by SendMax (0 when SendMax is an IOU).
+    let xrp_debit_drops = match params.send_max.as_deref() {
+        Some(sm) => match signing::send_max_xrp_drops(sm) {
             Ok(d) => d,
             Err(e) => {
-                send_action(action_tx, submit_err(format!("amount: {e}")));
+                send_action(action_tx, submit_err(format!("send_max: {e}")));
                 return;
             }
-        }
+        },
+        None => amount_drops,
     };
-    if !is_iou && amount_drops == 0 {
-        send_action(
-            action_tx,
-            submit_err("amount must be greater than zero".into()),
-        );
-        return;
-    }
     let Some(destination) = unwrap_or_submit_err(
         resolve_payment_destination(params.destination.trim()),
         submit_err,
@@ -1127,10 +1176,10 @@ async fn submit_payment_transaction(
         return;
     };
     let account = wallet.classic_address.clone();
-    if account == destination_resolved {
+    if account == destination_resolved && params.send_max.is_none() {
         send_action(
             action_tx,
-            submit_err("destination matches source account".into()),
+            submit_err("destination matches source account (set Send max to swap)".into()),
         );
         return;
     }
@@ -1147,6 +1196,7 @@ async fn submit_payment_transaction(
         params.amount.trim(),
         params.iou_currency.as_deref(),
         params.iou_issuer.as_deref(),
+        params.send_max.as_deref(),
         destination_tag,
         None,
         account_info.sequence,
@@ -1175,17 +1225,17 @@ async fn submit_payment_transaction(
     };
 
     let balance_drops = xrp_to_drops(&account_info.balance_xrp).unwrap_or(0);
-    let total_need = amount_drops.saturating_add(u64::from(fee_drops));
+    let total_need = xrp_debit_drops.saturating_add(u64::from(fee_drops));
     if balance_drops < total_need {
         send_action(
             action_tx,
-            submit_err(if is_iou {
+            submit_err(if xrp_debit_drops == 0 {
                 format!(
                     "insufficient XRP for fee: have {balance_drops} drops, need {fee_drops} fee"
                 )
             } else {
                 format!(
-                    "insufficient balance: have {balance_drops} drops, need {total_need} (amount {amount_drops} + fee {fee_drops})"
+                    "insufficient balance: have {balance_drops} drops, need {total_need} (amount {xrp_debit_drops} + fee {fee_drops})"
                 )
             }),
         );
@@ -1204,6 +1254,7 @@ async fn submit_payment_transaction(
                 params.amount.trim(),
                 params.iou_currency.as_deref(),
                 params.iou_issuer.as_deref(),
+                params.send_max.as_deref(),
                 destination_tag,
                 None,
                 sequence,
@@ -1300,6 +1351,7 @@ async fn submit_fxrp_direct_mint_payment(
         None,
         None,
         None,
+        None,
         Some(memo.as_str()),
         account_info.sequence,
     ) {
@@ -1351,6 +1403,7 @@ async fn submit_fxrp_direct_mint_payment(
                 None,
                 None,
                 None,
+                None,
                 Some(memo.as_str()),
                 sequence,
                 fee_drops,
@@ -1368,6 +1421,45 @@ async fn submit_fxrp_direct_mint_payment(
         },
     )
     .await;
+}
+
+/// `ripple_path_find` from the signing account in the Send max field's currency →
+/// Send max spec with slippage. Read-only; signing still goes through simulate.
+async fn quote_payment(
+    rpc: &RpcClient,
+    source: &str,
+    params: PaymentQuoteParams,
+) -> Result<String, String> {
+    let is_iou = params.iou_currency.is_some() && params.iou_issuer.is_some();
+    let source_currency = super::format::quote_source_currency(&params.send_max, is_iou)?;
+    let destination = resolve_payment_destination(params.destination.trim())
+        .map_err(|e| e.to_string())?
+        .classic;
+    let dest_amount = match (&params.iou_currency, &params.iou_issuer) {
+        (Some(currency), Some(issuer)) => serde_json::json!({
+            "currency": currency,
+            "issuer": issuer,
+            "value": params.amount.trim(),
+        }),
+        _ => serde_json::json!(
+            xrp_to_drops(params.amount.trim())
+                .map_err(|e| format!("amount: {e}"))?
+                .to_string()
+        ),
+    };
+    let result = tokio::time::timeout(
+        RPC_TIMEOUT,
+        rpc.ripple_path_find(
+            source,
+            &destination,
+            &dest_amount,
+            Some(std::slice::from_ref(&source_currency)),
+        ),
+    )
+    .await
+    .map_err(|_| "ripple_path_find: timeout".to_string())?
+    .map_err(|e| format!("ripple_path_find: {e}"))?;
+    super::format::send_max_spec_from_quote(&result, params.slippage_bps)
 }
 
 fn dispatch_timed<T, F>(
@@ -1772,6 +1864,34 @@ async fn drive_poll_loop(
                         let _guard = submit_lock.lock().await;
                         submit_offer_create_transaction(&*rpc_cell.read().await, &network, params, &action_tx, signing_credential).await;
                     }
+                    PollCommand::AccountOffers => match seed_address.as_deref() {
+                        Some(addr) => dispatch_timed(
+                            &action_tx,
+                            "account_offers",
+                            tokio::time::timeout(RPC_TIMEOUT, rpc_cell.read().await.account_offers(addr)).await,
+                            Action::XrplAccountOffers,
+                        ),
+                        None => {
+                            send_action(
+                                &action_tx,
+                                Action::XrplError("account_offers: no signing credential".into()),
+                            );
+                        }
+                    },
+                    PollCommand::OfferCancelSubmit(params) => {
+                        let _guard = submit_lock.lock().await;
+                        submit_offer_cancel_transaction(&*rpc_cell.read().await, &network, params, &action_tx, signing_credential).await;
+                    }
+                    PollCommand::PaymentQuote(params) => {
+                        let action = match seed_address.as_deref() {
+                            None => Action::PaymentQuoteErr("no signing credential".into()),
+                            Some(source) => match quote_payment(&*rpc_cell.read().await, source, params).await {
+                                Ok(spec) => Action::PaymentQuoteOk(spec),
+                                Err(e) => Action::PaymentQuoteErr(e),
+                            },
+                        };
+                        send_action(&action_tx, action);
+                    }
                     PollCommand::TrustSetSubmit(params) => {
                         let _guard = submit_lock.lock().await;
                         submit_trust_set_transaction(&*rpc_cell.read().await, &network, params, &action_tx, signing_credential).await;
@@ -2028,6 +2148,122 @@ mod tests {
         assert!(!mainnet_write_guard_blocks(&Network::XahauTest, false));
     }
 
+    /// TC-199: poll write paths against local JSON-RPC — Payment and OfferCancel run
+    /// account_info → simulate → submit and emit Ok; quote sends `source_currencies`
+    /// (XRP for an IOU Amount) and returns the slippage-adjusted Send max spec.
+    #[tokio::test]
+    async fn write_paths_and_quote_against_local_rpc() {
+        use crate::test_support::rpc_mock;
+        use secrecy::SecretString;
+        use serde_json::{Value, json};
+        use tokio::net::TcpListener;
+
+        const GENESIS: &str = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh";
+        fn result_for(method: &str) -> Value {
+            match method {
+                "account_info" => json!({"account_data": {
+                    "Account": GENESIS, "Balance": "10000000", "Sequence": 7,
+                    "OwnerCount": 0, "Flags": 0
+                }}),
+                "simulate" => json!({
+                    "engine_result": "tesSUCCESS",
+                    "tx_json": {"Sequence": 7, "Fee": "12", "LastLedgerSequence": 80_000_020}
+                }),
+                "submit" => json!({"engine_result": "tesSUCCESS", "tx_json": {"hash": "ABC"}}),
+                "ripple_path_find" => json!({
+                    "alternatives": [
+                        {"paths_computed": [], "source_amount": "2000000"},
+                        {"paths_computed": [], "source_amount": "1000000"}
+                    ],
+                    "destination_account": GENESIS,
+                    "destination_amount": {"currency": "USD", "issuer": GENESIS, "value": "10"}
+                }),
+                other => panic!("unexpected local RPC method: {other}"),
+            }
+        }
+
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.expect("bind");
+        let url = format!("http://{}", listener.local_addr().expect("addr"));
+        let server = tokio::spawn(rpc_mock::serve(listener, 7, result_for));
+        let rpc = RpcClient::connect(&url).expect("rpc client");
+        let credential = crate::signing::credential_from_secrets(
+            Some(&SecretString::from("sEdSkooMk31MeTjbHVE7vLvgCpEMAdB")),
+            None,
+        )
+        .expect("credential")
+        .expect("seed set");
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let first = |rx: &mut mpsc::UnboundedReceiver<Action>| {
+            let a = rx.try_recv().expect("action");
+            while rx.try_recv().is_ok() {}
+            a
+        };
+
+        submit_payment_transaction(
+            &rpc,
+            &Network::Testnet,
+            PaymentSubmitParams {
+                destination: GENESIS.into(),
+                amount: "1".into(),
+                iou_currency: None,
+                iou_issuer: None,
+                destination_tag: None,
+                send_max: None,
+                skip_mainnet_prompt: false,
+            },
+            &tx,
+            Some(&credential),
+        )
+        .await;
+        assert_eq!(first(&mut rx), Action::PaymentSubmitOk("ABC".into()));
+
+        submit_offer_cancel_transaction(
+            &rpc,
+            &Network::Testnet,
+            OfferCancelSubmitParams {
+                offer_sequence: 42,
+                skip_mainnet_prompt: false,
+            },
+            &tx,
+            Some(&credential),
+        )
+        .await;
+        assert_eq!(first(&mut rx), Action::OfferCancelSubmitOk("ABC".into()));
+
+        let source = credential.address().expect("address");
+        let spec = quote_payment(
+            &rpc,
+            &source,
+            PaymentQuoteParams {
+                destination: GENESIS.into(),
+                amount: "10".into(),
+                iou_currency: Some("USD".into()),
+                iou_issuer: Some(GENESIS.into()),
+                send_max: String::new(),
+                slippage_bps: 100,
+            },
+        )
+        .await;
+        assert_eq!(spec.as_deref(), Ok("XRP:1010000"));
+
+        let requests = server.await.expect("join").expect("serve");
+        assert_eq!(
+            rpc_mock::methods(&requests),
+            [
+                "account_info",
+                "simulate",
+                "submit",
+                "account_info",
+                "simulate",
+                "submit",
+                "ripple_path_find"
+            ]
+        );
+        let rpf = &requests[6]["params"][0];
+        assert_eq!(rpf["source_currencies"], json!([{"currency": "XRP"}]));
+        assert_eq!(rpf["destination_amount"]["value"], "10");
+    }
+
     /// TC-088 (R-006): every sign+submit path rejects production writes without `--yes`
     /// before any RPC/signing.
     #[tokio::test]
@@ -2078,6 +2314,7 @@ mod tests {
                                 iou_currency: None,
                                 iou_issuer: None,
                                 destination_tag: None,
+                                send_max: None,
                                 skip_mainnet_prompt: false,
                             },
                             &tx,
@@ -2117,6 +2354,24 @@ mod tests {
                             OfferCreateSubmitParams {
                                 taker_gets: "XRP:1000000".into(),
                                 taker_pays: format!("USD:{GENESIS}:10"),
+                                skip_mainnet_prompt: false,
+                            },
+                            &tx,
+                            None,
+                        )
+                        .await;
+                    })
+                }),
+            ),
+            (
+                "offer_cancel",
+                Box::new(|rpc, tx| {
+                    Box::pin(async move {
+                        submit_offer_cancel_transaction(
+                            rpc,
+                            &Network::Mainnet,
+                            OfferCancelSubmitParams {
+                                offer_sequence: 1,
                                 skip_mainnet_prompt: false,
                             },
                             &tx,
@@ -2178,6 +2433,7 @@ mod tests {
                 | Action::PaymentSubmitErr(m)
                 | Action::TrustSetSubmitErr(m)
                 | Action::OfferCreateSubmitErr(m)
+                | Action::OfferCancelSubmitErr(m)
                 | Action::SetRegularKeySubmitErr(m)
                 | Action::FxrpDirectMintPaymentSubmitErr(m) => m,
                 other => panic!("{name}: expected submit error, got {other:?}"),
@@ -2243,6 +2499,7 @@ mod tests {
                                 iou_currency: None,
                                 iou_issuer: None,
                                 destination_tag: None,
+                                send_max: None,
                                 skip_mainnet_prompt: true,
                             },
                             &tx,

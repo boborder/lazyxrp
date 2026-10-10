@@ -47,7 +47,7 @@ Module wiring summary: [`directory.md`](directory.md) §3. Tab splits and keys: 
 | `lazyxrp --self-uninstall` | アンインストール | `logging::init` 前に終了 |
 
 - エントリ: `src/lib.rs` — TUI → `App::new` → `run`、`-x` CLI → `xrpl::execute_cli_command(...)`.
-- レガシー: `lazyxrp watch` / 裸サブコマンドは deprecation 警告付き。正規形は上表。
+- 裸サブコマンド（`-x` なし）はエラーで `lazyxrp -x <name>` を案内。`watch` サブコマンドは削除（TUI は引数なし `lazyxrp`）。CLI の書き込み（`send`・`offer-cancel`）も **simulate → sign → submit**（Sequence/Fee は simulate 由来。LastLedgerSequence は simulate が返せばその値、無ければ `ledger_index + 20` を `parse_simulate_result` が補完）。`offers` は `account_offers` 読み取り。
 - スタック: `ratatui` + `crossterm`、非同期 `tokio`、XRPL は `src/xrpl/`。
 
 ## 2. ウォレット（行動契約）
@@ -58,8 +58,11 @@ Behavioral contract:
 
 - Credential resolution: `Config::new()` merges `XRPL_SEED` / `XRPL_MNEMONIC`, then `credential_from_secrets` → `PollContext.signing_credential` (`Option<SigningCredential>`).
 - All wallet TX: **simulate → sign → submit** (I-3). Mainnet / Xahau mainnet writes require CLI **`--yes`** (I-2).
-- Composer phases shipped: Payment, AccountSet, SetRegularKey, OfferCreate, TrustSet, FXRP Mint (C2), FXRP Execute (C3). EscrowCreate: signing path exists; UI unwired (P-003).
-- Payment validation: destination shape, positive amount, IOU issuer `r…`, currency non-empty.
+- Composer phases shipped: Payment, AccountSet, SetRegularKey, OfferCreate, OfferCancel, TrustSet, FXRP Mint (C2), FXRP Execute (C3). EscrowCreate: signing path exists; UI unwired (P-003).
+- OfferCancel: opening the composer sends `RefreshAccountOffers` (poll task → `account_offers`, first 200, signing account only → `XrplAccountOffers`); selected `seq` → `OfferCancelSubmit` (same simulate → sign → submit path). Not polled.
+- Payment validation: `signing::validate_payment_input` (shared by composer preview / submit / quote and poll `PaymentSubmit`) — destination classic checksum or X-address, positive amount (XRP drops / IOU value), IOU currency + issuer checksum, Send max spec. Poll adds X-address network, self-pay, balance.
+- Cross-currency Payment: optional `send_max` spec (same parser as OfferCreate) → `SendMax`, rippled default paths (no `Paths`, no partial payment). XRP→XRP SendMax rejected. With SendMax: self-payment allowed (swap), balance check uses SendMax XRP drops (0 for IOU SendMax). Dry paths fail in simulate (`tecPATH_DRY`/`tecPATH_PARTIAL`).
+- Send max quote (`p`): `PaymentQuote` → poll task `ripple_path_find` from the signing account with `source_currencies` = Send max field's currency prefix (empty + IOU Amount → XRP) → cheapest alternative + `[xrpl] slippage_bps` (default 100 = 1%, rounded up) → `PaymentQuoteOk(spec)` fills the field. Read-only; send still goes simulate → sign → submit.
 - FXRP C2: 32-byte memo to Core Vault; C3: pasted FDC proof JSON + `[flare.fassets] execute=true`.
 
 ## 3. ランタイム・データフロー
@@ -77,6 +80,8 @@ WebSocket ledger close coalesces poll triggers (`MIN_POLL_INTERVAL`). Scheduled 
 
 **Public-network politeness:** XRPL Foundation dUNL (`unl.xrplf.org`) is cached in-process for **10 minutes** (`DUNL_CACHE_TTL`); when a refresh fails, the stale summary keeps being served for a **60 s** retry cooldown (`DUNL_RETRY_BACKOFF`, stale-on-error — a first-ever fetch failure before any success has no cache and errors until it connects). Flare `ContractRegistry` lookups (`FtsoV2`, `AssetManagerFXRP`) are cached per RPC URL for the process lifetime. Poll failures back off exponentially (2s→60s cap) on **two independent tracks keyed per endpoint**: XRPL RPC fetch successes key the XRPL track, while Flare fetch failures only `warn!` and escalate a flare-only cooldown on the same 2s→60s schedule without touching the XRPL track; the dUNL fetch (different host) is likewise excluded from the XRPL track in both directions. Account-tab panels (`account_tx`, wallet overview) poll only while the Account tab is active, mirroring the Market/Assets tab gates. HTTP 429 is retried with delay. NFT image fetch (`nft_image.rs`) applies per-hop DNS SSRF checks, manual redirects, and a streamed response-size cap ([security.md](security.md) R-012).
 
+**Untrusted-fetch & signing guards:** `nft_image::fetch_via` + `client_for_url` is the single fetch path for NFT images **and** `xrp-ledger.toml` (validator-manifest `domain` must be a plain ASCII hostname): private/reserved addresses rejected, connection pinned to the checked IP, proxies disabled, every redirect hop (≤5) re-checked, body capped (4 MiB image / 1 MiB toml). JSON-RPC bodies are capped at 16 MiB while streaming. A node-chosen `Fee` above `signing::MAX_NODE_FEE_DROPS` (2 XRP) is never signed. Remote strings that reach CLI output/errors pass `util::sanitize_remote`. The Flare RPC URL follows the same https / no-signing-over-http rules as the XRPL endpoints (`lib.rs::check_flare_endpoint`).
+
 ## 4. 設定値と起動パラメータ
 
 ### CLI
@@ -86,7 +91,7 @@ WebSocket ledger close coalesces poll triggers (`MIN_POLL_INTERVAL`). Scheduled 
 | `--yes` | Skip mainnet write confirmation (CLI + TUI submit) |
 | `--network` | `mainnet` \| `testnet` \| `devnet` \| `xahau` \| `xahau-test` |
 | `--server`, `--ws-server` | Custom RPC/WS (highest priority) |
-| `--allow-insecure-rpc` | Allow `http://` / `ws://` |
+| `--allow-insecure-rpc` | Allow `http://` / `ws://` (XRPL and Flare RPC); signing is still refused over insecure endpoints |
 | `--tick-rate` | TUI loop tick rate |
 | `--seed` / `--mnemonic` | Override credentials (**non-preferred** — use env/config) |
 | `--account` | Watch address override |
@@ -95,7 +100,7 @@ WebSocket ledger close coalesces poll triggers (`MIN_POLL_INTERVAL`). Scheduled 
 ### Config file (`Config::xrpl`)
 
 - Paths: `$XDG_CONFIG_HOME/lazyxrp/config.toml` → `~/.config/lazyxrp/config.toml`
-- Fields: `network`, `account`, `issuer`, `currency`, `currency_code`, `offer_limit`, `poll_interval_ms` (default 5000; raise for 24/7 dashboards), `oracles`, `oracle_pairs`, `[xrpl.signing]`, optional `rpc_server` / `ws_server`
+- Fields: `network`, `account`, `issuer`, `currency`, `currency_code`, `offer_limit`, `poll_interval_ms` (default 5000; raise for 24/7 dashboards), `slippage_bps` (Payment quote, default 100 = 1%), `oracles`, `oracle_pairs`, `[xrpl.signing]`, optional `rpc_server` / `ws_server`
 - Default issuer fallback (mainnet Bitstamp USD): `rvYAfWj5gh67oV6fW32ZzP3Aw4Eubs59B`
 - `currency_code`: 160-bit hex for `book_offers` (default display `"USD"`)
 

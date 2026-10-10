@@ -19,7 +19,7 @@ use crate::{
     },
     config::Config,
     network::Network,
-    xrpl::{AccountSummary, GeneratedWalletKeys},
+    xrpl::{AccountOfferRow, AccountSummary, GeneratedWalletKeys},
 };
 
 /// Dropdown options for SetFlag / ClearFlag (must match [`crate::signing::parse_account_set_flag_choice`]).
@@ -68,6 +68,8 @@ enum ComposerPhase {
         amount: String,
         iou_currency: String,
         iou_issuer: String,
+        /// Optional SendMax spec → cross-currency payment (default paths).
+        send_max: String,
         is_iou: bool,
     },
     /// Empty `regular_key` clears the existing regular key (dangerous).
@@ -95,9 +97,14 @@ enum ComposerPhase {
     FxrpExecuteDirectMint {
         proof_json: String,
     },
+    /// Cancel one of the signing account's open offers (`offers`: `None` = loading).
+    OfferCancel {
+        offers: Option<Result<Vec<AccountOfferRow>, String>>,
+        selected: usize,
+    },
 }
 
-const COMPOSER_KIND_COUNT: usize = 7;
+const COMPOSER_KIND_COUNT: usize = 8;
 
 #[path = "wallet_composer.rs"]
 mod composer;
@@ -232,6 +239,17 @@ impl Component for WalletPanel {
             Action::PaymentSubmitErr(msg) => {
                 self.set_submit_flash(SubmitFlash::Error(format!("Payment · {msg}")));
             }
+            Action::PaymentQuoteOk(spec) => {
+                if let Some(ComposerPhase::Payment { send_max, .. }) = &mut self.composer {
+                    *send_max = spec.clone();
+                    self.set_submit_flash(SubmitFlash::Success(format!(
+                        "Quote · Send max {spec} (incl. slippage) — review, then s"
+                    )));
+                }
+            }
+            Action::PaymentQuoteErr(msg) => {
+                self.set_submit_flash(SubmitFlash::Error(format!("Quote · {msg}")));
+            }
             Action::SetRegularKeySubmitOk(hash) => {
                 self.set_submit_flash(SubmitFlash::Success(format!(
                     "SetRegularKey submitted · {hash}"
@@ -257,6 +275,30 @@ impl Component for WalletPanel {
             }
             Action::OfferCreateSubmitErr(msg) => {
                 self.set_submit_flash(SubmitFlash::Error(format!("OfferCreate · {msg}")));
+            }
+            Action::XrplAccountOffers(rows) => {
+                if let Some(ComposerPhase::OfferCancel { offers, selected }) = &mut self.composer {
+                    *selected = (*selected).min(rows.len().saturating_sub(1));
+                    *offers = Some(Ok(rows.clone()));
+                }
+            }
+            Action::XrplError(e) if e.starts_with("account_offers") => {
+                if let Some(ComposerPhase::OfferCancel { offers, .. }) = &mut self.composer {
+                    *offers = Some(Err(e.clone()));
+                }
+            }
+            Action::OfferCancelSubmitOk(hash) => {
+                self.set_submit_flash(SubmitFlash::Success(format!(
+                    "OfferCancel submitted · {hash}"
+                )));
+                if matches!(&self.composer, Some(ComposerPhase::OfferCancel { .. })) {
+                    self.composer = None;
+                    self.is_form_editing = false;
+                    return Ok(Some(Action::SetKeymapSuppression(false)));
+                }
+            }
+            Action::OfferCancelSubmitErr(msg) => {
+                self.set_submit_flash(SubmitFlash::Error(format!("OfferCancel · {msg}")));
             }
             Action::TrustSetSubmitOk(hash) => {
                 self.set_submit_flash(SubmitFlash::Success(format!("TrustSet submitted · {hash}")));
@@ -374,11 +416,16 @@ impl Component for WalletPanel {
                     self.composer = Some(ComposerPhase::PickKind { selected: 6 });
                     None
                 }
+                Some(ComposerPhase::OfferCancel { .. }) => {
+                    self.composer = Some(ComposerPhase::PickKind { selected: 7 });
+                    None
+                }
             });
         }
 
         // 'i' toggles between XRP and IOU payment mode (disabled while typing)
         if let Some(ComposerPhase::Payment {
+            ref mut row,
             ref mut is_iou,
             ref mut iou_currency,
             ref mut iou_issuer,
@@ -389,11 +436,22 @@ impl Component for WalletPanel {
             && !key.modifiers.contains(KeyModifiers::CONTROL)
         {
             *is_iou = !*is_iou;
+            // Send-max row index differs between modes.
+            *row = 0;
             if !*is_iou {
                 iou_currency.clear();
                 iou_issuer.clear();
             }
             return Ok(None);
+        }
+
+        // 'p' quotes Send max via ripple_path_find (disabled while typing).
+        if matches!(self.composer, Some(ComposerPhase::Payment { .. }))
+            && !self.is_form_editing
+            && matches!(key.code, KeyCode::Char('p') | KeyCode::Char('P'))
+            && !key.modifiers.contains(KeyModifiers::CONTROL)
+        {
+            return Ok(self.queue_payment_quote());
         }
 
         if let Some(ComposerPhase::Payment {
@@ -402,6 +460,7 @@ impl Component for WalletPanel {
             ref mut amount,
             ref mut iou_currency,
             ref mut iou_issuer,
+            ref mut send_max,
             is_iou,
         }) = self.composer
             && self.is_form_editing
@@ -410,6 +469,7 @@ impl Component for WalletPanel {
                 amount,
                 iou_currency,
                 iou_issuer,
+                send_max,
                 is_iou,
                 row,
                 &key,
@@ -470,6 +530,12 @@ impl Component for WalletPanel {
             && submit_shortcut(&key, self.is_form_editing)
         {
             return Ok(Some(self.queue_submit_offer_create()));
+        }
+
+        if matches!(&self.composer, Some(ComposerPhase::OfferCancel { .. }))
+            && submit_shortcut(&key, self.is_form_editing)
+        {
+            return Ok(self.queue_submit_offer_cancel());
         }
 
         if matches!(&self.composer, Some(ComposerPhase::TrustSet { .. }))
@@ -604,6 +670,7 @@ impl Component for WalletPanel {
                 amount,
                 iou_currency,
                 iou_issuer,
+                send_max,
                 is_iou,
                 ..
             }) if submit_shortcut(&key, self.is_form_editing) => Some((
@@ -611,14 +678,15 @@ impl Component for WalletPanel {
                 amount.clone(),
                 iou_currency.clone(),
                 iou_issuer.clone(),
+                send_max.clone(),
                 *is_iou,
             )),
             _ => None,
         };
 
-        if let Some((d, a, cur, iss, iou)) = payment_submit_pairs {
-            if let Err(m) = Self::payment_validate(&d, &a, iou, &cur, &iss) {
-                self.set_submit_flash(SubmitFlash::Error(m.to_string()));
+        if let Some((d, a, cur, iss, smax, iou)) = payment_submit_pairs {
+            if let Err(m) = Self::payment_validate(&d, &a, iou, &cur, &iss, Some(&smax)) {
+                self.set_submit_flash(SubmitFlash::Error(m));
                 return Ok(None);
             }
             // XRP mode must not leak leftover IOU fields into PaymentSubmitParams.
@@ -627,7 +695,7 @@ impl Component for WalletPanel {
             } else {
                 (String::new(), String::new())
             };
-            return Ok(Some(self.queue_submit_payment(d, a, cur, iss)));
+            return Ok(Some(self.queue_submit_payment(d, a, cur, iss, smax)));
         }
 
         match &mut self.composer {
@@ -653,6 +721,7 @@ impl Component for WalletPanel {
                         4 => self.open_trust_set_composer(),
                         5 => self.open_fxrp_direct_mint_composer(),
                         6 => self.open_fxrp_execute_direct_mint_composer(),
+                        7 => return Ok(Some(self.open_offer_cancel_composer())),
                         _ => {}
                     },
                     KeyCode::Char('1') => self.open_payment_composer(),
@@ -662,6 +731,7 @@ impl Component for WalletPanel {
                     KeyCode::Char('5') => self.open_trust_set_composer(),
                     KeyCode::Char('6') => self.open_fxrp_direct_mint_composer(),
                     KeyCode::Char('7') => self.open_fxrp_execute_direct_mint_composer(),
+                    KeyCode::Char('8') => return Ok(Some(self.open_offer_cancel_composer())),
                     _ => {}
                 }
                 return Ok(None);
@@ -670,7 +740,7 @@ impl Component for WalletPanel {
                 return Ok(self.account_set_modal_key_to_action(key));
             }
             Some(ComposerPhase::Payment { row, is_iou, .. }) => {
-                let row_count: usize = if *is_iou { 4 } else { 2 };
+                let row_count: usize = if *is_iou { 5 } else { 3 };
                 if Self::composer_row_nav(&mut self.is_form_editing, &key, row, row_count) {
                     return Ok(Some(Action::SetKeymapSuppression(true)));
                 }
@@ -703,6 +773,18 @@ impl Component for WalletPanel {
             Some(ComposerPhase::FxrpExecuteDirectMint { .. }) => {
                 if Self::composer_edit_toggle_nav(&mut self.is_form_editing, &key) {
                     return Ok(Some(Action::SetKeymapSuppression(true)));
+                }
+                return Ok(None);
+            }
+            Some(ComposerPhase::OfferCancel { offers, selected }) => {
+                let last = match offers {
+                    Some(Ok(rows)) => rows.len().saturating_sub(1),
+                    _ => 0,
+                };
+                match key.code {
+                    KeyCode::Char('j') | KeyCode::Down => *selected = (*selected + 1).min(last),
+                    KeyCode::Char('k') | KeyCode::Up => *selected = selected.saturating_sub(1),
+                    _ => {}
                 }
                 return Ok(None);
             }
@@ -892,54 +974,6 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::type_complexity)]
-    fn payment_validate_table() {
-        let cases: &[(&str, &str, bool, &str, &str, Result<(), &str>)] = &[
-            ("", "1", false, "", "", Err("destination required")),
-            ("rDest", "", false, "", "", Err("amount required")),
-            (
-                "rDest",
-                "abc",
-                false,
-                "",
-                "",
-                Err("amount must be a number"),
-            ),
-            ("rDest", "0", false, "", "", Err("amount must be > 0")),
-            ("rDest", "-1", false, "", "", Err("amount must be > 0")),
-            ("rDest", "1", false, "", "", Ok(())),
-            (
-                "rDest",
-                "1",
-                true,
-                "US",
-                "rIssuer",
-                Err("IOU currency must be 3 characters"),
-            ),
-            ("rDest", "1", true, "USD", "", Err("IOU issuer required")),
-            (
-                "rDest",
-                "1",
-                true,
-                "USD",
-                "notClassic",
-                Err("issuer must start with 'r'"),
-            ),
-            ("rDest", "1", true, "USD", "rIssuer123", Ok(())),
-            ("  rDest  ", " 1.5 ", true, " usd ", " rIssuer ", Ok(())),
-            ("rDest", "NaN", false, "", "", Err("amount must be > 0")),
-            ("rDest", "inf", false, "", "", Err("amount must be > 0")),
-        ];
-        for (dest, amt, is_iou, cur, iss, expected) in cases {
-            assert_eq!(
-                WalletPanel::payment_validate(dest, amt, *is_iou, cur, iss),
-                *expected,
-                "dest={dest:?} amt={amt:?} iou={is_iou} cur={cur:?} iss={iss:?}"
-            );
-        }
-    }
-
-    #[test]
     fn payment_composer_defaults_amount_1_and_i_toggles_iou_then_clears_fields_on_xrp() {
         let mut panel = WalletPanel::new(false);
         panel.is_focused = true;
@@ -952,6 +986,7 @@ mod tests {
                 destination,
                 iou_currency,
                 iou_issuer,
+                send_max,
                 row,
             }) => {
                 assert_eq!(amount, "1");
@@ -959,6 +994,7 @@ mod tests {
                 assert!(destination.is_empty());
                 assert!(iou_currency.is_empty());
                 assert!(iou_issuer.is_empty());
+                assert!(send_max.is_empty());
                 assert_eq!(*row, 0);
             }
             _ => panic!("expected payment composer"),
@@ -1022,6 +1058,7 @@ mod tests {
             "2.5".into(),
             "usd".into(),
             "rIssuer".into(),
+            String::new(),
         ) {
             Action::PaymentSubmit(p) => {
                 assert_eq!(p.destination, "rDest");
@@ -1032,13 +1069,131 @@ mod tests {
             }
             other => panic!("expected PaymentSubmit, got {other:?}"),
         }
-        match panel.queue_submit_payment("rDest".into(), "1".into(), String::new(), String::new()) {
+        match panel.queue_submit_payment(
+            "rDest".into(),
+            "1".into(),
+            String::new(),
+            String::new(),
+            String::new(),
+        ) {
             Action::PaymentSubmit(p) => {
                 assert!(p.iou_currency.is_none());
                 assert!(p.iou_issuer.is_none());
+                assert!(p.send_max.is_none());
             }
             other => panic!("expected PaymentSubmit, got {other:?}"),
         }
+        match panel.queue_submit_payment(
+            "rDest".into(),
+            "1".into(),
+            String::new(),
+            String::new(),
+            "  XRP:5  ".into(),
+        ) {
+            Action::PaymentSubmit(p) => assert_eq!(p.send_max.as_deref(), Some("XRP:5")),
+            other => panic!("expected PaymentSubmit, got {other:?}"),
+        }
+    }
+
+    /// TC-185: OfferCancel composer — key `8` fetches offers, `j`/`s` queue the selected seq.
+    #[test]
+    fn offer_cancel_composer_lists_offers_and_queues_selected_seq() {
+        let row = |seq| AccountOfferRow {
+            seq,
+            taker_gets: "1000000".into(),
+            taker_pays: "2 USD".into(),
+        };
+        let area = ratatui::layout::Rect::new(0, 0, 80, 24);
+        let mut panel = WalletPanel::new(true);
+        panel.is_focused = true;
+        panel.composer = Some(ComposerPhase::PickKind { selected: 0 });
+
+        let open = panel.on_key_event(key('8')).expect("open");
+        assert!(matches!(open, Some(Action::RefreshAccountOffers)));
+
+        assert!(panel.on_key_event(key('s')).expect("early s").is_none());
+        assert!(matches!(
+            &panel.submit_flash,
+            Some(SubmitFlash::Error(m)) if m.contains("no open offer selected")
+        ));
+
+        panel
+            .update(&Action::XrplAccountOffers(vec![row(11), row(22)]))
+            .expect("offers");
+        panel.on_key_event(key('j')).expect("down");
+        let out = crate::test_support::render_to_string(80, 24, |f| panel.render_composer(f, area));
+        assert!(out.contains("#22"), "{out}");
+        match panel.on_key_event(key('s')).expect("submit") {
+            Some(Action::OfferCancelSubmit(p)) => {
+                assert_eq!(p.offer_sequence, 22);
+                assert!(p.skip_mainnet_prompt);
+            }
+            other => panic!("expected OfferCancelSubmit, got {other:?}"),
+        }
+
+        panel
+            .update(&Action::XrplError("account_offers: timeout".into()))
+            .expect("err");
+        let out = crate::test_support::render_to_string(80, 24, |f| panel.render_composer(f, area));
+        assert!(out.contains("account_offers: timeout"), "{out}");
+    }
+
+    /// TC-194: Payment `p` requests a path quote (form fields + default 100 bps slippage);
+    /// incomplete form flashes instead; QuoteOk fills Send max, QuoteErr flashes.
+    #[test]
+    fn payment_quote_key_requests_quote_and_fills_send_max() {
+        const GENESIS: &str = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh";
+        let mut panel = WalletPanel::new(false);
+        panel.is_focused = true;
+        panel.open_payment_composer();
+        if let Some(ComposerPhase::Payment { amount, .. }) = &mut panel.composer {
+            amount.clear();
+        }
+        assert!(panel.on_key_event(key('p')).expect("p").is_none());
+        assert!(matches!(&panel.submit_flash, Some(SubmitFlash::Error(_))));
+
+        if let Some(ComposerPhase::Payment {
+            destination,
+            amount,
+            iou_currency,
+            iou_issuer,
+            send_max,
+            is_iou,
+            ..
+        }) = &mut panel.composer
+        {
+            *destination = GENESIS.into();
+            *amount = "10".into();
+            *iou_currency = "USD".into();
+            *iou_issuer = GENESIS.into();
+            *send_max = "XRP".into();
+            *is_iou = true;
+        }
+        match panel.on_key_event(key('p')).expect("p") {
+            Some(Action::PaymentQuote(q)) => {
+                assert_eq!(q.destination, GENESIS);
+                assert_eq!(q.amount, "10");
+                assert_eq!(q.iou_currency.as_deref(), Some("USD"));
+                assert_eq!(q.send_max, "XRP");
+                assert_eq!(q.slippage_bps, 100);
+            }
+            other => panic!("expected PaymentQuote, got {other:?}"),
+        }
+
+        panel
+            .update(&Action::PaymentQuoteOk("XRP:1010000".into()))
+            .expect("ok");
+        assert!(matches!(
+            &panel.composer,
+            Some(ComposerPhase::Payment { send_max, .. }) if send_max == "XRP:1010000"
+        ));
+        panel
+            .update(&Action::PaymentQuoteErr("no path".into()))
+            .expect("err");
+        assert!(matches!(
+            &panel.submit_flash,
+            Some(SubmitFlash::Error(m)) if m.contains("no path")
+        ));
     }
 
     #[test]
@@ -1077,21 +1232,50 @@ mod tests {
         }
     }
 
+    /// TC-198: preview + submit use the shared validation — bad destination checksum or
+    /// bad Send max stays orange and `s` refuses with a flash; valid input is green.
     #[test]
-    fn payment_preview_xrp_and_iou_ready_messages() {
-        let (xrp, _) = WalletPanel::payment_preview("rDestAddressLongEnough", "1.5", "", "", false);
+    fn payment_preview_and_submit_share_validation() {
+        const DEST: &str = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh";
+        const ISS: &str = "rJrRMgiRgrU6hDF4pgu5DXQdWyPbY35ErN";
+        let (xrp, st) = WalletPanel::payment_preview(DEST, "1.5", "", "", "", false);
         assert!(xrp.contains("Send 1.5 XRP"), "{xrp}");
-        assert!(xrp.contains('→'), "{xrp}");
+        assert_eq!(st, theme::success_style());
+        assert!(!xrp.contains("spend"), "{xrp}");
 
-        let (iou, _) = WalletPanel::payment_preview(
-            "rDestAddressLongEnough",
-            "10",
-            "USD",
-            "rIssuerAddressLong",
-            true,
-        );
+        let (iou, st) = WalletPanel::payment_preview(DEST, "10", "USD", ISS, "XRP:5000000", true);
         assert!(iou.contains("Pay 10 USD"), "{iou}");
-        assert!(iou.contains("issued by"), "{iou}");
+        assert!(iou.contains("spend ≤ XRP:5000000"), "{iou}");
+        assert_eq!(st, theme::success_style());
+
+        let (_, st) =
+            WalletPanel::payment_preview("rDestAddressLongEnough", "1", "", "", "", false);
+        assert_eq!(
+            st,
+            theme::warning_style(),
+            "bad checksum must not look ready"
+        );
+        let (bad, st) = WalletPanel::payment_preview(DEST, "1", "", "", "XRP:5", false);
+        assert_eq!(st, theme::warning_style());
+        assert!(bad.contains("SendMax"), "{bad}");
+
+        let mut panel = WalletPanel::new(false);
+        panel.is_focused = true;
+        panel.open_payment_composer();
+        if let Some(ComposerPhase::Payment {
+            destination,
+            send_max,
+            ..
+        }) = &mut panel.composer
+        {
+            *destination = DEST.into();
+            *send_max = "XRP:5".into();
+        }
+        assert!(panel.on_key_event(key('s')).expect("s").is_none());
+        assert!(matches!(
+            &panel.submit_flash,
+            Some(SubmitFlash::Error(m)) if m.contains("SendMax")
+        ));
     }
 
     #[test]

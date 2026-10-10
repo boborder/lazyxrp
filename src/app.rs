@@ -114,7 +114,7 @@ pub struct App {
     needs_draw: bool,
 }
 
-fn resolve_flare_rpc_url(flare: &FlareConfig) -> Option<String> {
+pub(crate) fn resolve_flare_rpc_url(flare: &FlareConfig) -> Option<String> {
     std::env::var("FLARE_RPC_URL")
         .ok()
         .map(|s| s.trim().to_string())
@@ -622,6 +622,9 @@ impl App {
                 Action::PaymentSubmit(params) => {
                     self.send_poll(PollCommand::PaymentSubmit(params.clone()))
                 }
+                Action::PaymentQuote(params) => {
+                    self.send_poll(PollCommand::PaymentQuote(params.clone()))
+                }
                 Action::SetRegularKeySubmit(params) => {
                     self.send_poll(PollCommand::SetRegularKeySubmit(params.clone()))
                 }
@@ -630,6 +633,10 @@ impl App {
                 }
                 Action::OfferCreateSubmit(params) => {
                     self.send_poll(PollCommand::OfferCreateSubmit(params.clone()))
+                }
+                Action::RefreshAccountOffers => self.send_poll(PollCommand::AccountOffers),
+                Action::OfferCancelSubmit(params) => {
+                    self.send_poll(PollCommand::OfferCancelSubmit(params.clone()))
                 }
                 Action::TrustSetSubmit(params) => {
                     self.send_poll(PollCommand::TrustSetSubmit(params.clone()))

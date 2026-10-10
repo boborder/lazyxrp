@@ -95,3 +95,78 @@ pub(crate) fn render_to_string(
         .map(|cell| cell.symbol())
         .collect()
 }
+
+/// Deterministic local JSON-RPC server for write/read path tests (no public network).
+#[cfg(test)]
+pub(crate) mod rpc_mock {
+    use std::time::Duration;
+
+    use serde_json::{Value, json};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::{TcpListener, TcpStream};
+
+    async fn read_request(stream: &mut TcpStream) -> color_eyre::Result<Value> {
+        let mut bytes = Vec::new();
+        loop {
+            let mut chunk = [0_u8; 1024];
+            let read = stream.read(&mut chunk).await?;
+            if read == 0 {
+                color_eyre::eyre::bail!("local RPC client closed before request");
+            }
+            bytes.extend_from_slice(&chunk[..read]);
+            let Some(end) = bytes.windows(4).position(|w| w == b"\r\n\r\n") else {
+                continue;
+            };
+            let header_end = end + 4;
+            let headers = String::from_utf8_lossy(&bytes[..end]);
+            let length = headers
+                .lines()
+                .find_map(|line| {
+                    line.strip_prefix("Content-Length:")
+                        .or_else(|| line.strip_prefix("content-length:"))
+                        .and_then(|value| value.trim().parse::<usize>().ok())
+                })
+                .unwrap_or(0);
+            if bytes.len() >= header_end + length {
+                return Ok(serde_json::from_slice(
+                    &bytes[header_end..header_end + length],
+                )?);
+            }
+        }
+    }
+
+    /// Answer `expected` requests with `{"result": result(method)}`; returns request bodies in order.
+    pub(crate) async fn serve(
+        listener: TcpListener,
+        expected: usize,
+        result: fn(&str) -> Value,
+    ) -> color_eyre::Result<Vec<Value>> {
+        let mut requests = Vec::with_capacity(expected);
+        for _ in 0..expected {
+            let (mut stream, _) =
+                tokio::time::timeout(Duration::from_secs(5), listener.accept()).await??;
+            let request = read_request(&mut stream).await?;
+            let method = request["method"]
+                .as_str()
+                .ok_or_else(|| color_eyre::eyre::eyre!("RPC method missing"))?
+                .to_owned();
+            let body = json!({"result": result(&method)}).to_string();
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            stream.write_all(response.as_bytes()).await?;
+            requests.push(request);
+        }
+        Ok(requests)
+    }
+
+    /// Method names of captured requests (order-preserving).
+    pub(crate) fn methods(requests: &[Value]) -> Vec<&str> {
+        requests
+            .iter()
+            .filter_map(|r| r["method"].as_str())
+            .collect()
+    }
+}

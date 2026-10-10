@@ -17,11 +17,6 @@
 - 症状: EscrowCreate の signing / poll コメントは残るが composer UI と poll 配線が未完了
 - 対応: 配線時は `finalize_simulate_sign_submit` を再利用し、型固有バリデーションは caller に残す
 
-### P-004: Submit validation split across layers
-
-- 症状: Payment 検証が wallet UI / `poll.rs` / `signing.rs` に分散し、UI が valid でも submit が invalid になり得る
-- 対応: 単一の validation 関数を wallet と poll で共有する（未実施）
-
 ### P-005: `config.rs` remains one file
 
 - 症状: `src/config.rs` は約 1200 行（defaults / file / env / keybindings / styles / Flare network+display+wallet / paths / test helpers）
@@ -37,3 +32,5 @@
 - ~~P-001: Rust の既知制限 (`issue #100013`) による lifetime bound エラー~~ → `start_poll_task` / `start_ws_task` の構成整理で解消
 - ~~W-001: `SplashScreen` コンポーネント未使用警告~~ → `App` の `splash` フィールドに組み込み済み
 - ~~W-002: Phase 3 関連の未使用警告~~ → `create_payment_tx` 削除済み。`create_and_sign_payment` の `#[allow(dead_code)]` と “Phase 3” コメントも除去済み（本番経路: `poll.rs` / `cli_exec.rs`、2026-09-12）
+- ~~P-004: Submit validation split across layers~~ → `signing::validate_payment_input` を composer（preview / submit / quote）と poll `PaymentSubmit` で共有（TC-197–198、2026-10-10）
+- ~~P-006: live `simulate` omits `LastLedgerSequence`~~ → rippled 3.x autofills Fee/Sequence only; every write (TUI + CLI) failed on testnet. `parse_simulate_result` fills `ledger_index + 20` when absent (TC-200、2026-10-10)

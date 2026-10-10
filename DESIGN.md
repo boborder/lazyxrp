@@ -132,7 +132,13 @@ Guard: `TAB_TITLES.len() == panels.len() == 4` (`app.rs`, TC-060).
 
 ## 6. Keys (operated)
 
-Defaults: [`config.json5`](config.json5) `keybindings.Splash`. User merge: `~/.config/lazyxrp/config.toml`. `Tab` / `Shift+Tab` / `1`–`4` are hard-coded in `app.rs`.
+Defaults: [`config.json5`](config.json5) `keybindings.Splash`. User merge: `~/.config/lazyxrp/config.toml` — same-key entries override, new keys add, unlisted defaults stay (no unbind). `Tab` / `Shift+Tab` / `1`–`4` and panel-local keys below are hard-coded.
+
+```toml
+[keybindings.Splash]
+"<x>" = "Help"          # add
+"<r>" = "RefreshBook"   # override default RefreshAccount
+```
 
 | Key | Action |
 |-----|--------|
@@ -155,10 +161,12 @@ Defaults: [`config.json5`](config.json5) `keybindings.Splash`. User merge: `~/.c
 |---------|-----|--------|
 | Table, modal closed | `j`/`k`, arrows | Row + scrollbar |
 | Table | `Enter` | TX detail |
-| Wallet | `t` | Composer picker: Payment, AccountSet, SetRegularKey, OfferCreate, TrustSet, FXRP Mint, Execute |
-| Picker | `Tab`, `j`/`k`, arrows, `1`–`7` | Phase select |
+| Wallet | `t` | Composer picker: Payment, AccountSet, SetRegularKey, OfferCreate, TrustSet, FXRP Mint, Execute, OfferCancel |
+| Picker | `Tab`, `j`/`k`, arrows, `1`–`8` | Phase select |
 | Forms | `Tab`, `[` `]`, `Enter` | Field nav; AccountSet `e` edits |
-| Payment | `i` | XRP ↔ IOU |
+| Payment | `i` | XRP ↔ IOU (resets row); last row **Send max** (`XRP:drops` / `CUR:issuer:value`, empty = same currency) → cross-currency via default paths, preview adds `spend ≤ …` |
+| Payment | `p` | Quote Send max via `ripple_path_find` in the Send max field's currency (`XRP` or `CUR:issuer`; empty + IOU Amount → XRP), + `slippage_bps`; fills the field |
+| OfferCancel | `j`/`k`, `s` | Select own open offer (fetched on open), cancel it |
 | Submit | `s`, `Ctrl-s` | Queue; preview color as in §5 |
 
 **Tx history:** `f` filter (`Enter` confirm, `Esc` cancel); `m` next page when marker.

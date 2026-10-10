@@ -213,6 +213,10 @@ fn default_oracle_pairs() -> Vec<crate::xrpl::OraclePricePair> {
     ]
 }
 
+fn default_slippage_bps() -> u32 {
+    100
+}
+
 #[derive(Clone, Debug, Deserialize)]
 pub struct LedgerConfig {
     pub account: String,
@@ -241,6 +245,9 @@ pub struct LedgerConfig {
     /// Price pairs to query via `get_aggregate_price`.
     #[serde(default = "default_oracle_pairs")]
     pub oracle_pairs: Vec<crate::xrpl::OraclePricePair>,
+    /// Payment composer quote (`p`) slippage in basis points added to the path cost (100 = 1%).
+    #[serde(default = "default_slippage_bps")]
+    pub slippage_bps: u32,
 }
 
 impl Default for LedgerConfig {
@@ -258,6 +265,7 @@ impl Default for LedgerConfig {
             signing: RawSigningConfig::default(),
             oracles: Vec::new(),
             oracle_pairs: default_oracle_pairs(),
+            slippage_bps: default_slippage_bps(),
         }
     }
 }
@@ -423,29 +431,37 @@ impl Config {
     }
 }
 
-/// Security (S-003): warn when a config file containing a signing credential is group- or world-readable.
-/// On non-Unix platforms this is a no-op.
+/// Security (S-003): message to show when a config file containing a signing credential is
+/// group- or world-readable. `None` on non-Unix platforms or when the mode is private.
 #[cfg(unix)]
-fn warn_if_config_world_readable(path: &std::path::Path) {
+fn config_permission_warning(path: &std::path::Path) -> Option<String> {
     use std::os::unix::fs::PermissionsExt;
-    if let Ok(meta) = path.metadata() {
-        let mode = meta.permissions().mode();
-        // 0o044 = group-read (0o040) | world-read (0o004)
-        if mode & 0o044 != 0 {
-            tracing::warn!(
-                // Security: config file with signing credential should be readable only by owner (0600)
-                "Config file '{}' has mode {:04o} and contains a signing credential. \
-                 Run: chmod 600 {}",
-                path.display(),
-                mode & 0o777,
-                path.display()
-            );
-        }
-    }
+    let mode = path.metadata().ok()?.permissions().mode();
+    // 0o044 = group-read (0o040) | world-read (0o004)
+    (mode & 0o044 != 0).then(|| {
+        // Security: config file with signing credential should be readable only by owner (0600)
+        format!(
+            "lazyxrp: warning: config file '{}' has mode {:04o} and contains a signing credential. \
+             Run: chmod 600 {}",
+            path.display(),
+            mode & 0o777,
+            path.display()
+        )
+    })
 }
 
 #[cfg(not(unix))]
-fn warn_if_config_world_readable(_path: &std::path::Path) {}
+fn config_permission_warning(_path: &std::path::Path) -> Option<String> {
+    None
+}
+
+/// Printed on stderr: `Config::new` runs before `logging::init`, so a `tracing` event
+/// would have no subscriber and the warning would never be shown.
+fn warn_if_config_world_readable(path: &std::path::Path) {
+    if let Some(msg) = config_permission_warning(path) {
+        eprintln!("{msg}");
+    }
+}
 
 pub fn data_dir() -> PathBuf {
     if let Some(s) = env_data_folder() {
@@ -816,6 +832,24 @@ mod tests {
     use super::*;
     use crate::test_support::{TempRootGuard, TestEnvGuard, env_lock};
 
+    /// S-003: a group/world-readable credential-bearing config yields a warning (shown on
+    /// stderr, since it runs before the tracing subscriber exists); a 0600 file does not.
+    #[cfg(unix)]
+    #[test]
+    fn config_permission_warning_flags_group_or_world_readable() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("lazyxrp-perm-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.toml");
+        std::fs::write(&path, "x = 1\n").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let msg = config_permission_warning(&path).expect("0644 must warn");
+        assert!(msg.contains("chmod 600"), "{msg}");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        assert!(config_permission_warning(&path).is_none());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     /// TC-113: FlareNetwork parses case-insensitively, defaults to Flare
     #[test]
     fn flare_network_parse() {
@@ -1117,6 +1151,41 @@ seed = "sEdFileSeedValueNotReal1234567890"
             c.xrpl.signing.seed.is_none(),
             "plain file seed must be cleared"
         );
+        Ok(())
+    }
+
+    /// TC-195: user `[keybindings.Splash]` in config.toml adds keys and overrides a default
+    /// binding; untouched defaults survive the merge.
+    #[test]
+    fn user_keybindings_override_and_extend_defaults() -> color_eyre::Result<()> {
+        let _env_lock = env_lock();
+        let _test_env = TestEnvGuard::new(&["LAZYXRP_CONFIG", "XDG_CONFIG_HOME"]);
+        let toml = r#"[xrpl]
+account = "r3kmLJN5D28dHuH8vZNUZpMC43pEHpaocV"
+issuer = "rMxCKbEDwqr76QuheSUMdEGf4B9xJ8m5De"
+currency = "RLUSD"
+currency_code = "524C555344000000000000000000000000000000"
+offer_limit = 5
+poll_interval_ms = 5000
+network = "mainnet"
+
+[keybindings.Splash]
+"<x>" = "Help"
+"<r>" = "RefreshBook"
+"#;
+        let (root, _guard) = write_config_dir("tc195", toml)?;
+        _test_env.remove("XDG_CONFIG_HOME");
+        _test_env.set("LAZYXRP_CONFIG", root.to_str().unwrap());
+        let c = Config::new()?;
+        let get = |k: &str| {
+            c.keybindings
+                .0
+                .get(&parse_key_sequence(k).unwrap())
+                .cloned()
+        };
+        assert_eq!(get("<x>"), Some(Action::Help));
+        assert_eq!(get("<r>"), Some(Action::RefreshBook));
+        assert_eq!(get("<q>"), Some(Action::Quit));
         Ok(())
     }
 

@@ -33,6 +33,8 @@
     "currency_code": "524C555344000000000000000000000000000000",
     "offer_limit": 5,
     "poll_interval_ms": 5000,
+    // Payment composer `p` quote: slippage (basis points) added to the path cost. 100 = 1%.
+    "slippage_bps": 100,
     "oracles": [
       // DIA mainnet oracle
       { "account": "rP24Lp7bcUHvEW7T7c8xkxtQKKd9fZyra7", "oracle_document_id": 42 }

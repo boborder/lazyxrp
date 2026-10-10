@@ -13,8 +13,8 @@ use crate::{
     components::shared::{fmt, theme},
     xrpl::{
         AccountSetSubmitParams, FxrpDirectMintPaymentParams, FxrpExecuteDirectMintParams,
-        OfferCreateSubmitParams, PaymentSubmitParams, SetRegularKeySubmitParams,
-        TrustSetSubmitParams,
+        OfferCancelSubmitParams, OfferCreateSubmitParams, PaymentQuoteParams, PaymentSubmitParams,
+        SetRegularKeySubmitParams, TrustSetSubmitParams,
     },
 };
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -99,6 +99,7 @@ impl WalletPanel {
             amount: "1".to_string(),
             iou_currency: String::new(),
             iou_issuer: String::new(),
+            send_max: String::new(),
             is_iou: false,
         });
         self.is_form_editing = false;
@@ -177,6 +178,33 @@ impl WalletPanel {
             taker_pays,
             skip_mainnet_prompt: self.skip_mainnet_prompt,
         })
+    }
+
+    pub(super) fn open_offer_cancel_composer(&mut self) -> Action {
+        self.composer = Some(ComposerPhase::OfferCancel {
+            offers: None,
+            selected: 0,
+        });
+        self.is_form_editing = false;
+        Action::RefreshAccountOffers
+    }
+
+    pub(super) fn queue_submit_offer_cancel(&mut self) -> Option<Action> {
+        let seq = match &self.composer {
+            Some(ComposerPhase::OfferCancel {
+                offers: Some(Ok(rows)),
+                selected,
+            }) => rows.get(*selected).map(|r| r.seq),
+            _ => None,
+        };
+        let Some(offer_sequence) = seq else {
+            self.set_submit_flash(SubmitFlash::Error("no open offer selected".into()));
+            return None;
+        };
+        Some(Action::OfferCancelSubmit(OfferCancelSubmitParams {
+            offer_sequence,
+            skip_mainnet_prompt: self.skip_mainnet_prompt,
+        }))
     }
 
     pub(super) fn open_trust_set_composer(&mut self) {
@@ -310,6 +338,7 @@ impl WalletPanel {
         amt: String,
         iou_currency: String,
         iou_issuer: String,
+        send_max: String,
     ) -> Action {
         Action::PaymentSubmit(PaymentSubmitParams {
             destination: dest,
@@ -325,47 +354,70 @@ impl WalletPanel {
                 Some(iou_issuer)
             },
             destination_tag: None,
+            send_max: Some(send_max.trim().to_string()).filter(|s| !s.is_empty()),
             skip_mainnet_prompt: self.skip_mainnet_prompt,
         })
+    }
+
+    /// Payment composer `p`: validated form → `PaymentQuote` (slippage from `[xrpl] slippage_bps`).
+    pub(super) fn queue_payment_quote(&mut self) -> Option<Action> {
+        let Some(ComposerPhase::Payment {
+            destination,
+            amount,
+            iou_currency,
+            iou_issuer,
+            send_max,
+            is_iou,
+            ..
+        }) = &self.composer
+        else {
+            return None;
+        };
+        if let Err(m) =
+            Self::payment_validate(destination, amount, *is_iou, iou_currency, iou_issuer, None)
+        {
+            self.set_submit_flash(SubmitFlash::Error(format!("Quote · {m}")));
+            return None;
+        }
+        let (iou_currency, iou_issuer) = if *is_iou {
+            (
+                Some(iou_currency.trim().to_uppercase()),
+                Some(iou_issuer.trim().to_string()),
+            )
+        } else {
+            (None, None)
+        };
+        Some(Action::PaymentQuote(PaymentQuoteParams {
+            destination: destination.trim().to_string(),
+            amount: amount.trim().to_string(),
+            iou_currency,
+            iou_issuer,
+            send_max: send_max.trim().to_string(),
+            slippage_bps: self.config.as_ref().map_or(100, |c| c.xrpl.slippage_bps),
+        }))
     }
 
     pub(super) fn set_submit_flash(&mut self, flash: SubmitFlash) {
         self.submit_flash = Some(flash);
     }
 
+    /// Shared validation (`signing::validate_payment_input`); `send_max = None` skips the
+    /// Send max spec (quote accepts a bare currency prefix there).
     pub(super) fn payment_validate(
         dest: &str,
         amt: &str,
         is_iou: bool,
         currency: &str,
         issuer: &str,
-    ) -> Result<(), &'static str> {
-        if dest.trim().is_empty() {
-            return Err("destination required");
-        }
-        if amt.trim().is_empty() {
-            return Err("amount required");
-        }
-        let Ok(v) = amt.trim().parse::<f64>() else {
-            return Err("amount must be a number");
-        };
-        if !v.is_finite() || v <= 0.0 {
-            return Err("amount must be > 0");
-        }
-        if is_iou {
-            let cur = currency.trim();
-            if cur.len() != 3 {
-                return Err("IOU currency must be 3 characters");
-            }
-            let iss = issuer.trim();
-            if iss.is_empty() {
-                return Err("IOU issuer required");
-            }
-            if !iss.starts_with('r') {
-                return Err("issuer must start with 'r'");
-            }
-        }
-        Ok(())
+        send_max: Option<&str>,
+    ) -> Result<(), String> {
+        crate::signing::validate_payment_input(
+            dest,
+            amt,
+            is_iou.then_some((currency, issuer)),
+            send_max,
+        )
+        .map_err(|e| e.to_string())
     }
 
     pub(super) fn payment_preview(
@@ -373,16 +425,13 @@ impl WalletPanel {
         amount: &str,
         iou_currency: &str,
         iou_issuer: &str,
+        send_max: &str,
         is_iou: bool,
     ) -> (String, Style) {
         let destination_trimmed = destination.trim();
         let amount_trimmed = amount.trim();
         let currency_trimmed = iou_currency.trim();
         let issuer_trimmed = iou_issuer.trim();
-        let amount_ok = amount_trimmed
-            .parse::<f64>()
-            .ok()
-            .filter(|v| v.is_finite() && *v > 0.0);
 
         if destination_trimmed.is_empty() {
             return (
@@ -393,34 +442,24 @@ impl WalletPanel {
         if amount_trimmed.is_empty() {
             return ("Need amount".to_string(), theme::warning_style());
         }
-        if amount_ok.is_none() {
-            return (
-                "Amount must be a number > 0".to_string(),
-                theme::warning_style(),
-            );
+        let iou = is_iou.then_some((currency_trimmed, issuer_trimmed));
+        if let Err(e) = crate::signing::validate_payment_input(
+            destination_trimmed,
+            amount_trimmed,
+            iou,
+            Some(send_max),
+        ) {
+            return (e.to_string(), theme::warning_style());
         }
-        if is_iou && currency_trimmed.len() != 3 {
-            return (
-                "IOU mode: need 3-char currency code".to_string(),
-                theme::warning_style(),
-            );
-        }
-        if is_iou && issuer_trimmed.is_empty() {
-            return (
-                "IOU mode: need issuer address (r…)".to_string(),
-                theme::warning_style(),
-            );
-        }
-        if is_iou && !issuer_trimmed.starts_with('r') {
-            return (
-                "Issuer must start with 'r'".to_string(),
-                theme::warning_style(),
-            );
-        }
+        let spend = if send_max.trim().is_empty() {
+            String::new()
+        } else {
+            format!(" · spend ≤ {}", Self::shorten_display(send_max.trim(), 24))
+        };
         if is_iou {
             return (
                 format!(
-                    "▸ Pay {} {currency_trimmed} (issued by {}) → {}",
+                    "▸ Pay {} {currency_trimmed} (issued by {}) → {}{spend}",
                     amount_trimmed,
                     Self::shorten_display(issuer_trimmed, 20),
                     Self::shorten_display(destination_trimmed, 20)
@@ -430,7 +469,7 @@ impl WalletPanel {
         }
         (
             format!(
-                "▸ Send {} XRP → {}",
+                "▸ Send {} XRP → {}{spend}",
                 amount_trimmed,
                 Self::shorten_display(destination_trimmed, 30)
             ),
@@ -481,13 +520,13 @@ impl WalletPanel {
 
         let popup_w = area.width.clamp(54, 74);
         let popup_h = match phase {
-            ComposerPhase::PickKind { .. } => 22u16,
+            ComposerPhase::PickKind { .. } => 23u16,
             ComposerPhase::AccountSet => 21u16,
             ComposerPhase::Payment { is_iou, .. } => {
                 if *is_iou {
-                    20u16
+                    21u16
                 } else {
-                    16u16
+                    17u16
                 }
             }
             ComposerPhase::DangerConfirm { .. } => 12u16,
@@ -496,6 +535,7 @@ impl WalletPanel {
             ComposerPhase::TrustSet { .. } => 16u16,
             ComposerPhase::FxrpDirectMint { .. } => 16u16,
             ComposerPhase::FxrpExecuteDirectMint { .. } => 16u16,
+            ComposerPhase::OfferCancel { .. } => 16u16,
         }
         .min(area.height.saturating_sub(2))
         .max(8);
@@ -521,6 +561,7 @@ impl WalletPanel {
             ComposerPhase::TrustSet { .. } => "Trust line",
             ComposerPhase::FxrpDirectMint { .. } => "FXRP Direct Mint",
             ComposerPhase::FxrpExecuteDirectMint { .. } => "FXRP Execute (C3)",
+            ComposerPhase::OfferCancel { .. } => "Cancel offer",
         };
         let block = theme::panel_block(inner_title, true);
         let inner = block.inner(popup);
@@ -559,9 +600,10 @@ impl WalletPanel {
                     row(4, "5", "TrustSet", "open IOU trust line"),
                     row(5, "6", "FXRP Mint", "pay Core Vault + memo"),
                     row(6, "7", "FXRP Execute", "paste FDC proof → Flare"),
+                    row(7, "8", "OfferCancel", "cancel own DEX offer"),
                     Line::from(""),
                     Line::from(Span::styled(
-                        "1–7 jump · j/k move · Enter open · Esc close",
+                        "1–8 jump · j/k move · Enter open · Esc close",
                         theme::secondary_style(),
                     )),
                 ])
@@ -687,6 +729,7 @@ impl WalletPanel {
                 amount,
                 iou_currency,
                 iou_issuer,
+                send_max,
                 is_iou,
             } => {
                 let net_note = if self.network.is_production() && !self.skip_mainnet_prompt {
@@ -694,8 +737,14 @@ impl WalletPanel {
                 } else {
                     ""
                 };
-                let (preview_text, preview_st) =
-                    Self::payment_preview(destination, amount, iou_currency, iou_issuer, *is_iou);
+                let (preview_text, preview_st) = Self::payment_preview(
+                    destination,
+                    amount,
+                    iou_currency,
+                    iou_issuer,
+                    send_max,
+                    *is_iou,
+                );
 
                 let value_st = theme::accent_style();
                 let labels = theme::dim_style();
@@ -739,12 +788,31 @@ impl WalletPanel {
                         Span::styled(amount.clone(), value_st),
                     ]));
                 }
+                let send_max_row = if *is_iou { 4 } else { 2 };
+                lines.push(Line::from(vec![
+                    Span::styled(
+                        format!(
+                            "Send max      [{}]",
+                            if *row == send_max_row { "*" } else { " " }
+                        ),
+                        if *row == send_max_row {
+                            highlight_style
+                        } else {
+                            labels
+                        },
+                    ),
+                    Span::styled(send_max.clone(), value_st),
+                ]));
+                lines.push(Line::from(Span::styled(
+                    "  empty = same currency · XRP:drops or CUR:issuer:value",
+                    labels,
+                )));
 
                 lines.push(Line::from(""));
                 lines.push(Line::from(Span::styled(preview_text, preview_st)));
                 lines.push(Line::from(Span::styled(
                     format!(
-                        "[ ] Tab rows · Enter edit · i toggle XRP/IOU · e type · s send · Esc back{net_note}",
+                        "[ ] Tab rows · Enter edit · i XRP/IOU · p quote Send max · e type · s send · Esc back{net_note}",
                     ),
                     theme::secondary_style(),
                 )));
@@ -965,6 +1033,55 @@ impl WalletPanel {
                         theme::secondary_style(),
                     )),
                 ])
+            }
+            ComposerPhase::OfferCancel { offers, selected } => {
+                let net_note = if self.network.is_production() && !self.skip_mainnet_prompt {
+                    " · production writes need --yes"
+                } else {
+                    ""
+                };
+                let mut lines = vec![
+                    Line::from(Span::styled(
+                        format!("Your open offers (seq · TakerGets → TakerPays){net_note}"),
+                        theme::secondary_style(),
+                    )),
+                    Line::from(""),
+                ];
+                match offers {
+                    None => lines.push(Line::from(Span::styled(
+                        "loading account_offers…",
+                        theme::dim_style(),
+                    ))),
+                    Some(Err(e)) => {
+                        lines.push(Line::from(Span::styled(e.clone(), theme::error_style())))
+                    }
+                    Some(Ok(rows)) if rows.is_empty() => lines.push(Line::from(Span::styled(
+                        "(no open offers)",
+                        theme::dim_style(),
+                    ))),
+                    Some(Ok(rows)) => {
+                        let start = selected.saturating_sub(9);
+                        for (i, r) in rows.iter().enumerate().skip(start).take(10) {
+                            let on = i == *selected;
+                            lines.push(Line::from(Span::styled(
+                                format!(
+                                    "{}#{}  {} → {}",
+                                    if on { "⟩ " } else { "  " },
+                                    r.seq,
+                                    Self::shorten_display(&r.taker_gets, 24),
+                                    Self::shorten_display(&r.taker_pays, 24),
+                                ),
+                                if on { highlight_style } else { label_style },
+                            )));
+                        }
+                    }
+                }
+                lines.push(Line::from(""));
+                lines.push(Line::from(Span::styled(
+                    "j/k select · s cancel offer · Esc back",
+                    theme::secondary_style(),
+                )));
+                Paragraph::new(lines)
             }
         };
         frame.render_widget(body, inner);

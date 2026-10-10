@@ -59,7 +59,7 @@ pub struct Cli {
     #[arg(long, default_value_t = false)]
     pub allow_insecure_rpc: bool,
 
-    /// Watch account for the TUI (overrides config). Prefer over legacy `watch --account`.
+    /// Watch account for the TUI (overrides config).
     #[arg(long, global = true)]
     pub account: Option<String>,
 
@@ -122,11 +122,6 @@ impl RpCli {
 
 #[derive(Subcommand, Debug, Clone)]
 pub enum Cmd {
-    /// Launch the TUI (default when no subcommand). Deprecated: use bare `lazyxrp` instead.
-    Watch {
-        #[arg(long)]
-        account: Option<String>,
-    },
     Info,
     Account {
         address: String,
@@ -182,12 +177,20 @@ pub enum Cmd {
         #[arg(long, default_value = "0.000123")]
         amount: String,
     },
+    /// List an account's open DEX offers (`account_offers`, first 200)
+    Offers {
+        address: String,
+    },
+    /// Cancel one of the signing account's offers by sequence (simulate first; mainnet needs --yes)
+    OfferCancel {
+        /// Offer sequence (`seq` from `offers`)
+        sequence: u32,
+    },
 }
 
 impl Cmd {
     pub fn subcommand_name(&self) -> &'static str {
         match self {
-            Cmd::Watch { .. } => "watch",
             Cmd::Info => "info",
             Cmd::Account { .. } => "account",
             Cmd::Book { .. } => "book",
@@ -198,6 +201,8 @@ impl Cmd {
             Cmd::TxHistory { .. } => "tx-history",
             Cmd::AccountStatus { .. } => "account-status",
             Cmd::Send { .. } => "send",
+            Cmd::Offers { .. } => "offers",
+            Cmd::OfferCancel { .. } => "offer-cancel",
         }
     }
 }
@@ -240,8 +245,29 @@ mod tests {
     fn book_requires_base_and_quote_arguments() {
         assert!(Cli::try_parse_from(["lazyxrp", "-x", "book", "--quote", "USD"]).is_err());
         assert!(Cli::try_parse_from(["lazyxrp", "-x", "book", "--base", "XRP"]).is_err());
-        // Deprecated bare form still parses until removal.
+        // Bare (no `-x`) form still parses so the resolver can point at `-x`.
         assert!(Cli::try_parse_from(["lazyxrp", "book", "--quote", "USD"]).is_err());
+        // `watch` was removed: bare `lazyxrp` is the TUI.
+        assert!(Cli::try_parse_from(["lazyxrp", "watch"]).is_err());
+    }
+
+    /// TC-190: DEX CLI — `offers <ADDR>` and `offer-cancel <SEQ>` parse; non-numeric seq rejected.
+    #[test]
+    fn dex_subcommands_parse() {
+        let c = Cli::try_parse_from([
+            "lazyxrp",
+            "-x",
+            "offers",
+            "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+        ])
+        .expect("offers parses");
+        assert!(matches!(c.command, Some(super::Cmd::Offers { .. })));
+        let c = Cli::try_parse_from(["lazyxrp", "-x", "offer-cancel", "42"]).expect("parses");
+        assert!(matches!(
+            c.command,
+            Some(super::Cmd::OfferCancel { sequence: 42 })
+        ));
+        assert!(Cli::try_parse_from(["lazyxrp", "-x", "offer-cancel", "abc"]).is_err());
     }
 
     #[test]

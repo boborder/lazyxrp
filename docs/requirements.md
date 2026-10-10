@@ -19,7 +19,7 @@ Product **requirements** (what). Behavioral design: [`architecture.md`](architec
 ### FR-01: 監視モード
 
 - `lazyxrp`（引数なし）で TUI を起動し、XRPL 情報を継続表示すること。
-- 既定では設定ファイルのアカウントを監視し、`--account` で上書きできること（レガシー `watch` サブコマンドも deprecation 警告付きで可）。
+- 既定では設定ファイルのアカウントを監視し、`--account` で上書きできること。
 
 ### FR-02: サーバー情報取得
 
@@ -137,4 +137,4 @@ Product **requirements** (what). Behavioral design: [`architecture.md`](architec
 ## 6. 開発ステータス
 
 - Phase 1（読み取り拡張）+ Phase 2（ネットワーク抽象化 + Xahau / Flare multichain）: **実装完了**
-- Phase 3（書き込み系 TX）: **実装済み** — TUI コンポーザー + CLI で Payment / AccountSet / SetRegularKey / OfferCreate / TrustSet / FXRP Mint / FXRP Execute に対応。EscrowCreate は poll/signing 完備だが UI 未実装（`docs/problems.md` P-003）。残りは本番動作確認とエッジケース対応。将来 TX 種別（AccountDelete / EscrowFinish・Cancel / AMM Deposit・Withdraw）と OfferCancel（DEX trading に統合）は [`ROADMAP.md`](../ROADMAP.md) の horizon（短期 / 中期 / 長期）参照。
+- Phase 3（書き込み系 TX）: **実装済み** — TUI コンポーザー + CLI で Payment / AccountSet / SetRegularKey / OfferCreate / OfferCancel / TrustSet / FXRP Mint / FXRP Execute に対応。EscrowCreate は poll/signing 完備だが UI 未実装（`docs/problems.md` P-003）。残りは本番動作確認とエッジケース対応。将来 TX 種別（AccountDelete / EscrowFinish・Cancel / AMM Deposit・Withdraw）は [`ROADMAP.md`](../ROADMAP.md) の horizon（短期 / 中期 / 長期）参照。

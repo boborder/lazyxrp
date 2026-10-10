@@ -581,7 +581,21 @@ pub struct PaymentSubmitParams {
     pub iou_issuer: Option<String>,
     /// Destination tag extracted from an X-address (or set explicitly).
     pub destination_tag: Option<u32>,
+    /// Optional SendMax spec (`XRP:drops` or `CUR:issuer:value`) → cross-currency payment via default paths.
+    pub send_max: Option<String>,
     pub skip_mainnet_prompt: bool,
+}
+
+/// Payment composer quote request (`ripple_path_find` from the signing account).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PaymentQuoteParams {
+    pub destination: String,
+    pub amount: String,
+    pub iou_currency: Option<String>,
+    pub iou_issuer: Option<String>,
+    /// Raw Send max field; its currency prefix picks the source currency.
+    pub send_max: String,
+    pub slippage_bps: u32,
 }
 
 /// FXRP Direct Mint Payment: XRP to Core Vault with 32-byte recipient memo (C2).
@@ -631,6 +645,21 @@ pub struct OfferCreateSubmitParams {
     pub skip_mainnet_prompt: bool,
 }
 
+/// One of the watched account's open DEX offers (`account_offers`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AccountOfferRow {
+    pub seq: u32,
+    pub taker_gets: String,
+    pub taker_pays: String,
+}
+
+/// OfferCancel from the Wallet composer.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OfferCancelSubmitParams {
+    pub offer_sequence: u32,
+    pub skip_mainnet_prompt: bool,
+}
+
 /// TrustSet from the Wallet form (v1: Limit + Currency + Issuer only).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TrustSetSubmitParams {
@@ -663,6 +692,11 @@ pub enum PollCommand {
     /// Sign and submit EscrowCreate (wallet form).
     EscrowCreateSubmit(EscrowCreateSubmitParams),
     OfferCreateSubmit(OfferCreateSubmitParams),
+    /// `account_offers` for the signing account (Wallet OfferCancel composer).
+    AccountOffers,
+    OfferCancelSubmit(OfferCancelSubmitParams),
+    /// `ripple_path_find` quote → Send max spec for the Payment composer.
+    PaymentQuote(PaymentQuoteParams),
     /// Sign and submit TrustSet (wallet form).
     TrustSetSubmit(TrustSetSubmitParams),
     /// Generate a new key pair locally ("ed25519" or "secp256k1").
