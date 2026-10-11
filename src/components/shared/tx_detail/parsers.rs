@@ -17,7 +17,7 @@ fn detail_line(label: impl Into<Cow<'static, str>>, value: String) -> Line<'stat
 }
 
 fn ripple_time_line(label: &'static str, secs: u64) -> Line<'static> {
-    let unix = secs as i64 + super::RIPPLE_EPOCH;
+    let unix = super::ripple_to_unix(secs);
     detail_line(
         label,
         crate::components::shared::fmt::fmt_local_datetime(unix),

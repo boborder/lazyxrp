@@ -13,7 +13,13 @@ use serde_json::Value;
 use crate::action::Action;
 use crate::components::shared::{theme, widgets::centered_popup_rect};
 use crate::xrpl::ArcValue;
-use crate::xrpl::RIPPLE_EPOCH_UNIX as RIPPLE_EPOCH;
+use crate::xrpl::RIPPLE_EPOCH_UNIX;
+
+/// Ripple-epoch seconds from an untrusted tx field → unix seconds without overflow
+/// (out-of-range values saturate and render as the `----` placeholder).
+fn ripple_to_unix(secs: u64) -> i64 {
+    RIPPLE_EPOCH_UNIX.saturating_add(i64::try_from(secs).unwrap_or(i64::MAX))
+}
 
 mod format;
 mod parsers;
@@ -199,8 +205,7 @@ fn detail_lines_for<'a>(tx: &'a Value, meta: &'a Value) -> Vec<Line<'a>> {
     }
 
     if let Some(date) = tx.get("date").and_then(Value::as_u64) {
-        let unix = date as i64 + RIPPLE_EPOCH;
-        let ts = crate::components::shared::fmt::fmt_local_datetime(unix);
+        let ts = crate::components::shared::fmt::fmt_local_datetime(ripple_to_unix(date));
         lines.push(Line::from(vec![
             Span::styled("Date", hi_style),
             Span::raw(": "),
@@ -376,6 +381,19 @@ mod tests {
 
     fn arc(v: serde_json::Value) -> ArcValue {
         ArcValue(Arc::new(v))
+    }
+
+    /// TC-238: hostile `date` / time fields never overflow; huge values saturate and
+    /// render as the placeholder instead of panicking (debug) or a wrapped date.
+    #[test]
+    fn ripple_to_unix_saturates() {
+        assert_eq!(ripple_to_unix(0), 946_684_800);
+        assert_eq!(ripple_to_unix(u64::MAX), i64::MAX);
+        assert_eq!(ripple_to_unix(i64::MAX as u64), i64::MAX);
+        assert_eq!(
+            crate::components::shared::fmt::fmt_local_datetime(ripple_to_unix(u64::MAX)),
+            "----/--/-- --:--:--"
+        );
     }
 
     #[test]

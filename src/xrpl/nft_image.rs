@@ -77,7 +77,7 @@ pub(crate) async fn fetch_via(
                 .ok_or_else(|| color_eyre::eyre::eyre!("redirect has no location"))?
                 .to_str()
                 .map_err(|_| color_eyre::eyre::eyre!("redirect location is invalid"))?;
-            current = current.join(location)?;
+            current = next_hop(&current, location)?;
             continue;
         }
         let status = response.status().as_u16();
@@ -182,6 +182,19 @@ fn resolve_uri(uri: &str) -> color_eyre::Result<Url> {
     Ok(url)
 }
 
+/// Resolve a redirect `Location` against the current hop; an https resource must not
+/// be handed to plain http (the body would travel unauthenticated and spoofable).
+fn next_hop(current: &Url, location: &str) -> color_eyre::Result<Url> {
+    let next = current.join(location)?;
+    if current.scheme() == "https" && next.scheme() != "https" {
+        return Err(color_eyre::eyre::eyre!(
+            "redirect downgrades https to {}",
+            next.scheme()
+        ));
+    }
+    Ok(next)
+}
+
 pub(crate) fn is_private_or_loopback(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(ip) => {
@@ -195,15 +208,29 @@ pub(crate) fn is_private_or_loopback(ip: IpAddr) -> bool {
                 || (o[0] == 192 && o[1] == 0 && o[2] == 0) // 192.0.0.0/24 IETF protocol
                 || (o[0] == 198 && (o[1] & 0xfe) == 18) // 198.18.0.0/15 benchmarking
                 || o[0] >= 240 // 240.0.0.0/4 reserved
+                || o[0] == 0 // 0.0.0.0/8 "this network"
         }
         IpAddr::V6(ip) => {
-            if let Some(v4) = ip.to_ipv4_mapped() {
+            let s = ip.segments();
+            let low_v4 = || std::net::Ipv4Addr::from((u32::from(s[6]) << 16) | u32::from(s[7]));
+            // IPv4 embedded in the low 32 bits: mapped (::ffff:0:0/96), deprecated
+            // compatible (::/96, minus :: and ::1) and NAT64 (64:ff9b::/96).
+            if ip.to_ipv4_mapped().is_some()
+                || (s[..6] == [0; 6] && !ip.is_loopback() && !ip.is_unspecified())
+                || s[..6] == [0x64, 0xff9b, 0, 0, 0, 0]
+            {
+                return is_private_or_loopback(IpAddr::V4(low_v4()));
+            }
+            // 6to4 (2002::/16) carries the IPv4 in segments 1–2.
+            if s[0] == 0x2002 {
+                let v4 = std::net::Ipv4Addr::from((u32::from(s[1]) << 16) | u32::from(s[2]));
                 return is_private_or_loopback(IpAddr::V4(v4));
             }
             ip.is_loopback()
                 || ip.is_unique_local()
                 || ip.is_unicast_link_local()
                 || ip.is_unspecified()
+                || (s[0] & 0xffc0) == 0xfec0 // fec0::/10 deprecated site-local
         }
     }
 }
@@ -267,6 +294,14 @@ mod tests {
             "192.0.0.8",
             "198.18.0.1",
             "240.0.0.1",
+            "0.1.2.3",
+            "::127.0.0.1",
+            "::10.0.0.1",
+            "64:ff9b::a9fe:a9fe",
+            "2002:7f00:1::",
+            "2002:a00:1::1",
+            "fec0::1",
+            "feff::1",
         ] {
             assert!(
                 is_private_or_loopback(ip.parse().unwrap()),
@@ -276,6 +311,34 @@ mod tests {
         assert!(!is_private_or_loopback("8.8.8.8".parse().unwrap()));
         assert!(!is_private_or_loopback("100.128.0.1".parse().unwrap()));
         assert!(!is_private_or_loopback("198.20.0.1".parse().unwrap()));
+        assert!(!is_private_or_loopback("2606:4700::1111".parse().unwrap()));
+        assert!(!is_private_or_loopback("64:ff9b::808:808".parse().unwrap()));
+        assert!(!is_private_or_loopback("2002:808:808::".parse().unwrap()));
+    }
+
+    /// TC-237: a redirect may not downgrade https → http (absolute or scheme-relative
+    /// stays https); http → https and same-scheme relative hops are allowed.
+    #[test]
+    fn next_hop_rejects_https_downgrade() {
+        let https = Url::parse("https://a.example/x/1.json").unwrap();
+        assert!(next_hop(&https, "http://b.example/img.png").is_err());
+        assert_eq!(
+            next_hop(&https, "//b.example/i").unwrap().as_str(),
+            "https://b.example/i"
+        );
+        assert_eq!(
+            next_hop(&https, "2.png").unwrap().as_str(),
+            "https://a.example/x/2.png"
+        );
+        let http = Url::parse("http://a.example/").unwrap();
+        assert_eq!(
+            next_hop(&http, "https://b.example/").unwrap().scheme(),
+            "https"
+        );
+        assert_eq!(
+            next_hop(&http, "http://b.example/").unwrap().scheme(),
+            "http"
+        );
     }
 
     #[test]

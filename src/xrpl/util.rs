@@ -8,10 +8,23 @@ pub(crate) fn next_backoff_secs(current: u64) -> u64 {
     }
 }
 
-/// Strip control characters (and cap length) from remote-supplied text before it is put
-/// in an error report or printed by the CLI, so a hostile node cannot inject escape sequences.
+/// Strip control, bidi-override and invisible format characters (and cap length) from
+/// remote-supplied text, so a hostile node cannot inject escape sequences or visually
+/// reorder / hide text (Trojan Source style) in the TUI, error reports or CLI output.
+pub(crate) fn sanitize_text(s: &str, max_chars: usize) -> String {
+    s.chars()
+        .filter(|&c| {
+            !c.is_control()
+                && !matches!(c,
+                    '\u{061C}' | '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}'
+                    | '\u{2060}'..='\u{2064}' | '\u{2066}'..='\u{206F}' | '\u{FEFF}')
+        })
+        .take(max_chars)
+        .collect()
+}
+
 pub(crate) fn sanitize_remote(s: &str) -> String {
-    s.chars().filter(|c| !c.is_control()).take(512).collect()
+    sanitize_text(s, 512)
 }
 
 fn json_node_at<'a>(value: &'a Value, path: &[&str]) -> &'a Value {
@@ -72,5 +85,20 @@ mod tests {
         let non_numeric = json!({"a": "foo"});
         assert_eq!(json_u32(&non_numeric, &["a"]), 0);
         assert_eq!(json_u32(&non_numeric, &["x"]), 0);
+    }
+
+    /// TC-236: remote text loses controls, bidi overrides and zero-width format chars
+    /// (Trojan Source), keeps ordinary Unicode, and is capped by chars not bytes.
+    #[test]
+    fn sanitize_text_strips_controls_bidi_and_format_chars() {
+        assert_eq!(sanitize_text("ab\u{1b}c\nd", 10), "abcd");
+        assert_eq!(
+            sanitize_text(
+                "tes\u{202E}SSECCUS\u{2066}x\u{2069}\u{200B}\u{FEFF}\u{061C}",
+                64
+            ),
+            "tesSSECCUSx"
+        );
+        assert_eq!(sanitize_text("あいうえお", 3), "あいう");
     }
 }

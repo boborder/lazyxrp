@@ -42,7 +42,7 @@ XRPL エコシステム（開発者・ユーザー双方）で人気の CLI/TUI 
 
 ## Next (次期)
 
-中期 #1–#8 はすべて済み（0.4.0–0.4.2）。長期は F-01 AccountDelete（0.5.0）と Watch / Operate 分離（0.6.0）が済み。残り（Action エラー型・row cache・パネル内キー設定化）は完了条件が未定義のため着手前に査定。
+中期 #1–#8 はすべて済み（0.4.0–0.4.2）。長期は F-01 AccountDelete（0.5.0）と Watch / Operate 分離（0.6.0）が済み。監査 run-2 の残り 5 件（https→http redirect・IPv6 埋め込み IPv4 / `fec0::/10` SSRF・bidi / 書式文字・tx 時刻 overflow・`install.sh` https 限定）は `[Unreleased]` で修正（TC-236–238）。残り（Action エラー型・row cache・パネル内キー設定化）は完了条件が未定義のため着手前に査定。
 
 ## Short-term (短期) — 0.3.0 公開後の残務
 

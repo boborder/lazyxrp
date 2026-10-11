@@ -31,13 +31,13 @@ Watch mode uses **four top-level tabs** (jump with `1`–`4`):
 
 ```bash
 # Latest release (default: ~/.local/bin)
-curl -fsSL https://raw.githubusercontent.com/boborder/lazyxrp/main/install.sh | bash
+curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/boborder/lazyxrp/main/install.sh | bash
 
 # Authenticated install if GitHub API rate-limits anonymous calls
 # curl -fsSL ... | env GITHUB_TOKEN=ghp_... bash
 
 # Custom install directory
-curl -fsSL https://raw.githubusercontent.com/boborder/lazyxrp/main/install.sh | INSTALL_DIR=/usr/local/bin bash
+curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/boborder/lazyxrp/main/install.sh | INSTALL_DIR=/usr/local/bin bash
 
 # crates.io
 cargo install lazyxrp

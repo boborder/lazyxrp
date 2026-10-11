@@ -109,6 +109,9 @@ cargo deny check
 | TC-233 | P1 | `src/components/panels/wallet.rs` | AccountDelete composer: `s` never queues directly — invalid destination flashes, valid one opens `DELETE` type-to-confirm; Esc keeps the destination; partial word refused; `DELETE` + Enter queues the trimmed destination |
 | TC-234 | P1 | `src/lib.rs` | `--watch -x <write>` (send / offer-cancel / offer-create / amm-deposit / amm-withdraw / account-delete) refused before any RPC; reads, faucet and the TUI path still resolve |
 | TC-235 | P1 | `src/lib.rs` | `enter_watch_mode` drops seed, mnemonic (plaintext + secret) and Flare EVM key from `Config`, returns the key's address (None without a key) |
+| TC-236 | P1 | `src/xrpl/util.rs` | `sanitize_text` (TUI server panel + `sanitize_remote` CLI/error text) strips controls, bidi overrides (`U+202A–202E`, `U+2066–2069`, `U+061C`) and zero-width format chars; ordinary Unicode kept, cap counts chars |
+| TC-237 | P1 | `src/xrpl/nft_image.rs` | Redirect hop https → http refused (NFT image + `xrp-ledger.toml`); scheme-relative / relative hops stay https; http → https allowed. SSRF table adds `::a.b.c.d`, NAT64, 6to4, `fec0::/10`, `0.0.0.0/8` (public NAT64 / 6to4 still allowed) |
+| TC-238 | P2 | `src/components/shared/tx_detail/mod.rs` | Ripple-epoch time from a tx field saturates instead of overflowing; `u64::MAX` renders the `----` placeholder |
 | TC-104 | P1 | `src/xrpl/parse.rs`, `src/components/shared/fps.rs` | account_tx marker survives parsing; tick-rate label refreshes after 1s |
 | TC-105 | P2 | `src/xrpl/client.rs` | Local HTTP 429 retried before success |
 | TC-106 | P1 | `src/xrpl/submit.rs`, `src/app.rs` | Submit failure emits error + account resync; user actions mark dirty |

@@ -21,7 +21,8 @@ PARTIAL_RP_DEST=""
 # ── Configuration ────────────────────────────────────────────────────────────
 INSTALLER_VERSION="2.2"
 UA="lazyxrp-installer/${INSTALLER_VERSION}"
-CURL_RETRY=(--retry 3 --retry-delay 1 --connect-timeout 15 --max-time 300)
+# https only, including every redirect hop (curl's default redirect set also allows http/ftp).
+CURL_RETRY=(--proto '=https' --proto-redir '=https' --retry 3 --retry-delay 1 --connect-timeout 15 --max-time 300)
 REPO="boborder/lazyxrp"
 BIN_NAME="lazyxrp"
 
@@ -44,7 +45,7 @@ lazyxrp installer — https://github.com/boborder/lazyxrp
 Installs lazyxrp (and links `rp` when possible) to ~/.local/bin by default.
 
 Quick start:
-  curl -fsSL https://raw.githubusercontent.com/boborder/lazyxrp/main/install.sh | bash
+  curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/boborder/lazyxrp/main/install.sh | bash
   ./install.sh                              # local clone: build or download
   ./install.sh -q --method binary           # CI / non-interactive binary install
 

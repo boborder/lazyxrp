@@ -24,4 +24,5 @@ pub use poll::start_poll_task;
 pub use toml::fetch_xrpl_toml_with_meta;
 pub(crate) use types::RIPPLE_EPOCH_UNIX;
 pub use types::*;
+pub(crate) use util::sanitize_text;
 pub use ws::start_ws_task;

@@ -55,7 +55,7 @@ Risks without a matching S entry (e.g. R-006 mainnet guard bypass, R-008 RPC 429
 
 ## 2026-08-06 再レビュー対応
 
-- **S-012 NFT外部URIのDNS SSRF**: 修正済み。`src/xrpl/nft_image.rs` は各URIのDNS応答を全件検査し、private/loopback/link-local/unique-local に加え unspecified (`0.0.0.0`)・broadcast・IPv4-mapped IPv6 (`::ffff:` 形) も拒否する。自動redirectを無効化し、redirectごとに解決・検査・接続先固定を行う (上限6ホップ・4 MiB — TC-146/147)。
+- **S-012 NFT外部URIのDNS SSRF**: 修正済み。`src/xrpl/nft_image.rs` は各URIのDNS応答を全件検査し、private/loopback/link-local/unique-local に加え unspecified (`0.0.0.0`)・`0.0.0.0/8`・broadcast・site-local `fec0::/10`、IPv6 に埋め込まれた IPv4（mapped `::ffff:`・compatible `::a.b.c.d`・NAT64 `64:ff9b::/96`・6to4 `2002::/16`）も中身の IPv4 で判定して拒否する。自動redirectを無効化し、redirectごとに解決・検査・接続先固定を行う (上限6ホップ・4 MiB — TC-146/147)。https → http の redirect は拒否（TC-237）。
 - **S-013 NFT metadata再帰DoS**: 修正済み。metadata探索に深さ32・ノード数10,000の上限を設けた。レスポンス上限4 MiBも維持。
 - **S-014 ウォレット同時送信**: 修正済み。poll task内の `account_info → simulate → sign → submit` を `PollContext.submit_lock` で直列化。blind retryは追加していない。submit失敗後は次操作でaccount_infoを再取得する。
 - **S-015 insecure RPCでの署名**: 修正済み。署名seed保持中に `http://` または `ws://` endpointを使用すると起動を拒否する。読み取り専用利用はseed未設定時に限り許可。
@@ -74,9 +74,9 @@ Risks without a matching S entry (e.g. R-006 mainnet guard bypass, R-008 RPC 429
 - **`--watch`（閲覧専用起動、2026-10-11、TC-234–235）**: `lib::enter_watch_mode` が起動直後に `Config` から全鍵（seed / mnemonic の平文欄と secret 欄、`flare_evm_key`）を消し、アドレスだけを表示用に残す。TUI は Wallet（composer・鍵生成）を出さず、poll task に credential が渡らない。`-x` の署名系サブコマンドは RPC 前に拒否。
 - **クラッシュ系**: 遠隔文字列のバイトスライス（`short_hex` / tx hash / path address）を文字単位に、Flare の `U256::to::<T>()` を `saturating_to` / `try_into` に、`ripple_path_find` のソートを `f64::total_cmp`（非有限値は末尾）に変更。panic hook は `process::exit(1)` のため、これらはすべて遠隔入力で TUI を終了させ得た。
 - **RPC 本文上限**: 16 MiB を `Content-Length` 事前検査に加えて chunk 読み込み中にも強制。
-- **CLI 出力の制御文字**: `error_message` / `engine_result(_message)` / tx hash を `util::sanitize_remote` で制御文字除去。
+- **リモート文字列の制御・不可視文字**: `error_message` / `engine_result(_message)` / tx hash（`util::sanitize_remote`）と Server パネルの host / version（`sanitize_text`）から制御文字・bidi override・zero-width 書式文字を除去（TC-236）。
 - **S-003**: 警告は `Config::new()`（`logging::init` より前）で出るため `tracing` ではなく `eprintln!`。
-- **`install.sh`**: GitHub token を curl `-K -`(stdin) / wget `--config`(fd) 経由にして argv から除去。想定外文字を含む token は無視。
+- **`install.sh`**: GitHub token を curl `-K -`(stdin) / wget `--config`(fd) 経由にして argv から除去。想定外文字を含む token は無視。curl は `--proto '=https' --proto-redir '=https'`（redirect 先も https のみ）、README のワンライナーも `--proto '=https' --tlsv1.2`。wget フォールバックは scheme 制限なし（`--https-only` は再帰時のみ有効）。
 - **`cd.yml`**: `cargo package --locked`（token なし）で検証ビルドし、token 付きは `cargo publish --locked --no-verify`。
 
 調査して**修正しなかった**もの（同一オペレーター内の操作 / ハードニング）: Ctrl-N 後のネットワーク表示と接続先のずれ、config の keybindings からの Action 束縛、URL に入れた provider token のログ出力、dUNL 署名未検証（表示専用）、NFT デコードの寸法上限、CD の ref/environment 制約（GitHub 側 ruleset で担保）。二重送信は 2026-10-11 に対応（TUI: 同一 params の write は結果 Ok/Err 到着まで拒否、TC-228）。

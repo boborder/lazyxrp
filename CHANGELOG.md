@@ -4,6 +4,13 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ## [Unreleased]
 
+### Security
+
+- NFT image / `xrp-ledger.toml` fetches: a redirect from https to http is refused; the private-address guard now also rejects IPv4 hidden in IPv6 (IPv4-compatible `::a.b.c.d`, NAT64 `64:ff9b::/96`, 6to4 `2002::/16`), deprecated site-local `fec0::/10` and `0.0.0.0/8`.
+- Text from RPC nodes (server host / version, CLI error and engine messages) has bidi-override and zero-width format characters stripped as well as control characters, so it cannot visually reorder or hide text.
+- Transaction detail: an absurd `date` / time field no longer overflows (debug panic, wrapped date in release); it shows the `----` placeholder.
+- `install.sh` and the README one-liner download over https only (`--proto '=https'`, also for every redirect hop).
+
 ## [0.6.1] - 2026-10-11
 
 ### Fixed

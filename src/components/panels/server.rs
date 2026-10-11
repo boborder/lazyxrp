@@ -256,11 +256,11 @@ impl Component for ServerPanel {
             .map(|s| fmt::group_digits_u64(u64::from(s.ledger_index)))
             .unwrap_or_else(|| "-".to_string());
         let host = server_info
-            .map(|s| fmt::sanitize_display(&s.hostid, 64))
+            .map(|s| crate::xrpl::sanitize_text(&s.hostid, 64))
             .filter(|s| !s.is_empty())
             .unwrap_or_else(|| "-".to_string());
         let version = server_info
-            .map(|s| fmt::sanitize_display(&s.build_version, 64))
+            .map(|s| crate::xrpl::sanitize_text(&s.build_version, 64))
             .filter(|v| !v.is_empty())
             .unwrap_or_else(|| "-".to_string());
         let fee = self
