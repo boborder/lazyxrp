@@ -106,6 +106,8 @@ cargo deny check
 | TC-229 | P2 | `src/xrpl/client.rs` | `account_offers` follows `marker` across pages (local JSON-RPC) until none is returned |
 | TC-230 | P1 | `src/xrpl/client.rs` | `simulate` request carries no JSON nulls (Direct Mint memo built by xrpl-rust has `MemoFormat: null`; rippled rejects it) |
 | TC-231 | P1 | `src/flare.rs` | C3 `executeDirectMinting` selector = deployed `0x78d0299e` (`IXRPPayment.Proof`); a real Coston2 DA `{response, proof}` answer decodes (and its `{data, merkleProof}` alias encodes identically); malformed / old hex-`response` shape rejected |
+| TC-232 | P1 | `src/xrpl/submit.rs` | AccountDelete (local JSON-RPC): an X-address destination's tag reaches simulate and the signed blob; the blob carries the simulate-chosen fee (owner reserve), not a base fee. Mainnet without `--yes` refused (TC-088 table) |
+| TC-233 | P1 | `src/components/panels/wallet.rs` | AccountDelete composer: `s` never queues directly — invalid destination flashes, valid one opens `DELETE` type-to-confirm; Esc keeps the destination; partial word refused; `DELETE` + Enter queues the trimmed destination |
 | TC-104 | P1 | `src/xrpl/parse.rs`, `src/components/shared/fps.rs` | account_tx marker survives parsing; tick-rate label refreshes after 1s |
 | TC-105 | P2 | `src/xrpl/client.rs` | Local HTTP 429 retried before success |
 | TC-106 | P1 | `src/xrpl/submit.rs`, `src/app.rs` | Submit failure emits error + account resync; user actions mark dirty |
@@ -279,6 +281,14 @@ cargo deny check
 | 5 XRP payment with a 48-byte memo (executor = ours, throwaway xrpl.js) → proof (verifier `prepareRequest` with the Flare-published testnet key, `FdcHub.requestAttestation`, DA `proof-by-request-round`; throwaway viem script) → TUI `7` C3 | `executeDirectMinting` succeeded; FXRP 9.8 → 14.7 (4.9 = 5 − 0.1 min fee; executor fee to ourselves) | XRPL `C0FC83E57C37BC4782B48E4CB4EB0123829137B52A4C1CC8B6F57E38B548AE6A`, Flare `0x1460dc9ae36bbe58beb4a8fd1a6d6bd358d4fd3f5a315583646cd31d111e5f02` |
 
 Before the fix, C3 called a selector the contract does not have (`0x548cddd4`, `bytes data`); the deployed one is `0x78d0299e` (decoded `IXRPPayment.Response`) → TC-231.
+
+**AccountDelete (manual, 2026-10-11, testnet):** two fresh `-x faucet` accounts (funded at ledger 21,447,697), destination = account B `rLo2…dnJ`.
+
+| Step | Result | Hash |
+|------|--------|------|
+| CLI, 12 min after funding, dest = self / dest = B | `simulate temDST_IS_SRC` / `simulate tecTOO_SOON` (nothing signed) | — |
+| TUI composer `x`, X-address of B with tag 777 → `DELETE` | `tesSUCCESS` at ledger 21,447,957; tx has `DestinationTag: 777`, `Fee: 200000` (owner reserve, filled by simulate). Wallet panel then shows "account not found on this network" | `1A92B4DF3AF48E11359443FF5F2A7EF0A5C96DD3A912A0717A07D9E6882958AE` |
+| CLI `-x account-delete <B>` | `Validated: tesSUCCESS`; `-x account` on the deleted address → `Account not found` | `6B596EBA18F7BF35C6D8C04E78D79F90E2040A1B9E5E6FBEC2882DB62A9E421E` |
 
 **2026-10-10 CLI (manual, 0.3.0)** — testnet rippled 3.4.1, faucet account `r15nczQYUNYBVLws8M9zkFE2SaSkU4kkk`. All hashes `validated: true`, `tesSUCCESS`.
 

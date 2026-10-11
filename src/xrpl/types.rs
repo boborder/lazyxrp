@@ -692,6 +692,13 @@ pub struct AmmWithdrawSubmitParams {
     pub skip_mainnet_prompt: bool,
 }
 
+/// AccountDelete: classic or X-address (tag from the X-address). Irreversible.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AccountDeleteSubmitParams {
+    pub destination: String,
+    pub skip_mainnet_prompt: bool,
+}
+
 /// OfferCreate from the Wallet form.
 /// taker_gets / taker_pays use compact spec: `"XRP:100"` (XRP) or `"USD:rIssuer:10"` (IOU).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -753,6 +760,8 @@ pub enum PollCommand {
     EscrowCloseSubmit(EscrowCloseSubmitParams),
     AmmDepositSubmit(AmmDepositSubmitParams),
     AmmWithdrawSubmit(AmmWithdrawSubmitParams),
+    /// Sign and submit AccountDelete (wallet form, after typing DELETE).
+    AccountDeleteSubmit(AccountDeleteSubmitParams),
     OfferCreateSubmit(OfferCreateSubmitParams),
     /// `account_offers` for the signing account (Wallet OfferCancel composer).
     AccountOffers,

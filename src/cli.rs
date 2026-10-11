@@ -214,6 +214,12 @@ pub enum Cmd {
         #[arg(long)]
         lp: Option<String>,
     },
+    /// Delete the signing account; the remaining XRP goes to DESTINATION (simulate first; mainnet
+    /// needs --yes). Irreversible. Use an X-address to set a destination tag
+    AccountDelete {
+        /// Classic address, or X-address carrying a destination tag
+        destination: String,
+    },
     /// Fund an account from the public faucet (testnet/devnet only). No ADDRESS: generate a fresh
     /// wallet locally (seed printed once, never saved or sent).
     Faucet {
@@ -240,6 +246,7 @@ impl Cmd {
             Cmd::OfferCreate { .. } => "offer-create",
             Cmd::AmmDeposit { .. } => "amm-deposit",
             Cmd::AmmWithdraw { .. } => "amm-withdraw",
+            Cmd::AccountDelete { .. } => "account-delete",
             Cmd::Faucet { .. } => "faucet",
         }
     }

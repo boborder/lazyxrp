@@ -58,6 +58,9 @@ fn validate_cmd_account_and_issuer_addresses(cmd: &Cmd) -> color_eyre::Result<()
             asset2,
             lp.as_deref().unwrap_or_default(),
         )?,
+        Cmd::AccountDelete { destination } => {
+            super::address::resolve_payment_destination(destination.trim())?;
+        }
         Cmd::Faucet {
             address: Some(address),
         } => {
@@ -496,6 +499,63 @@ pub async fn execute_cli_command(
                 &asset,
                 &asset2,
                 lp_in,
+                tx_sequence,
+                fee_drops,
+                last_ledger_sequence,
+            )?;
+            let summary = rpc.submit_signed_tx(&blob).await?;
+            println!("Transaction Hash: {}", summary.hash);
+            if wait {
+                let result = wait_validated(
+                    &rpc,
+                    &summary.hash,
+                    last_ledger_sequence,
+                    WAIT_POLL,
+                    WAIT_LIMIT,
+                )
+                .await?;
+                println!("Validated: {result}");
+            }
+        }
+        Cmd::AccountDelete { destination } => {
+            use super::address::{ensure_xaddress_matches_network, resolve_payment_destination};
+
+            let resolved = resolve_payment_destination(destination.trim())?;
+            ensure_xaddress_matches_network(&resolved, network)?;
+            let (dest, tag) = (resolved.classic, resolved.destination_tag);
+            let wallet = cli_wallet(signing_credential.as_ref())?;
+            let account = wallet.classic_address.clone();
+            rpc.ensure_network(network).await?;
+            let account_info = rpc.account_info(&account).await?;
+            let tx_json = signing::build_account_delete_tx_json_for_simulate(
+                &account,
+                &dest,
+                tag,
+                account_info.sequence,
+            )?;
+            let sim = super::submit::simulate_tx_requiring_tes_success(&rpc, tx_json)
+                .await
+                .map_err(|e| color_eyre::eyre::eyre!(e))?;
+            let (tx_sequence, fee_drops, last_ledger_sequence) =
+                signing::sequence_fee_ledger_from_simulate(&sim.tx_json)?;
+            let tag_note = tag.map_or(String::new(), |t| format!(" (tag {t})"));
+            println!(
+                "AccountDelete {account} → {dest}{tag_note}: balance {} XRP minus fee {fee_drops} drops goes to the destination; the account is removed (irreversible)",
+                account_info.balance_xrp
+            );
+            if !prompt_production_confirmation(
+                &format!("AccountDelete {account} (remaining XRP to {dest}{tag_note})"),
+                network,
+                yes,
+            ) {
+                println!("Transaction cancelled by user.");
+                return Ok(());
+            }
+            let blob = signing::create_and_sign_account_delete(
+                &wallet,
+                &account,
+                &dest,
+                tag,
                 tx_sequence,
                 fee_drops,
                 last_ledger_sequence,

@@ -926,6 +926,10 @@ async fn drive_poll_loop(
                         let _guard = submit_lock.lock().await;
                         submit_amm_withdraw_transaction(&*rpc_cell.read().await, &network, params, &action_tx, signing_credential).await;
                     }
+                    PollCommand::AccountDeleteSubmit(params) => {
+                        let _guard = submit_lock.lock().await;
+                        submit_account_delete_transaction(&*rpc_cell.read().await, &network, params, &action_tx, signing_credential).await;
+                    }
                 }
             }
         }

@@ -643,6 +643,9 @@ impl App {
                 Action::AmmWithdrawSubmit(params) => {
                     self.send_poll(PollCommand::AmmWithdrawSubmit(params.clone()))
                 }
+                Action::AccountDeleteSubmit(params) => {
+                    self.send_poll(PollCommand::AccountDeleteSubmit(params.clone()))
+                }
                 Action::OfferCreateSubmit(params) => {
                     self.send_poll(PollCommand::OfferCreateSubmit(params.clone()))
                 }

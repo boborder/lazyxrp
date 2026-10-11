@@ -43,10 +43,14 @@ enum SubmitFlash {
     Error(String),
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 enum DangerResume {
     AccountSet,
     SetRegularKey,
+    /// Destination restored on Esc, submitted on confirm.
+    AccountDelete {
+        destination: String,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -54,7 +58,7 @@ enum ComposerPhase {
     PickKind {
         selected: usize,
     },
-    /// Type-to-confirm for destructive AccountSet / SetRegularKey clear.
+    /// Type-to-confirm for destructive AccountSet / SetRegularKey clear / AccountDelete.
     DangerConfirm {
         expected: String,
         hint: String,
@@ -128,9 +132,13 @@ enum ComposerPhase {
         asset2: String,
         lp_amount: String,
     },
+    /// AccountDelete: classic or X-address; submit goes through DangerConfirm (DELETE).
+    AccountDelete {
+        destination: String,
+    },
 }
 
-const COMPOSER_KIND_COUNT: usize = 12;
+const COMPOSER_KIND_COUNT: usize = 13;
 
 #[path = "wallet_composer.rs"]
 mod composer;
@@ -294,6 +302,19 @@ impl Component for WalletPanel {
             }
             Action::SetRegularKeySubmitErr(msg) => {
                 self.set_submit_flash(SubmitFlash::Error(format!("SetRegularKey · {msg}")));
+            }
+            Action::AccountDeleteSubmitOk(hash) => {
+                self.set_submit_flash(SubmitFlash::Success(format!(
+                    "AccountDelete submitted · {hash}"
+                )));
+                if matches!(&self.composer, Some(ComposerPhase::AccountDelete { .. })) {
+                    self.composer = None;
+                    self.is_form_editing = false;
+                    return Ok(Some(Action::SetKeymapSuppression(false)));
+                }
+            }
+            Action::AccountDeleteSubmitErr(msg) => {
+                self.set_submit_flash(SubmitFlash::Error(format!("AccountDelete · {msg}")));
             }
             Action::OfferCreateSubmitOk(hash) => {
                 self.set_submit_flash(SubmitFlash::Success(format!(
@@ -491,7 +512,8 @@ impl Component for WalletPanel {
         }
 
         let Some(account) = self.account.as_ref() else {
-            render_empty(frame, area, "Wallet", "None", self.is_focused);
+            let msg = "account not found on this network (unfunded or deleted)";
+            render_empty(frame, area, "Wallet", msg, self.is_focused);
             return Ok(());
         };
 
@@ -619,12 +641,15 @@ impl WalletPanel {
                     None
                 }
                 Some(ComposerPhase::DangerConfirm { resume, .. }) => {
-                    let resume = *resume;
+                    let resume = resume.clone();
                     self.composer = Some(match resume {
                         DangerResume::AccountSet => ComposerPhase::AccountSet,
                         DangerResume::SetRegularKey => ComposerPhase::SetRegularKey {
                             regular_key: String::new(),
                         },
+                        DangerResume::AccountDelete { destination } => {
+                            ComposerPhase::AccountDelete { destination }
+                        }
                     });
                     self.is_form_editing = false;
                     None
@@ -671,6 +696,10 @@ impl WalletPanel {
                 }
                 Some(ComposerPhase::AmmWithdraw { .. }) => {
                     self.composer = Some(ComposerPhase::PickKind { selected: 11 });
+                    None
+                }
+                Some(ComposerPhase::AccountDelete { .. }) => {
+                    self.composer = Some(ComposerPhase::PickKind { selected: 12 });
                     None
                 }
             });
@@ -747,7 +776,7 @@ impl WalletPanel {
                 }
                 KeyCode::Enter => {
                     if typed.as_str() == expected {
-                        let resume = *resume;
+                        let resume = resume.clone();
                         self.is_form_editing = false;
                         let action = match resume {
                             DangerResume::AccountSet => {
@@ -759,6 +788,11 @@ impl WalletPanel {
                                     regular_key: String::new(),
                                 });
                                 Some(self.queue_submit_set_regular_key_confirmed())
+                            }
+                            DangerResume::AccountDelete { destination } => {
+                                let action = self.account_delete_action(destination.clone());
+                                self.composer = Some(ComposerPhase::AccountDelete { destination });
+                                Some(action)
                             }
                         };
                         return Ok(action);
@@ -777,6 +811,12 @@ impl WalletPanel {
             && submit_shortcut(&key, self.is_form_editing)
         {
             return Ok(self.queue_submit_set_regular_key());
+        }
+
+        if matches!(&self.composer, Some(ComposerPhase::AccountDelete { .. }))
+            && submit_shortcut(&key, self.is_form_editing)
+        {
+            return Ok(self.queue_submit_account_delete());
         }
 
         if matches!(&self.composer, Some(ComposerPhase::OfferCreate { .. }))
@@ -920,6 +960,7 @@ impl WalletPanel {
                     1 => asset2,
                     _ => lp_amount,
                 }),
+                Some(ComposerPhase::AccountDelete { destination }) => Some(destination),
                 _ => None,
             };
             if let Some(target) = target {
@@ -1066,6 +1107,7 @@ impl WalletPanel {
                         9 => return Ok(Some(self.open_escrows_composer())),
                         10 => self.open_amm_deposit_composer(),
                         11 => self.open_amm_withdraw_composer(),
+                        12 => self.open_account_delete_composer(),
                         _ => {}
                     },
                     KeyCode::Char('1') => self.open_payment_composer(),
@@ -1080,6 +1122,7 @@ impl WalletPanel {
                     KeyCode::Char('0') => return Ok(Some(self.open_escrows_composer())),
                     KeyCode::Char('d') => self.open_amm_deposit_composer(),
                     KeyCode::Char('w') => self.open_amm_withdraw_composer(),
+                    KeyCode::Char('x') => self.open_account_delete_composer(),
                     _ => {}
                 }
                 return Ok(None);
@@ -1094,7 +1137,7 @@ impl WalletPanel {
                 }
                 return Ok(None);
             }
-            Some(ComposerPhase::SetRegularKey { .. }) => {
+            Some(ComposerPhase::SetRegularKey { .. } | ComposerPhase::AccountDelete { .. }) => {
                 if Self::composer_edit_toggle_nav(&mut self.is_form_editing, &key) {
                     return Ok(Some(Action::SetKeymapSuppression(true)));
                 }
@@ -1226,6 +1269,7 @@ fn is_write_submit(action: &Action) -> bool {
             | Action::OfferCreateSubmit(_)
             | Action::OfferCancelSubmit(_)
             | Action::TrustSetSubmit(_)
+            | Action::AccountDeleteSubmit(_)
     )
 }
 
@@ -1254,6 +1298,8 @@ fn is_write_result(action: &Action) -> bool {
             | Action::OfferCancelSubmitErr(_)
             | Action::TrustSetSubmitOk(_)
             | Action::TrustSetSubmitErr(_)
+            | Action::AccountDeleteSubmitOk(_)
+            | Action::AccountDeleteSubmitErr(_)
     )
 }
 
@@ -1579,6 +1625,57 @@ mod tests {
             panel.composer,
             Some(ComposerPhase::PickKind { selected: 8 })
         ));
+    }
+
+    /// TC-233: AccountDelete is irreversible — `x` opens it; `s` never queues directly but asks
+    /// for DELETE (bad destination: flash only). Esc keeps the destination; a partial word is
+    /// refused; DELETE + Enter queues the trimmed destination.
+    #[test]
+    fn account_delete_requires_typed_delete_and_keeps_destination() {
+        const DEST: &str = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh";
+        let enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::empty());
+        let mut panel = WalletPanel::new(true);
+        panel.is_focused = true;
+        panel.composer = Some(ComposerPhase::PickKind { selected: 0 });
+        assert!(panel.on_key_event(key('x')).expect("open").is_none());
+
+        assert!(panel.on_key_event(key('s')).expect("s").is_none());
+        assert!(matches!(
+            &panel.composer,
+            Some(ComposerPhase::AccountDelete { .. })
+        ));
+        if let Some(ComposerPhase::AccountDelete { destination }) = &mut panel.composer {
+            *destination = format!(" {DEST} ");
+        }
+        assert!(panel.on_key_event(key('s')).expect("s").is_none());
+        assert!(matches!(
+            &panel.composer,
+            Some(ComposerPhase::DangerConfirm { expected, .. }) if expected == "DELETE"
+        ));
+        // DangerConfirm opens in typing mode: first Esc leaves typing, second leaves the modal.
+        for _ in 0..2 {
+            panel
+                .on_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::empty()))
+                .expect("esc");
+        }
+        assert!(matches!(
+            &panel.composer,
+            Some(ComposerPhase::AccountDelete { destination }) if destination.trim() == DEST
+        ));
+
+        panel.on_key_event(key('s')).expect("s");
+        for c in "DELET".chars() {
+            panel.on_key_event(key(c)).expect("type");
+        }
+        assert!(panel.on_key_event(enter).expect("partial").is_none());
+        panel.on_key_event(key('E')).expect("type");
+        match panel.on_key_event(enter).expect("confirm") {
+            Some(Action::AccountDeleteSubmit(p)) => {
+                assert_eq!(p.destination, DEST);
+                assert!(p.skip_mainnet_prompt);
+            }
+            other => panic!("expected AccountDeleteSubmit, got {other:?}"),
+        }
     }
 
     /// TC-220: Escrow finish/cancel composer — `0` fetches escrows; `s` finishes, `c` cancels the

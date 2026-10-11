@@ -4,6 +4,14 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ## [Unreleased]
 
+### Added
+
+- AccountDelete: Wallet composer `x` and `-x account-delete <DEST>`. Deletes the signing account and sends the remaining XRP to the destination (X-address for a destination tag). The TUI always asks you to type `DELETE` first; the CLI follows the usual simulate → `--yes` on mainnet flow. The fee (owner reserve) comes from simulate.
+
+### Changed
+
+- Wallet panel: an address with no account on the connected network (unfunded or deleted) now says so instead of showing "None".
+
 ## [0.4.2] - 2026-10-11
 
 ### Fixed

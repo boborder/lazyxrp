@@ -5,10 +5,10 @@ use strum::Display;
 use crate::{
     network::Network,
     xrpl::{
-        AccountOfferRow, AccountSetSubmitParams, AccountSummary, AggregatePrice,
-        AmmDepositSubmitParams, AmmSummary, AmmWithdrawSubmitParams, BookMidPrice, DunlSummary,
-        EscrowCloseSubmitParams, EscrowCreateSubmitParams, EscrowRow, FeeSummary, FlareFeedPrice,
-        FlareWalletSummary, FxrpDirectMintInfo, FxrpDirectMintPaymentParams,
+        AccountDeleteSubmitParams, AccountOfferRow, AccountSetSubmitParams, AccountSummary,
+        AggregatePrice, AmmDepositSubmitParams, AmmSummary, AmmWithdrawSubmitParams, BookMidPrice,
+        DunlSummary, EscrowCloseSubmitParams, EscrowCreateSubmitParams, EscrowRow, FeeSummary,
+        FlareFeedPrice, FlareWalletSummary, FxrpDirectMintInfo, FxrpDirectMintPaymentParams,
         FxrpExecuteDirectMintParams, GeneratedWalletKeys, LedgerObjectRow, NftRow,
         OfferCancelSubmitParams, OfferCreateSubmitParams, OfferRow, PathFindSnapshot,
         PaymentQuoteParams, PaymentSubmitParams, ServerInfoSummary, SetRegularKeySubmitParams,
@@ -162,6 +162,10 @@ pub enum Action {
     AmmWithdrawSubmit(AmmWithdrawSubmitParams),
     AmmSubmitOk(String),
     AmmSubmitErr(String),
+    /// Queue AccountDelete sign+submit from Wallet composer (poll task; after typing DELETE).
+    AccountDeleteSubmit(AccountDeleteSubmitParams),
+    AccountDeleteSubmitOk(String),
+    AccountDeleteSubmitErr(String),
     /// Queue OfferCreate sign+submit from Wallet form (poll task).
     OfferCreateSubmit(OfferCreateSubmitParams),
     OfferCreateSubmitOk(String),

@@ -10,11 +10,11 @@ use crate::signing;
 
 use super::client::{RPC_TIMEOUT, RpcClient, xrp_to_drops};
 use super::types::{
-    AccountSetSubmitParams, AmmDepositSubmitParams, AmmWithdrawSubmitParams,
-    EscrowCloseSubmitParams, EscrowCreateSubmitParams, FxrpDirectMintPaymentParams,
-    FxrpExecuteDirectMintParams, OfferCancelSubmitParams, OfferCreateSubmitParams,
-    PaymentQuoteParams, PaymentSubmitParams, SetRegularKeySubmitParams, SimulateResult,
-    TrustSetSubmitParams,
+    AccountDeleteSubmitParams, AccountSetSubmitParams, AmmDepositSubmitParams,
+    AmmWithdrawSubmitParams, EscrowCloseSubmitParams, EscrowCreateSubmitParams,
+    FxrpDirectMintPaymentParams, FxrpExecuteDirectMintParams, OfferCancelSubmitParams,
+    OfferCreateSubmitParams, PaymentQuoteParams, PaymentSubmitParams, SetRegularKeySubmitParams,
+    SimulateResult, TrustSetSubmitParams,
 };
 use serde_json::Value;
 use tracing::warn;
@@ -888,6 +888,75 @@ pub(super) async fn submit_amm_withdraw_transaction(
                 Action::RefreshAccount,
                 Action::RefreshTxHistory,
                 Action::RefreshLines,
+            ]
+        },
+    )
+    .await;
+}
+
+/// AccountDelete: the remaining XRP goes to `destination` (X-address tag kept); simulate
+/// catches `tecTOO_SOON` / `tecHAS_OBLIGATIONS` / `tecDST_TAG_NEEDED` / `temDST_IS_SRC`.
+pub(super) async fn submit_account_delete_transaction(
+    rpc: &RpcClient,
+    network: &Network,
+    params: AccountDeleteSubmitParams,
+    action_tx: &UnboundedSender<Action>,
+    signing_credential: Option<&crate::signing::SigningCredential>,
+) {
+    let submit_err = Action::AccountDeleteSubmitErr;
+    let Some(destination) = unwrap_or_submit_err(
+        resolve_payment_destination(params.destination.trim()).and_then(|d| {
+            ensure_xaddress_matches_network(&d, network)?;
+            Ok(d)
+        }),
+        submit_err,
+        action_tx,
+    ) else {
+        return;
+    };
+    let Some(wallet) = resolve_submit_wallet(
+        network,
+        params.skip_mainnet_prompt,
+        signing_credential,
+        "production network: restart lazyxrp with --yes to allow AccountDelete writes",
+        submit_err,
+        action_tx,
+    ) else {
+        return;
+    };
+    let account = wallet.classic_address.clone();
+    let Some(account_info) =
+        fetch_account_summary_for_submit(rpc, network, &account, submit_err, action_tx).await
+    else {
+        return;
+    };
+
+    simulate_then_finalize(
+        rpc,
+        action_tx,
+        submit_err,
+        signing::build_account_delete_tx_json_for_simulate(
+            &account,
+            &destination.classic,
+            destination.destination_tag,
+            account_info.sequence,
+        ),
+        |sequence, fee_drops, last_ledger_sequence| {
+            signing::create_and_sign_account_delete(
+                &wallet,
+                &account,
+                &destination.classic,
+                destination.destination_tag,
+                sequence,
+                fee_drops,
+                last_ledger_sequence,
+            )
+        },
+        |hash| {
+            vec![
+                Action::AccountDeleteSubmitOk(hash),
+                Action::RefreshAccount,
+                Action::RefreshTxHistory,
             ]
         },
     )
@@ -1785,6 +1854,91 @@ mod tests {
         );
     }
 
+    /// TC-232: AccountDelete — an X-address destination's tag reaches simulate and the signed
+    /// blob, and the blob carries the node-chosen fee (owner reserve, not the base fee).
+    #[tokio::test]
+    async fn account_delete_against_local_rpc_keeps_xaddress_tag_and_node_fee() {
+        use crate::test_support::rpc_mock;
+        use secrecy::SecretString;
+        use serde_json::{Value, json};
+        use tokio::net::TcpListener;
+        use xrpl::core::addresscodec::classic_address_to_xaddress;
+        use xrpl::core::binarycodec::decode;
+
+        const GENESIS: &str = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh";
+        fn result_for(method: &str) -> Value {
+            match method {
+                "server_info" => json!({"info": {"network_id": 1, "validated_ledger": {"seq": 1}}}),
+                "account_info" => json!({"account_data": {
+                    "Account": GENESIS, "Balance": "100000000", "Sequence": 7,
+                    "OwnerCount": 0, "Flags": 0
+                }}),
+                "simulate" => json!({
+                    "engine_result": "tesSUCCESS",
+                    "ledger_index": 80_000_000,
+                    "tx_json": {"Sequence": 7, "Fee": "200000"}
+                }),
+                "submit" => json!({"engine_result": "tesSUCCESS", "tx_json": {"hash": "ABC"}}),
+                other => panic!("unexpected local RPC method: {other}"),
+            }
+        }
+
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.expect("bind");
+        let url = format!("http://{}", listener.local_addr().expect("addr"));
+        let server = tokio::spawn(rpc_mock::serve(listener, 4, result_for));
+        let rpc = RpcClient::connect(&url).expect("rpc client");
+        let credential = crate::signing::credential_from_secrets(
+            Some(&SecretString::from("sEdSkooMk31MeTjbHVE7vLvgCpEMAdB")),
+            None,
+        )
+        .expect("credential")
+        .expect("seed set");
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let xaddr = classic_address_to_xaddress(GENESIS, Some(12345), true).expect("xaddr");
+
+        submit_account_delete_transaction(
+            &rpc,
+            &Network::Testnet,
+            AccountDeleteSubmitParams {
+                destination: format!(" {xaddr} "),
+                skip_mainnet_prompt: false,
+            },
+            &tx,
+            Some(&credential),
+        )
+        .await;
+        let got = rx.try_recv();
+        assert!(
+            matches!(&got, Ok(Action::AccountDeleteSubmitOk(m)) if m.ends_with("fee 200000 drops")),
+            "{got:?}"
+        );
+
+        let requests = server.await.expect("join").expect("serve");
+        assert_eq!(
+            rpc_mock::methods(&requests),
+            ["server_info", "account_info", "simulate", "submit"]
+        );
+        let sim = &requests[2]["params"][0]["tx_json"];
+        assert_eq!(
+            (
+                &sim["TransactionType"],
+                &sim["Destination"],
+                &sim["DestinationTag"]
+            ),
+            (&json!("AccountDelete"), &json!(GENESIS), &json!(12345))
+        );
+        let blob = requests[3]["params"][0]["tx_blob"].as_str().expect("blob");
+        let signed = decode(blob).expect("decode");
+        assert_eq!(
+            (
+                &signed["Destination"],
+                &signed["DestinationTag"],
+                &signed["Fee"]
+            ),
+            (&json!(GENESIS), &json!(12345), &json!("200000"))
+        );
+    }
+
     /// TC-088 (R-006): every sign+submit path rejects production writes without `--yes`
     /// before any RPC/signing.
     #[tokio::test]
@@ -2022,6 +2176,24 @@ mod tests {
                     })
                 }),
             ),
+            (
+                "account_delete",
+                Box::new(|rpc, tx| {
+                    Box::pin(async move {
+                        submit_account_delete_transaction(
+                            rpc,
+                            &Network::Mainnet,
+                            AccountDeleteSubmitParams {
+                                destination: GENESIS.into(),
+                                skip_mainnet_prompt: false,
+                            },
+                            &tx,
+                            None,
+                        )
+                        .await;
+                    })
+                }),
+            ),
         ];
 
         for (name, run) in cases {
@@ -2040,7 +2212,8 @@ mod tests {
                 | Action::FxrpDirectMintPaymentSubmitErr(m)
                 | Action::EscrowCreateSubmitErr(m)
                 | Action::EscrowCloseSubmitErr(m)
-                | Action::AmmSubmitErr(m) => m,
+                | Action::AmmSubmitErr(m)
+                | Action::AccountDeleteSubmitErr(m) => m,
                 other => panic!("{name}: expected submit error, got {other:?}"),
             };
             assert!(msg.contains("production network"), "{name}: {msg}");

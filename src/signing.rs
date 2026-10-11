@@ -1210,6 +1210,63 @@ pub fn create_and_sign_amm_withdraw(
     sign_blob!(tx, wallet)
 }
 
+fn account_delete_tx<'a>(
+    account: &str,
+    destination: &str,
+    destination_tag: Option<u32>,
+    sequence: u32,
+    fee_lls: Option<(u32, u32)>,
+) -> xrpl::models::transactions::account_delete::AccountDelete<'a> {
+    use xrpl::models::XRPAmount;
+    use xrpl::models::transactions::account_delete::AccountDelete;
+    use xrpl::models::transactions::{CommonFields, TransactionType};
+
+    let mut common = CommonFields::from_account(account.to_string())
+        .with_transaction_type(TransactionType::AccountDelete)
+        .with_sequence(sequence);
+    if let Some((fee, lls)) = fee_lls {
+        common = common
+            .with_fee(XRPAmount::from(fee.to_string()))
+            .with_last_ledger_sequence(lls);
+    }
+    AccountDelete {
+        common_fields: common,
+        destination: destination.to_string().into(),
+        destination_tag,
+        credential_ids: None,
+    }
+}
+
+/// Unsigned AccountDelete JSON for `simulate` (the node fills the owner-reserve `Fee`).
+pub fn build_account_delete_tx_json_for_simulate(
+    account: &str,
+    destination: &str,
+    destination_tag: Option<u32>,
+    sequence: u32,
+) -> color_eyre::Result<Value> {
+    let tx = account_delete_tx(account, destination, destination_tag, sequence, None);
+    serde_json::to_value(&tx).map_err(|e| color_eyre::eyre::eyre!("account_delete tx_json: {e}"))
+}
+
+pub fn create_and_sign_account_delete(
+    wallet: &xrpl::wallet::Wallet,
+    account: &str,
+    destination: &str,
+    destination_tag: Option<u32>,
+    sequence: u32,
+    fee_drops: u32,
+    last_ledger_sequence: u32,
+) -> color_eyre::Result<String> {
+    let mut tx = account_delete_tx(
+        account,
+        destination,
+        destination_tag,
+        sequence,
+        Some((fee_drops, last_ledger_sequence)),
+    );
+    sign_blob!(tx, wallet)
+}
+
 /// Create and sign a TrustSet transaction, returning the tx_blob hex (v1: limit only).
 #[allow(clippy::too_many_arguments)]
 pub fn create_and_sign_trust_set(

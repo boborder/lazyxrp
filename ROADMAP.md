@@ -4,7 +4,7 @@
 
 **Planning view**. Requirements → [`requirements.md`](docs/requirements.md) · System behavior → [`architecture.md`](docs/architecture.md) · UI/UX → [`DESIGN.md`](DESIGN.md).
 
-**Current version:** `Cargo.toml` → 0.4.2（2026-10-11 公開: GitHub Release + crates.io）
+**Current version:** `Cargo.toml` → 0.5.0（2026-10-11 公開: GitHub Release + crates.io）
 **Last updated:** 2026-10-11
 
 **Priority:** P0 = リリースブロッカー · P1 = 次マイルストーンの主目標 · P2 = 計画済み · P3 = 余力・需要次第。各 horizon 内は上から着手。
@@ -19,7 +19,7 @@ XRPL エコシステム（開発者・ユーザー双方）で人気の CLI/TUI 
 
 | Item | Priority | 前提 / Notes |
 |------|----------|--------------|
-| TX surface completion — F-01 AccountDelete | Later | 0.4.0 の EscrowCreate / Finish / Cancel と同じ submit 追加パターン（F-03 EscrowFinish/Cancel は 0.4.0 に前倒し済み） |
+| ~~TX surface completion — F-01 AccountDelete~~ **済**（0.5.0、2026-10-11） | — | composer `x`（`DELETE` 入力の確認必須）+ `-x account-delete`。Fee（owner reserve）は simulate 由来。TC-232–233、testnet で TUI（X-address tag 付き）/ CLI を validated |
 | Watch / Operate UI 分離 | Later | `docs/security.md` 構造課題。署名系 UI を閲覧専用起動から外す |
 | Action エラー型移行（`String` → 型付き） | Later | `docs/security.md` 構造課題。UI 文言の SSOT 化と同時に |
 | Global row cache (A1) — render perf at scale | Later | 計測で問題が出たら |
@@ -42,7 +42,7 @@ XRPL エコシステム（開発者・ユーザー双方）で人気の CLI/TUI 
 
 ## Next (次期)
 
-中期 #1–#8 はすべて済み（0.4.0–0.4.2 で公開）。次の着手候補は長期（上の表）から査定。
+中期 #1–#8 はすべて済み（0.4.0–0.4.2）。長期 F-01 AccountDelete は 0.5.0。残りの長期項目は着手前に査定（完了条件が未定義）。
 
 ## Short-term (短期) — 0.3.0 公開後の残務
 
@@ -75,6 +75,7 @@ XRPL エコシステム（開発者・ユーザー双方）で人気の CLI/TUI 
 | write 基盤整理 + TX 拡張 | 0.4.0 | **Done** (2026-10-11) | `poll.rs` → `submit.rs` 分割、EscrowCreate / Finish / Cancel（TUI）、AMM Deposit / Withdraw（TUI + `-x`）、`amm_info` 実応答形の parse 修正（TC-015）。testnet で Escrow ×4・AMM ×4 validated |
 | 中期 #5–#7 | 0.4.1 | **Done** (2026-10-11) | WS イベント未認識の修正（TC-227）、二重送信ガード（TC-228）、`account_offers` paging（TC-229） |
 | C3 testnet smoke | 0.4.2 | **Done** (2026-10-11) | FXRP C2 simulate の null 拒否修正（TC-230）、C3 ABI 修正（TC-231）。XRPL testnet + Coston2 で mint / execute を確認 |
+| AccountDelete | 0.5.0 | **Done** (2026-10-11) | 長期 F-01。composer `x` + `-x account-delete`、TUI は `DELETE` 入力の確認必須（TC-232–233）。testnet で TUI / CLI validated |
 
 ## Task tracking
 

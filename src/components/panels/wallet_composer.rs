@@ -4,7 +4,7 @@ use ratatui::{
     layout::Rect,
     style::Style,
     text::{Line, Span},
-    widgets::{Clear, Paragraph},
+    widgets::{Clear, Paragraph, Wrap},
 };
 
 use super::{ComposerPhase, DangerResume, SubmitFlash, WalletPanel};
@@ -12,10 +12,11 @@ use crate::{
     action::Action,
     components::shared::{fmt, theme},
     xrpl::{
-        AccountSetSubmitParams, AmmDepositSubmitParams, AmmWithdrawSubmitParams,
-        EscrowCloseSubmitParams, EscrowCreateSubmitParams, FxrpDirectMintPaymentParams,
-        FxrpExecuteDirectMintParams, OfferCancelSubmitParams, OfferCreateSubmitParams,
-        PaymentQuoteParams, PaymentSubmitParams, SetRegularKeySubmitParams, TrustSetSubmitParams,
+        AccountDeleteSubmitParams, AccountSetSubmitParams, AmmDepositSubmitParams,
+        AmmWithdrawSubmitParams, EscrowCloseSubmitParams, EscrowCreateSubmitParams,
+        FxrpDirectMintPaymentParams, FxrpExecuteDirectMintParams, OfferCancelSubmitParams,
+        OfferCreateSubmitParams, PaymentQuoteParams, PaymentSubmitParams,
+        SetRegularKeySubmitParams, TrustSetSubmitParams,
     },
 };
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -304,6 +305,36 @@ impl WalletPanel {
                 None
             }
         }
+    }
+
+    pub(super) fn open_account_delete_composer(&mut self) {
+        self.composer = Some(ComposerPhase::AccountDelete {
+            destination: String::new(),
+        });
+        self.is_form_editing = false;
+    }
+
+    /// Irreversible: a valid destination goes to type-to-confirm (DELETE), never straight out.
+    pub(super) fn queue_submit_account_delete(&mut self) -> Option<Action> {
+        let Some(ComposerPhase::AccountDelete { destination }) = &self.composer else {
+            return None;
+        };
+        let destination = destination.trim().to_string();
+        if let Err(e) = crate::xrpl::resolve_payment_destination(&destination) {
+            self.set_submit_flash(SubmitFlash::Error(format!("AccountDelete · {e}")));
+            return None;
+        }
+        let hint =
+            format!("Irreversible: deletes this account; all remaining XRP goes to {destination}");
+        self.enter_danger_confirm("DELETE", &hint, DangerResume::AccountDelete { destination });
+        None
+    }
+
+    pub(super) fn account_delete_action(&self, destination: String) -> Action {
+        Action::AccountDeleteSubmit(AccountDeleteSubmitParams {
+            destination,
+            skip_mainnet_prompt: self.skip_mainnet_prompt,
+        })
     }
 
     pub(super) fn open_escrows_composer(&mut self) -> Action {
@@ -680,6 +711,7 @@ impl WalletPanel {
             ComposerPhase::Escrows { .. } => 18u16,
             ComposerPhase::AmmDeposit { .. } => 14u16,
             ComposerPhase::AmmWithdraw { .. } => 15u16,
+            ComposerPhase::AccountDelete { .. } => 12u16,
         }
         .min(area.height.saturating_sub(2))
         .max(8);
@@ -710,6 +742,7 @@ impl WalletPanel {
             ComposerPhase::Escrows { .. } => "Finish / cancel escrow",
             ComposerPhase::AmmDeposit { .. } => "AMM deposit (two-asset)",
             ComposerPhase::AmmWithdraw { .. } => "AMM withdraw",
+            ComposerPhase::AccountDelete { .. } => "Delete account",
         };
         let block = theme::panel_block(inner_title, true);
         let inner = block.inner(popup);
@@ -736,12 +769,12 @@ impl WalletPanel {
                     ])
                 };
                 // Hint first and scroll to keep the selection visible: the wallet panel is often
-                // shorter than the 12-row list.
+                // shorter than the 13-row list.
                 let first_row = 2u16;
                 let scroll = (first_row + *selected as u16 + 1).saturating_sub(inner.height);
                 Paragraph::new(vec![
                     Line::from(Span::styled(
-                        "1–9, 0, d, w jump · j/k move · Enter open · Esc close",
+                        "1–9, 0, d, w, x jump · j/k move · Enter open · Esc close",
                         theme::secondary_style(),
                     )),
                     Line::from(""),
@@ -757,6 +790,7 @@ impl WalletPanel {
                     row(9, "0", "Escrows", "finish / cancel escrow"),
                     row(10, "d", "AMMDeposit", "add both assets to a pool"),
                     row(11, "w", "AMMWithdraw", "return LP tokens"),
+                    row(12, "x", "AccountDelete", "delete account, send rest ⚠"),
                 ])
                 .scroll((scroll, 0))
             }
@@ -792,6 +826,7 @@ impl WalletPanel {
                         Span::styled("cancel", theme::dim_style()),
                     ]),
                 ])
+                .wrap(Wrap { trim: false })
             }
             ComposerPhase::AccountSet => {
                 let net_note = if self.network.is_production() && !self.skip_mainnet_prompt {
@@ -998,6 +1033,40 @@ impl WalletPanel {
                     )),
                 ])
             }
+            ComposerPhase::AccountDelete { destination } => Paragraph::new(vec![
+                Line::from(Span::styled(
+                    format!(
+                        "WARNING: deletes this account (irreversible){}",
+                        self.production_note()
+                    ),
+                    theme::error_style(),
+                )),
+                Line::from(Span::styled(
+                    "Remaining XRP → Destination · fee = owner reserve",
+                    theme::dim_style(),
+                )),
+                Line::from(Span::styled(
+                    "Needs no owned objects and ≥256 ledgers of age",
+                    theme::dim_style(),
+                )),
+                Line::from(""),
+                Line::from(vec![
+                    Span::styled("Destination ", label_style),
+                    Span::styled(
+                        if destination.is_empty() {
+                            "(classic, or X-address for a tag)"
+                        } else {
+                            destination.as_str()
+                        },
+                        value_style,
+                    ),
+                ]),
+                Line::from(""),
+                Line::from(Span::styled(
+                    "e edit · Ctrl+S / S submit (then type DELETE) · Esc back",
+                    theme::secondary_style(),
+                )),
+            ]),
             ComposerPhase::OfferCreate {
                 row,
                 taker_gets,
