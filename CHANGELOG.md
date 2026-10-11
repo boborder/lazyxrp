@@ -4,6 +4,8 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-10-11
+
 ### Added
 
 - AccountDelete: Wallet composer `x` and `-x account-delete <DEST>`. Deletes the signing account and sends the remaining XRP to the destination (X-address for a destination tag). The TUI always asks you to type `DELETE` first; the CLI follows the usual simulate → `--yes` on mainnet flow. The fee (owner reserve) comes from simulate.
@@ -103,7 +105,8 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 See [GitHub Releases](https://github.com/boborder/lazyxrp/releases) for 0.2.11 and older.
 
-[Unreleased]: https://github.com/boborder/lazyxrp/compare/v0.4.2...HEAD
+[Unreleased]: https://github.com/boborder/lazyxrp/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/boborder/lazyxrp/compare/v0.4.1...v0.5.0
 [0.4.2]: https://github.com/boborder/lazyxrp/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/boborder/lazyxrp/compare/v0.3.0...v0.4.1
 [0.4.0]: https://github.com/boborder/lazyxrp/compare/v0.3.0...v0.4.0
