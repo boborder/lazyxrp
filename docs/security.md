@@ -22,6 +22,7 @@ This file tracks **security review findings (S-xxx)** and **implementation risks
 | S-014 | R-013 | Wallet submit serialization |
 | S-015 | R-014 | Plaintext RPC with signing seed |
 | S-016 | R-015 | Issuer and financial input validation |
+| S-017 | R-016 | Endpoint network ≠ selected network at signing time |
 
 Risks without a matching S entry (e.g. R-006 mainnet guard bypass, R-008 RPC 429) are tracked in the R-xxx table below and [`test.md`](test.md).
 
@@ -44,6 +45,13 @@ Risks without a matching S entry (e.g. R-006 mainnet guard bypass, R-008 RPC 429
 | R-013 | S-014 | Concurrent wallet submissions (**mitigated in poll task**) |
 | R-014 | S-015 | Insecure RPC with signing seed (**mitigated**) |
 | R-015 | S-016 | Unvalidated issuer and financial numeric inputs (**mitigated**) |
+| R-016 | S-017 | Custom endpoint on another network bypasses the `--yes` guard (**mitigated**, TC-203) |
+
+## 2026-10-11 endpoint network 照合（S-017）
+
+- **症状**: `XRPL_RPC_SERVER`（`rpc_server` / `--server` も同じ）は `--network` の preset より優先される（architecture §6.2）。mainnet endpoint を指したまま `--network testnet` で書き込むと、`--yes` ガードは testnet 扱いで外れ、署名・送信は mainnet に届いた。TUI の `<Ctrl-n>` も custom endpoint を維持するため同様。testnet E2E 中に、mainnet の `XRPL_RPC_SERVER` と `XRPL_SEED` が設定されたシェルで判明（その回の write は env を外していたため mainnet 送信なし）。
+- **対応**: 署名前に `RpcClient::ensure_network` で `server_info.network_id` を照合し、不一致なら拒否（mainnet は `network_id` 省略 = 0、testnet 1、devnet 2、xahau 21337、xahau-test 21338 を実測）。TUI 全 XRPL submit（`fetch_account_summary_for_submit`）と CLI `send` / `offer-create` / `offer-cancel` が対象。write 1 回につき RPC が 1 回増える。
+- **残余**: 照合はノードの自己申告。悪意ある endpoint は偽の `network_id` を返せる（信頼する endpoint を選ぶ前提は S-015 と同じ）。
 
 ## 2026-08-06 再レビュー対応
 
@@ -59,8 +67,8 @@ Risks without a matching S entry (e.g. R-006 mainnet guard bypass, R-008 RPC 429
 
 ソース監査のリード 14 件を順に確認し、以下を修正した（各テストは `docs/test.md` TC-175〜TC-182）。
 
-- **Flare RPC の https 強制・署名拒否（S-015 拡張, R-014）**: `FLARE_RPC_URL` / preset を `lib.rs::check_flare_endpoint` で検査。`http://` は `--allow-insecure-rpc` なしで拒否、署名資格情報（XRPL seed/mnemonic または Flare EVM 鍵 env）がある場合は `--allow-insecure-rpc` でも拒否。Core Vault 宛先は Flare RPC の応答が決めるため、**信頼する Flare RPC provider を選ぶこと**が残余リスク（宛先はコンポーザに表示される。固定/照合は未実装）。
-- **node が決める Fee の上限**: `signing::MAX_NODE_FEE_DROPS`（2 XRP = 2,000,000 drops）超の Fee は署名前に拒否（TUI・CLI `Send` とも simulate 経路の `sequence_fee_ledger_from_simulate`）。CLI `Send` も simulate 必須（`tesSUCCESS` 以外は署名しない）、残高検査は `amount + fee` を `checked_add`。Sequence/LastLedgerSequence の整合検査は未実装。
+- **Flare RPC の https 強制・署名拒否（S-015 拡張, R-014）**: `FLARE_RPC_URL` / preset を `lib.rs::check_flare_endpoint` で検査。`http://` は `--allow-insecure-rpc` なしで拒否、署名資格情報（XRPL seed/mnemonic または Flare EVM 鍵 env）がある場合は `--allow-insecure-rpc` でも拒否。Core Vault 宛先は Flare RPC の応答が決めるため、2026-10-11 から `[flare.fassets] expected_core_vault`（運用者が別経路で確認した値）と一致しない限り署名しない（`flare::check_core_vault`、未設定も拒否）。
+- **node が決める Fee の上限**: `signing::MAX_NODE_FEE_DROPS`（2 XRP = 2,000,000 drops）超の Fee は署名前に拒否（TUI・CLI `Send` とも simulate 経路の `sequence_fee_ledger_from_simulate`）。CLI `Send` も simulate 必須（`tesSUCCESS` 以外は署名しない）、残高検査は `amount + fee` を `checked_add`。2026-10-11 から `parse::check_simulate_bound_to_request`（全 write 共通の `simulate_tx_requiring_tes_success` 内）で simulate の `Sequence` が要求値と一致し、`LastLedgerSequence` が `ledger_index` 超 `+ MAX_LLS_WINDOW`（100）以下であることも検査。残余: 窓は node 自身の `ledger_index` 基準。
 - **`xrp-ledger.toml` 取得（S-012 拡張）**: manifest 由来 domain を ASCII ホスト名のみに制限し、NFT 画像と同じガード付き取得（`nft_image::fetch_via`/`client_for_url`: private/loopback 拒否・DNS 固定・redirect 毎に再検査・上限 1 MiB）を使用。
 - **proxy 経由の DNS 固定バイパス**: `client_for_url` は `.no_proxy()`。**HTTP(S)_PROXY 必須環境では NFT 画像・toml の取得は失敗する（fail closed）**。private 判定に `100.64/10`・`192.0.0.0/24`・`198.18/15`・`240/4` を追加。
 - **クラッシュ系**: 遠隔文字列のバイトスライス（`short_hex` / tx hash / path address）を文字単位に、Flare の `U256::to::<T>()` を `saturating_to` / `try_into` に、`ripple_path_find` のソートを `f64::total_cmp`（非有限値は末尾）に変更。panic hook は `process::exit(1)` のため、これらはすべて遠隔入力で TUI を終了させ得た。
@@ -71,6 +79,17 @@ Risks without a matching S entry (e.g. R-006 mainnet guard bypass, R-008 RPC 429
 - **`cd.yml`**: `cargo package --locked`（token なし）で検証ビルドし、token 付きは `cargo publish --locked --no-verify`。
 
 調査して**修正しなかった**もの（同一オペレーター内の操作 / ハードニング）: 二重送信、Ctrl-N 後のネットワーク表示と接続先のずれ、config の keybindings からの Action 束縛、URL に入れた provider token のログ出力、dUNL 署名未検証（表示専用）、NFT デコードの寸法上限、CD の ref/environment 制約（GitHub 側 ruleset で担保）。
+
+## 2026-10-11 セキュリティ監査 run-2 対応
+
+needs_validation 4 件（Core Vault ピン・simulate の Sequence/LLS 照合・quote 通貨照合・simulate 文字列 sanitize）は上の 2026-10-04 節の各項目を参照。以下はハードニング（テストは `docs/test.md` TC-204〜214）。
+
+- **env 秘密の取得**: `XRPL_SEED` / `XRPL_MNEMONIC` / Flare EVM 鍵（`[flare.fassets] evm_key_env`）は `config::take_secret_env` が `Config::new()` で一度だけ取り出して env から削除し、`SecretString` で保持、生 `String` は zeroize。EVM 鍵は以前は初回 execute 時に poll task 内で `remove_var`（他タスクが env を読み得る実行中の変更、失敗すると以後使えない）だった。**Linux では `remove_var` は初期 `/proc/self/environ` を書き換えない**（同一 uid からは読める）— env 渡しは引き続き同一ユーザー内の信頼が前提。
+- **JSON-RPC client は redirect を追わない**（`client.rs`、`Policy::none()`）。https endpoint が `submit`（署名済み blob）を http へ 307 で転送する経路を閉じた。system proxy はそのまま（運用者の選択）。faucet も redirect なし + 本文上限。
+- **tx hash** は署名済み blob からローカル計算。TUI の送信結果に simulate 由来の署名済み Fee を表示（`<hash> · fee N drops`）。署名前の確認ステップは無い（Fee 上限 `MAX_NODE_FEE_DROPS` が担保）。
+- **入力**: `XRP:100:tail` のような余分な区切りを拒否。CLI `send` も composer と同じ `validate_payment_input`（amount > 0 など）を RPC 前に実行。
+- **鍵生成 popup / faucet**: `GeneratedWalletKeys` は drop 時に seed を zeroize、popup は Network 切替で消去（表示は「Esc to dismiss · g new key」）。`-x faucet` の生成 seed は `SecretString`。
+- **CI**: 全 GitHub Actions をコミット SHA に固定（タグはコメント）、`cross@0.2.5` 固定。
 
 ## 2026-09-17 依存監査対応（`mise run audit` 整備で検知）
 

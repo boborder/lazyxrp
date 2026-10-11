@@ -115,6 +115,7 @@ FLARE_FEEDS env > FLARE_FEED env > DEFAULT_FLARE_FEEDS (`FXRP/USD`, `FLR/USD`, `
 | `[flare] display` | `full` / `compact` / `off` | Overview / Market の Flare パネル密度 |
 | `[flare.wallet] address` | `0x…` EVM | Overview 読み取りパネル（invalid hex は起動失敗） |
 | `[flare.fassets] execute` | `true` / `false` | C3 `executeDirectMinting` ゲート（既定 `false`） |
+| `[flare.fassets] expected_core_vault` | XRPL `r…` | C2 Direct Mint の Core Vault 宛先ピン。Flare RPC が返す値と一致しなければ署名拒否（未設定も拒否）。別経路で確認した値を設定 |
 
 TUI セッション内の `<Ctrl-n>` は `Network::next_network()` で XRPL ネットワークを循環（config へは永続化しない）。`xahau` は mainnet 同等の書き込みガード（`--yes`）対象。
 

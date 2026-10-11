@@ -49,17 +49,19 @@ pub(crate) fn parse_simulate_result(value: &Value) -> color_eyre::Result<Simulat
         .cloned()
         .ok_or_else(|| color_eyre::eyre::eyre!("simulate response missing tx_json"))?;
 
-    let engine_result = result
-        .get("engine_result")
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_string();
+    let engine_result = super::util::sanitize_remote(
+        result
+            .get("engine_result")
+            .and_then(Value::as_str)
+            .unwrap_or_default(),
+    );
 
-    let engine_result_message = result
-        .get("engine_result_message")
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_string();
+    let engine_result_message = super::util::sanitize_remote(
+        result
+            .get("engine_result_message")
+            .and_then(Value::as_str)
+            .unwrap_or_default(),
+    );
 
     let ledger_index = json_u32(value, &["result", "ledger_index"]);
     // rippled 3.x simulate autofills Fee/Sequence but not LastLedgerSequence; same +20 window as xrpl.js autofill.
@@ -75,6 +77,35 @@ pub(crate) fn parse_simulate_result(value: &Value) -> color_eyre::Result<Simulat
         ledger_index,
         meta,
     })
+}
+
+/// Widest `LastLedgerSequence` window (ledgers past simulate's `ledger_index`) we sign: ~5 min.
+pub(crate) const MAX_LLS_WINDOW: u64 = 100;
+
+/// Bind node-filled signing fields to the request: `Sequence` must be the one we asked for and
+/// `LastLedgerSequence` must expire within [`MAX_LLS_WINDOW`] ledgers of simulate's `ledger_index`.
+// ponytail: window is relative to the node's own ledger_index; a separate validated-ledger read would close that.
+pub(crate) fn check_simulate_bound_to_request(
+    request_tx: &Value,
+    sim: &SimulateResult,
+) -> Result<(), String> {
+    let num = |v: &Value, k: &str| {
+        v.get(k)
+            .and_then(|x| x.as_u64().or_else(|| x.as_str()?.parse().ok()))
+    };
+    let (asked, got) = (num(request_tx, "Sequence"), num(&sim.tx_json, "Sequence"));
+    if asked.is_some() && asked != got {
+        return Err(format!(
+            "refusing to sign: simulate Sequence {got:?} differs from requested {asked:?}"
+        ));
+    }
+    let ledger = u64::from(sim.ledger_index);
+    match num(&sim.tx_json, "LastLedgerSequence") {
+        Some(lls) if ledger > 0 && lls > ledger && lls <= ledger + MAX_LLS_WINDOW => Ok(()),
+        lls => Err(format!(
+            "refusing to sign: LastLedgerSequence {lls:?} outside ledger {ledger} + {MAX_LLS_WINDOW}"
+        )),
+    }
 }
 
 pub(crate) fn parse_ripple_path_find(value: &Value) -> color_eyre::Result<RipplePathFindResult> {
@@ -999,6 +1030,48 @@ mod tests {
         server_filled["result"]["tx_json"]["LastLedgerSequence"] = json!(21_430_170);
         let sim = parse_simulate_result(&server_filled).expect("simulate should parse");
         assert_eq!(sim.tx_json["LastLedgerSequence"], 21_430_170);
+    }
+
+    /// Lead 4: node-supplied simulate result strings are stripped of control chars at parse time.
+    #[test]
+    fn parse_simulate_result_sanitizes_result_strings() {
+        let v = json!({"result": {
+            "engine_result": "tec\u{1b}[2J",
+            "engine_result_message": "bad\u{1b}]52;c;eA==\u{7}",
+            "ledger_index": 10,
+            "tx_json": {"Sequence": 1, "Fee": "10"}
+        }});
+        let sim = parse_simulate_result(&v).expect("simulate should parse");
+        assert!(!sim.engine_result.chars().any(char::is_control));
+        assert!(!sim.engine_result_message.chars().any(char::is_control));
+    }
+
+    /// Lead 3: simulate Sequence must equal the requested one and LastLedgerSequence must sit
+    /// in (ledger_index, ledger_index + MAX_LLS_WINDOW].
+    #[test]
+    fn check_simulate_bound_to_request_rejects_foreign_sequence_and_far_lls() {
+        let sim = |seq: u64, lls: Option<u64>, ledger: u64| {
+            let mut tx = json!({"Sequence": seq, "Fee": "10"});
+            if let Some(l) = lls {
+                tx["LastLedgerSequence"] = json!(l);
+            }
+            parse_simulate_result(&json!({"result": {
+                "engine_result": "tesSUCCESS", "ledger_index": ledger, "tx_json": tx
+            }}))
+            .expect("parse")
+        };
+        let req = json!({"Sequence": 7});
+        assert!(check_simulate_bound_to_request(&req, &sim(7, None, 100)).is_ok());
+        assert!(
+            check_simulate_bound_to_request(&req, &sim(7, Some(100 + MAX_LLS_WINDOW), 100)).is_ok()
+        );
+        let e = check_simulate_bound_to_request(&req, &sim(8, None, 100)).unwrap_err();
+        assert!(e.contains("Sequence"), "{e}");
+        let e =
+            check_simulate_bound_to_request(&req, &sim(7, Some(u32::MAX as u64), 100)).unwrap_err();
+        assert!(e.contains("LastLedgerSequence"), "{e}");
+        assert!(check_simulate_bound_to_request(&req, &sim(7, Some(100), 100)).is_err());
+        assert!(check_simulate_bound_to_request(&req, &sim(7, Some(50), 0)).is_err());
     }
 
     /// TC-071, TC-072: empty account_objects yields no rows; mixed ledger

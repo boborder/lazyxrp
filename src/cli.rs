@@ -39,6 +39,10 @@ pub struct Cli {
     #[arg(long, default_value_t = false)]
     pub yes: bool,
 
+    /// `-x` writes: return right after submit instead of waiting for the validated result
+    #[arg(long, default_value_t = false)]
+    pub no_wait: bool,
+
     /// Remove this executable (and `{name}.bak` next to it) plus resolved config/data dirs. Does not run `cargo uninstall`; see README / `./install.sh --uninstall-help`. Conflicts with subcommands.
     #[arg(long)]
     pub self_uninstall: bool,
@@ -186,6 +190,19 @@ pub enum Cmd {
         /// Offer sequence (`seq` from `offers`)
         sequence: u32,
     },
+    /// Place a DEX offer (simulate first; mainnet needs --yes). Specs: `XRP:drops` or `CUR:issuer:value`
+    OfferCreate {
+        /// What you give (TakerGets), e.g. `XRP:1000000`
+        taker_gets: String,
+        /// What you want (TakerPays), e.g. `USD:rIssuer:1`
+        taker_pays: String,
+    },
+    /// Fund an account from the public faucet (testnet/devnet only). No ADDRESS: generate a fresh
+    /// wallet locally (seed printed once, never saved or sent).
+    Faucet {
+        /// Existing classic address to fund
+        address: Option<String>,
+    },
 }
 
 impl Cmd {
@@ -203,6 +220,8 @@ impl Cmd {
             Cmd::Send { .. } => "send",
             Cmd::Offers { .. } => "offers",
             Cmd::OfferCancel { .. } => "offer-cancel",
+            Cmd::OfferCreate { .. } => "offer-create",
+            Cmd::Faucet { .. } => "faucet",
         }
     }
 }
@@ -251,7 +270,8 @@ mod tests {
         assert!(Cli::try_parse_from(["lazyxrp", "watch"]).is_err());
     }
 
-    /// TC-190: DEX CLI — `offers <ADDR>` and `offer-cancel <SEQ>` parse; non-numeric seq rejected.
+    /// TC-190: DEX CLI — `offers <ADDR>`, `offer-cancel <SEQ>`, `offer-create <GETS> <PAYS>` parse;
+    /// non-numeric seq rejected.
     #[test]
     fn dex_subcommands_parse() {
         let c = Cli::try_parse_from([
@@ -268,6 +288,23 @@ mod tests {
             Some(super::Cmd::OfferCancel { sequence: 42 })
         ));
         assert!(Cli::try_parse_from(["lazyxrp", "-x", "offer-cancel", "abc"]).is_err());
+        let c = Cli::try_parse_from(["lazyxrp", "-x", "offer-create", "XRP:1000000", "USD:rX:1"])
+            .expect("offer-create parses");
+        assert!(matches!(
+            c.command,
+            Some(super::Cmd::OfferCreate { ref taker_gets, ref taker_pays })
+                if taker_gets == "XRP:1000000" && taker_pays == "USD:rX:1"
+        ));
+        let c = Cli::try_parse_from(["lazyxrp", "-x", "faucet"]).expect("bare faucet parses");
+        assert!(matches!(
+            c.command,
+            Some(super::Cmd::Faucet { address: None })
+        ));
+        let c = Cli::try_parse_from(["lazyxrp", "-x", "faucet", "rX"]).expect("faucet ADDR parses");
+        assert!(matches!(
+            c.command,
+            Some(super::Cmd::Faucet { address: Some(_) })
+        ));
     }
 
     #[test]

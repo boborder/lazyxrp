@@ -1,8 +1,13 @@
 # lazyxrp
 
-Terminal UI for the XRP Ledger — monitor accounts, order books, NFTs, trust lines, and AMM pools.
+[![crates.io](https://img.shields.io/crates/v/lazyxrp.svg)](https://crates.io/crates/lazyxrp)
+[![CI](https://github.com/boborder/lazyxrp/actions/workflows/ci.yml/badge.svg)](https://github.com/boborder/lazyxrp/actions/workflows/ci.yml)
+[![MSRV](https://img.shields.io/crates/msrv/lazyxrp.svg)](Cargo.toml)
+[![License: MIT](https://img.shields.io/crates/l/lazyxrp.svg)](LICENSE)
 
-Repository: https://github.com/boborder/lazyxrp
+Terminal UI and script CLI for the XRP Ledger — watch accounts, order books, NFTs, trust lines and AMM pools; sign payments and DEX offers (simulate-first, mainnet guarded).
+
+Repository: https://github.com/boborder/lazyxrp · Changes: [`CHANGELOG.md`](CHANGELOG.md) · Security: [`SECURITY.md`](SECURITY.md)
 
 ## Features
 
@@ -90,6 +95,7 @@ Non-interactive subcommands use **`-x`** (or shell alias **`rc`**):
 lazyxrp -x info
 lazyxrp --network testnet -x account <r-address>
 lazyxrp -x send <r-destination> --amount 10   # requires XRPL_SEED
+lazyxrp --network testnet -x faucet           # fresh testnet wallet (seed printed once, not saved)
 
 # Optional shell alias (not installed by install.sh)
 alias rc='lazyxrp -x'
@@ -111,6 +117,10 @@ rc book --base XRP --quote USD --issuer <r-issuer>
 | `send <DEST> [--amount AMT]` | Send XRP (requires `XRPL_SEED` or `XRPL_MNEMONIC`) |
 | `offers <ADDR>` | Open DEX offers (`seq`, TakerGets, TakerPays; first 200) |
 | `offer-cancel <SEQ>` | Cancel your offer `SEQ` (requires signing key; simulate first; `--yes` on mainnet/xahau) |
+| `offer-create <GETS> <PAYS>` | Place a DEX offer; specs `XRP:drops` or `CUR:issuer:value` (requires signing key; simulate first; `--yes` on mainnet/xahau) |
+| `faucet [ADDR]` | testnet/devnet only: fund `ADDR`, or generate a wallet locally and fund it (seed printed once; only the address is sent) |
+
+Writes (`send`, `offer-create`, `offer-cancel`) wait until the transaction is validated and exit non-zero unless the final result is `tes…` (`--no-wait` returns right after submit). Before signing, the endpoint's `network_id` must match `--network`: a mainnet `XRPL_RPC_SERVER` under `--network testnet` is refused.
 
 **Migrating to 0.3.0:** bare `lazyxrp info` (without `-x`) and `lazyxrp watch` were removed; the bare form exits with an error pointing at `lazyxrp -x info` (use `lazyxrp` with no arguments for the TUI). `send` simulates before signing (same as the TUI), needs `--yes` on mainnet/xahau or an interactive confirmation, and exits non-zero when signing or submission fails.
 

@@ -59,6 +59,19 @@ fn default_flare_evm_key_env() -> String {
     "FLARE_EVM_KEY".to_string()
 }
 
+/// Remove `name` from the environment and return its trimmed value as a secret; the raw
+/// `String` copy is zeroized. Empty / unset → `None`.
+fn take_secret_env(name: &str, trim: fn(&str) -> &str) -> Option<secrecy::SecretString> {
+    use secrecy::zeroize::Zeroize;
+    let mut raw = env::var(name).ok()?;
+    // SAFETY: called only from `Config::new()` before any task that reads the env is spawned.
+    unsafe { env::remove_var(name) };
+    let t = trim(&raw);
+    let secret = (!t.is_empty()).then(|| secrecy::SecretString::from(t.to_string()));
+    raw.zeroize();
+    secret
+}
+
 /// `[flare.fassets]` — Direct Mint execute path (C3). Default off: never Flare-writes.
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 pub struct FlareFassetsConfig {
@@ -68,6 +81,10 @@ pub struct FlareFassetsConfig {
     /// Env var name holding the Flare executor private key (never XRPL seed).
     #[serde(default = "default_flare_evm_key_env")]
     pub evm_key_env: String,
+    /// Core Vault XRPL address the operator verified out of band. FXRP Direct Mint Payments are
+    /// refused unless the Flare RPC answer equals it (the RPC alone is not trusted for funds).
+    #[serde(default)]
+    pub expected_core_vault: Option<String>,
 }
 
 impl Default for FlareFassetsConfig {
@@ -75,6 +92,7 @@ impl Default for FlareFassetsConfig {
         Self {
             execute: false,
             evm_key_env: default_flare_evm_key_env(),
+            expected_core_vault: None,
         }
     }
 }
@@ -135,6 +153,10 @@ pub struct Config {
     pub xrpl: LedgerConfig,
     #[serde(default)]
     pub flare: FlareConfig,
+    /// Flare executor key taken from `[flare.fassets] evm_key_env` by `Config::new()`; the env
+    /// var is removed at startup so no later `remove_var` runs while async tasks read the env.
+    #[serde(skip)]
+    pub flare_evm_key: Option<secrecy::SecretString>,
 }
 
 /// Raw signing config as read from `[xrpl.signing]` in config.toml.
@@ -143,7 +165,7 @@ pub struct Config {
 pub struct RawSigningConfig {
     /// Signing seed (family seed format, e.g. `sXXX...`).
     /// ⚠️  Plain text on disk — prefer the `XRPL_SEED` env var instead.
-    /// After `Config::new()` this is cleared to `None`; use [`secret_seed`] instead.
+    /// After `Config::new()` this is cleared to `None`; use [`Self::secret_seed`] instead.
     #[serde(default)]
     pub seed: Option<String>,
     /// Memory-masked seed (set by `Config::new()` from env/file/CLI).
@@ -379,24 +401,17 @@ impl Config {
             config.xrpl.signing.secret_mnemonic = Some(secrecy::SecretString::from(plain));
         }
 
-        // Merge XRPL_SEED env var into signing config (env var takes priority over file)
-        if let Ok(env_seed) = env::var(crate::signing::SEED_ENV) {
-            // SAFETY: Config::new runs during single-threaded startup before worker threads
-            // observe the environment — clear seed from /proc/self/environ immediately.
-            unsafe { env::remove_var(crate::signing::SEED_ENV) };
-            let t = crate::signing::trim_family_seed(&env_seed);
-            if !t.is_empty() {
-                config.xrpl.signing.secret_seed = Some(secrecy::SecretString::from(t.to_string()));
-            }
+        // Env secrets win over the file. Taken once here, before the poll/UI tasks start; no
+        // later `remove_var` runs while tasks may read the env. On Linux `remove_var` does not
+        // rewrite the initial `/proc/self/environ` block (same-uid readers still see it).
+        if let Some(s) = take_secret_env(crate::signing::SEED_ENV, crate::signing::trim_family_seed)
+        {
+            config.xrpl.signing.secret_seed = Some(s);
         }
-        if let Ok(env_mnemonic) = env::var(crate::signing::MNEMONIC_ENV) {
-            unsafe { env::remove_var(crate::signing::MNEMONIC_ENV) };
-            let t = env_mnemonic.trim();
-            if !t.is_empty() {
-                config.xrpl.signing.secret_mnemonic =
-                    Some(secrecy::SecretString::from(t.to_string()));
-            }
+        if let Some(s) = take_secret_env(crate::signing::MNEMONIC_ENV, str::trim) {
+            config.xrpl.signing.secret_mnemonic = Some(s);
         }
+        config.flare_evm_key = take_secret_env(&config.flare.fassets.evm_key_env, str::trim);
 
         if let Ok(v) = env::var(XRPL_NETWORK_ENV)
             && let Ok(n) = v.parse::<Network>()
@@ -1121,6 +1136,7 @@ rpc_server = "https://from-file.example"
             "LAZYXRP_CONFIG",
             "XDG_CONFIG_HOME",
             crate::signing::SEED_ENV,
+            "FLARE_EVM_KEY",
         ]);
         let toml = r#"[xrpl]
 account = "r3kmLJN5D28dHuH8vZNUZpMC43pEHpaocV"
@@ -1138,6 +1154,7 @@ seed = "sEdFileSeedValueNotReal1234567890"
         _test_env.remove("XDG_CONFIG_HOME");
         _test_env.set("LAZYXRP_CONFIG", root.to_str().unwrap());
         _test_env.set(crate::signing::SEED_ENV, "sEdEnvSeedOverride9876543210");
+        _test_env.set("FLARE_EVM_KEY", " 0xabc ");
         let c = Config::new()?;
         assert_eq!(
             c.xrpl
@@ -1151,6 +1168,12 @@ seed = "sEdFileSeedValueNotReal1234567890"
             c.xrpl.signing.seed.is_none(),
             "plain file seed must be cleared"
         );
+        // Flare executor key is taken at startup (not lazily under the async runtime) and scrubbed.
+        assert_eq!(
+            c.flare_evm_key.as_ref().map(|s| s.expose_secret()),
+            Some("0xabc")
+        );
+        assert!(std::env::var("FLARE_EVM_KEY").is_err());
         Ok(())
     }
 

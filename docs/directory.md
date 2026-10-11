@@ -13,6 +13,8 @@ lazyxrp/
 ├── README.md
 ├── DESIGN.md              # UI/UX SSOT (keys, layout, theme, modals)
 ├── ROADMAP.md             # goal / milestone SSOT (docs/roadmap-log.md: cautions, pivots)
+├── CHANGELOG.md           # user-facing changes per release (Keep a Changelog)
+├── SECURITY.md            # vulnerability reporting + safety model (details: docs/security.md)
 ├── config.json5
 ├── .env.example
 ├── install.sh
@@ -109,13 +111,15 @@ lazyxrp/
 ## 2. ルート直下ファイル
 
 - `Cargo.toml`: クレート定義と依存関係、features 設定。
-- `rust-toolchain.toml`: **CI とローカルで同じ** Rust チャンネル（現状 `stable`）。`.github/workflows/ci.yml` の `dtolnay/rust-toolchain@v1` は入力 `toolchain` にこのファイルの `channel` と同じ文字列を渡す（v1 で必須；`rustfmt` / `clippy` は該当ジョブで `components` 指定）。
+- `rust-toolchain.toml`: **CI とローカルで同じ** Rust チャンネル（現状 `stable`）。`.github/workflows/ci.yml` の `dtolnay/rust-toolchain`（SHA 固定、`# v1`）は入力 `toolchain` にこのファイルの `channel` と同じ文字列を渡す（v1 で必須；`rustfmt` / `clippy` は該当ジョブで `components` 指定）。Actions の SHA 更新は `.github/dependabot.yml`。
 - `config.json5`: キーバインド等の組み込みデフォルト（`src/config.rs` の `include_str!` 対象）。ユーザー設定 `config.toml` とは別物。
 - `Cargo.lock`: 依存の固定バージョン（**バイナリ向けにコミット**。CI は `cargo … --locked`）。
 - `build.rs`: ビルド時の補助処理。
 - `README.md`: 利用者向けの概要と起動手順。
 - `DESIGN.md`: UI/UX SSOT（キー・レイアウト・テーマ）。
 - `ROADMAP.md`: ゴール階層（最終ゴール / 長期 / 中期 / 短期）とマイルストーン（進捗 SSOT）。注意点・進路変更記録は `roadmap-log.md`。
+- `CHANGELOG.md`: 利用者向けの変更履歴（Keep a Changelog）。`[Unreleased]` に追記し、リリース時に版番号へ確定。crates.io パッケージにも同梱。
+- `SECURITY.md`: 脆弱性の報告窓口（GitHub private vulnerability reporting）と安全モデルの要約。詳細と履歴は `docs/security.md`。
 - `.env.example`: `XRPL_*` 環境変数の例（任意。一覧は `docs/tech.md` と実装を参照）。
 - `install.sh`: インタラクティブインストーラ（必須は `curl` **または** `wget`）。プロンプトとメッセージは英語。`--help` で CLI 一覧（`--method cargo|binary`、`--install-rust` / `--no-install-rust`、`--install-mise` / `--no-install-mise`、`-q`）。`CI=1` は `-q` 相当。PATH 未設定時は shell profile へ追記可。リリースアーカイブに `rp` があればそれを入れ、無ければ `rp` → `lazyxrp` symlink。**手動アンインストール**は `--uninstall-help`（`lazyxrp --self-uninstall`、`INSTALL_DIR/rp` 削除など）。
 - `mise.toml`: [mise](https://mise.jdx.dev/) タスク（`install`、`tags`（一覧）、`tag-push`（緊急時の手動タグフォールバック）、`bench` / `bench-fast` / `bench-ci`（ベンチマーク））。公開フロー（CI の `Cargo.toml` version 検知 → auto-tag → CD 公開）の詳細は [`maintenance.md`](maintenance.md)。

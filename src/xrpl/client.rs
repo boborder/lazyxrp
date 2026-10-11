@@ -49,7 +49,7 @@ pub struct RpcClient {
     retry_delay_ms: RetryDelayMsFn,
 }
 
-async fn read_response_text_capped(
+pub(crate) async fn read_response_text_capped(
     mut resp: reqwest::Response,
     label: &str,
 ) -> color_eyre::Result<String> {
@@ -93,7 +93,11 @@ impl RpcClient {
     ) -> color_eyre::Result<Self> {
         Ok(Self {
             client: AsyncJsonRpcClient::connect(rpc_url.parse()?),
-            http: reqwest::Client::builder().http1_only().build()?,
+            // No redirects: an https endpoint must not bounce `submit` (signed blob) elsewhere.
+            http: reqwest::Client::builder()
+                .http1_only()
+                .redirect(reqwest::redirect::Policy::none())
+                .build()?,
             retry_delay_ms,
         })
     }
@@ -150,6 +154,18 @@ impl RpcClient {
     pub async fn server_info(&self) -> color_eyre::Result<ServerInfoSummary> {
         let value = self.rpc_value("server_info", json!({})).await?;
         Ok(parse_server_info_value(&value))
+    }
+
+    /// Before signing: the endpoint's `server_info.network_id` must be `network`'s.
+    pub async fn ensure_network(
+        &self,
+        network: &crate::network::Network,
+    ) -> color_eyre::Result<()> {
+        let value = self.rpc_value("server_info", json!({})).await?;
+        let reported = value["result"]["info"]["network_id"]
+            .as_u64()
+            .map(|n| u32::try_from(n).unwrap_or(u32::MAX));
+        network.check_endpoint_network_id(reported)
     }
 
     pub async fn fetch_xrplf_dunl(&self) -> color_eyre::Result<DunlSummary> {
@@ -463,11 +479,14 @@ impl RpcClient {
         self.rpc_value("tx", json!({ "transaction": hash })).await
     }
 
+    /// Submit a signed blob. The returned hash is computed from the blob, not taken from the node.
     pub async fn submit_signed_tx(&self, signed_tx_blob: &str) -> color_eyre::Result<TxSummary> {
+        let hash = crate::signing::tx_hash_from_blob(signed_tx_blob)?;
         let value = self
             .rpc_value("submit", json!({ "tx_blob": signed_tx_blob }))
             .await?;
-        parse_submit_success(&value)
+        parse_submit_success(&value)?;
+        Ok(TxSummary { hash })
     }
 
     /// Dry-run an unsigned transaction via the `simulate` RPC.
@@ -610,6 +629,36 @@ mod tests {
         let err = read_response_text_capped(resp, "test").await.unwrap_err();
         assert!(err.to_string().contains("exceeds cap"), "{err}");
         server.abort();
+    }
+
+    /// TC-210: an RPC endpoint answering 307 is an error — the request (and the signed blob
+    /// in `submit`) is never re-posted to the redirect target, which may be plain `http://`.
+    #[tokio::test]
+    async fn rpc_redirect_is_not_followed() {
+        use crate::test_support::rpc_mock;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let target = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
+        let target_addr = target.local_addr().unwrap();
+        let target_srv = tokio::spawn(rpc_mock::serve(target, 1, |_| json!({"info": {}})));
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut s, _) = listener.accept().await.unwrap();
+            let mut buf = [0_u8; 4096];
+            let _ = s.read(&mut buf).await;
+            let head = format!(
+                "HTTP/1.1 307 Temporary Redirect\r\nLocation: http://{target_addr}/\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            );
+            let _ = s.write_all(head.as_bytes()).await;
+        });
+        let rpc = RpcClient::connect_with_retry_delay(&format!("http://{addr}"), |_, _| 0).unwrap();
+        assert!(rpc.rpc_value("server_info", json!({})).await.is_err());
+        server.abort();
+        target_srv.abort();
     }
 
     /// TC-068: XRPL RPC error — not found is not silently swallowed

@@ -46,7 +46,16 @@ fn validate_cmd_account_and_issuer_addresses(cmd: &Cmd) -> color_eyre::Result<()
         Cmd::Offers { address } => {
             require_classic_address_shape("account", address)?;
         }
-        Cmd::Info | Cmd::Send { .. } | Cmd::OfferCancel { .. } => {}
+        Cmd::OfferCreate {
+            taker_gets,
+            taker_pays,
+        } => crate::signing::validate_offer_specs(taker_gets, taker_pays)?,
+        Cmd::Faucet {
+            address: Some(address),
+        } => {
+            require_classic_address_shape("account", address)?;
+        }
+        Cmd::Info | Cmd::Send { .. } | Cmd::OfferCancel { .. } | Cmd::Faucet { address: None } => {}
     }
     Ok(())
 }
@@ -61,12 +70,126 @@ fn cli_wallet(credential: Option<&SigningCredential>) -> color_eyre::Result<xrpl
         .wallet()
 }
 
+/// Public faucet endpoint; production networks are refused (no faucet, and never "fund" mainnet).
+pub(crate) fn faucet_url(network: &Network) -> color_eyre::Result<&'static str> {
+    match network {
+        Network::Testnet => Ok("https://faucet.altnet.rippletest.net/accounts"),
+        Network::Devnet => Ok("https://faucet.devnet.rippletest.net/accounts"),
+        _ => color_eyre::eyre::bail!(
+            "faucet is available on testnet/devnet only (use --network testnet)"
+        ),
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct FaucetFunded {
+    pub amount_xrp: String,
+    pub tx_hash: Option<String>,
+}
+
+/// POST `{destination}` to the faucet; the response must name the same address.
+pub(crate) async fn fund_from_faucet(
+    url: &str,
+    destination: &str,
+) -> color_eyre::Result<FaucetFunded> {
+    use super::util::sanitize_remote;
+
+    let response = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()?
+        .post(url)
+        .json(&serde_json::json!({
+            "destination": destination,
+            "userAgent": concat!("lazyxrp/", env!("CARGO_PKG_VERSION")),
+        }))
+        .send()
+        .await?;
+    let status = response.status();
+    let text = super::client::read_response_text_capped(response, "faucet").await?;
+    if !status.is_success() {
+        color_eyre::eyre::bail!("faucet HTTP {status}: {}", sanitize_remote(&text));
+    }
+    let body: serde_json::Value = serde_json::from_str(&text)?;
+    let funded = body["account"]["classicAddress"]
+        .as_str()
+        .unwrap_or_default();
+    if funded != destination {
+        color_eyre::eyre::bail!(
+            "faucet funded {:?}, not {destination}",
+            sanitize_remote(funded)
+        );
+    }
+    Ok(FaucetFunded {
+        amount_xrp: body["amount"]
+            .as_f64()
+            .map_or_else(|| "?".into(), |a| a.to_string()),
+        tx_hash: body["transactionHash"].as_str().map(sanitize_remote),
+    })
+}
+
+const WAIT_POLL: std::time::Duration = std::time::Duration::from_secs(1);
+/// LLS window is ~20 ledgers (≈ 80 s); this only guards a node that never advances.
+const WAIT_LIMIT: std::time::Duration = std::time::Duration::from_secs(300);
+
+/// Poll `tx` until validated: `tes*` → `Ok(code)`, anything else → `Err` naming the code.
+/// Still missing once the validated ledger passes `last_ledger_sequence` → one more `tx`
+/// check (it may have validated between the two reads), then `Err` (expired; it can never be
+/// included). Still pending after `limit` → `Err` (stuck node or no `validated_ledger`).
+/// Transport errors from `server_info` propagate.
+pub(crate) async fn wait_validated(
+    rpc: &RpcClient,
+    hash: &str,
+    last_ledger_sequence: u32,
+    poll: std::time::Duration,
+    limit: std::time::Duration,
+) -> color_eyre::Result<String> {
+    use super::util::sanitize_remote;
+
+    let deadline = std::time::Instant::now() + limit;
+    let mut past_lls = None;
+    loop {
+        // `txnNotFound` (not yet in a ledger) is an RPC error: treat like pending.
+        if let Ok(tx) = rpc.tx(hash).await
+            && tx["result"]["validated"] == true
+        {
+            let code = sanitize_remote(
+                tx["result"]["meta"]["TransactionResult"]
+                    .as_str()
+                    .unwrap_or("?"),
+            );
+            if code.starts_with("tes") {
+                return Ok(code);
+            }
+            color_eyre::eyre::bail!("transaction {hash} validated with {code}");
+        }
+        if let Some(validated) = past_lls {
+            color_eyre::eyre::bail!(
+                "transaction {hash} expired: not validated by LastLedgerSequence {last_ledger_sequence} (validated ledger {validated})"
+            );
+        }
+        let validated = rpc.server_info().await?.ledger_index;
+        if validated > last_ledger_sequence {
+            past_lls = Some(validated);
+            continue;
+        }
+        if std::time::Instant::now() >= deadline {
+            color_eyre::eyre::bail!(
+                "transaction {hash} wait timed out after {}s (validated ledger {validated}, LastLedgerSequence {last_ledger_sequence}); check it later with its hash",
+                limit.as_secs()
+            );
+        }
+        tokio::time::sleep(poll).await;
+    }
+}
+
 pub async fn execute_cli_command(
     cmd: Cmd,
     rpc_url: &str,
     network: &Network,
     signing_credential: Option<SigningCredential>,
     yes: bool,
+    wait: bool,
 ) -> color_eyre::Result<()> {
     validate_cmd_account_and_issuer_addresses(&cmd)?;
     let rpc = RpcClient::connect(rpc_url)?;
@@ -175,6 +298,7 @@ pub async fn execute_cli_command(
         Cmd::OfferCancel { sequence } => {
             let wallet = cli_wallet(signing_credential.as_ref())?;
             let account = wallet.classic_address.clone();
+            rpc.ensure_network(network).await?;
             let account_info = rpc.account_info(&account).await?;
             // Never sign without simulate (Sequence/Fee/LLS from simulate, fee capped).
             let tx_json = signing::build_offer_cancel_tx_json_for_simulate(
@@ -206,6 +330,94 @@ pub async fn execute_cli_command(
             )?;
             let summary = rpc.submit_signed_tx(&blob).await?;
             println!("Transaction Hash: {}", summary.hash);
+            if wait {
+                let result = wait_validated(
+                    &rpc,
+                    &summary.hash,
+                    last_ledger_sequence,
+                    WAIT_POLL,
+                    WAIT_LIMIT,
+                )
+                .await?;
+                println!("Validated: {result}");
+            }
+        }
+        Cmd::OfferCreate {
+            taker_gets,
+            taker_pays,
+        } => {
+            let wallet = cli_wallet(signing_credential.as_ref())?;
+            let account = wallet.classic_address.clone();
+            rpc.ensure_network(network).await?;
+            let account_info = rpc.account_info(&account).await?;
+            let tx_json = signing::build_offer_create_tx_json_for_simulate(
+                &account,
+                &taker_gets,
+                &taker_pays,
+                account_info.sequence,
+            )?;
+            let sim = super::poll::simulate_tx_requiring_tes_success(&rpc, tx_json)
+                .await
+                .map_err(|e| color_eyre::eyre::eyre!(e))?;
+            let (tx_sequence, fee_drops, last_ledger_sequence) =
+                signing::sequence_fee_ledger_from_simulate(&sim.tx_json)?;
+            println!(
+                "OfferCreate from {account}: give {taker_gets}, want {taker_pays} (fee {fee_drops} drops, offer seq {tx_sequence})"
+            );
+            if !prompt_production_confirmation(
+                &format!("Place offer: give {taker_gets}, want {taker_pays}"),
+                network,
+                yes,
+            ) {
+                println!("Transaction cancelled by user.");
+                return Ok(());
+            }
+            let blob = signing::create_and_sign_offer_create(
+                &wallet,
+                &account,
+                &taker_gets,
+                &taker_pays,
+                tx_sequence,
+                fee_drops,
+                last_ledger_sequence,
+                network,
+            )?;
+            let summary = rpc.submit_signed_tx(&blob).await?;
+            println!("Transaction Hash: {}", summary.hash);
+            if wait {
+                let result = wait_validated(
+                    &rpc,
+                    &summary.hash,
+                    last_ledger_sequence,
+                    WAIT_POLL,
+                    WAIT_LIMIT,
+                )
+                .await?;
+                println!("Validated: {result}");
+            }
+        }
+        Cmd::Faucet { address } => {
+            let url = faucet_url(network)?;
+            // No address: keys are generated here; only the address goes to the faucet.
+            let (address, seed) = match address {
+                Some(address) => (address, None),
+                None => {
+                    let keys = signing::generate_wallet_keys_local("ed25519")?;
+                    let seed = secrecy::SecretString::from(keys.master_seed.clone());
+                    (keys.account_id.clone(), Some(seed))
+                }
+            };
+            let funded = fund_from_faucet(url, &address).await?;
+            println!("Funded {address} with {} XRP", funded.amount_xrp);
+            if let Some(hash) = funded.tx_hash {
+                println!("Transaction Hash: {hash}");
+            }
+            if let Some(seed) = seed {
+                println!("Seed: {}", secrecy::ExposeSecret::expose_secret(&seed));
+                eprintln!(
+                    "note: test-network seed shown once and not saved; export XRPL_SEED to sign with it"
+                );
+            }
         }
         Cmd::Send {
             destination,
@@ -213,6 +425,7 @@ pub async fn execute_cli_command(
         } => {
             use super::address::{ensure_xaddress_matches_network, resolve_payment_destination};
 
+            signing::validate_payment_input(&destination, &amount, None, None)?;
             let wallet = cli_wallet(signing_credential.as_ref())?;
             let account = wallet.classic_address.clone();
 
@@ -221,6 +434,7 @@ pub async fn execute_cli_command(
             let destination_classic = resolved.classic;
             let destination_tag = resolved.destination_tag;
 
+            rpc.ensure_network(network).await?;
             let account_info = rpc.account_info(&account).await?;
             let balance_xrp_str = account_info.balance_xrp;
             let balance_drops = xrp_to_drops(&balance_xrp_str).unwrap_or(0);
@@ -293,6 +507,17 @@ pub async fn execute_cli_command(
             let tx_summary = rpc.submit_signed_tx(&signed_tx_blob).await?;
             println!("Transaction Hash: {}", tx_summary.hash);
             println!("Transaction submitted successfully!");
+            if wait {
+                let result = wait_validated(
+                    &rpc,
+                    &tx_summary.hash,
+                    last_ledger_sequence,
+                    WAIT_POLL,
+                    WAIT_LIMIT,
+                )
+                .await?;
+                println!("Validated: {result}");
+            }
         }
     }
     Ok(())
@@ -387,6 +612,7 @@ mod tests {
             &Network::Mainnet,
             None,
             false,
+            false,
         )
         .await;
         let err = r.expect_err("invalid classic address must fail");
@@ -413,6 +639,7 @@ mod tests {
             match method {
                 "server_info" => json!({
                     "info": {
+                        "network_id": 1,
                         "validated_ledger": {"seq": 80_000_000},
                         "hostid": "local-test",
                         "build_version": "local"
@@ -461,7 +688,9 @@ mod tests {
                 }),
                 "simulate" => json!({
                     "engine_result": "tesSUCCESS",
-                    "tx_json": {"Sequence": 7, "Fee": "12", "LastLedgerSequence": 80_000_020}
+                    // rippled 3.4.1 shape: no LastLedgerSequence; filled from ledger_index (TC-200).
+                    "ledger_index": 80_000_000,
+                    "tx_json": {"Sequence": 7, "Fee": "12"}
                 }),
                 "submit" => json!({"engine_result": "tesSUCCESS", "tx_json": {"hash": "ABC"}}),
                 other => panic!("unexpected local RPC method: {other}"),
@@ -493,7 +722,7 @@ mod tests {
             let server = tokio::spawn(serve(listener, 11));
 
             async fn run(step: &str, cmd: Cmd, url: &str) -> color_eyre::Result<()> {
-                execute_cli_command(cmd, url, &Network::Testnet, None, false)
+                execute_cli_command(cmd, url, &Network::Testnet, None, false, false)
                     .await
                     .map_err(|e| color_eyre::eyre::eyre!("{step}: {e}"))
             }
@@ -591,15 +820,15 @@ mod tests {
             Ok(())
         }
 
-        /// TC-188: `-x send` runs account_info → simulate → submit (no unsimulated signing);
-        /// sequence/fee/LLS come from the simulate response.
+        /// TC-188: `-x send` checks the endpoint network, then account_info → simulate → submit
+        /// (no unsimulated signing); sequence/fee/LLS come from the simulate response.
         #[tokio::test]
         async fn send_simulates_before_signing_and_submits() -> color_eyre::Result<()> {
             use secrecy::SecretString;
 
             let listener = TcpListener::bind(("127.0.0.1", 0)).await?;
             let url = format!("http://{}", listener.local_addr()?);
-            let server = tokio::spawn(serve(listener, 3));
+            let server = tokio::spawn(serve(listener, 4));
             let credential = crate::signing::credential_from_secrets(
                 Some(&SecretString::from("sEdSkooMk31MeTjbHVE7vLvgCpEMAdB")),
                 None,
@@ -613,9 +842,75 @@ mod tests {
                 &Network::Testnet,
                 credential,
                 false,
+                false,
             )
             .await?;
-            assert_eq!(server.await??, ["account_info", "simulate", "submit"]);
+            assert_eq!(
+                server.await??,
+                ["server_info", "account_info", "simulate", "submit"]
+            );
+            Ok(())
+        }
+
+        /// TC-203: a mainnet node (no `network_id`) behind `--network testnet` (e.g. env
+        /// `XRPL_RPC_SERVER`) is refused before account_info / signing.
+        #[tokio::test]
+        async fn write_refuses_endpoint_on_other_network() -> color_eyre::Result<()> {
+            use secrecy::SecretString;
+
+            fn mainnet_node(method: &str) -> Value {
+                match method {
+                    "server_info" => json!({"info": {"validated_ledger": {"seq": 1}}}),
+                    other => result_for(other),
+                }
+            }
+            let listener = TcpListener::bind(("127.0.0.1", 0)).await?;
+            let url = format!("http://{}", listener.local_addr()?);
+            let server = tokio::spawn(serve_with(listener, 1, mainnet_node));
+            let credential = crate::signing::credential_from_secrets(
+                Some(&SecretString::from("sEdSkooMk31MeTjbHVE7vLvgCpEMAdB")),
+                None,
+            )?;
+            let err = execute_cli_command(
+                Cmd::Send {
+                    destination: GENESIS.into(),
+                    amount: "1".into(),
+                },
+                &url,
+                &Network::Testnet,
+                credential,
+                false,
+                false,
+            )
+            .await
+            .expect_err("mainnet endpoint under --network testnet");
+            assert!(err.to_string().contains("network_id"), "{err}");
+            assert_eq!(server.await??, ["server_info"]);
+            Ok(())
+        }
+
+        /// TC-212: `-x send` validates the amount (> 0) before any RPC, like the composer.
+        #[tokio::test]
+        async fn send_zero_amount_is_refused_before_rpc() -> color_eyre::Result<()> {
+            use secrecy::SecretString;
+            let credential = crate::signing::credential_from_secrets(
+                Some(&SecretString::from("sEdSkooMk31MeTjbHVE7vLvgCpEMAdB")),
+                None,
+            )?;
+            let err = execute_cli_command(
+                Cmd::Send {
+                    destination: GENESIS.into(),
+                    amount: "0".into(),
+                },
+                "http://127.0.0.1:1",
+                &Network::Testnet,
+                credential,
+                false,
+                false,
+            )
+            .await
+            .expect_err("zero amount");
+            assert!(err.to_string().contains("amount must be > 0"), "{err}");
             Ok(())
         }
 
@@ -635,7 +930,7 @@ mod tests {
             }
             let listener = TcpListener::bind(("127.0.0.1", 0)).await?;
             let url = format!("http://{}", listener.local_addr()?);
-            let server = tokio::spawn(serve_with(listener, 3, rejecting));
+            let server = tokio::spawn(serve_with(listener, 4, rejecting));
             let credential = crate::signing::credential_from_secrets(
                 Some(&SecretString::from("sEdSkooMk31MeTjbHVE7vLvgCpEMAdB")),
                 None,
@@ -649,23 +944,28 @@ mod tests {
                 &Network::Testnet,
                 credential,
                 false,
+                false,
             )
             .await
             .expect_err("rejected submit must fail the command");
             assert!(err.to_string().contains("tefPAST_SEQ"), "{err}");
-            assert_eq!(server.await??, ["account_info", "simulate", "submit"]);
+            assert_eq!(
+                server.await??,
+                ["server_info", "account_info", "simulate", "submit"]
+            );
             Ok(())
         }
 
-        /// TC-191: `-x offers` reads `account_offers`; `-x offer-cancel` runs
-        /// account_info → simulate → submit and needs a signing credential before any RPC.
+        /// TC-191: `-x offers` reads `account_offers`; `-x offer-cancel` / `-x offer-create` run
+        /// account_info → simulate → submit and need a signing credential before any RPC;
+        /// a bad offer spec fails before any RPC.
         #[tokio::test]
         async fn dex_offers_and_offer_cancel_against_local_rpc() -> color_eyre::Result<()> {
             use secrecy::SecretString;
 
             let listener = TcpListener::bind(("127.0.0.1", 0)).await?;
             let url = format!("http://{}", listener.local_addr()?);
-            let server = tokio::spawn(serve(listener, 4));
+            let server = tokio::spawn(serve(listener, 9));
             execute_cli_command(
                 Cmd::Offers {
                     address: GENESIS.into(),
@@ -673,6 +973,7 @@ mod tests {
                 &url,
                 &Network::Testnet,
                 None,
+                false,
                 false,
             )
             .await?;
@@ -682,6 +983,7 @@ mod tests {
                 &url,
                 &Network::Testnet,
                 None,
+                false,
                 false,
             )
             .await
@@ -699,14 +1001,173 @@ mod tests {
                 Cmd::OfferCancel { sequence: 42 },
                 &url,
                 &Network::Testnet,
+                credential.clone(),
+                false,
+                false,
+            )
+            .await?;
+
+            let bad_spec = execute_cli_command(
+                Cmd::OfferCreate {
+                    taker_gets: "XRP:abc".into(),
+                    taker_pays: format!("USD:{GENESIS}:1"),
+                },
+                &url,
+                &Network::Testnet,
+                credential.clone(),
+                false,
+                false,
+            )
+            .await
+            .expect_err("bad TakerGets spec");
+            assert!(bad_spec.to_string().starts_with("TakerGets:"), "{bad_spec}");
+            execute_cli_command(
+                Cmd::OfferCreate {
+                    taker_gets: "XRP:1000000".into(),
+                    taker_pays: format!("USD:{GENESIS}:1"),
+                },
+                &url,
+                &Network::Testnet,
                 credential,
+                false,
                 false,
             )
             .await?;
             assert_eq!(
                 server.await??,
-                ["account_offers", "account_info", "simulate", "submit"]
+                [
+                    "account_offers",
+                    "server_info",
+                    "account_info",
+                    "simulate",
+                    "submit",
+                    "server_info",
+                    "account_info",
+                    "simulate",
+                    "submit"
+                ]
             );
+            Ok(())
+        }
+
+        /// TC-201: faucet — testnet/devnet only; POSTs `destination` and reports amount + hash;
+        /// a response funding a different address is rejected.
+        #[tokio::test]
+        async fn faucet_funds_destination_on_test_networks_only() -> color_eyre::Result<()> {
+            use super::super::{faucet_url, fund_from_faucet};
+
+            assert!(faucet_url(&Network::Testnet)?.contains("altnet"));
+            assert!(faucet_url(&Network::Devnet)?.contains("devnet"));
+            for network in [Network::Mainnet, Network::Xahau, Network::XahauTest] {
+                assert!(faucet_url(&network).is_err(), "{network:?}");
+            }
+
+            let listener = TcpListener::bind(("127.0.0.1", 0)).await?;
+            let url = format!("http://{}/accounts", listener.local_addr()?);
+            let server = tokio::spawn(rpc_mock::serve_raw(
+                listener,
+                2,
+                |_| json!({"account": {"classicAddress": GENESIS}, "amount": 100, "transactionHash": "ABC"}),
+            ));
+            let funded = fund_from_faucet(&url, GENESIS).await?;
+            assert_eq!(
+                (funded.amount_xrp.as_str(), funded.tx_hash.as_deref()),
+                ("100", Some("ABC"))
+            );
+            let mismatch = fund_from_faucet(&url, RLUSD_ISSUER)
+                .await
+                .expect_err("faucet funded another address");
+            assert!(mismatch.to_string().contains(GENESIS), "{mismatch}");
+            let requests = server.await??;
+            assert_eq!(requests[0]["destination"], GENESIS);
+            Ok(())
+        }
+
+        /// TC-202: write wait — polls `tx` until validated (tes → Ok, tec → Err naming the code);
+        /// not found once the validated ledger passes LastLedgerSequence → Err (expired);
+        /// a node that never advances (or omits `validated_ledger`) hits the time limit → Err.
+        #[tokio::test]
+        async fn wait_validated_reports_final_result() -> color_eyre::Result<()> {
+            use std::sync::atomic::{AtomicUsize, Ordering};
+            use std::time::Duration;
+
+            use super::super::wait_validated;
+            use crate::xrpl::client::RpcClient;
+
+            async fn run(
+                lls: u32,
+                limit: Duration,
+                replies: Vec<Value>,
+            ) -> color_eyre::Result<(color_eyre::Result<String>, Vec<String>)> {
+                let listener = TcpListener::bind(("127.0.0.1", 0)).await?;
+                let rpc = RpcClient::connect(&format!("http://{}", listener.local_addr()?))?;
+                let expected = replies.len();
+                let next = AtomicUsize::new(0);
+                let server = tokio::spawn(rpc_mock::serve_raw(listener, expected, move |_| {
+                    replies[next.fetch_add(1, Ordering::SeqCst)].clone()
+                }));
+                let outcome = wait_validated(&rpc, "ABC", lls, Duration::ZERO, limit).await;
+                let requests = server.await??;
+                let methods = rpc_mock::methods(&requests)
+                    .into_iter()
+                    .map(str::to_owned)
+                    .collect();
+                Ok((outcome, methods))
+            }
+            let pending = json!({"result": {"validated": false}});
+            let ledger = |seq: u32| json!({"result": {"info": {"validated_ledger": {"seq": seq}}}});
+            let minute = Duration::from_secs(60);
+            let validated = |code: &str| json!({"result": {"validated": true, "meta": {"TransactionResult": code}}});
+
+            let (ok, methods) = run(
+                120,
+                minute,
+                vec![pending.clone(), ledger(100), validated("tesSUCCESS")],
+            )
+            .await?;
+            assert_eq!(ok?, "tesSUCCESS");
+            assert_eq!(methods, ["tx", "server_info", "tx"]);
+
+            let (tec, _) = run(120, minute, vec![validated("tecUNFUNDED_OFFER")]).await?;
+            assert!(
+                tec.expect_err("tec is a failure")
+                    .to_string()
+                    .contains("tecUNFUNDED_OFFER")
+            );
+
+            let not_found = json!({"result": {"error": "txnNotFound", "status": "error"}});
+            let (expired, methods) = run(
+                120,
+                minute,
+                vec![not_found.clone(), ledger(121), not_found.clone()],
+            )
+            .await?;
+            assert!(
+                expired
+                    .expect_err("past LLS")
+                    .to_string()
+                    .contains("expired")
+            );
+            assert_eq!(methods, ["tx", "server_info", "tx"]);
+
+            // Validated between the `tx` miss and the `server_info` read: success, not "expired".
+            let (raced, _) = run(
+                120,
+                minute,
+                vec![not_found, ledger(121), validated("tesSUCCESS")],
+            )
+            .await?;
+            assert_eq!(raced?, "tesSUCCESS");
+
+            let no_ledger = json!({"result": {"info": {}}});
+            let (stuck, methods) = run(120, Duration::ZERO, vec![pending, no_ledger]).await?;
+            assert!(
+                stuck
+                    .expect_err("never advances")
+                    .to_string()
+                    .contains("timed out")
+            );
+            assert_eq!(methods, ["tx", "server_info"]);
             Ok(())
         }
     }
@@ -733,6 +1194,7 @@ mod tests {
                     "https://xrplcluster.com",
                     &Network::Mainnet,
                     None,
+                    false,
                     false,
                 ),
             )

@@ -269,7 +269,7 @@ pub async fn fetch_flare_wallet_balance(
     rpc_url: &str,
     address: &str,
     execute_enabled: bool,
-    evm_key_env: &str,
+    executor_key_configured: bool,
 ) -> color_eyre::Result<FlareWalletSummary> {
     let wallet: Address = address
         .parse()
@@ -286,10 +286,6 @@ pub async fn fetch_flare_wallet_balance(
         tokio::try_join!(async { token.balanceOf(wallet).call().await }, async {
             token.decimals().call().await
         },)?;
-
-    let executor_key_configured = std::env::var(evm_key_env)
-        .map(|v| !v.trim().is_empty())
-        .unwrap_or(false);
 
     Ok(FlareWalletSummary {
         address: format!("{wallet:#x}"),
@@ -324,6 +320,20 @@ pub async fn fetch_fxrp_direct_mint_info(rpc_url: &str) -> color_eyre::Result<Fx
             .try_into()
             .map_err(|_| too_big("executor fee"))?,
     })
+}
+
+/// The Core Vault comes from one Flare RPC answer; sign a Payment to it only when it equals the
+/// operator-pinned `[flare.fassets] expected_core_vault` (verified out of band).
+pub fn check_core_vault(fetched: &str, expected: Option<&str>) -> Result<(), String> {
+    match expected.map(str::trim).filter(|e| !e.is_empty()) {
+        Some(e) if e == fetched.trim() => Ok(()),
+        Some(e) => Err(format!(
+            "refusing to sign: Flare RPC Core Vault {fetched} differs from expected_core_vault {e}"
+        )),
+        None => Err(format!(
+            "refusing to sign: verify Core Vault {fetched} out of band, then set [flare.fassets] expected_core_vault"
+        )),
+    }
 }
 
 /// Refuse Flare writes unless `[flare.fassets] execute = true`.
@@ -459,6 +469,23 @@ pub async fn execute_direct_minting(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Lead 1: the RPC-supplied Core Vault is signed only when it equals the pinned value.
+    #[test]
+    fn check_core_vault_requires_pinned_match() {
+        assert!(check_core_vault("rVault", Some(" rVault ")).is_ok());
+        assert!(
+            check_core_vault("rEvil", Some("rVault"))
+                .unwrap_err()
+                .contains("differs")
+        );
+        assert!(
+            check_core_vault("rVault", None)
+                .unwrap_err()
+                .contains("expected_core_vault")
+        );
+        assert!(check_core_vault("rVault", Some("")).is_err());
+    }
 
     /// An oversized uint256 from the RPC must not panic the display formatters.
     #[test]

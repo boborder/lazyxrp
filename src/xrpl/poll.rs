@@ -97,6 +97,7 @@ pub(crate) async fn simulate_tx_requiring_tes_success(
     rpc: &RpcClient,
     tx_json: Value,
 ) -> Result<SimulateResult, String> {
+    let request = tx_json.clone();
     match tokio::time::timeout(RPC_TIMEOUT, rpc.simulate_tx(tx_json)).await {
         Ok(Ok(sim)) => {
             if sim.engine_result != "tesSUCCESS" {
@@ -105,7 +106,7 @@ pub(crate) async fn simulate_tx_requiring_tes_success(
                     sim.engine_result, sim.engine_result_message
                 ))
             } else {
-                Ok(sim)
+                super::parse::check_simulate_bound_to_request(&request, &sim).map(|()| sim)
             }
         }
         Ok(Err(e)) => Err(format!("simulate: {e}")),
@@ -189,8 +190,10 @@ where
     send_action(action_tx, Action::RefreshAccount);
 }
 
+/// Endpoint network check (TC-203) then `account_info` — the shared entry of every XRPL write.
 async fn fetch_account_summary_for_submit<E>(
     rpc: &RpcClient,
+    network: &Network,
     account: &str,
     submit_err: E,
     action_tx: &UnboundedSender<Action>,
@@ -198,6 +201,17 @@ async fn fetch_account_summary_for_submit<E>(
 where
     E: Fn(String) -> Action,
 {
+    match tokio::time::timeout(RPC_TIMEOUT, rpc.ensure_network(network)).await {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => {
+            send_action(action_tx, submit_err(format!("{e}")));
+            return None;
+        }
+        Err(_) => {
+            send_action(action_tx, submit_err("server_info: timeout".into()));
+            return None;
+        }
+    }
     match tokio::time::timeout(RPC_TIMEOUT, rpc.account_info(account)).await {
         Ok(Ok(summary)) => Some(summary),
         Ok(Err(e)) => {
@@ -242,7 +256,8 @@ async fn finalize_simulate_sign_submit<E, FO, FS>(
 
     match tokio::time::timeout(RPC_TIMEOUT, rpc.submit_signed_tx(&blob)).await {
         Ok(Ok(tx)) => {
-            for action in on_ok(tx.hash) {
+            // Show the node-chosen (simulate) fee that was signed next to the hash.
+            for action in on_ok(format!("{} · fee {fee_drops} drops", tx.hash)) {
                 send_action(action_tx, action);
             }
         }
@@ -313,7 +328,7 @@ struct PollBatchInputs<'a> {
     flare_display: crate::config::FlareDisplay,
     flare_wallet_address: Option<&'a str>,
     flare_fassets_execute: bool,
-    flare_evm_key_env: &'a str,
+    flare_evm_key_set: bool,
     /// When a signing seed is configured, `poll_wallet_overview` fetches `account_tx` once.
     skip_account_tx: bool,
     active_tab: usize,
@@ -352,7 +367,7 @@ async fn poll_batch(
         flare_display,
         flare_wallet_address,
         flare_fassets_execute,
-        flare_evm_key_env,
+        flare_evm_key_set,
         skip_account_tx,
         active_tab,
     } = inputs;
@@ -605,7 +620,7 @@ async fn poll_batch(
                                 flare_rpc,
                                 wallet_addr,
                                 flare_fassets_execute,
-                                flare_evm_key_env,
+                                flare_evm_key_set,
                             ),
                         )
                         .await,
@@ -776,7 +791,7 @@ async fn submit_account_set_transaction(
     let clear_flag = signing::parse_account_set_flag_choice(params.clear_flag.as_deref());
 
     let Some(account_info) =
-        fetch_account_summary_for_submit(rpc, &account, submit_err, action_tx).await
+        fetch_account_summary_for_submit(rpc, network, &account, submit_err, action_tx).await
     else {
         return;
     };
@@ -862,7 +877,7 @@ async fn submit_trust_set_transaction(
     let account = wallet.classic_address.clone();
 
     let Some(account_info) =
-        fetch_account_summary_for_submit(rpc, &account, submit_err, action_tx).await
+        fetch_account_summary_for_submit(rpc, network, &account, submit_err, action_tx).await
     else {
         return;
     };
@@ -939,7 +954,7 @@ async fn submit_offer_create_transaction(
     let account = wallet.classic_address.clone();
 
     let Some(account_info) =
-        fetch_account_summary_for_submit(rpc, &account, submit_err, action_tx).await
+        fetch_account_summary_for_submit(rpc, network, &account, submit_err, action_tx).await
     else {
         return;
     };
@@ -998,7 +1013,7 @@ async fn submit_offer_cancel_transaction(
     let account = wallet.classic_address.clone();
 
     let Some(account_info) =
-        fetch_account_summary_for_submit(rpc, &account, submit_err, action_tx).await
+        fetch_account_summary_for_submit(rpc, network, &account, submit_err, action_tx).await
     else {
         return;
     };
@@ -1078,7 +1093,7 @@ async fn submit_set_regular_key_transaction(
     }
 
     let Some(account_info) =
-        fetch_account_summary_for_submit(rpc, &account, submit_err, action_tx).await
+        fetch_account_summary_for_submit(rpc, network, &account, submit_err, action_tx).await
     else {
         return;
     };
@@ -1185,7 +1200,7 @@ async fn submit_payment_transaction(
     }
 
     let Some(account_info) =
-        fetch_account_summary_for_submit(rpc, &account, submit_err, action_tx).await
+        fetch_account_summary_for_submit(rpc, network, &account, submit_err, action_tx).await
     else {
         return;
     };
@@ -1279,6 +1294,7 @@ async fn submit_fxrp_direct_mint_payment(
     rpc: &RpcClient,
     network: &Network,
     params: FxrpDirectMintPaymentParams,
+    expected_core_vault: Option<&str>,
     action_tx: &UnboundedSender<Action>,
     signing_credential: Option<&crate::signing::SigningCredential>,
 ) {
@@ -1337,9 +1353,13 @@ async fn submit_fxrp_direct_mint_payment(
         );
         return;
     }
+    if let Err(e) = crate::flare::check_core_vault(&destination_resolved, expected_core_vault) {
+        send_action(action_tx, submit_err(e));
+        return;
+    }
 
     let Some(account_info) =
-        fetch_account_summary_for_submit(rpc, &account, submit_err, action_tx).await
+        fetch_account_summary_for_submit(rpc, network, &account, submit_err, action_tx).await
     else {
         return;
     };
@@ -1459,7 +1479,7 @@ async fn quote_payment(
     .await
     .map_err(|_| "ripple_path_find: timeout".to_string())?
     .map_err(|e| format!("ripple_path_find: {e}"))?;
-    super::format::send_max_spec_from_quote(&result, params.slippage_bps)
+    super::format::send_max_spec_from_quote(&result, &source_currency, params.slippage_bps)
 }
 
 fn dispatch_timed<T, F>(
@@ -1493,6 +1513,7 @@ async fn submit_fxrp_execute_direct_mint(
     flare_rpc_url: Option<&str>,
     flare_fassets_execute: bool,
     flare_evm_key_env: &str,
+    flare_evm_key: Option<&secrecy::SecretString>,
     network: &Network,
     params: FxrpExecuteDirectMintParams,
     action_tx: &UnboundedSender<Action>,
@@ -1520,24 +1541,22 @@ async fn submit_fxrp_execute_direct_mint(
         send_action(action_tx, submit_err("flare RPC URL not configured".into()));
         return;
     };
-    let key = match std::env::var(flare_evm_key_env) {
-        Ok(k) if !k.trim().is_empty() => {
-            // SAFETY: poll task is the sole reader of this env var after startup; clear it so
-            // /proc/self/environ and child processes cannot observe the Flare executor key.
-            unsafe { std::env::remove_var(flare_evm_key_env) };
-            k
-        }
-        _ => {
-            send_action(
-                action_tx,
-                submit_err(format!(
-                    "env {flare_evm_key_env} not set (Flare EVM executor key)"
-                )),
-            );
-            return;
-        }
+    let Some(key) = flare_evm_key else {
+        send_action(
+            action_tx,
+            submit_err(format!(
+                "env {flare_evm_key_env} was not set at startup (Flare EVM executor key)"
+            )),
+        );
+        return;
     };
-    match crate::flare::execute_direct_minting(rpc, key.trim(), &params.proof_json).await {
+    match crate::flare::execute_direct_minting(
+        rpc,
+        secrecy::ExposeSecret::expose_secret(key),
+        &params.proof_json,
+    )
+    .await
+    {
         Ok(hash) => send_action(action_tx, Action::FxrpExecuteDirectMintSubmitOk(hash)),
         Err(e) => send_action(action_tx, submit_err(format!("{e}"))),
     };
@@ -1644,8 +1663,10 @@ async fn drive_poll_loop(
         flare_rpc_url,
         flare_feeds,
         flare_fassets_execute,
+        flare_expected_core_vault,
         flare_display,
         flare_evm_key_env,
+        flare_evm_key,
         flare_wallet_address,
         tab_watch,
         submit_lock,
@@ -1725,7 +1746,7 @@ async fn drive_poll_loop(
                         flare_display,
                         flare_wallet_address: flare_wallet_address.as_deref(),
                         flare_fassets_execute,
-                        flare_evm_key_env: &flare_evm_key_env,
+                        flare_evm_key_set: flare_evm_key.is_some(),
                         skip_account_tx: seed_address.is_some(),
                         active_tab,
                     },
@@ -1758,7 +1779,7 @@ async fn drive_poll_loop(
                         flare_display,
                         flare_wallet_address: flare_wallet_address.as_deref(),
                         flare_fassets_execute,
-                        flare_evm_key_env: &flare_evm_key_env,
+                        flare_evm_key_set: flare_evm_key.is_some(),
                         skip_account_tx: seed_address.is_some(),
                         active_tab,
                     },
@@ -1844,13 +1865,14 @@ async fn drive_poll_loop(
                     }
                     PollCommand::FxrpDirectMintPayment(params) => {
                         let _guard = submit_lock.lock().await;
-                        submit_fxrp_direct_mint_payment(&*rpc_cell.read().await, &network, params, &action_tx, signing_credential).await;
+                        submit_fxrp_direct_mint_payment(&*rpc_cell.read().await, &network, params, flare_expected_core_vault.as_deref(), &action_tx, signing_credential).await;
                     }
                     PollCommand::FxrpExecuteDirectMint(params) => {
                         submit_fxrp_execute_direct_mint(
                             flare_rpc_url.as_deref(),
                             flare_fassets_execute,
                             &flare_evm_key_env,
+                            flare_evm_key.as_ref(),
                             &network,
                             params,
                             &action_tx,
@@ -2161,13 +2183,16 @@ mod tests {
         const GENESIS: &str = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh";
         fn result_for(method: &str) -> Value {
             match method {
+                "server_info" => json!({"info": {"network_id": 1, "validated_ledger": {"seq": 1}}}),
                 "account_info" => json!({"account_data": {
                     "Account": GENESIS, "Balance": "10000000", "Sequence": 7,
                     "OwnerCount": 0, "Flags": 0
                 }}),
                 "simulate" => json!({
                     "engine_result": "tesSUCCESS",
-                    "tx_json": {"Sequence": 7, "Fee": "12", "LastLedgerSequence": 80_000_020}
+                    // rippled 3.4.1 shape: no LastLedgerSequence; filled from ledger_index (TC-200).
+                    "ledger_index": 80_000_000,
+                    "tx_json": {"Sequence": 7, "Fee": "12"}
                 }),
                 "submit" => json!({"engine_result": "tesSUCCESS", "tx_json": {"hash": "ABC"}}),
                 "ripple_path_find" => json!({
@@ -2184,7 +2209,7 @@ mod tests {
 
         let listener = TcpListener::bind(("127.0.0.1", 0)).await.expect("bind");
         let url = format!("http://{}", listener.local_addr().expect("addr"));
-        let server = tokio::spawn(rpc_mock::serve(listener, 7, result_for));
+        let server = tokio::spawn(rpc_mock::serve(listener, 10, result_for));
         let rpc = RpcClient::connect(&url).expect("rpc client");
         let credential = crate::signing::credential_from_secrets(
             Some(&SecretString::from("sEdSkooMk31MeTjbHVE7vLvgCpEMAdB")),
@@ -2215,7 +2240,20 @@ mod tests {
             Some(&credential),
         )
         .await;
-        assert_eq!(first(&mut rx), Action::PaymentSubmitOk("ABC".into()));
+        // The node claims hash "ABC"; the reported hash is the one computed from our signed blob,
+        // followed by the node-chosen fee that was signed (TC-214).
+        let local_hash = |a: Action| match a {
+            Action::PaymentSubmitOk(h) | Action::OfferCancelSubmitOk(h) => h,
+            other => panic!("expected submit ok, got {other:?}"),
+        };
+        let shown = local_hash(first(&mut rx));
+        let (h, fee) = shown.split_once(" · ").expect("hash · fee");
+        assert!(
+            h.len() == 64 && h.chars().all(|c| c.is_ascii_hexdigit()),
+            "{shown}"
+        );
+        assert_eq!(fee, "fee 12 drops");
+        let h = h.to_string();
 
         submit_offer_cancel_transaction(
             &rpc,
@@ -2228,7 +2266,7 @@ mod tests {
             Some(&credential),
         )
         .await;
-        assert_eq!(first(&mut rx), Action::OfferCancelSubmitOk("ABC".into()));
+        assert_ne!(local_hash(first(&mut rx)), h);
 
         let source = credential.address().expect("address");
         let spec = quote_payment(
@@ -2246,20 +2284,39 @@ mod tests {
         .await;
         assert_eq!(spec.as_deref(), Ok("XRP:1010000"));
 
+        // TC-203: a testnet node (network_id 1) under a devnet session is refused before signing.
+        submit_offer_cancel_transaction(
+            &rpc,
+            &Network::Devnet,
+            OfferCancelSubmitParams {
+                offer_sequence: 42,
+                skip_mainnet_prompt: false,
+            },
+            &tx,
+            Some(&credential),
+        )
+        .await;
+        assert!(
+            matches!(first(&mut rx), Action::OfferCancelSubmitErr(e) if e.contains("network_id")),
+        );
+
         let requests = server.await.expect("join").expect("serve");
         assert_eq!(
             rpc_mock::methods(&requests),
             [
+                "server_info",
                 "account_info",
                 "simulate",
                 "submit",
+                "server_info",
                 "account_info",
                 "simulate",
                 "submit",
-                "ripple_path_find"
+                "ripple_path_find",
+                "server_info"
             ]
         );
-        let rpf = &requests[6]["params"][0];
+        let rpf = &requests[8]["params"][0];
         assert_eq!(rpf["source_currencies"], json!([{"currency": "XRP"}]));
         assert_eq!(rpf["destination_amount"]["value"], "10");
     }
@@ -2413,6 +2470,7 @@ mod tests {
                                 amount_xrp: "1".into(),
                                 skip_mainnet_prompt: false,
                             },
+                            None,
                             &tx,
                             None,
                         )
@@ -2454,6 +2512,7 @@ mod tests {
             Some("https://flare-api.flare.network/ext/C/rpc"),
             false,
             "FLARE_EVM_KEY",
+            None,
             &Network::Testnet,
             params,
             &tx,

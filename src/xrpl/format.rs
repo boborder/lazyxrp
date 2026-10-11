@@ -244,25 +244,43 @@ pub fn quote_source_currency(send_max_field: &str, amount_is_iou: bool) -> Resul
     }
 }
 
-/// Cheapest `ripple_path_find` alternative + `slippage_bps` (rounded up) → Send max spec
-/// (`XRP:drops` / `CUR:issuer:value`).
+/// Cheapest `ripple_path_find` alternative in the requested source currency + `slippage_bps`
+/// (rounded up) → Send max spec (`XRP:drops` / `CUR:issuer:value`). Alternatives in any other
+/// currency/issuer are ignored: the node must not pick what the signer commits to.
 pub fn send_max_spec_from_quote(
     result: &RipplePathFindResult,
+    requested: &Value,
     slippage_bps: u32,
 ) -> Result<String, String> {
+    let want_currency = requested
+        .get("currency")
+        .and_then(Value::as_str)
+        .unwrap_or("XRP");
+    let want_issuer = requested.get("issuer").and_then(Value::as_str);
+    let matches = |amount: &Value| match json_amount(amount) {
+        Some(JsonAmount::XrpDrops(_)) => want_currency == "XRP",
+        Some(JsonAmount::Issued {
+            currency, issuer, ..
+        }) => currency == want_currency && issuer.is_some() && issuer == want_issuer,
+        None => false,
+    };
     let best = result
         .alternatives
         .iter()
+        .filter(|a| matches(&a.source_amount))
         .min_by(|a, b| {
             source_amount_sort_key(&a.source_amount)
                 .total_cmp(&source_amount_sort_key(&b.source_amount))
         })
-        .ok_or("no payment path found")?;
+        .ok_or("no payment path found in the requested source currency")?;
     match json_amount(&best.source_amount) {
         Some(JsonAmount::XrpDrops(d)) => {
             let drops: u128 = d.parse().map_err(|_| format!("bad source drops: {d}"))?;
             let bps = u128::from(slippage_bps);
-            Ok(format!("XRP:{}", (drops * (10_000 + bps)).div_ceil(10_000)))
+            drops
+                .checked_mul(10_000 + bps)
+                .map(|v| format!("XRP:{}", v.div_ceil(10_000)))
+                .ok_or_else(|| format!("source drops out of range: {d}"))
         }
         Some(JsonAmount::Issued {
             currency,
@@ -537,16 +555,40 @@ mod tests {
             destination_amount: json!("1"),
             source_account: "rSrc".into(),
         };
+        let xrp_req = json!({"currency": "XRP"});
+        let usd_req = json!({"currency": "USD", "issuer": "rI"});
         let xrp = result(vec![json!("2000000"), json!("1000000")]);
-        assert_eq!(send_max_spec_from_quote(&xrp, 100).unwrap(), "XRP:1010000");
         assert_eq!(
-            send_max_spec_from_quote(&result(vec![json!("1")]), 1).unwrap(),
+            send_max_spec_from_quote(&xrp, &xrp_req, 100).unwrap(),
+            "XRP:1010000"
+        );
+        assert_eq!(
+            send_max_spec_from_quote(&result(vec![json!("1")]), &xrp_req, 1).unwrap(),
             "XRP:2"
         );
         let iou = result(vec![
             json!({"currency": "USD", "issuer": "rI", "value": "10"}),
         ]);
-        assert_eq!(send_max_spec_from_quote(&iou, 100).unwrap(), "USD:rI:10.1");
-        assert!(send_max_spec_from_quote(&result(vec![]), 100).is_err());
+        assert_eq!(
+            send_max_spec_from_quote(&iou, &usd_req, 100).unwrap(),
+            "USD:rI:10.1"
+        );
+        assert!(send_max_spec_from_quote(&result(vec![]), &xrp_req, 100).is_err());
+
+        // Lead 2: alternatives not matching the requested source are ignored, even when cheaper.
+        let mixed = result(vec![
+            json!({"currency": "EUR", "issuer": "rI", "value": "1"}),
+            json!({"currency": "USD", "issuer": "rEvil", "value": "1"}),
+            json!("5"),
+            json!({"currency": "USD", "issuer": "rI", "value": "10"}),
+        ]);
+        assert_eq!(
+            send_max_spec_from_quote(&mixed, &usd_req, 0).unwrap(),
+            "USD:rI:10"
+        );
+        assert!(send_max_spec_from_quote(&iou, &xrp_req, 0).is_err());
+        // Overflowing drops is an error, not a wrapped ceiling.
+        let huge = result(vec![json!("340282366920938463463374607431768211455")]);
+        assert!(send_max_spec_from_quote(&huge, &xrp_req, 100).is_err());
     }
 }

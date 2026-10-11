@@ -141,16 +141,24 @@ pub(crate) mod rpc_mock {
         expected: usize,
         result: fn(&str) -> Value,
     ) -> color_eyre::Result<Vec<Value>> {
+        serve_raw(listener, expected, move |request| {
+            json!({"result": result(request["method"].as_str().unwrap_or_default())})
+        })
+        .await
+    }
+
+    /// Answer `expected` JSON requests with `respond(body)` verbatim (non-JSON-RPC, e.g. faucet REST).
+    pub(crate) async fn serve_raw(
+        listener: TcpListener,
+        expected: usize,
+        respond: impl Fn(&Value) -> Value,
+    ) -> color_eyre::Result<Vec<Value>> {
         let mut requests = Vec::with_capacity(expected);
         for _ in 0..expected {
             let (mut stream, _) =
                 tokio::time::timeout(Duration::from_secs(5), listener.accept()).await??;
             let request = read_request(&mut stream).await?;
-            let method = request["method"]
-                .as_str()
-                .ok_or_else(|| color_eyre::eyre::eyre!("RPC method missing"))?
-                .to_owned();
-            let body = json!({"result": result(&method)}).to_string();
+            let body = respond(&request).to_string();
             let response = format!(
                 "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 body.len(),

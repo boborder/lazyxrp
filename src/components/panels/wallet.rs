@@ -351,6 +351,7 @@ impl Component for WalletPanel {
             }
             Action::NetworkChange(net) => {
                 self.network = *net;
+                self.keygen_result = None;
             }
             _ => {}
         }

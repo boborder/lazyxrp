@@ -478,6 +478,16 @@ pub fn sequence_fee_ledger_from_simulate(tx_json: &Value) -> color_eyre::Result<
     ))
 }
 
+/// Transaction ID of a signed blob: SHA-512Half(`TXN\0` ‖ blob), uppercase hex. Computed locally
+/// so a node cannot substitute another transaction's hash for the one we signed.
+pub fn tx_hash_from_blob(signed_tx_blob: &str) -> color_eyre::Result<String> {
+    let mut msg = 0x5458_4E00_u32.to_be_bytes().to_vec();
+    msg.extend(hex::decode(signed_tx_blob.trim())?);
+    Ok(hex::encode_upper(
+        xrpl::core::keypairs::utils::sha512_first_half(&msg),
+    ))
+}
+
 /// Unsigned SetRegularKey JSON for `simulate`.
 /// Pass `regular_key` as `None` (or empty) to clear the existing regular key.
 pub fn build_set_regular_key_tx_json_for_simulate(
@@ -595,6 +605,9 @@ fn parse_offer_amount_spec(spec: &str) -> color_eyre::Result<OfferAmountSpec<'_>
         color_eyre::eyre::bail!("invalid amount spec (use XRP:drops or CUR:issuer:value): {spec}");
     }
     if parts[0] == "XRP" {
+        if parts.len() > 2 {
+            color_eyre::eyre::bail!("XRP amount takes 2 parts (XRP:drops): {spec}");
+        }
         let drops = parts[1]
             .parse::<u64>()
             .map_err(|_| color_eyre::eyre::eyre!("XRP drops must be an integer"))?;
@@ -613,6 +626,13 @@ fn parse_offer_amount_spec(spec: &str) -> color_eyre::Result<OfferAmountSpec<'_>
         issuer: parts[1],
         value: parts[2],
     })
+}
+
+/// Check both OfferCreate specs before any RPC; errors name the failing side.
+pub fn validate_offer_specs(taker_gets: &str, taker_pays: &str) -> color_eyre::Result<()> {
+    parse_offer_amount_spec(taker_gets).map_err(|e| color_eyre::eyre::eyre!("TakerGets: {e}"))?;
+    parse_offer_amount_spec(taker_pays).map_err(|e| color_eyre::eyre::eyre!("TakerPays: {e}"))?;
+    Ok(())
 }
 
 /// Build an `Amount` from a compact spec string.
@@ -989,6 +1009,17 @@ mod tests {
         assert!(err.to_string().contains("exceeds"));
     }
 
+    /// Transaction ID = SHA-512Half(`TXN\0` ‖ blob) (vector from an independent hashlib run);
+    /// non-hex blobs are rejected rather than hashed.
+    #[test]
+    fn tx_hash_from_blob_matches_independent_vector() {
+        assert_eq!(
+            tx_hash_from_blob("120000").unwrap(),
+            "DC71B939905587CDF8410B02ACA9CC5E2BED966CC46C2D524EA08B62E2437A7D"
+        );
+        assert!(tx_hash_from_blob("zz").is_err());
+    }
+
     #[test]
     fn build_payment_tx_json_for_simulate_xrp() {
         let v = build_payment_tx_json_for_simulate(
@@ -1280,6 +1311,9 @@ mod tests {
         );
         assert!(send_max_xrp_drops("XRP:0").is_err());
         assert!(send_max_xrp_drops("junk").is_err());
+        // Trailing segments are rejected, not silently dropped (TC-211).
+        assert!(send_max_xrp_drops("XRP:5000000:tail").is_err());
+        assert!(validate_offer_specs("XRP:100:tail", "XRP:1").is_err());
     }
 
     /// TC: ed25519 family-seed wallet derives the known address, trimming whitespace

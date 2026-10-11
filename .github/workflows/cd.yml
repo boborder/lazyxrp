@@ -16,8 +16,7 @@ jobs:
     timeout-minutes: 45
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v7
-
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Wait for and verify CI on tagged commit
         env:
           GH_TOKEN: ${{ github.token }}
@@ -87,21 +86,19 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v7
-
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@v1
+        uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # v1
         with:
           toolchain: stable
           targets: ${{ matrix.target }}
 
-      - uses: Swatinem/rust-cache@v2
-
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
       - name: Install cross
         if: ${{ matrix.use-cross }}
-        uses: taiki-e/install-action@v2
+        uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe # v2
         with:
-          tool: cross
+          tool: cross@0.2.5
 
       - name: Build
         run: |
@@ -148,7 +145,7 @@ jobs:
           fi
 
       - name: Upload packaged binaries
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: release-${{ matrix.os-name }}-${{ matrix.architecture }}-${{ matrix.target }}
           path: |
@@ -164,16 +161,36 @@ jobs:
     permissions:
       contents: write
     steps:
+      - name: Checkout repository (history + tags for notes)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+
+      # Direct pushes to main (few PRs) leave GitHub's generated notes nearly empty:
+      # list commit subjects since the previous tag; generated notes append after it.
+      - name: Build release notes
+        run: |
+          set -euo pipefail
+          PREV="$(git describe --tags --abbrev=0 --match 'v[0-9]*' "${GITHUB_REF_NAME}^" 2>/dev/null || true)"
+          {
+            echo "## Changes${PREV:+ since ${PREV}}"
+            echo
+            git log --no-merges --format='- %s (%h)' ${PREV:+"${PREV}.."}"${GITHUB_REF_NAME}"
+          } > release-notes.md
+          cat release-notes.md
+
       - name: Download release artifacts
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           path: release-assets
           pattern: release-*
           merge-multiple: true
 
       - name: Upload release assets
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3
         with:
+          body_path: release-notes.md
+          generate_release_notes: true
           files: |
             release-assets/*.tar.gz
             release-assets/*.sha256
@@ -186,13 +203,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v7
-
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@v1
+        uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # v1
         with:
           toolchain: stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
       # Verify (compiles build.rs + the dependency graph) WITHOUT the registry token,
       # then publish with the token and no second verify compile.
       - name: Verify package (no token)

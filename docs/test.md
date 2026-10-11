@@ -183,10 +183,10 @@ cargo deny check
 | TC-185 | P1 | `src/components/panels/wallet.rs`, `src/xrpl/poll.rs` | OfferCancel composer — `8` fetches offers, `j`/`s` queue selected seq, no-selection error, fetch error rendered; mainnet without `--yes` rejected |
 | TC-186 | P1 | `src/signing.rs` | Payment SendMax — set for cross-currency (no `Paths`), XRP→XRP SendMax rejected |
 | TC-187 | P1 | `src/signing.rs`, `src/components/panels/wallet.rs`, `wallet_keys.rs` | `send_max_xrp_drops` (XRP→drops, IOU→0, invalid→Err); composer Send max row editing, trimmed/empty→`None`, preview `spend ≤` |
-| TC-188 | P1 | `src/xrpl/cli_exec.rs` | CLI `send` — local JSON-RPC sees exactly `account_info → simulate → submit` (no unsimulated signing) |
+| TC-188 | P1 | `src/xrpl/cli_exec.rs` | CLI `send` — local JSON-RPC sees exactly `server_info → account_info → simulate → submit` (network check first; no unsimulated signing) |
 | TC-189 | P1 | `src/lib.rs` | Command resolve — bare → TUI keeps `--account`; bare subcommand errors with `lazyxrp -x <name>`; `-x` alone errors; `-x info` → Info |
-| TC-190 | P1 | `src/cli.rs` | DEX CLI parse — `offers <ADDR>`, `offer-cancel <SEQ>`; non-numeric seq rejected |
-| TC-191 | P1 | `src/xrpl/cli_exec.rs` | DEX CLI — `offers` reads `account_offers`; `offer-cancel` without key fails before RPC, with key runs `account_info → simulate → submit` |
+| TC-190 | P1 | `src/cli.rs` | DEX/faucet CLI parse — `offers <ADDR>`, `offer-cancel <SEQ>`, `offer-create <GETS> <PAYS>`, `faucet [ADDR]`; non-numeric seq rejected |
+| TC-191 | P1 | `src/xrpl/cli_exec.rs` | DEX CLI — `offers` reads `account_offers`; `offer-cancel` without key fails before RPC; bad `offer-create` spec fails before RPC (`TakerGets:`); with key both run `server_info → account_info → simulate → submit` |
 | TC-192 | P1 | `src/xrpl/format.rs` | Quote source currency — Send max prefix wins, IOU Amount defaults to XRP, XRP Amount needs non-XRP prefix, IOU prefix needs issuer |
 | TC-193 | P1 | `src/xrpl/format.rs` | Quote → Send max spec — cheapest alternative, slippage rounded up (drops / 6 sig. digits), no path → Err |
 | TC-194 | P1 | `src/components/panels/wallet.rs` | Payment `p` — invalid form flashes; valid form queues `PaymentQuote` (default 100 bps); QuoteOk fills Send max; QuoteErr flashes |
@@ -194,8 +194,22 @@ cargo deny check
 | TC-196 | P0 | `src/xrpl/cli_exec.rs` | CLI `send` — rejected submit (`tefPAST_SEQ`) returns Err → non-zero exit |
 | TC-197 | P1 | `src/signing.rs` | `validate_payment_input` — destination checksum / X-address, positive amount, IOU currency+issuer, SendMax spec (XRP→XRP rejected, blank = none) |
 | TC-198 | P1 | `src/components/panels/wallet.rs` | Payment preview + `s` share validation — bad checksum / bad Send max stay orange and submit refuses with flash |
-| TC-199 | P1 | `src/xrpl/poll.rs`, `src/test_support.rs` | Poll write paths vs local JSON-RPC — Payment / OfferCancel `account_info → simulate → submit` → Ok; quote sends `source_currencies`, returns slippage spec |
+| TC-199 | P1 | `src/xrpl/poll.rs`, `src/test_support.rs` | Poll write paths vs local JSON-RPC — Payment / OfferCancel `server_info → account_info → simulate → submit` → Ok; quote sends `source_currencies`, returns slippage spec |
 | TC-200 | P0 | `src/xrpl/parse.rs` | `simulate` without `LastLedgerSequence` (rippled 3.4.1 shape) → filled `ledger_index + 20` so signing proceeds; server value kept |
+| TC-201 | P1 | `src/xrpl/cli_exec.rs` | `faucet` — testnet/devnet URLs only (mainnet/xahau refused); POSTs `destination`, reports amount + hash; response naming another address → Err |
+| TC-202 | P1 | `src/xrpl/cli_exec.rs` | CLI write wait — polls `tx` until validated (`tes` → Ok, `tec` → Err with code); not found after validated ledger > LLS → Err (expired); node that never advances / omits `validated_ledger` → Err (timed out, 5 min cap) |
+| TC-203 | P0 | `src/network.rs`, `src/xrpl/cli_exec.rs`, `src/xrpl/poll.rs` | Endpoint `network_id` must match the selected network before signing (mainnet omits = 0); mainnet node under `--network testnet` refused after `server_info` only (CLI); devnet session on a testnet node refused (TUI) |
+| TC-204 | P0 | `src/xrpl/parse.rs`, `src/xrpl/poll.rs` | simulate `Sequence` ≠ request or `LastLedgerSequence` ≤ / > `ledger_index + 100` → refused before signing (all write paths) |
+| TC-205 | P0 | `src/flare.rs` | FXRP C2 Core Vault: signed only on exact match with `expected_core_vault`; mismatch / unset → refused |
+| TC-206 | P1 | `src/xrpl/format.rs` | Quote picks only alternatives in requested Send max currency/issuer; mismatch → Err; XRP slippage overflow → Err (TC-193 extended) |
+| TC-207 | P1 | `src/signing.rs`, `src/xrpl/poll.rs` | Submitted tx hash = SHA-512Half(`TXN\0` ‖ blob), independent vector; node-reported hash ignored |
+| TC-208 | P1 | `src/xrpl/parse.rs` | simulate `engine_result(_message)` control characters stripped |
+| TC-209 | P1 | `src/xrpl/cli_exec.rs` | CLI wait: tx validated after ledger passes LLS is re-checked once → Ok, not expired (TC-202 extended) |
+| TC-210 | P1 | `src/xrpl/client.rs` | JSON-RPC endpoint answering 307 → Err; request not re-posted to the redirect target |
+| TC-211 | P1 | `src/signing.rs` | `XRP:<drops>:<tail>` rejected (SendMax and OfferCreate specs) |
+| TC-212 | P1 | `src/xrpl/cli_exec.rs` | `-x send 0` refused by `validate_payment_input` before any RPC |
+| TC-213 | P1 | `src/components/panels/wallet_keygen.rs`, `src/config.rs` | Keygen popup cleared on NetworkChange, label "Esc to dismiss"; `Config::new` takes + removes the Flare EVM key env (TC-049 extended) |
+| TC-214 | P1 | `src/xrpl/poll.rs` | TUI submit result = `<local hash> · fee N drops` (simulate fee that was signed) |
 
 
 
@@ -231,10 +245,13 @@ cargo deny check
 | R-006 mainnet write guard bypass | TC-088 `mainnet_write_guard_blocks` | `src/xrpl/poll.rs` |
 | R-007 config merge precedence | TC-033-035/TC-092 `config_source_precedence`, TC-036 | `src/config.rs` |
 | R-001 seed priority chain | TC-045/046/049 `credential_from_secrets` + env override | `src/signing.rs`, `src/config.rs` |
+| R-016 endpoint network ≠ selected network | TC-203 `endpoint_network_id_must_match` + CLI/TUI refusal | `src/network.rs`, `src/xrpl/cli_exec.rs`, `src/xrpl/poll.rs` |
 
-## Testnet E2E (manual)
+## Testnet E2E
 
-2026-10-10, testnet rippled 3.4.1, faucet account `r15nczQYUNYBVLws8M9zkFE2SaSkU4kkk` (offer seq 21430112 created via xrpl.js `OfferCreate` `699AA05B…`). All hashes `validated: true`, `tesSUCCESS`.
+**Automated (opt-in):** `mise run e2e-testnet` (`tests/testnet_e2e.rs`, `#[ignore]`, not in CI): `-x faucet` ×2 → `send` → `offer-create` → `offers` → `offer-cancel` → `offers` = `[]`, every write `Validated: tesSUCCESS`. Run before each release. Passed 2026-10-11 (≈ 27 s).
+
+**2026-10-10 CLI (manual, 0.3.0)** — testnet rippled 3.4.1, faucet account `r15nczQYUNYBVLws8M9zkFE2SaSkU4kkk`. All hashes `validated: true`, `tesSUCCESS`.
 
 | Step | Result | Tx hash |
 |------|--------|---------|
@@ -244,7 +261,19 @@ cargo deny check
 | `offer-cancel` on the already-removed offer | exit 0 (XRPL no-op `tesSUCCESS`) | `0620179B9177C20E333E7C2D85093F642BA1454C0B329D49F3BC6C62CC404173` |
 | `send` to a bad-checksum address | exit 1, no RPC write | — |
 
-First run failed every write with `simulate tx_json missing LastLedgerSequence` (mocks returned LLS; live simulate does not) → fixed, TC-200. TUI flows (OfferCreate → OfferCancel, `p` quote → cross-currency Payment) are still pending manual runs.
+First run failed every write with `simulate tx_json missing LastLedgerSequence` (mocks returned LLS; live simulate does not) → fixed, TC-200.
+
+**2026-10-11 TUI (driven via tmux)** — sender `rwJXoAen3drVz6tep2CzXz7jFwS7G8pKnz`; issuer B `rwENtdso…` (DefaultRipple, offer 100 USD for 100 XRP); destination D trusts B. All `validated: true`, `tesSUCCESS`.
+
+| Step | Result | Tx hash |
+|------|--------|---------|
+| Composer `4` OfferCreate `XRP:1000000` → `USD:B:1` | crossed B's offer at once (A received 1 USD); OfferCancel list empty — correct | `FB22BA340747D44D4A39805081302F930BA0EEA808C2C60C6E8D4859930C7465` |
+| Composer `1` Payment IOU 1 USD.B → D, `p` | Send max filled `XRP:1010000` (1 XRP + 1 %) | — |
+| `s` cross-currency Payment | delivered 1 USD | `2FE724657854C59A5E87E0AD1D843B115D197E9F9CCEF2FC020ED18E6023401D` |
+| Composer `4` OfferCreate `XRP:1000000` → `USD:B:100` (no cross) | offer `#21432418` listed in `8` | `3FDB2522AC0E8A698C01D5C49BF962BFC0F8C958AE8A91E5B668215D519C6F6E` |
+| Composer `8` → `s` | offer gone (`(no open offers)`) | `DB7A79BDFCB81373FB98BDD40886A9593A986D2FC3F11D0EDE6833297CAF4EA8` |
+
+Notes: the first quote returned "no payment path found" — correct, the issuer lacked DefaultRipple (`simulate` = `tecPATH_DRY`). **S-017** found here: a mainnet `XRPL_RPC_SERVER` in the shell silently overrode `--network testnet` (reads hit mainnet) → TC-203; live check: mainnet endpoint + `--network testnet` refused (exit 1), testnet endpoint validated `868477854FBAD38A1B22629659BA4A98DC945E994422728DE99805BBF43B6209`.
 
 Remaining gaps (unimplemented by design — low priority):
 

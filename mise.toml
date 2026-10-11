@@ -43,6 +43,10 @@ run = "cargo test --locked --all-features --workspace"
 description = "Test suite single-threaded (env-order-sensitive checks; caught cli_smoke races)"
 run = "cargo test --locked --all-features --workspace -- --test-threads=1"
 
+[tasks.e2e-testnet]
+description = "Opt-in live testnet E2E: faucet → send → offer-create → offers → offer-cancel, all validated (public faucet; not in CI)"
+run = "cargo test --locked --test testnet_e2e -- --ignored --nocapture"
+
 [tasks.doc]
 description = "CI Docs gate: rustdoc with -D warnings"
 env = { RUSTDOCFLAGS = "-D warnings" }
@@ -73,6 +77,32 @@ run = "./benchmark.sh --fast --perf-only"
 [tasks.bench-ci]
 description = "CI-equivalent benchmark (--json --fast --perf-only)"
 run = "./benchmark.sh --json --fast --perf-only"
+
+# Usage: mise run release 0.3.1 — bump + Cargo.lock sync + CHANGELOG cut + gates + ONE commit. Push yourself (CI auto-tags).
+[tasks.release]
+description = "Bump Cargo.toml version, sync Cargo.lock, date CHANGELOG [Unreleased], run lint/test gates, commit 'chore: release <ver>' (no push)"
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+NEW="${1:?usage: mise run release <x.y.z>}"
+[[ "$NEW" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "error: version must be x.y.z" >&2; exit 1; }
+[ "$(git branch --show-current)" = main ] || { echo "error: not on main" >&2; exit 1; }
+[ -z "$(git status --porcelain)" ] || { echo "error: worktree not clean" >&2; exit 1; }
+git rev-parse "v$NEW" >/dev/null 2>&1 && { echo "error: tag v$NEW exists" >&2; exit 1; }
+PREV="$(git describe --tags --abbrev=0 --match 'v[0-9]*')"
+grep -q '^## \[Unreleased\]$' CHANGELOG.md || { echo "error: CHANGELOG.md has no ## [Unreleased]" >&2; exit 1; }
+awk -v v="$NEW" '!done && /^version = /{sub(/"[^"]+"/, "\"" v "\""); done=1} 1' Cargo.toml > Cargo.toml.tmp && mv Cargo.toml.tmp Cargo.toml
+# Unreleased → "## [NEW] - date" (fresh empty Unreleased above it) and compare links.
+awk -v v="$NEW" -v d="$(date +%F)" -v prev="$PREV" -v repo="https://github.com/boborder/lazyxrp" '
+  /^## \[Unreleased\]$/ && !h { print; print ""; print "## [" v "] - " d; h=1; next }
+  /^\[Unreleased\]: / { print "[Unreleased]: " repo "/compare/v" v "...HEAD"; print "[" v "]: " repo "/compare/" prev "...v" v; next }
+  { print }' CHANGELOG.md > CHANGELOG.md.tmp && mv CHANGELOG.md.tmp CHANGELOG.md
+cargo update -p lazyxrp --offline
+mise run lint
+mise run test
+git commit -q -m "chore: release $NEW" Cargo.toml Cargo.lock CHANGELOG.md
+git log --oneline -1
+'''
 
 # Cargo.toml を必ず更新する
 [tasks.tag-push]

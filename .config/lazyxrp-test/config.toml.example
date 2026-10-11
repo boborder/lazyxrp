@@ -20,3 +20,5 @@ seed = "sEd..." # <-- replace with your own faucet seed
 # Flare write gate. Keep false until you deliberately rehearse C3 on testnet.
 # Executor key goes in executor.key (0x…) next to this file — feed via FLARE_EVM_KEY at launch.
 execute = false
+# Core Vault pin for C2 Direct Mint (verify out of band). Unset → C2 payment refused.
+# expected_core_vault = "r..."

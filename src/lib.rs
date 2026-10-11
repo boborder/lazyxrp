@@ -1,4 +1,21 @@
-//! lazyxrp library — shared by the `lazyxrp` and `rp` binaries.
+//! **lazyxrp** — terminal UI and script CLI for the XRP Ledger (plus Xahau and Flare reads).
+//!
+//! This crate is an **application**. The library target only exists so the `lazyxrp` and `rp`
+//! binaries share code; [`run`] and [`run_rp`] are its whole public API, with no stability
+//! guarantee beyond them. Usage, keys, configuration and the script CLI (`lazyxrp -x …`) are
+//! documented in the [README](https://github.com/boborder/lazyxrp#readme).
+//!
+//! ```text
+//! cargo install lazyxrp --locked
+//! lazyxrp                                   # TUI (mainnet by default)
+//! lazyxrp --network testnet -x faucet       # fresh funded testnet wallet
+//! lazyxrp -x send <r-address> --amount 1    # simulate → sign → submit → wait for validation
+//! ```
+//!
+//! Safety model: every write is simulated before signing, mainnet/Xahau writes need `--yes` or a
+//! confirmation, the endpoint's `network_id` must match the selected network, and signing over
+//! plain `http://`/`ws://` is refused. See
+//! [SECURITY.md](https://github.com/boborder/lazyxrp/blob/main/SECURITY.md).
 use clap::Parser;
 use cli::{Cli, Cmd, RpCli};
 use config::Config;
@@ -11,7 +28,7 @@ mod app;
 mod cli;
 mod components;
 mod config;
-pub mod errors;
+mod errors;
 mod flare;
 mod logging;
 mod network;
@@ -214,7 +231,7 @@ pub async fn run() -> color_eyre::Result<()> {
     match resolve_lazyxrp_command(&args)? {
         None => {
             if let Some(url) = app::resolve_flare_rpc_url(&config.flare) {
-                let evm_key_set = env::var(&config.flare.fassets.evm_key_env).is_ok();
+                let evm_key_set = config.flare_evm_key.is_some();
                 check_flare_endpoint(
                     &url,
                     args.allow_insecure_rpc,
@@ -234,7 +251,8 @@ pub async fn run() -> color_eyre::Result<()> {
             app.run().await?;
         }
         Some(cmd) => {
-            xrpl::execute_cli_command(cmd, &rpc_url, &network, credential, yes).await?;
+            let wait = !args.no_wait;
+            xrpl::execute_cli_command(cmd, &rpc_url, &network, credential, yes, wait).await?;
         }
     }
     Ok(())

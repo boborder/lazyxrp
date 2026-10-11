@@ -56,6 +56,31 @@ impl Network {
         matches!(self, Self::Mainnet | Self::Xahau)
     }
 
+    /// `server_info.network_id` this network's nodes report (mainnet omits it: 0).
+    pub fn network_id(&self) -> u32 {
+        match self {
+            Self::Mainnet => 0,
+            Self::Testnet => 1,
+            Self::Devnet => 2,
+            Self::Xahau => 21337,
+            Self::XahauTest => 21338,
+        }
+    }
+
+    /// Refuse to sign when the endpoint's `network_id` is another network's (e.g. env
+    /// `XRPL_RPC_SERVER` pointing at mainnet under `--network testnet` would skip `--yes`).
+    pub fn check_endpoint_network_id(&self, reported: Option<u32>) -> color_eyre::Result<()> {
+        let got = reported.unwrap_or(0);
+        let want = self.network_id();
+        if got != want {
+            color_eyre::eyre::bail!(
+                "endpoint network_id {got} is not {} (network_id {want}); refusing to sign — check --network / XRPL_RPC_SERVER / rpc_server",
+                self.display_name()
+            );
+        }
+        Ok(())
+    }
+
     /// Cycle order for the TUI hotkey: mainnet→testnet→devnet→xahau→xahau-test→mainnet.
     pub fn next_network(&self) -> Self {
         match self {
@@ -137,5 +162,23 @@ mod tests {
             assert_eq!(json, format!("\"{s}\""));
             assert_eq!(serde_json::from_str::<Network>(&json).unwrap(), net);
         }
+    }
+
+    /// TC-203: endpoint `network_id` must match the selected network before signing
+    /// (mainnet nodes omit it = 0); a mainnet node behind `--network testnet` is refused.
+    #[test]
+    fn endpoint_network_id_must_match() {
+        for (net, ok, bad) in [
+            (Network::Mainnet, Some(0), Some(1)),
+            (Network::Testnet, Some(1), None),
+            (Network::Devnet, Some(2), Some(1)),
+            (Network::Xahau, Some(21337), Some(21338)),
+            (Network::XahauTest, Some(21338), None),
+        ] {
+            assert!(net.check_endpoint_network_id(ok).is_ok(), "{net:?} {ok:?}");
+            let err = net.check_endpoint_network_id(bad).expect_err("mismatch");
+            assert!(err.to_string().contains("network_id"), "{err}");
+        }
+        assert!(Network::Mainnet.check_endpoint_network_id(None).is_ok());
     }
 }

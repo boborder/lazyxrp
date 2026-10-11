@@ -12,7 +12,7 @@ pub(crate) const RIPPLE_EPOCH_UNIX: i64 = 946_684_800;
 /// Instances are **shared across components** (e.g. `TxRow.tx_json` is passed to both
 /// TxHistory panel and TxDetail overlay). **NEVER mutate** shared `ArcValue` via
 /// `Arc::make_mut` — clone the inner value first if modification is needed.
-/// See I-10 in `docs/agent/INVARIANTS.md`.
+/// Invariant I-10 (`docs/security.md`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ArcValue(pub Arc<serde_json::Value>);
 
@@ -274,6 +274,15 @@ impl std::fmt::Debug for GeneratedWalletKeys {
             .field("public_key_hex", &self.public_key_hex)
             .field("key_type", &self.key_type)
             .finish()
+    }
+}
+
+/// Seed copies (Action clones, popup state) are wiped when dropped.
+impl Drop for GeneratedWalletKeys {
+    fn drop(&mut self) {
+        use secrecy::zeroize::Zeroize;
+        self.master_seed.zeroize();
+        self.master_seed_hex.zeroize();
     }
 }
 
@@ -726,12 +735,16 @@ pub struct PollContext {
     pub flare_rpc_url: Option<String>,
     /// FTSOv2 feed names (e.g. `FXRP/USD`).
     pub flare_feeds: Vec<String>,
+    /// `[flare.fassets] expected_core_vault` — pinned Core Vault for FXRP Direct Mint Payments.
+    pub flare_expected_core_vault: Option<String>,
     /// `[flare.fassets] execute` — when false, C3 execute path is refused.
     pub flare_fassets_execute: bool,
     /// `[flare] display` — Off skips FTSO/FXRP read fetches (C3 execute URL unaffected).
     pub flare_display: crate::config::FlareDisplay,
     /// Env var name for Flare executor key (`[flare.fassets] evm_key_env`).
     pub flare_evm_key_env: String,
+    /// Executor key captured by `Config::new()` (env removed at startup).
+    pub flare_evm_key: Option<secrecy::SecretString>,
     /// `[flare.wallet] address` for Overview Flare wallet panel reads.
     pub flare_wallet_address: Option<String>,
     /// Serializes account_info → simulate → sign → submit for one wallet.

@@ -189,7 +189,7 @@ impl App {
             Box::new(MarketOracleTab::new(flare_display)),
             Box::new(AssetsTab::new()),
         ];
-        // UA-1: guard against tab/panel index mismatch (docs/agent/INVARIANTS.md)
+        // UA-1: guard against tab/panel index mismatch.
         debug_assert_eq!(
             TAB_TITLES.len(),
             panels.len(),
@@ -303,9 +303,11 @@ impl App {
                 oracle_pairs: self.config.xrpl.oracle_pairs.clone(),
                 flare_rpc_url: flare_rpc_url.clone(),
                 flare_feeds: flare_feeds.clone(),
+                flare_expected_core_vault: self.config.flare.fassets.expected_core_vault.clone(),
                 flare_fassets_execute: self.config.flare.fassets.execute,
                 flare_display: self.config.flare.display,
                 flare_evm_key_env: self.config.flare.fassets.evm_key_env.clone(),
+                flare_evm_key: self.config.flare_evm_key.clone(),
                 flare_wallet_address: self.config.flare.wallet.address.clone(),
                 submit_lock: Arc::new(tokio::sync::Mutex::new(())),
             },

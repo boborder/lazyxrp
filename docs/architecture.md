@@ -47,7 +47,7 @@ Module wiring summary: [`directory.md`](directory.md) §3. Tab splits and keys: 
 | `lazyxrp --self-uninstall` | アンインストール | `logging::init` 前に終了 |
 
 - エントリ: `src/lib.rs` — TUI → `App::new` → `run`、`-x` CLI → `xrpl::execute_cli_command(...)`.
-- 裸サブコマンド（`-x` なし）はエラーで `lazyxrp -x <name>` を案内。`watch` サブコマンドは削除（TUI は引数なし `lazyxrp`）。CLI の書き込み（`send`・`offer-cancel`）も **simulate → sign → submit**（Sequence/Fee は simulate 由来。LastLedgerSequence は simulate が返せばその値、無ければ `ledger_index + 20` を `parse_simulate_result` が補完）。`offers` は `account_offers` 読み取り。
+- 裸サブコマンド（`-x` なし）はエラーで `lazyxrp -x <name>` を案内。`watch` サブコマンドは削除（TUI は引数なし `lazyxrp`）。CLI の書き込み（`send`・`offer-create`・`offer-cancel`）も **network 照合 → simulate → sign → submit → validated 待ち**（Sequence/Fee は simulate 由来。LastLedgerSequence は simulate が返せばその値、無ければ `ledger_index + 20` を `parse_simulate_result` が補完）。validated 待ち（`wait_validated`）: 1 秒ごとに `tx` を確認し、最終結果が `tes*` 以外なら Err、validated ledger が LLS を過ぎても未取込なら Err（expired）、5 分（`WAIT_LIMIT`）経っても決着しなければ Err（ノード停止・`validated_ledger` 欠落への上限）。`--no-wait` で submit 直後に戻る。`offers` は `account_offers` 読み取り。`faucet [ADDR]` は testnet/devnet の公開 faucet へ `destination` を POST（ADDR 省略時は `generate_wallet_keys_local` でローカル生成し seed は表示のみ）。応答の `classicAddress` が依頼先と違えば Err。
 - スタック: `ratatui` + `crossterm`、非同期 `tokio`、XRPL は `src/xrpl/`。
 
 ## 2. ウォレット（行動契約）
@@ -57,13 +57,14 @@ Module wiring summary: [`directory.md`](directory.md) §3. Tab splits and keys: 
 Behavioral contract:
 
 - Credential resolution: `Config::new()` merges `XRPL_SEED` / `XRPL_MNEMONIC`, then `credential_from_secrets` → `PollContext.signing_credential` (`Option<SigningCredential>`).
-- All wallet TX: **simulate → sign → submit** (I-3). Mainnet / Xahau mainnet writes require CLI **`--yes`** (I-2).
+- All wallet TX: **network 照合 → simulate → sign → submit** (I-3). Mainnet / Xahau mainnet writes require CLI **`--yes`** (I-2).
+- Endpoint network 照合（TC-203）: 署名前に `RpcClient::ensure_network` が `server_info.network_id` を `Network::network_id()`（mainnet 0 = 省略、testnet 1、devnet 2、xahau 21337、xahau-test 21338）と比較し、不一致なら拒否。TUI は全 XRPL submit が `fetch_account_summary_for_submit`、CLI は各 write arm で実行。`XRPL_RPC_SERVER` / `rpc_server` / `--server` は preset より優先されるため（§6.2）、別ネットワークの endpoint で `--yes` ガードが外れるのを防ぐ。
 - Composer phases shipped: Payment, AccountSet, SetRegularKey, OfferCreate, OfferCancel, TrustSet, FXRP Mint (C2), FXRP Execute (C3). EscrowCreate: signing path exists; UI unwired (P-003).
 - OfferCancel: opening the composer sends `RefreshAccountOffers` (poll task → `account_offers`, first 200, signing account only → `XrplAccountOffers`); selected `seq` → `OfferCancelSubmit` (same simulate → sign → submit path). Not polled.
 - Payment validation: `signing::validate_payment_input` (shared by composer preview / submit / quote and poll `PaymentSubmit`) — destination classic checksum or X-address, positive amount (XRP drops / IOU value), IOU currency + issuer checksum, Send max spec. Poll adds X-address network, self-pay, balance.
 - Cross-currency Payment: optional `send_max` spec (same parser as OfferCreate) → `SendMax`, rippled default paths (no `Paths`, no partial payment). XRP→XRP SendMax rejected. With SendMax: self-payment allowed (swap), balance check uses SendMax XRP drops (0 for IOU SendMax). Dry paths fail in simulate (`tecPATH_DRY`/`tecPATH_PARTIAL`).
 - Send max quote (`p`): `PaymentQuote` → poll task `ripple_path_find` from the signing account with `source_currencies` = Send max field's currency prefix (empty + IOU Amount → XRP) → cheapest alternative + `[xrpl] slippage_bps` (default 100 = 1%, rounded up) → `PaymentQuoteOk(spec)` fills the field. Read-only; send still goes simulate → sign → submit.
-- FXRP C2: 32-byte memo to Core Vault; C3: pasted FDC proof JSON + `[flare.fassets] execute=true`.
+- FXRP C2: 32-byte memo to Core Vault (signed only if it equals `[flare.fassets] expected_core_vault`, `flare::check_core_vault`); C3: pasted FDC proof JSON + `[flare.fassets] execute=true`.
 
 ## 3. ランタイム・データフロー
 
@@ -89,6 +90,7 @@ WebSocket ledger close coalesces poll triggers (`MIN_POLL_INTERVAL`). Scheduled 
 | Flag | Effect |
 |------|--------|
 | `--yes` | Skip mainnet write confirmation (CLI + TUI submit) |
+| `--no-wait` | `-x` writes return after submit (default: wait for validated, non-`tes` = non-zero exit) |
 | `--network` | `mainnet` \| `testnet` \| `devnet` \| `xahau` \| `xahau-test` |
 | `--server`, `--ws-server` | Custom RPC/WS (highest priority) |
 | `--allow-insecure-rpc` | Allow `http://` / `ws://` (XRPL and Flare RPC); signing is still refused over insecure endpoints |

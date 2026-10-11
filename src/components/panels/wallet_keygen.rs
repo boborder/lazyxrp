@@ -56,7 +56,7 @@ impl WalletPanel {
                 warning_style.bold(),
             )),
             Line::from(Span::styled(
-                "   to activate · Esc / g to dismiss",
+                "   to activate · Esc to dismiss · g new key",
                 theme::secondary_style(),
             )),
         ]);
@@ -107,6 +107,14 @@ mod tests {
         assert!(out.contains("Type:   ed25519  Seed hex: DEADBEEF01"));
         assert!(out.contains("Save the seed offline!"));
         assert!(out.contains("Set XRPL_SEED=<seed>"));
-        assert!(out.contains("Esc / g to dismiss"));
+        // `g` regenerates (it does not dismiss); only Esc dismisses.
+        assert!(out.contains("Esc to dismiss"));
+        assert!(!out.contains("Esc / g"));
+
+        // Seed is not left on screen across a network switch (TC-213).
+        panel
+            .update(&Action::NetworkChange(crate::network::Network::Devnet))
+            .unwrap();
+        assert!(popup_rendered(&panel, 100, 24).trim().is_empty());
     }
 }
