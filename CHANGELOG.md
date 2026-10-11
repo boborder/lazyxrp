@@ -4,6 +4,8 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-10-11
+
 ### Added
 
 - `-x offer-create <GETS> <PAYS>` — place a DEX offer from the CLI (specs `XRP:drops` / `CUR:issuer:value`, checked before any RPC).
@@ -60,5 +62,6 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 See [GitHub Releases](https://github.com/boborder/lazyxrp/releases) for 0.2.11 and older.
 
-[Unreleased]: https://github.com/boborder/lazyxrp/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/boborder/lazyxrp/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/boborder/lazyxrp/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/boborder/lazyxrp/compare/v0.2.11...v0.3.0
