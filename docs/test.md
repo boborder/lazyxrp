@@ -39,7 +39,7 @@ cargo deny check
 | TC-010-012 | P1 | `src/xrpl/format.rs` | format_amount — None dash / XRP drops string / issued currency object |
 | TC-013, TC-074 | P1 | `src/xrpl/parse.rs` | account_nfts — parse response into NftRow vec; tfMutable flag (dNFT) |
 | TC-014 | P1 | `src/xrpl/parse.rs` | account_lines — parse response into TrustLineRow vec |
-| TC-015 | P2 | `src/xrpl/parse.rs` | amm_info — parse response into AmmSummary |
+| TC-015 | P2 | `src/xrpl/parse.rs` | amm_info — real rippled shape (`amount` / `amount2` / `lp_token` / `trading_fee`; assets implied by the amounts) into AmmSummary |
 | TC-016 | P2 | `src/xrpl/parse.rs` | account_tx — parse response into TxRow vec (with direction) |
 | TC-017 | P1 | `src/xrpl/parse.rs` | book_offers — parse response into OfferRow vec |
 | TC-018 | P2 | `src/xrpl/parse.rs` | server_info/fee — parse response into summary structs |
@@ -90,7 +90,7 @@ cargo deny check
 | TC-084 | P2 | `src/xrpl/format.rs` | path_find_rows_from — display rows; cheapest-first ordering |
 | TC-085-086 | P2 | `src/xrpl/types.rs` | asset_display_name — known hex codes; unknown passthrough |
 | TC-087 | P2 | `src/xrpl/poll.rs` | Poll trigger — coalesces rapid bursts |
-| TC-088 | P0 | `src/xrpl/poll.rs` | Mainnet guard: all submit paths reject without `--yes` (R-006) |
+| TC-088 | P0 | `src/xrpl/submit.rs` | Mainnet guard: all submit paths reject without `--yes` (R-006) |
 | TC-089/TC-144 | P0 | `src/xrpl/parse.rs`, `src/xrpl/poll.rs` | account_tx result mapping — not-found → empty history (I-7); action follows append flag (Ok/Err × append matrix) |
 | TC-093 | P1 | `src/components/shared/tx_detail/mod.rs` | TxDetail render cache — invalidated on open |
 | TC-094 | P2 | `src/components/shared/tx_detail/parsers.rs` | TxDetail parser registry — required types, no duplicates |
@@ -103,8 +103,8 @@ cargo deny check
 | TC-103 | P2 | `src/xrpl/ws.rs`, `src/components/shared/fps.rs` | Duplicate ledger-close emits one trigger; FPS counts draws not ticks |
 | TC-104 | P1 | `src/xrpl/parse.rs`, `src/components/shared/fps.rs` | account_tx marker survives parsing; tick-rate label refreshes after 1s |
 | TC-105 | P2 | `src/xrpl/client.rs` | Local HTTP 429 retried before success |
-| TC-106 | P1 | `src/xrpl/poll.rs`, `src/app.rs` | Submit failure emits error + account resync; user actions mark dirty |
-| TC-107 | P1 | `src/xrpl/poll.rs`, `src/app.rs` | Closed action channel returns failure without panic; ticks redraw |
+| TC-106 | P1 | `src/xrpl/submit.rs`, `src/app.rs` | Submit failure emits error + account resync; user actions mark dirty |
+| TC-107 | P1 | `src/xrpl/submit.rs`, `src/app.rs` | Closed action channel returns failure without panic; ticks redraw |
 | TC-108 | P1 | `src/app.rs` | Dirty-render — `run()` draws once per loop iteration when `needs_draw` (`draw_frame`: clears dirty, counts toward FPS). No automated test (needs a real terminal): smoke via PTY — splash and main UI must appear without a resize |
 | TC-109 | P2 | `src/components/tabs/nft.rs` | NFT with URI emits `NftImageRequest` |
 | TC-110 | P2 | `src/components/tabs/nft.rs` | NFT without URI emits no preview request |
@@ -180,7 +180,7 @@ cargo deny check
 | TC-182 | — | `install.sh`, `.github/workflows/cd.yml` | Manual: token not in argv (stub-curl check); `cargo package` token-free then `publish --no-verify` |
 | TC-183 | P2 | `src/xrpl/parse.rs` | `account_offers` rows — lowercase keys mapped; entries without u32 `seq` skipped |
 | TC-184 | P1 | `src/signing.rs` | OfferCancel simulate JSON + signed blob carry `OfferSequence`/`Sequence` |
-| TC-185 | P1 | `src/components/panels/wallet.rs`, `src/xrpl/poll.rs` | OfferCancel composer — `8` fetches offers, `j`/`s` queue selected seq, no-selection error, fetch error rendered; mainnet without `--yes` rejected |
+| TC-185 | P1 | `src/components/panels/wallet.rs`, `src/xrpl/submit.rs` | OfferCancel composer — `8` fetches offers, `j`/`s` queue selected seq, no-selection error, fetch error rendered; mainnet without `--yes` rejected (TC-088 also covers EscrowCreate / EscrowFinish·Cancel) |
 | TC-186 | P1 | `src/signing.rs` | Payment SendMax — set for cross-currency (no `Paths`), XRP→XRP SendMax rejected |
 | TC-187 | P1 | `src/signing.rs`, `src/components/panels/wallet.rs`, `wallet_keys.rs` | `send_max_xrp_drops` (XRP→drops, IOU→0, invalid→Err); composer Send max row editing, trimmed/empty→`None`, preview `spend ≤` |
 | TC-188 | P1 | `src/xrpl/cli_exec.rs` | CLI `send` — local JSON-RPC sees exactly `server_info → account_info → simulate → submit` (network check first; no unsimulated signing) |
@@ -194,22 +194,34 @@ cargo deny check
 | TC-196 | P0 | `src/xrpl/cli_exec.rs` | CLI `send` — rejected submit (`tefPAST_SEQ`) returns Err → non-zero exit |
 | TC-197 | P1 | `src/signing.rs` | `validate_payment_input` — destination checksum / X-address, positive amount, IOU currency+issuer, SendMax spec (XRP→XRP rejected, blank = none) |
 | TC-198 | P1 | `src/components/panels/wallet.rs` | Payment preview + `s` share validation — bad checksum / bad Send max stay orange and submit refuses with flash |
-| TC-199 | P1 | `src/xrpl/poll.rs`, `src/test_support.rs` | Poll write paths vs local JSON-RPC — Payment / OfferCancel `server_info → account_info → simulate → submit` → Ok; quote sends `source_currencies`, returns slippage spec |
+| TC-199 | P1 | `src/xrpl/submit.rs`, `src/test_support.rs` | Poll write paths vs local JSON-RPC — Payment / OfferCancel `server_info → account_info → simulate → submit` → Ok; quote sends `source_currencies`, returns slippage spec |
 | TC-200 | P0 | `src/xrpl/parse.rs` | `simulate` without `LastLedgerSequence` (rippled 3.4.1 shape) → filled `ledger_index + 20` so signing proceeds; server value kept |
 | TC-201 | P1 | `src/xrpl/cli_exec.rs` | `faucet` — testnet/devnet URLs only (mainnet/xahau refused); POSTs `destination`, reports amount + hash; response naming another address → Err |
 | TC-202 | P1 | `src/xrpl/cli_exec.rs` | CLI write wait — polls `tx` until validated (`tes` → Ok, `tec` → Err with code); not found after validated ledger > LLS → Err (expired); node that never advances / omits `validated_ledger` → Err (timed out, 5 min cap) |
-| TC-203 | P0 | `src/network.rs`, `src/xrpl/cli_exec.rs`, `src/xrpl/poll.rs` | Endpoint `network_id` must match the selected network before signing (mainnet omits = 0); mainnet node under `--network testnet` refused after `server_info` only (CLI); devnet session on a testnet node refused (TUI) |
-| TC-204 | P0 | `src/xrpl/parse.rs`, `src/xrpl/poll.rs` | simulate `Sequence` ≠ request or `LastLedgerSequence` ≤ / > `ledger_index + 100` → refused before signing (all write paths) |
+| TC-203 | P0 | `src/network.rs`, `src/xrpl/cli_exec.rs`, `src/xrpl/submit.rs` | Endpoint `network_id` must match the selected network before signing (mainnet omits = 0); mainnet node under `--network testnet` refused after `server_info` only (CLI); devnet session on a testnet node refused (TUI) |
+| TC-204 | P0 | `src/xrpl/parse.rs`, `src/xrpl/submit.rs` | simulate `Sequence` ≠ request or `LastLedgerSequence` ≤ / > `ledger_index + 100` → refused before signing (all write paths) |
 | TC-205 | P0 | `src/flare.rs` | FXRP C2 Core Vault: signed only on exact match with `expected_core_vault`; mismatch / unset → refused |
 | TC-206 | P1 | `src/xrpl/format.rs` | Quote picks only alternatives in requested Send max currency/issuer; mismatch → Err; XRP slippage overflow → Err (TC-193 extended) |
-| TC-207 | P1 | `src/signing.rs`, `src/xrpl/poll.rs` | Submitted tx hash = SHA-512Half(`TXN\0` ‖ blob), independent vector; node-reported hash ignored |
+| TC-207 | P1 | `src/signing.rs`, `src/xrpl/submit.rs` | Submitted tx hash = SHA-512Half(`TXN\0` ‖ blob), independent vector; node-reported hash ignored |
 | TC-208 | P1 | `src/xrpl/parse.rs` | simulate `engine_result(_message)` control characters stripped |
 | TC-209 | P1 | `src/xrpl/cli_exec.rs` | CLI wait: tx validated after ledger passes LLS is re-checked once → Ok, not expired (TC-202 extended) |
 | TC-210 | P1 | `src/xrpl/client.rs` | JSON-RPC endpoint answering 307 → Err; request not re-posted to the redirect target |
 | TC-211 | P1 | `src/signing.rs` | `XRP:<drops>:<tail>` rejected (SendMax and OfferCreate specs) |
 | TC-212 | P1 | `src/xrpl/cli_exec.rs` | `-x send 0` refused by `validate_payment_input` before any RPC |
 | TC-213 | P1 | `src/components/panels/wallet_keygen.rs`, `src/config.rs` | Keygen popup cleared on NetworkChange, label "Esc to dismiss"; `Config::new` takes + removes the Flare EVM key env (TC-049 extended) |
-| TC-214 | P1 | `src/xrpl/poll.rs` | TUI submit result = `<local hash> · fee N drops` (simulate fee that was signed) |
+| TC-214 | P1 | `src/xrpl/submit.rs` | TUI submit result = `<local hash> · fee N drops` (simulate fee that was signed) |
+| TC-215 | P1 | `src/signing.rs` | Escrow duration `90s`/`30m`/`2h`/`7d` → seconds; empty, unitless, zero, negative, fractional, unknown unit, u32 overflow rejected |
+| TC-216 | P1 | `src/signing.rs` | EscrowCreate input — classic Destination, XRP > 0, FinishAfter required, CancelAfter optional and strictly later |
+| TC-217 | P1 | `src/signing.rs` | EscrowCreate / EscrowFinish / EscrowCancel simulate JSON + signed blobs carry Amount/Destination/FinishAfter/CancelAfter and Owner/OfferSequence |
+| TC-218 | P1 | `src/xrpl/parse.rs` | Escrow rows from `account_objects` (owner, destination, times, condition, object `Sequence`); creating tx → `Sequence`, or `TicketSequence` when 0 (API v1 and v2 shapes) |
+| TC-219 | P1 | `src/components/panels/wallet.rs` | EscrowCreate composer — `9` opens; invalid form flashes; valid form queues trimmed params; Esc → picker row 9 |
+| TC-220 | P1 | `src/components/panels/wallet.rs` | Escrows composer — `0` fetches; `s` finish / `c` cancel selected; no selection, unresolved seq, finish of a condition escrow refused with flash |
+| TC-221 | P1 | `src/xrpl/submit.rs` | Escrow paths vs local JSON-RPC — Create simulates the absolute FinishAfter (now + 1h) / CancelAfter it signs; Finish carries Owner/OfferSequence; `account_escrows` resolves seq via `tx` |
+| TC-222 | P1 | `src/signing.rs` | AMM input table — deposit: same asset / zero amount rejected; withdraw: same asset, missing / bad issuer, amount in asset field, LP `0` / non-numeric rejected; empty LP = withdraw all OK |
+| TC-223 | P1 | `src/signing.rs` | AMM tx JSON + signed blobs — deposit `tfTwoAsset` with Asset/Asset2 from amounts; withdraw all `tfWithdrawAll`; LP `tfLPToken` + `LPTokenIn` |
+| TC-224 | P2 | `src/xrpl/parse.rs` | `amm_info` LP token identity (`lp_token` or `LPToken`) → `(currency, AMM account)` |
+| TC-225 | P1 | `src/components/panels/wallet.rs` | AMM composers — `d` / `w` open; invalid form flashes `AMM ·`; valid forms queue trimmed params; empty LP = withdraw all; Esc → picker rows 10 / 11 |
+| TC-226 | P1 | `src/xrpl/submit.rs` | AMM paths vs local JSON-RPC — deposit simulates `tfTwoAsset`; withdraw by LP calls `amm_info` before simulate and signs `LPTokenIn` with its currency / issuer |
 
 
 
@@ -242,14 +254,16 @@ cargo deny check
 
 | Risk | Covered by | Evidence |
 |------|------------|----------|
-| R-006 mainnet write guard bypass | TC-088 `mainnet_write_guard_blocks` | `src/xrpl/poll.rs` |
+| R-006 mainnet write guard bypass | TC-088 `mainnet_write_guard_blocks` | `src/xrpl/submit.rs` |
 | R-007 config merge precedence | TC-033-035/TC-092 `config_source_precedence`, TC-036 | `src/config.rs` |
 | R-001 seed priority chain | TC-045/046/049 `credential_from_secrets` + env override | `src/signing.rs`, `src/config.rs` |
-| R-016 endpoint network ≠ selected network | TC-203 `endpoint_network_id_must_match` + CLI/TUI refusal | `src/network.rs`, `src/xrpl/cli_exec.rs`, `src/xrpl/poll.rs` |
+| R-016 endpoint network ≠ selected network | TC-203 `endpoint_network_id_must_match` + CLI/TUI refusal | `src/network.rs`, `src/xrpl/cli_exec.rs`, `src/xrpl/submit.rs` |
 
 ## Testnet E2E
 
 **Automated (opt-in):** `mise run e2e-testnet` (`tests/testnet_e2e.rs`, `#[ignore]`, not in CI): `-x faucet` ×2 → `send` → `offer-create` → `offers` → `offer-cancel` → `offers` = `[]`, every write `Validated: tesSUCCESS`. Run before each release. Passed 2026-10-11 (≈ 27 s).
+
+**AMM (manual, 2026-10-11):** pool XRP/TST created on testnet by a throwaway xrpl.js script (lazyxrp has no AMMCreate). CLI `-x amm-deposit XRP:1000000 TST:<iss>:10` and `-x amm-withdraw XRP TST:<iss> --lp 1000`, then TUI composer `d` (deposit, Amount2 limited the XRP side to 0.5 XRP) and `w` with empty LP (withdraw all; the sole LP's withdrawal deleted the pool): all `tesSUCCESS`.
 
 **2026-10-10 CLI (manual, 0.3.0)** — testnet rippled 3.4.1, faucet account `r15nczQYUNYBVLws8M9zkFE2SaSkU4kkk`. All hashes `validated: true`, `tesSUCCESS`.
 
@@ -274,6 +288,16 @@ First run failed every write with `simulate tx_json missing LastLedgerSequence` 
 | Composer `8` → `s` | offer gone (`(no open offers)`) | `DB7A79BDFCB81373FB98BDD40886A9593A986D2FC3F11D0EDE6833297CAF4EA8` |
 
 Notes: the first quote returned "no payment path found" — correct, the issuer lacked DefaultRipple (`simulate` = `tecPATH_DRY`). **S-017** found here: a mainnet `XRPL_RPC_SERVER` in the shell silently overrode `--network testnet` (reads hit mainnet) → TC-203; live check: mainnet endpoint + `--network testnet` refused (exit 1), testnet endpoint validated `868477854FBAD38A1B22629659BA4A98DC945E994422728DE99805BBF43B6209`.
+
+**2026-10-11 TUI escrow (PTY driven, pyte screen)** — owner `rGyZL1VDvkzBUWY7rwJ4BaiXRaxH85wHAR`, destination `rLo2GiHSRivGN17CZhJGFpBbYGXEACpdnJ` (both `-x faucet`). All `tesSUCCESS` in Tx History.
+
+| Step | Result | Tx hash |
+|------|--------|---------|
+| Composer `9` EscrowCreate 1 XRP, FinishAfter `90s` | owner 1, list `#21443113` (seq resolved) | `4A7D8FE1756DB468A7B996A8F28E471D8E5E8A655D2E7993B142685CA31812DA` |
+| Composer `9` EscrowCreate 1 XRP, `60s` / CancelAfter `120s` | list `#21443114` with finish + cancel times | `40ADC91F1B566A615761EFD8C10293765D3C1461D8852EA677797850DDFB7A8A` |
+| `0` → `s` before FinishAfter | `simulate tecNO_PERMISSION` flash, nothing signed | — |
+| `0` → `c` on `#21443114` after CancelAfter | refunded, owner 2 → 1 | `4B0A8C61AA9AB183A3D7E2F7CF61C112116DF762F8DF10B73BD8C2E2C45A8603` |
+| `0` → `s` on `#21443113` | finished, owner 0, list `(no escrows)` | `D29C54F24D0AF9DBCE735475FA0270578476C313BE4D0B0A81A303D88FAF1B54` |
 
 Remaining gaps (unimplemented by design — low priority):
 

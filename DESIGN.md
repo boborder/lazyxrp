@@ -161,12 +161,16 @@ Defaults: [`config.json5`](config.json5) `keybindings.Splash`. User merge: `~/.c
 |---------|-----|--------|
 | Table, modal closed | `j`/`k`, arrows | Row + scrollbar |
 | Table | `Enter` | TX detail |
-| Wallet | `t` | Composer picker: Payment, AccountSet, SetRegularKey, OfferCreate, TrustSet, FXRP Mint, Execute, OfferCancel |
-| Picker | `Tab`, `j`/`k`, arrows, `1`–`8` | Phase select |
+| Wallet | `t` | Composer picker: Payment, AccountSet, SetRegularKey, OfferCreate, TrustSet, FXRP Mint, Execute, OfferCancel, EscrowCreate, Escrows, AMMDeposit, AMMWithdraw |
+| Picker | `Tab`, `j`/`k`, arrows, `1`–`9`, `0`, `d`, `w` | Phase select; the list scrolls to keep the selection visible when the wallet panel is short |
 | Forms | `Tab`, `[` `]`, `Enter` | Field nav; AccountSet `e` edits |
 | Payment | `i` | XRP ↔ IOU (resets row); last row **Send max** (`XRP:drops` / `CUR:issuer:value`, empty = same currency) → cross-currency via default paths, preview adds `spend ≤ …` |
 | Payment | `p` | Quote Send max via `ripple_path_find` in the Send max field's currency (`XRP` or `CUR:issuer`; empty + IOU Amount → XRP), + `slippage_bps`; fills the field |
 | OfferCancel | `j`/`k`, `s` | Select own open offer (fetched on open), cancel it |
+| EscrowCreate | form | Destination, Amount XRP, FinishAfter, CancelAfter (optional) — times relative to submit: `90s` / `30m` / `2h` / `7d`; CancelAfter must be later than FinishAfter |
+| Escrows | `j`/`k`, `s`, `c` | Escrows you own or receive (fetched on open; `?` seq = creating tx not resolved); `s` EscrowFinish, `c` EscrowCancel. Crypto-condition escrows can only be cancelled |
+| AMMDeposit | form | Amount, Amount2 — `XRP:drops` / `CUR:issuer:value`, both maxima; the pair names the pool (two-asset only) |
+| AMMWithdraw | form | Asset, Asset2 (`XRP` / `CUR:issuer`), LP amount — empty = withdraw all |
 | Submit | `s`, `Ctrl-s` | Queue; preview color as in §5 |
 
 **Tx history:** `f` filter (`Enter` confirm, `Esc` cancel); `m` next page when marker.

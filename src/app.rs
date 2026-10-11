@@ -633,6 +633,16 @@ impl App {
                 Action::EscrowCreateSubmit(params) => {
                     self.send_poll(PollCommand::EscrowCreateSubmit(params.clone()))
                 }
+                Action::RefreshAccountEscrows => self.send_poll(PollCommand::AccountEscrows),
+                Action::EscrowCloseSubmit(params) => {
+                    self.send_poll(PollCommand::EscrowCloseSubmit(params.clone()))
+                }
+                Action::AmmDepositSubmit(params) => {
+                    self.send_poll(PollCommand::AmmDepositSubmit(params.clone()))
+                }
+                Action::AmmWithdrawSubmit(params) => {
+                    self.send_poll(PollCommand::AmmWithdrawSubmit(params.clone()))
+                }
                 Action::OfferCreateSubmit(params) => {
                     self.send_poll(PollCommand::OfferCreateSubmit(params.clone()))
                 }

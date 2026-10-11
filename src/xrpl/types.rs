@@ -635,13 +635,59 @@ pub struct SetRegularKeySubmitParams {
     pub skip_mainnet_prompt: bool,
 }
 
-/// EscrowCreate from the Wallet form.
+/// EscrowCreate from the Wallet composer (XRP only, time-based; no crypto-condition).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EscrowCreateSubmitParams {
     pub destination: String,
     pub amount_xrp: String,
-    /// Seconds since Ripple Epoch; if 0, defaults to 30 days from now.
+    /// Relative duration from submit time (`30m`, `2h`, `7d`); becomes `FinishAfter`.
     pub finish_after: String,
+    /// Optional relative duration (empty = none); becomes `CancelAfter`, must exceed `finish_after`.
+    pub cancel_after: String,
+    pub skip_mainnet_prompt: bool,
+}
+
+/// One escrow the signing account owns or receives (`account_objects` type `escrow`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EscrowRow {
+    pub owner: String,
+    pub destination: String,
+    /// Formatted amount (`1.5 XRP`).
+    pub amount: String,
+    /// Ripple-epoch seconds.
+    pub finish_after: Option<u32>,
+    pub cancel_after: Option<u32>,
+    /// Crypto-condition escrows cannot be finished here (no fulfillment input).
+    pub has_condition: bool,
+    /// EscrowCreate's `Sequence` (or `TicketSequence`); `None` when it could not be resolved.
+    pub offer_sequence: Option<u32>,
+    /// The EscrowCreate tx (only EscrowCreate modifies an Escrow) — used to resolve `offer_sequence`.
+    pub previous_txn_id: String,
+}
+
+/// EscrowFinish (`cancel == false`) or EscrowCancel from the Wallet composer.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EscrowCloseSubmitParams {
+    pub owner: String,
+    pub offer_sequence: u32,
+    pub cancel: bool,
+    pub skip_mainnet_prompt: bool,
+}
+
+/// Two-asset AMMDeposit: amount specs (`XRP:drops` / `CUR:issuer:value`) are maxima and name the pool.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AmmDepositSubmitParams {
+    pub amount: String,
+    pub amount2: String,
+    pub skip_mainnet_prompt: bool,
+}
+
+/// AMMWithdraw: pool assets (`XRP` / `CUR:issuer`); empty `lp_amount` = withdraw all.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AmmWithdrawSubmitParams {
+    pub asset: String,
+    pub asset2: String,
+    pub lp_amount: String,
     pub skip_mainnet_prompt: bool,
 }
 
@@ -700,6 +746,12 @@ pub enum PollCommand {
     SetRegularKeySubmit(SetRegularKeySubmitParams),
     /// Sign and submit EscrowCreate (wallet form).
     EscrowCreateSubmit(EscrowCreateSubmitParams),
+    /// Escrows the signing account owns or receives (Wallet escrow composer).
+    AccountEscrows,
+    /// Sign and submit EscrowFinish / EscrowCancel.
+    EscrowCloseSubmit(EscrowCloseSubmitParams),
+    AmmDepositSubmit(AmmDepositSubmitParams),
+    AmmWithdrawSubmit(AmmWithdrawSubmitParams),
     OfferCreateSubmit(OfferCreateSubmitParams),
     /// `account_offers` for the signing account (Wallet OfferCancel composer).
     AccountOffers,

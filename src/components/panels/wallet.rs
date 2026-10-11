@@ -19,7 +19,7 @@ use crate::{
     },
     config::Config,
     network::Network,
-    xrpl::{AccountOfferRow, AccountSummary, GeneratedWalletKeys},
+    xrpl::{AccountOfferRow, AccountSummary, EscrowRow, GeneratedWalletKeys},
 };
 
 /// Dropdown options for SetFlag / ClearFlag (must match [`crate::signing::parse_account_set_flag_choice`]).
@@ -102,9 +102,35 @@ enum ComposerPhase {
         offers: Option<Result<Vec<AccountOfferRow>, String>>,
         selected: usize,
     },
+    /// Lock XRP until a relative time (`FinishAfter`), optional refund deadline (`CancelAfter`).
+    EscrowCreate {
+        row: usize,
+        destination: String,
+        amount_xrp: String,
+        finish_after: String,
+        cancel_after: String,
+    },
+    /// Finish or cancel an escrow the signing account owns or receives (`None` = loading).
+    Escrows {
+        escrows: Option<Result<Vec<EscrowRow>, String>>,
+        selected: usize,
+    },
+    /// Two-asset AMMDeposit: both amount specs are maxima and name the pool.
+    AmmDeposit {
+        row: usize,
+        amount: String,
+        amount2: String,
+    },
+    /// AMMWithdraw: pool assets; empty `lp_amount` = withdraw all.
+    AmmWithdraw {
+        row: usize,
+        asset: String,
+        asset2: String,
+        lp_amount: String,
+    },
 }
 
-const COMPOSER_KIND_COUNT: usize = 8;
+const COMPOSER_KIND_COUNT: usize = 12;
 
 #[path = "wallet_composer.rs"]
 mod composer;
@@ -300,6 +326,55 @@ impl Component for WalletPanel {
             Action::OfferCancelSubmitErr(msg) => {
                 self.set_submit_flash(SubmitFlash::Error(format!("OfferCancel · {msg}")));
             }
+            Action::XrplAccountEscrows(rows) => {
+                if let Some(ComposerPhase::Escrows { escrows, selected }) = &mut self.composer {
+                    *selected = (*selected).min(rows.len().saturating_sub(1));
+                    *escrows = Some(Ok(rows.clone()));
+                }
+            }
+            Action::XrplError(e) if e.starts_with("account_escrows") => {
+                if let Some(ComposerPhase::Escrows { escrows, .. }) = &mut self.composer {
+                    *escrows = Some(Err(e.clone()));
+                }
+            }
+            Action::EscrowCreateSubmitOk(hash) => {
+                self.set_submit_flash(SubmitFlash::Success(format!(
+                    "EscrowCreate submitted · {hash}"
+                )));
+                if matches!(&self.composer, Some(ComposerPhase::EscrowCreate { .. })) {
+                    self.composer = None;
+                    self.is_form_editing = false;
+                    return Ok(Some(Action::SetKeymapSuppression(false)));
+                }
+            }
+            Action::EscrowCreateSubmitErr(msg) => {
+                self.set_submit_flash(SubmitFlash::Error(format!("EscrowCreate · {msg}")));
+            }
+            Action::EscrowCloseSubmitOk(hash) => {
+                self.set_submit_flash(SubmitFlash::Success(format!("Escrow closed · {hash}")));
+                if matches!(&self.composer, Some(ComposerPhase::Escrows { .. })) {
+                    self.composer = None;
+                    self.is_form_editing = false;
+                    return Ok(Some(Action::SetKeymapSuppression(false)));
+                }
+            }
+            Action::EscrowCloseSubmitErr(msg) => {
+                self.set_submit_flash(SubmitFlash::Error(format!("Escrow · {msg}")));
+            }
+            Action::AmmSubmitOk(msg) => {
+                self.set_submit_flash(SubmitFlash::Success(format!("{msg} submitted")));
+                if matches!(
+                    &self.composer,
+                    Some(ComposerPhase::AmmDeposit { .. } | ComposerPhase::AmmWithdraw { .. })
+                ) {
+                    self.composer = None;
+                    self.is_form_editing = false;
+                    return Ok(Some(Action::SetKeymapSuppression(false)));
+                }
+            }
+            Action::AmmSubmitErr(msg) => {
+                self.set_submit_flash(SubmitFlash::Error(format!("AMM · {msg}")));
+            }
             Action::TrustSetSubmitOk(hash) => {
                 self.set_submit_flash(SubmitFlash::Success(format!("TrustSet submitted · {hash}")));
                 if matches!(&self.composer, Some(ComposerPhase::TrustSet { .. })) {
@@ -421,6 +496,22 @@ impl Component for WalletPanel {
                     self.composer = Some(ComposerPhase::PickKind { selected: 7 });
                     None
                 }
+                Some(ComposerPhase::EscrowCreate { .. }) => {
+                    self.composer = Some(ComposerPhase::PickKind { selected: 8 });
+                    None
+                }
+                Some(ComposerPhase::Escrows { .. }) => {
+                    self.composer = Some(ComposerPhase::PickKind { selected: 9 });
+                    None
+                }
+                Some(ComposerPhase::AmmDeposit { .. }) => {
+                    self.composer = Some(ComposerPhase::PickKind { selected: 10 });
+                    None
+                }
+                Some(ComposerPhase::AmmWithdraw { .. }) => {
+                    self.composer = Some(ComposerPhase::PickKind { selected: 11 });
+                    None
+                }
             });
         }
 
@@ -539,6 +630,31 @@ impl Component for WalletPanel {
             return Ok(self.queue_submit_offer_cancel());
         }
 
+        if matches!(&self.composer, Some(ComposerPhase::EscrowCreate { .. }))
+            && submit_shortcut(&key, self.is_form_editing)
+        {
+            return Ok(self.queue_submit_escrow_create());
+        }
+
+        if matches!(
+            &self.composer,
+            Some(ComposerPhase::AmmDeposit { .. } | ComposerPhase::AmmWithdraw { .. })
+        ) && submit_shortcut(&key, self.is_form_editing)
+        {
+            return Ok(self.queue_submit_amm());
+        }
+
+        if matches!(&self.composer, Some(ComposerPhase::Escrows { .. })) {
+            if submit_shortcut(&key, false) {
+                return Ok(self.queue_submit_escrow_close(false));
+            }
+            if matches!(key.code, KeyCode::Char('c') | KeyCode::Char('C'))
+                && !key.modifiers.contains(KeyModifiers::CONTROL)
+            {
+                return Ok(self.queue_submit_escrow_close(true));
+            }
+        }
+
         if matches!(&self.composer, Some(ComposerPhase::TrustSet { .. }))
             && submit_shortcut(&key, self.is_form_editing)
         {
@@ -620,6 +736,68 @@ impl Component for WalletPanel {
                 }
                 KeyCode::Backspace => {
                     proof_json.pop();
+                    return Ok(None);
+                }
+                _ => {}
+            }
+        }
+
+        if self.is_form_editing {
+            let target = match &mut self.composer {
+                Some(ComposerPhase::AmmDeposit {
+                    row,
+                    amount,
+                    amount2,
+                }) => Some(if *row == 0 { amount } else { amount2 }),
+                Some(ComposerPhase::AmmWithdraw {
+                    row,
+                    asset,
+                    asset2,
+                    lp_amount,
+                }) => Some(match *row {
+                    0 => asset,
+                    1 => asset2,
+                    _ => lp_amount,
+                }),
+                _ => None,
+            };
+            if let Some(target) = target {
+                match key.code {
+                    KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        target.push(c);
+                        return Ok(None);
+                    }
+                    KeyCode::Backspace => {
+                        target.pop();
+                        return Ok(None);
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        if let Some(ComposerPhase::EscrowCreate {
+            row,
+            ref mut destination,
+            ref mut amount_xrp,
+            ref mut finish_after,
+            ref mut cancel_after,
+        }) = self.composer
+            && self.is_form_editing
+        {
+            let target = match row {
+                0 => destination,
+                1 => amount_xrp,
+                2 => finish_after,
+                _ => cancel_after,
+            };
+            match key.code {
+                KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    target.push(c);
+                    return Ok(None);
+                }
+                KeyCode::Backspace => {
+                    target.pop();
                     return Ok(None);
                 }
                 _ => {}
@@ -723,6 +901,10 @@ impl Component for WalletPanel {
                         5 => self.open_fxrp_direct_mint_composer(),
                         6 => self.open_fxrp_execute_direct_mint_composer(),
                         7 => return Ok(Some(self.open_offer_cancel_composer())),
+                        8 => self.open_escrow_create_composer(),
+                        9 => return Ok(Some(self.open_escrows_composer())),
+                        10 => self.open_amm_deposit_composer(),
+                        11 => self.open_amm_withdraw_composer(),
                         _ => {}
                     },
                     KeyCode::Char('1') => self.open_payment_composer(),
@@ -733,6 +915,10 @@ impl Component for WalletPanel {
                     KeyCode::Char('6') => self.open_fxrp_direct_mint_composer(),
                     KeyCode::Char('7') => self.open_fxrp_execute_direct_mint_composer(),
                     KeyCode::Char('8') => return Ok(Some(self.open_offer_cancel_composer())),
+                    KeyCode::Char('9') => self.open_escrow_create_composer(),
+                    KeyCode::Char('0') => return Ok(Some(self.open_escrows_composer())),
+                    KeyCode::Char('d') => self.open_amm_deposit_composer(),
+                    KeyCode::Char('w') => self.open_amm_withdraw_composer(),
                     _ => {}
                 }
                 return Ok(None);
@@ -779,6 +965,36 @@ impl Component for WalletPanel {
             }
             Some(ComposerPhase::OfferCancel { offers, selected }) => {
                 let last = match offers {
+                    Some(Ok(rows)) => rows.len().saturating_sub(1),
+                    _ => 0,
+                };
+                match key.code {
+                    KeyCode::Char('j') | KeyCode::Down => *selected = (*selected + 1).min(last),
+                    KeyCode::Char('k') | KeyCode::Up => *selected = selected.saturating_sub(1),
+                    _ => {}
+                }
+                return Ok(None);
+            }
+            Some(ComposerPhase::AmmDeposit { row, .. }) => {
+                if Self::composer_row_nav(&mut self.is_form_editing, &key, row, 2) {
+                    return Ok(Some(Action::SetKeymapSuppression(true)));
+                }
+                return Ok(None);
+            }
+            Some(ComposerPhase::AmmWithdraw { row, .. }) => {
+                if Self::composer_row_nav(&mut self.is_form_editing, &key, row, 3) {
+                    return Ok(Some(Action::SetKeymapSuppression(true)));
+                }
+                return Ok(None);
+            }
+            Some(ComposerPhase::EscrowCreate { row, .. }) => {
+                if Self::composer_row_nav(&mut self.is_form_editing, &key, row, 4) {
+                    return Ok(Some(Action::SetKeymapSuppression(true)));
+                }
+                return Ok(None);
+            }
+            Some(ComposerPhase::Escrows { escrows, selected }) => {
+                let last = match escrows {
                     Some(Ok(rows)) => rows.len().saturating_sub(1),
                     _ => 0,
                 };
@@ -1137,6 +1353,182 @@ mod tests {
             .expect("err");
         let out = crate::test_support::render_to_string(80, 24, |f| panel.render_composer(f, area));
         assert!(out.contains("account_offers: timeout"), "{out}");
+    }
+
+    /// TC-225: AMM composers — picker `d` / `w`; invalid input flashes; deposit queues both
+    /// amount specs; withdraw with empty LP = withdraw all; Esc returns to picker rows 10 / 11.
+    #[test]
+    fn amm_composers_validate_then_queue() {
+        const ISS: &str = "rJrRMgiRgrU6hDF4pgu5DXQdWyPbY35ErN";
+        let mut panel = WalletPanel::new(true);
+        panel.is_focused = true;
+        panel.composer = Some(ComposerPhase::PickKind { selected: 0 });
+        assert!(
+            panel
+                .on_key_event(key('d'))
+                .expect("open deposit")
+                .is_none()
+        );
+        assert!(panel.on_key_event(key('s')).expect("bad").is_none());
+        assert!(matches!(&panel.submit_flash, Some(SubmitFlash::Error(m)) if m.contains("AMM")));
+        if let Some(ComposerPhase::AmmDeposit { amount2, .. }) = &mut panel.composer {
+            *amount2 = format!("USD:{ISS}:10");
+        }
+        match panel.on_key_event(key('s')).expect("deposit") {
+            Some(Action::AmmDepositSubmit(p)) => {
+                assert_eq!(
+                    (p.amount.as_str(), p.amount2.as_str()),
+                    ("XRP:1000000", &*format!("USD:{ISS}:10"))
+                );
+                assert!(p.skip_mainnet_prompt);
+            }
+            other => panic!("expected AmmDepositSubmit, got {other:?}"),
+        }
+        panel
+            .on_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::empty()))
+            .expect("esc");
+        assert!(matches!(
+            panel.composer,
+            Some(ComposerPhase::PickKind { selected: 10 })
+        ));
+
+        assert!(
+            panel
+                .on_key_event(key('w'))
+                .expect("open withdraw")
+                .is_none()
+        );
+        if let Some(ComposerPhase::AmmWithdraw { asset2, .. }) = &mut panel.composer {
+            *asset2 = format!("USD:{ISS}");
+        }
+        let area = ratatui::layout::Rect::new(0, 0, 80, 24);
+        let out = crate::test_support::render_to_string(80, 24, |f| panel.render_composer(f, area));
+        assert!(out.contains("empty = withdraw all"), "{out}");
+        match panel.on_key_event(key('s')).expect("withdraw") {
+            Some(Action::AmmWithdrawSubmit(p)) => {
+                assert_eq!((p.asset.as_str(), p.lp_amount.as_str()), ("XRP", ""));
+            }
+            other => panic!("expected AmmWithdrawSubmit, got {other:?}"),
+        }
+        panel
+            .on_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::empty()))
+            .expect("esc");
+        assert!(matches!(
+            panel.composer,
+            Some(ComposerPhase::PickKind { selected: 11 })
+        ));
+    }
+
+    /// TC-219: EscrowCreate composer — `9` opens it; invalid input flashes instead of queuing;
+    /// valid fields queue `EscrowCreateSubmit` (trimmed, relative durations kept for the poll task).
+    #[test]
+    fn escrow_create_composer_validates_then_queues() {
+        const DEST: &str = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh";
+        let area = ratatui::layout::Rect::new(0, 0, 80, 24);
+        let mut panel = WalletPanel::new(true);
+        panel.is_focused = true;
+        panel.composer = Some(ComposerPhase::PickKind { selected: 0 });
+        assert!(panel.on_key_event(key('9')).expect("open").is_none());
+
+        assert!(panel.on_key_event(key('s')).expect("s").is_none());
+        assert!(matches!(
+            &panel.submit_flash,
+            Some(SubmitFlash::Error(m)) if m.contains("Destination")
+        ));
+
+        if let Some(ComposerPhase::EscrowCreate {
+            destination,
+            cancel_after,
+            ..
+        }) = &mut panel.composer
+        {
+            *destination = format!(" {DEST} ");
+            *cancel_after = "2d".into();
+        }
+        let out = crate::test_support::render_to_string(80, 24, |f| panel.render_composer(f, area));
+        assert!(out.contains("FinishAfter") && out.contains("2d"), "{out}");
+        match panel.on_key_event(key('s')).expect("submit") {
+            Some(Action::EscrowCreateSubmit(p)) => {
+                assert_eq!(p.destination, DEST);
+                assert_eq!(
+                    (p.finish_after.as_str(), p.cancel_after.as_str()),
+                    ("1h", "2d")
+                );
+                assert!(p.skip_mainnet_prompt);
+            }
+            other => panic!("expected EscrowCreateSubmit, got {other:?}"),
+        }
+        panel
+            .on_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::empty()))
+            .expect("esc");
+        assert!(matches!(
+            panel.composer,
+            Some(ComposerPhase::PickKind { selected: 8 })
+        ));
+    }
+
+    /// TC-220: Escrow finish/cancel composer — `0` fetches escrows; `s` finishes, `c` cancels the
+    /// selected row; condition escrows cannot be finished and unresolved sequences are refused.
+    #[test]
+    fn escrow_list_composer_finishes_and_cancels_selected() {
+        let row = |seq: Option<u32>, has_condition: bool| crate::xrpl::EscrowRow {
+            owner: "rOwner".into(),
+            destination: "rDest".into(),
+            amount: "1.5 XRP".into(),
+            finish_after: Some(800),
+            cancel_after: None,
+            has_condition,
+            offer_sequence: seq,
+            previous_txn_id: "AB".into(),
+        };
+        let area = ratatui::layout::Rect::new(0, 0, 80, 24);
+        let mut panel = WalletPanel::new(true);
+        panel.is_focused = true;
+        panel.composer = Some(ComposerPhase::PickKind { selected: 0 });
+        let open = panel.on_key_event(key('0')).expect("open");
+        assert!(matches!(open, Some(Action::RefreshAccountEscrows)));
+        assert!(panel.on_key_event(key('s')).expect("early s").is_none());
+        assert!(matches!(
+            &panel.submit_flash,
+            Some(SubmitFlash::Error(m)) if m.contains("no escrow selected")
+        ));
+
+        panel
+            .update(&Action::XrplAccountEscrows(vec![
+                row(Some(5), true),
+                row(None, false),
+                row(Some(9), false),
+            ]))
+            .expect("escrows");
+        assert!(panel.on_key_event(key('s')).expect("finish cond").is_none());
+        assert!(matches!(
+            &panel.submit_flash,
+            Some(SubmitFlash::Error(m)) if m.contains("condition")
+        ));
+        match panel.on_key_event(key('c')).expect("cancel") {
+            Some(Action::EscrowCloseSubmit(p)) => {
+                assert_eq!(
+                    (p.owner.as_str(), p.offer_sequence, p.cancel),
+                    ("rOwner", 5, true)
+                );
+            }
+            other => panic!("expected EscrowCloseSubmit, got {other:?}"),
+        }
+        panel.on_key_event(key('j')).expect("down");
+        assert!(panel.on_key_event(key('s')).expect("no seq").is_none());
+        assert!(matches!(
+            &panel.submit_flash,
+            Some(SubmitFlash::Error(m)) if m.contains("sequence")
+        ));
+        panel.on_key_event(key('j')).expect("down");
+        let out = crate::test_support::render_to_string(80, 24, |f| panel.render_composer(f, area));
+        assert!(out.contains("#9") && out.contains("1.5 XRP"), "{out}");
+        match panel.on_key_event(key('s')).expect("finish") {
+            Some(Action::EscrowCloseSubmit(p)) => {
+                assert_eq!((p.offer_sequence, p.cancel), (9, false));
+            }
+            other => panic!("expected EscrowCloseSubmit, got {other:?}"),
+        }
     }
 
     /// TC-194: Payment `p` requests a path quote (form fields + default 100 bps slippage);

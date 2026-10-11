@@ -11,16 +11,17 @@ use super::format::drops_to_xrp;
 pub use super::format::{path_find_snapshot, xrp_to_drops};
 pub(crate) use super::parse::empty_account_tx_page_on_not_found;
 use super::parse::{
-    book_currency, book_offer_best_price, is_not_found_error, is_rate_limited_error,
-    is_transient_xrpl_error, parse_account_lines_value, parse_account_nfts_value,
-    parse_account_objects_value, parse_account_offers_value, parse_account_tx_page,
-    parse_aggregate_price_value, parse_amm_info_value, parse_book_offers_value, parse_fee_value,
+    book_currency, book_offer_best_price, escrow_offer_sequence_from_tx, is_not_found_error,
+    is_rate_limited_error, is_transient_xrpl_error, parse_account_escrows_value,
+    parse_account_lines_value, parse_account_nfts_value, parse_account_objects_value,
+    parse_account_offers_value, parse_account_tx_page, parse_aggregate_price_value,
+    parse_amm_info_value, parse_amm_lp_token, parse_book_offers_value, parse_fee_value,
     parse_ripple_path_find, parse_server_info_value, parse_simulate_result, parse_submit_success,
 };
 use super::types::{
     AccountOfferRow, AccountSummary, AccountTxPage, AggregatePrice, AmmSummary, BookMidPrice,
-    DunlSummary, FeeSummary, LedgerObjectRow, NftRow, OfferRow, OracleId, RipplePathFindResult,
-    ServerInfoSummary, SimulateResult, TrustLineRow, TxRow, TxSummary,
+    DunlSummary, EscrowRow, FeeSummary, LedgerObjectRow, NftRow, OfferRow, OracleId,
+    RipplePathFindResult, ServerInfoSummary, SimulateResult, TrustLineRow, TxRow, TxSummary,
 };
 use super::util::{json_str, json_u32};
 
@@ -284,6 +285,27 @@ impl RpcClient {
         Ok(parse_amm_info_value(&value))
     }
 
+    /// LP token `(currency, issuer)` of the pool for `asset`/`asset2` (`XRP` or `CUR:issuer`).
+    pub async fn amm_lp_token(
+        &self,
+        asset: &str,
+        asset2: &str,
+    ) -> color_eyre::Result<(String, String)> {
+        let (c1, i1) = crate::signing::parse_amm_asset(asset)?;
+        let (c2, i2) = crate::signing::parse_amm_asset(asset2)?;
+        let value = self
+            .rpc_value(
+                "amm_info",
+                json!({
+                    "asset": book_currency(&c1, i1.as_deref()),
+                    "asset2": book_currency(&c2, i2.as_deref())
+                }),
+            )
+            .await?;
+        parse_amm_lp_token(&value)
+            .ok_or_else(|| color_eyre::eyre::eyre!("amm_info: no LP token for {asset} / {asset2}"))
+    }
+
     pub async fn account_tx(
         &self,
         watch_address: &str,
@@ -380,6 +402,31 @@ impl RpcClient {
             Err(e) => return Err(e),
         };
         Ok(parse_account_offers_value(&value))
+    }
+
+    /// Escrows the account owns or receives, each with the `OfferSequence` Finish/Cancel needs.
+    /// When the object lacks `Sequence`, it is read from the creating tx (`PreviousTxnID`); a
+    /// failed lookup leaves `offer_sequence` `None` and the composer refuses that row.
+    pub async fn account_escrows(&self, account: &str) -> color_eyre::Result<Vec<EscrowRow>> {
+        // ponytail: first 200 escrows, one `tx` lookup each without Sequence; page if needed
+        let value = match self
+            .rpc_value(
+                "account_objects",
+                json!({ "account": account, "type": "escrow", "limit": 200 }),
+            )
+            .await
+        {
+            Ok(value) => value,
+            Err(e) if is_not_found_error(&format!("{e}")) => return Ok(vec![]),
+            Err(e) => return Err(e),
+        };
+        let mut rows = parse_account_escrows_value(&value);
+        for row in rows.iter_mut().filter(|r| r.offer_sequence.is_none()) {
+            if let Ok(tx) = self.tx(&row.previous_txn_id).await {
+                row.offer_sequence = escrow_offer_sequence_from_tx(&tx);
+            }
+        }
+        Ok(rows)
     }
 
     pub async fn book_offers(

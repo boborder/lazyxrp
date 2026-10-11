@@ -12,7 +12,7 @@ From [`requirements.md`](requirements.md). Tests in [`test.md`](test.md) trace h
 |-------|------|
 | Look, keys, focus, theme | [`DESIGN.md`](../DESIGN.md) |
 | FR/NFR ids | [`requirements.md`](requirements.md) |
-| Modules, channels, startup/submit flows | `src/app.rs`, `src/xrpl/poll.rs`, [`directory.md`](directory.md) §3 |
+| Modules, channels, startup/submit flows | `src/app.rs`, `src/xrpl/poll.rs`, `src/xrpl/submit.rs`, [`directory.md`](directory.md) §3 |
 | Rules I-1〜I-11 | [`security.md`](security.md) (guards in `src/`) |
 | Directory layout | [`directory.md`](directory.md) |
 | TX detail parser registry | §5.2.1 below, `src/components/shared/tx_detail/` |
@@ -30,9 +30,9 @@ lazyxrp is a **single Rust binary** run locally. It connects to public **XRP Led
 |------|------|--------------|
 | Watch (TUI) | Dashboard, panels, keyboard flows | `app.rs`, `tui.rs`, `components/` |
 | CLI runner | Non-interactive subcommands | `cli.rs`, `xrpl/cli_exec.rs` |
-| XRPL integration | RPC, WebSocket, poll task → `Action` | `xrpl/client.rs`, `ws.rs`, `poll.rs` |
+| XRPL integration | RPC, WebSocket, poll task → `Action`; write paths | `xrpl/client.rs`, `ws.rs`, `poll.rs`, `submit.rs` |
 | Config & signing | Merged `config.toml`, credentials | `config.rs`, `signing.rs` |
-| Flare | FTSO / FXRP read (+ optional execute) | `flare.rs`, `poll.rs` |
+| Flare | FTSO / FXRP read (+ optional execute) | `flare.rs`, `poll.rs`, `submit.rs` |
 
 Module wiring summary: [`directory.md`](directory.md) §3. Tab splits and keys: [`DESIGN.md`](../DESIGN.md).
 
@@ -47,7 +47,7 @@ Module wiring summary: [`directory.md`](directory.md) §3. Tab splits and keys: 
 | `lazyxrp --self-uninstall` | アンインストール | `logging::init` 前に終了 |
 
 - エントリ: `src/lib.rs` — TUI → `App::new` → `run`、`-x` CLI → `xrpl::execute_cli_command(...)`.
-- 裸サブコマンド（`-x` なし）はエラーで `lazyxrp -x <name>` を案内。`watch` サブコマンドは削除（TUI は引数なし `lazyxrp`）。CLI の書き込み（`send`・`offer-create`・`offer-cancel`）も **network 照合 → simulate → sign → submit → validated 待ち**（Sequence/Fee は simulate 由来。LastLedgerSequence は simulate が返せばその値、無ければ `ledger_index + 20` を `parse_simulate_result` が補完）。validated 待ち（`wait_validated`）: 1 秒ごとに `tx` を確認し、最終結果が `tes*` 以外なら Err、validated ledger が LLS を過ぎても未取込なら Err（expired）、5 分（`WAIT_LIMIT`）経っても決着しなければ Err（ノード停止・`validated_ledger` 欠落への上限）。`--no-wait` で submit 直後に戻る。`offers` は `account_offers` 読み取り。`faucet [ADDR]` は testnet/devnet の公開 faucet へ `destination` を POST（ADDR 省略時は `generate_wallet_keys_local` でローカル生成し seed は表示のみ）。応答の `classicAddress` が依頼先と違えば Err。
+- 裸サブコマンド（`-x` なし）はエラーで `lazyxrp -x <name>` を案内。`watch` サブコマンドは削除（TUI は引数なし `lazyxrp`）。CLI の書き込み（`send`・`offer-create`・`offer-cancel`・`amm-deposit`・`amm-withdraw`）も **network 照合 → simulate → sign → submit → validated 待ち**（Sequence/Fee は simulate 由来。LastLedgerSequence は simulate が返せばその値、無ければ `ledger_index + 20` を `parse_simulate_result` が補完）。validated 待ち（`wait_validated`）: 1 秒ごとに `tx` を確認し、最終結果が `tes*` 以外なら Err、validated ledger が LLS を過ぎても未取込なら Err（expired）、5 分（`WAIT_LIMIT`）経っても決着しなければ Err（ノード停止・`validated_ledger` 欠落への上限）。`--no-wait` で submit 直後に戻る。`offers` は `account_offers` 読み取り。`faucet [ADDR]` は testnet/devnet の公開 faucet へ `destination` を POST（ADDR 省略時は `generate_wallet_keys_local` でローカル生成し seed は表示のみ）。応答の `classicAddress` が依頼先と違えば Err。
 - スタック: `ratatui` + `crossterm`、非同期 `tokio`、XRPL は `src/xrpl/`。
 
 ## 2. ウォレット（行動契約）
@@ -59,7 +59,10 @@ Behavioral contract:
 - Credential resolution: `Config::new()` merges `XRPL_SEED` / `XRPL_MNEMONIC`, then `credential_from_secrets` → `PollContext.signing_credential` (`Option<SigningCredential>`).
 - All wallet TX: **network 照合 → simulate → sign → submit** (I-3). Mainnet / Xahau mainnet writes require CLI **`--yes`** (I-2).
 - Endpoint network 照合（TC-203）: 署名前に `RpcClient::ensure_network` が `server_info.network_id` を `Network::network_id()`（mainnet 0 = 省略、testnet 1、devnet 2、xahau 21337、xahau-test 21338）と比較し、不一致なら拒否。TUI は全 XRPL submit が `fetch_account_summary_for_submit`、CLI は各 write arm で実行。`XRPL_RPC_SERVER` / `rpc_server` / `--server` は preset より優先されるため（§6.2）、別ネットワークの endpoint で `--yes` ガードが外れるのを防ぐ。
-- Composer phases shipped: Payment, AccountSet, SetRegularKey, OfferCreate, OfferCancel, TrustSet, FXRP Mint (C2), FXRP Execute (C3). EscrowCreate: signing path exists; UI unwired (P-003).
+- Composer phases shipped: Payment, AccountSet, SetRegularKey, OfferCreate, OfferCancel, TrustSet, FXRP Mint (C2), FXRP Execute (C3), EscrowCreate (`9`), Escrows finish/cancel (`0`), AMMDeposit (`d`), AMMWithdraw (`w`). TUI only for escrow (no `-x` escrow commands).
+- AMM (TC-222–226): AMMDeposit is two-asset only (`tfTwoAsset`; `Amount` / `Amount2` = maxima, also naming the pool; `signing::validate_amm_deposit_specs`: specs `XRP:drops` / `CUR:issuer:value`, two different assets). AMMWithdraw: empty LP amount → `tfWithdrawAll`; otherwise `tfLPToken` + `LPTokenIn` whose currency / issuer (AMM account) come from `amm_info` (`RpcClient::amm_lp_token`) before simulate. Same simulate → sign → submit; composer `d` / `w` and `-x amm-deposit` / `-x amm-withdraw`. No AMMCreate / single-asset / Vote / Bid.
+- EscrowCreate: XRP only, no crypto-condition. `signing::validate_escrow_create_input` (composer + poll): classic Destination, amount > 0, FinishAfter / optional CancelAfter as durations relative to submit (`90s` / `30m` / `2h` / `7d`), CancelAfter strictly later. The poll task fixes absolute Ripple-epoch times once (local clock) so simulate and the signed tx carry the same values; a FinishAfter already passed by ledger time fails in simulate.
+- Escrows: opening sends `RefreshAccountEscrows` → `RpcClient::account_escrows` (`account_objects` type `escrow`, first 200, owned **and** incoming). `OfferSequence` = object `Sequence` when present, else the creating tx (`PreviousTxnID`; only EscrowCreate modifies an Escrow) `Sequence`, or `TicketSequence` when 0. `s` → EscrowFinish, `c` → EscrowCancel (`EscrowCloseSubmit`, same simulate → sign → submit). Refused locally: unresolved sequence, Finish of a condition escrow. Timing rules (FinishAfter / CancelAfter passed) are left to simulate (`tecNO_PERMISSION`).
 - OfferCancel: opening the composer sends `RefreshAccountOffers` (poll task → `account_offers`, first 200, signing account only → `XrplAccountOffers`); selected `seq` → `OfferCancelSubmit` (same simulate → sign → submit path). Not polled.
 - Payment validation: `signing::validate_payment_input` (shared by composer preview / submit / quote and poll `PaymentSubmit`) — destination classic checksum or X-address, positive amount (XRP drops / IOU value), IOU currency + issuer checksum, Send max spec. Poll adds X-address network, self-pay, balance.
 - Cross-currency Payment: optional `send_max` spec (same parser as OfferCreate) → `SendMax`, rippled default paths (no `Paths`, no partial payment). XRP→XRP SendMax rejected. With SendMax: self-payment allowed (swap), balance check uses SendMax XRP drops (0 for IOU SendMax). Dry paths fail in simulate (`tecPATH_DRY`/`tecPATH_PARTIAL`).
@@ -68,7 +71,7 @@ Behavioral contract:
 
 ## 3. ランタイム・データフロー
 
-Implementation: `src/xrpl/poll.rs`, `src/app.rs`.
+Implementation: `src/xrpl/poll.rs` (loop, reads), `src/xrpl/submit.rs` (writes), `src/app.rs`.
 
 | Direction | Path |
 |-----------|------|

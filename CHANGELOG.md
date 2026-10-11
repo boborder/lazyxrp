@@ -4,6 +4,19 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ## [Unreleased]
 
+### Added
+
+- Wallet composer `9` **EscrowCreate** (XRP, FinishAfter / optional CancelAfter as `90s` / `30m` / `2h` / `7d` from now) and `0` **Escrows**: list escrows you own or receive, `s` EscrowFinish / `c` EscrowCancel. TUI only; crypto-condition escrows can only be cancelled.
+- AMM deposit / withdraw: Wallet composer `d` **AMMDeposit** (two-asset, both amounts are maxima) and `w` **AMMWithdraw** (all, or an LP-token amount), plus `-x amm-deposit <AMOUNT> <AMOUNT2>` / `-x amm-withdraw <ASSET> <ASSET2> [--lp N]`.
+
+### Changed
+
+- Internal: the poll task's write paths moved to `src/xrpl/submit.rs` (no behavior change).
+
+### Fixed
+
+- Market AMM panel and `-x amm` showed `asset2 XRP`, empty pools and `0 ?` LP against live rippled: `amm_info` fields are snake_case (`amount`, `amount2`, `lp_token`, `trading_fee`), not ledger-object casing.
+
 ## [0.3.1] - 2026-10-11
 
 ### Added

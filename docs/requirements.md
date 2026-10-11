@@ -137,4 +137,4 @@ Product **requirements** (what). Behavioral design: [`architecture.md`](architec
 ## 6. 開発ステータス
 
 - Phase 1（読み取り拡張）+ Phase 2（ネットワーク抽象化 + Xahau / Flare multichain）: **実装完了**
-- Phase 3（書き込み系 TX）: **実装済み** — TUI コンポーザー + CLI で Payment / AccountSet / SetRegularKey / OfferCreate / OfferCancel / TrustSet / FXRP Mint / FXRP Execute に対応。EscrowCreate は poll/signing 完備だが UI 未実装（`docs/problems.md` P-003）。残りは本番動作確認とエッジケース対応。将来 TX 種別（AccountDelete / EscrowFinish・Cancel / AMM Deposit・Withdraw）は [`ROADMAP.md`](../ROADMAP.md) の horizon（短期 / 中期 / 長期）参照。
+- Phase 3（書き込み系 TX）: **実装済み** — TUI コンポーザー + CLI で Payment / AccountSet / SetRegularKey / OfferCreate / OfferCancel / TrustSet / FXRP Mint / FXRP Execute / AMMDeposit（two-asset）/ AMMWithdraw（全額 or LP 量）に対応。EscrowCreate / EscrowFinish / EscrowCancel は TUI コンポーザーのみ（時間条件のみ、crypto-condition 非対応）。残りは本番動作確認とエッジケース対応。将来 TX 種別（AccountDelete）は [`ROADMAP.md`](../ROADMAP.md) の horizon（短期 / 中期 / 長期）参照。

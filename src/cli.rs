@@ -197,6 +197,23 @@ pub enum Cmd {
         /// What you want (TakerPays), e.g. `USD:rIssuer:1`
         taker_pays: String,
     },
+    /// Two-asset AMM deposit (simulate first; mainnet needs --yes). Both specs are maxima:
+    /// `XRP:drops` or `CUR:issuer:value`; their assets name the pool
+    AmmDeposit {
+        /// e.g. `XRP:1000000`
+        amount: String,
+        /// e.g. `USD:rIssuer:1`
+        amount2: String,
+    },
+    /// AMM withdraw (simulate first; mainnet needs --yes). Assets: `XRP` or `CUR:issuer`.
+    /// Without `--lp`, returns all LP tokens
+    AmmWithdraw {
+        asset: String,
+        asset2: String,
+        /// LP tokens to return (proportional withdrawal)
+        #[arg(long)]
+        lp: Option<String>,
+    },
     /// Fund an account from the public faucet (testnet/devnet only). No ADDRESS: generate a fresh
     /// wallet locally (seed printed once, never saved or sent).
     Faucet {
@@ -221,6 +238,8 @@ impl Cmd {
             Cmd::Offers { .. } => "offers",
             Cmd::OfferCancel { .. } => "offer-cancel",
             Cmd::OfferCreate { .. } => "offer-create",
+            Cmd::AmmDeposit { .. } => "amm-deposit",
+            Cmd::AmmWithdraw { .. } => "amm-withdraw",
             Cmd::Faucet { .. } => "faucet",
         }
     }
@@ -295,6 +314,21 @@ mod tests {
             Some(super::Cmd::OfferCreate { ref taker_gets, ref taker_pays })
                 if taker_gets == "XRP:1000000" && taker_pays == "USD:rX:1"
         ));
+        let c = Cli::try_parse_from([
+            "lazyxrp",
+            "-x",
+            "amm-withdraw",
+            "XRP",
+            "USD:rX",
+            "--lp",
+            "5",
+        ])
+        .expect("amm-withdraw parses");
+        assert!(matches!(
+            c.command,
+            Some(super::Cmd::AmmWithdraw { ref lp, .. }) if lp.as_deref() == Some("5")
+        ));
+        assert!(Cli::try_parse_from(["lazyxrp", "-x", "amm-deposit", "XRP:1"]).is_err());
         let c = Cli::try_parse_from(["lazyxrp", "-x", "faucet"]).expect("bare faucet parses");
         assert!(matches!(
             c.command,

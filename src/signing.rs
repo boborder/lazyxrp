@@ -770,6 +770,446 @@ pub fn create_and_sign_offer_cancel(
     encode(&tx).map_err(|e| color_eyre::eyre::eyre!("encode error: {:?}", e))
 }
 
+/// Sign `tx` with `wallet` and return the binary-encoded blob (hex).
+macro_rules! sign_blob {
+    ($tx:ident, $wallet:expr) => {{
+        xrpl::transaction::sign(&mut $tx, $wallet, false)
+            .map_err(|e| color_eyre::eyre::eyre!("sign error: {:?}", e))?;
+        xrpl::core::binarycodec::encode(&$tx)
+            .map_err(|e| color_eyre::eyre::eyre!("encode error: {:?}", e))
+    }};
+}
+
+/// Relative duration for escrow times: `<n>s|m|h|d`, n > 0, result fits u32 seconds.
+pub fn parse_relative_duration(input: &str) -> color_eyre::Result<u32> {
+    let s = input.trim();
+    let bad = || color_eyre::eyre::eyre!("duration must look like 90s / 30m / 2h / 7d: {s:?}");
+    let unit = match s.chars().last().ok_or_else(bad)? {
+        's' => 1,
+        'm' => 60,
+        'h' => 3_600,
+        'd' => 86_400,
+        _ => return Err(bad()),
+    };
+    let n: u32 = s[..s.len() - 1].parse().map_err(|_| bad())?;
+    match n.checked_mul(unit) {
+        Some(secs) if secs > 0 => Ok(secs),
+        _ => Err(bad()),
+    }
+}
+
+/// EscrowCreate composer input → (amount drops, FinishAfter secs, CancelAfter secs) relative
+/// to submit time. CancelAfter must be later than FinishAfter or the escrow could never finish.
+pub fn validate_escrow_create_input(
+    destination: &str,
+    amount_xrp: &str,
+    finish_after: &str,
+    cancel_after: &str,
+) -> color_eyre::Result<(u64, u32, Option<u32>)> {
+    use color_eyre::eyre::{bail, eyre};
+    require_classic_address_shape("Destination", destination.trim())?;
+    let drops = crate::xrpl::xrp_to_drops(amount_xrp.trim()).map_err(|e| eyre!("amount: {e}"))?;
+    if drops == 0 {
+        bail!("amount must be > 0");
+    }
+    let finish = parse_relative_duration(finish_after).map_err(|e| eyre!("FinishAfter: {e}"))?;
+    let cancel = match cancel_after.trim() {
+        "" => None,
+        c => Some(parse_relative_duration(c).map_err(|e| eyre!("CancelAfter: {e}"))?),
+    };
+    if cancel.is_some_and(|c| c <= finish) {
+        bail!("CancelAfter must be later than FinishAfter");
+    }
+    Ok((drops, finish, cancel))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn escrow_create_tx<'a>(
+    account: &str,
+    destination: &str,
+    amount_drops: u64,
+    finish_after: u32,
+    cancel_after: Option<u32>,
+    sequence: u32,
+    fee_lls: Option<(u32, u32)>,
+) -> xrpl::models::transactions::escrow_create::EscrowCreate<'a> {
+    use xrpl::models::XRPAmount;
+    use xrpl::models::transactions::escrow_create::EscrowCreate;
+    use xrpl::models::transactions::{CommonFields, TransactionType};
+
+    let mut common = CommonFields::from_account(account.to_string())
+        .with_transaction_type(TransactionType::EscrowCreate)
+        .with_sequence(sequence);
+    if let Some((fee, lls)) = fee_lls {
+        common = common
+            .with_fee(XRPAmount::from(fee.to_string()))
+            .with_last_ledger_sequence(lls);
+    }
+    EscrowCreate {
+        common_fields: common,
+        amount: XRPAmount::from(amount_drops.to_string()),
+        destination: destination.to_string().into(),
+        destination_tag: None,
+        cancel_after,
+        finish_after: Some(finish_after),
+        condition: None,
+    }
+}
+
+/// Unsigned EscrowCreate JSON for `simulate`; times are absolute Ripple-epoch seconds.
+pub fn build_escrow_create_tx_json_for_simulate(
+    account: &str,
+    destination: &str,
+    amount_drops: u64,
+    finish_after: u32,
+    cancel_after: Option<u32>,
+    sequence: u32,
+) -> color_eyre::Result<Value> {
+    let tx = escrow_create_tx(
+        account,
+        destination,
+        amount_drops,
+        finish_after,
+        cancel_after,
+        sequence,
+        None,
+    );
+    serde_json::to_value(&tx).map_err(|e| color_eyre::eyre::eyre!("escrow_create tx_json: {e}"))
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn create_and_sign_escrow_create(
+    wallet: &xrpl::wallet::Wallet,
+    account: &str,
+    destination: &str,
+    amount_drops: u64,
+    finish_after: u32,
+    cancel_after: Option<u32>,
+    sequence: u32,
+    fee_drops: u32,
+    last_ledger_sequence: u32,
+) -> color_eyre::Result<String> {
+    let mut tx = escrow_create_tx(
+        account,
+        destination,
+        amount_drops,
+        finish_after,
+        cancel_after,
+        sequence,
+        Some((fee_drops, last_ledger_sequence)),
+    );
+    sign_blob!(tx, wallet)
+}
+
+fn escrow_close_common<'a>(
+    account: &str,
+    cancel: bool,
+    sequence: u32,
+    fee_lls: Option<(u32, u32)>,
+) -> xrpl::models::transactions::CommonFields<'a, xrpl::models::NoFlags> {
+    use xrpl::models::XRPAmount;
+    use xrpl::models::transactions::{CommonFields, TransactionType};
+
+    let ty = if cancel {
+        TransactionType::EscrowCancel
+    } else {
+        TransactionType::EscrowFinish
+    };
+    let common = CommonFields::from_account(account.to_string())
+        .with_transaction_type(ty)
+        .with_sequence(sequence);
+    match fee_lls {
+        Some((fee, lls)) => common
+            .with_fee(XRPAmount::from(fee.to_string()))
+            .with_last_ledger_sequence(lls),
+        None => common,
+    }
+}
+
+/// Unsigned EscrowFinish (`cancel == false`) / EscrowCancel JSON for `simulate`.
+pub fn build_escrow_close_tx_json_for_simulate(
+    account: &str,
+    owner: &str,
+    offer_sequence: u32,
+    cancel: bool,
+    sequence: u32,
+) -> color_eyre::Result<Value> {
+    use xrpl::models::transactions::escrow_cancel::EscrowCancel;
+    use xrpl::models::transactions::escrow_finish::EscrowFinish;
+
+    let common_fields = escrow_close_common(account, cancel, sequence, None);
+    let owner = owner.to_string().into();
+    let value = if cancel {
+        serde_json::to_value(EscrowCancel {
+            common_fields,
+            owner,
+            offer_sequence,
+        })
+    } else {
+        serde_json::to_value(EscrowFinish {
+            common_fields,
+            owner,
+            offer_sequence,
+            condition: None,
+            fulfillment: None,
+            credential_ids: None,
+        })
+    };
+    value.map_err(|e| color_eyre::eyre::eyre!("escrow tx_json: {e}"))
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn create_and_sign_escrow_close(
+    wallet: &xrpl::wallet::Wallet,
+    account: &str,
+    owner: &str,
+    offer_sequence: u32,
+    cancel: bool,
+    sequence: u32,
+    fee_drops: u32,
+    last_ledger_sequence: u32,
+) -> color_eyre::Result<String> {
+    use xrpl::models::transactions::escrow_cancel::EscrowCancel;
+    use xrpl::models::transactions::escrow_finish::EscrowFinish;
+
+    let common_fields = escrow_close_common(
+        account,
+        cancel,
+        sequence,
+        Some((fee_drops, last_ledger_sequence)),
+    );
+    let owner = owner.to_string().into();
+    if cancel {
+        let mut tx = EscrowCancel {
+            common_fields,
+            owner,
+            offer_sequence,
+        };
+        sign_blob!(tx, wallet)
+    } else {
+        let mut tx = EscrowFinish {
+            common_fields,
+            owner,
+            offer_sequence,
+            condition: None,
+            fulfillment: None,
+            credential_ids: None,
+        };
+        sign_blob!(tx, wallet)
+    }
+}
+
+/// AMM pool asset: `XRP` or `CUR:issuer` → `(currency, issuer)`.
+pub fn parse_amm_asset(spec: &str) -> color_eyre::Result<(String, Option<String>)> {
+    let spec = spec.trim();
+    if spec == "XRP" {
+        return Ok(("XRP".into(), None));
+    }
+    let Some((currency, issuer)) = spec.split_once(':') else {
+        color_eyre::eyre::bail!("asset must be XRP or CUR:issuer: {spec}");
+    };
+    if !is_valid_iou_currency(currency) {
+        color_eyre::eyre::bail!("invalid IOU currency code: {currency}");
+    }
+    require_classic_address_shape("issuer", issuer)?;
+    Ok((currency.to_string(), Some(issuer.to_string())))
+}
+
+fn amm_currency(asset: (String, Option<String>)) -> xrpl::models::Currency<'static> {
+    use xrpl::models::{Currency, IssuedCurrency, XRP};
+    match asset {
+        (_, None) => Currency::XRP(XRP::new()),
+        (currency, Some(issuer)) => Currency::IssuedCurrency(IssuedCurrency {
+            currency: currency.into(),
+            issuer: issuer.into(),
+        }),
+    }
+}
+
+/// The pool asset an amount spec is denominated in.
+fn amm_asset_of_amount(spec: &str) -> color_eyre::Result<(String, Option<String>)> {
+    Ok(match parse_offer_amount_spec(spec.trim())? {
+        OfferAmountSpec::Xrp(_) => ("XRP".into(), None),
+        OfferAmountSpec::Iou {
+            currency, issuer, ..
+        } => (currency.to_string(), Some(issuer.to_string())),
+    })
+}
+
+/// Two-asset AMMDeposit: both amounts are maxima in different assets (they name the pool).
+pub fn validate_amm_deposit_specs(amount: &str, amount2: &str) -> color_eyre::Result<()> {
+    use color_eyre::eyre::eyre;
+    let a = amm_asset_of_amount(amount).map_err(|e| eyre!("Amount: {e}"))?;
+    let b = amm_asset_of_amount(amount2).map_err(|e| eyre!("Amount2: {e}"))?;
+    if a == b {
+        color_eyre::eyre::bail!("Amount and Amount2 must be different assets");
+    }
+    Ok(())
+}
+
+/// AMMWithdraw: two different pool assets; `lp_amount` empty = withdraw all, else LP to return.
+pub fn validate_amm_withdraw_input(
+    asset: &str,
+    asset2: &str,
+    lp_amount: &str,
+) -> color_eyre::Result<()> {
+    use color_eyre::eyre::eyre;
+    let a = parse_amm_asset(asset).map_err(|e| eyre!("Asset: {e}"))?;
+    let b = parse_amm_asset(asset2).map_err(|e| eyre!("Asset2: {e}"))?;
+    if a == b {
+        color_eyre::eyre::bail!("Asset and Asset2 must differ");
+    }
+    let lp = lp_amount.trim();
+    if !lp.is_empty() {
+        let v: f64 = lp.parse().map_err(|_| eyre!("LP amount must be numeric"))?;
+        if !v.is_finite() || v <= 0.0 {
+            color_eyre::eyre::bail!("LP amount must be greater than zero");
+        }
+    }
+    Ok(())
+}
+
+fn amm_deposit_tx<'a>(
+    account: &str,
+    amount: &str,
+    amount2: &str,
+    sequence: u32,
+    fee_lls: Option<(u32, u32)>,
+) -> color_eyre::Result<xrpl::models::transactions::amm_deposit::AMMDeposit<'a>> {
+    use xrpl::models::XRPAmount;
+    use xrpl::models::transactions::amm_deposit::{AMMDeposit, AMMDepositFlag};
+    use xrpl::models::transactions::{CommonFields, TransactionType};
+
+    validate_amm_deposit_specs(amount, amount2)?;
+    let mut common = CommonFields::from_account(account.to_string())
+        .with_transaction_type(TransactionType::AMMDeposit)
+        .with_flags(vec![AMMDepositFlag::TfTwoAsset])
+        .with_sequence(sequence);
+    if let Some((fee, lls)) = fee_lls {
+        common = common
+            .with_fee(XRPAmount::from(fee.to_string()))
+            .with_last_ledger_sequence(lls);
+    }
+    Ok(AMMDeposit {
+        common_fields: common,
+        asset: amm_currency(amm_asset_of_amount(amount)?),
+        asset2: amm_currency(amm_asset_of_amount(amount2)?),
+        amount: Some(parse_offer_amount(amount.trim())?),
+        amount2: Some(parse_offer_amount(amount2.trim())?),
+        e_price: None,
+        lp_token_out: None,
+    })
+}
+
+/// Unsigned two-asset AMMDeposit JSON for `simulate` (amount specs like OfferCreate).
+pub fn build_amm_deposit_tx_json_for_simulate(
+    account: &str,
+    amount: &str,
+    amount2: &str,
+    sequence: u32,
+) -> color_eyre::Result<Value> {
+    let tx = amm_deposit_tx(account, amount, amount2, sequence, None)?;
+    serde_json::to_value(&tx).map_err(|e| color_eyre::eyre::eyre!("amm_deposit tx_json: {e}"))
+}
+
+pub fn create_and_sign_amm_deposit(
+    wallet: &xrpl::wallet::Wallet,
+    account: &str,
+    amount: &str,
+    amount2: &str,
+    sequence: u32,
+    fee_drops: u32,
+    last_ledger_sequence: u32,
+) -> color_eyre::Result<String> {
+    let mut tx = amm_deposit_tx(
+        account,
+        amount,
+        amount2,
+        sequence,
+        Some((fee_drops, last_ledger_sequence)),
+    )?;
+    sign_blob!(tx, wallet)
+}
+
+/// `lp_token_in` = `(LP currency, AMM account, value)` from `amm_info`; `None` = withdraw all.
+type LpTokenIn<'s> = Option<(&'s str, &'s str, &'s str)>;
+
+fn amm_withdraw_tx<'a>(
+    account: &str,
+    asset: &str,
+    asset2: &str,
+    lp_token_in: LpTokenIn<'_>,
+    sequence: u32,
+    fee_lls: Option<(u32, u32)>,
+) -> color_eyre::Result<xrpl::models::transactions::amm_withdraw::AMMWithdraw<'a>> {
+    use xrpl::models::transactions::amm_withdraw::{AMMWithdraw, AMMWithdrawFlag};
+    use xrpl::models::transactions::{CommonFields, TransactionType};
+    use xrpl::models::{IssuedCurrencyAmount, XRPAmount};
+
+    validate_amm_withdraw_input(asset, asset2, lp_token_in.map_or("", |(_, _, v)| v))?;
+    let flag = if lp_token_in.is_some() {
+        AMMWithdrawFlag::TfLpToken
+    } else {
+        AMMWithdrawFlag::TfWithdrawAll
+    };
+    let mut common = CommonFields::from_account(account.to_string())
+        .with_transaction_type(TransactionType::AMMWithdraw)
+        .with_flags(vec![flag])
+        .with_sequence(sequence);
+    if let Some((fee, lls)) = fee_lls {
+        common = common
+            .with_fee(XRPAmount::from(fee.to_string()))
+            .with_last_ledger_sequence(lls);
+    }
+    Ok(AMMWithdraw {
+        common_fields: common,
+        asset: amm_currency(parse_amm_asset(asset)?),
+        asset2: amm_currency(parse_amm_asset(asset2)?),
+        amount: None,
+        amount2: None,
+        e_price: None,
+        lp_token_in: lp_token_in.map(|(currency, issuer, value)| IssuedCurrencyAmount {
+            currency: currency.to_string().into(),
+            issuer: issuer.to_string().into(),
+            value: value.trim().to_string().into(),
+        }),
+    })
+}
+
+/// Unsigned AMMWithdraw JSON for `simulate` (`tfWithdrawAll`, or `tfLPToken` + `LPTokenIn`).
+pub fn build_amm_withdraw_tx_json_for_simulate(
+    account: &str,
+    asset: &str,
+    asset2: &str,
+    lp_token_in: LpTokenIn<'_>,
+    sequence: u32,
+) -> color_eyre::Result<Value> {
+    let tx = amm_withdraw_tx(account, asset, asset2, lp_token_in, sequence, None)?;
+    serde_json::to_value(&tx).map_err(|e| color_eyre::eyre::eyre!("amm_withdraw tx_json: {e}"))
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn create_and_sign_amm_withdraw(
+    wallet: &xrpl::wallet::Wallet,
+    account: &str,
+    asset: &str,
+    asset2: &str,
+    lp_token_in: LpTokenIn<'_>,
+    sequence: u32,
+    fee_drops: u32,
+    last_ledger_sequence: u32,
+) -> color_eyre::Result<String> {
+    let mut tx = amm_withdraw_tx(
+        account,
+        asset,
+        asset2,
+        lp_token_in,
+        sequence,
+        Some((fee_drops, last_ledger_sequence)),
+    )?;
+    sign_blob!(tx, wallet)
+}
+
 /// Create and sign a TrustSet transaction, returning the tx_blob hex (v1: limit only).
 #[allow(clippy::too_many_arguments)]
 pub fn create_and_sign_trust_set(
@@ -1249,6 +1689,177 @@ mod tests {
         let decoded = decode(&blob).expect("decodes");
         assert_eq!(decoded["TransactionType"], "OfferCancel");
         assert_eq!(decoded["OfferSequence"], 42);
+    }
+
+    /// TC-215: escrow durations — `s`/`m`/`h`/`d` suffix, positive, u32 seconds; anything else rejected.
+    #[test]
+    fn parse_relative_duration_table() {
+        for (input, secs) in [
+            ("90s", 90),
+            ("30m", 1_800),
+            ("2h", 7_200),
+            (" 7d ", 604_800),
+        ] {
+            assert_eq!(parse_relative_duration(input).unwrap(), secs, "{input}");
+        }
+        for bad in ["", "10", "0m", "-1h", "1.5h", "5y", "m", "99999999d"] {
+            assert!(parse_relative_duration(bad).is_err(), "{bad}");
+        }
+    }
+
+    /// TC-216: EscrowCreate input — classic destination, XRP > 0, CancelAfter (optional) later
+    /// than FinishAfter.
+    #[test]
+    fn validate_escrow_create_input_table() {
+        const DEST: &str = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh";
+        let ok = validate_escrow_create_input(DEST, "1.5", "1h", "").unwrap();
+        assert_eq!(ok, (1_500_000, 3_600, None));
+        let with_cancel = validate_escrow_create_input(DEST, "1", "1h", "2d").unwrap();
+        assert_eq!(with_cancel, (1_000_000, 3_600, Some(172_800)));
+        for (dest, amt, fin, can, needle) in [
+            ("rBad", "1", "1h", "", "Destination"),
+            (DEST, "0", "1h", "", "amount"),
+            (DEST, "1", "", "", "FinishAfter"),
+            (DEST, "1", "2h", "1h", "CancelAfter"),
+            (DEST, "1", "2h", "2h", "CancelAfter"),
+        ] {
+            let err = validate_escrow_create_input(dest, amt, fin, can).unwrap_err();
+            assert!(err.to_string().contains(needle), "{needle}: {err}");
+        }
+    }
+
+    /// TC-217: Escrow simulate JSON and signed blobs carry the escrow fields
+    /// (Create: Amount/Destination/FinishAfter/CancelAfter; Finish/Cancel: Owner/OfferSequence).
+    #[test]
+    fn escrow_tx_json_and_signed_blobs_carry_fields() {
+        use xrpl::core::binarycodec::decode;
+        const DEST: &str = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh";
+        let wallet = wallet_from_family_seed(&sample_family_seed(), 0).expect("wallet");
+        let acct = wallet.classic_address.clone();
+
+        let json = build_escrow_create_tx_json_for_simulate(&acct, DEST, 1_000_000, 800, None, 5)
+            .expect("tx_json");
+        assert_eq!(json["TransactionType"], "EscrowCreate");
+        assert_eq!(json["Amount"], "1000000");
+        assert_eq!(json["FinishAfter"], 800);
+        assert!(json.get("CancelAfter").is_none());
+        let blob = create_and_sign_escrow_create(
+            &wallet,
+            &acct,
+            DEST,
+            1_000_000,
+            800,
+            Some(900),
+            5,
+            12,
+            100,
+        )
+        .expect("signed");
+        let d = decode(&blob).expect("decodes");
+        assert_eq!(
+            (&d["Destination"], &d["FinishAfter"], &d["CancelAfter"]),
+            (
+                &serde_json::json!(DEST),
+                &serde_json::json!(800),
+                &serde_json::json!(900)
+            )
+        );
+
+        for (cancel, ty) in [(false, "EscrowFinish"), (true, "EscrowCancel")] {
+            let json = build_escrow_close_tx_json_for_simulate(&acct, DEST, 42, cancel, 5)
+                .expect("tx_json");
+            assert_eq!(json["TransactionType"], ty);
+            assert_eq!(
+                (&json["Owner"], &json["OfferSequence"]),
+                (&serde_json::json!(DEST), &serde_json::json!(42))
+            );
+            let blob = create_and_sign_escrow_close(&wallet, &acct, DEST, 42, cancel, 5, 12, 100)
+                .expect("signed");
+            let d = decode(&blob).expect("decodes");
+            assert_eq!(
+                (&d["TransactionType"], &d["OfferSequence"]),
+                (&serde_json::json!(ty), &serde_json::json!(42))
+            );
+        }
+    }
+
+    /// TC-222: AMM inputs — asset `XRP` / `CUR:issuer`; deposit = two amount specs of different
+    /// assets; withdraw = two different assets + optional positive LP amount.
+    #[test]
+    fn validate_amm_inputs_table() {
+        const ISS: &str = "rJrRMgiRgrU6hDF4pgu5DXQdWyPbY35ErN";
+        let usd = format!("USD:{ISS}");
+        assert!(validate_amm_deposit_specs("XRP:1000000", &format!("{usd}:10")).is_ok());
+        assert!(
+            validate_amm_deposit_specs("XRP:1", "XRP:2").is_err(),
+            "same asset"
+        );
+        assert!(validate_amm_deposit_specs("XRP:0", &format!("{usd}:10")).is_err());
+        assert!(
+            validate_amm_withdraw_input("XRP", &usd, "").is_ok(),
+            "withdraw all"
+        );
+        assert!(validate_amm_withdraw_input("XRP", &usd, "12.5").is_ok());
+        for (a1, a2, lp) in [
+            ("XRP", "XRP", ""),
+            ("XRP", "USD", ""),
+            ("XRP", "USD:rBad", ""),
+            ("XRP:1", usd.as_str(), ""),
+            ("XRP", usd.as_str(), "0"),
+            ("XRP", usd.as_str(), "abc"),
+        ] {
+            assert!(
+                validate_amm_withdraw_input(a1, a2, lp).is_err(),
+                "{a1} {a2} {lp}"
+            );
+        }
+    }
+
+    /// TC-223: AMMDeposit (tfTwoAsset, Asset/Asset2 from the amount specs) and AMMWithdraw
+    /// (tfWithdrawAll, or tfLPToken + LPTokenIn) JSON and signed blobs.
+    #[test]
+    fn amm_tx_json_and_signed_blobs() {
+        use serde_json::json;
+        use xrpl::core::binarycodec::decode;
+        const ISS: &str = "rJrRMgiRgrU6hDF4pgu5DXQdWyPbY35ErN";
+        const LP: &str = "03930D02208264E2E40EC1B0C09E4DB96EE197B1";
+        let wallet = wallet_from_family_seed(&sample_family_seed(), 0).expect("wallet");
+        let acct = wallet.classic_address.clone();
+        let usd10 = format!("USD:{ISS}:10");
+
+        let dep = build_amm_deposit_tx_json_for_simulate(&acct, "XRP:1000000", &usd10, 5)
+            .expect("deposit json");
+        assert_eq!(dep["TransactionType"], "AMMDeposit");
+        assert_eq!(dep["Flags"], 0x0010_0000);
+        assert_eq!(dep["Asset"], json!({"currency": "XRP"}));
+        assert_eq!(dep["Asset2"], json!({"currency": "USD", "issuer": ISS}));
+        assert_eq!(dep["Amount"], "1000000");
+        assert_eq!(dep["Amount2"]["value"], "10");
+        let blob = create_and_sign_amm_deposit(&wallet, &acct, "XRP:1000000", &usd10, 5, 12, 100)
+            .expect("signed deposit");
+        assert_eq!(decode(&blob).expect("decode")["Flags"], 0x0010_0000);
+
+        let usd = format!("USD:{ISS}");
+        let all = build_amm_withdraw_tx_json_for_simulate(&acct, "XRP", &usd, None, 5)
+            .expect("withdraw all");
+        assert_eq!(all["Flags"], 0x0002_0000);
+        assert!(all.get("LPTokenIn").is_none());
+        let lp_in = (LP, ISS, "12.5");
+        let some = build_amm_withdraw_tx_json_for_simulate(&acct, "XRP", &usd, Some(lp_in), 5)
+            .expect("withdraw lp");
+        assert_eq!(some["Flags"], 0x0001_0000);
+        assert_eq!(
+            some["LPTokenIn"],
+            json!({"currency": LP, "issuer": ISS, "value": "12.5"})
+        );
+        let blob =
+            create_and_sign_amm_withdraw(&wallet, &acct, "XRP", &usd, Some(lp_in), 5, 12, 100)
+                .expect("signed withdraw");
+        let d = decode(&blob).expect("decode");
+        assert_eq!(
+            (&d["TransactionType"], &d["Flags"]),
+            (&json!("AMMWithdraw"), &json!(0x0001_0000))
+        );
     }
 
     /// TC-186: Payment SendMax — set for cross-currency, no Paths, XRP→XRP rejected.

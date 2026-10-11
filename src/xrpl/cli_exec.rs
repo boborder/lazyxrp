@@ -50,6 +50,14 @@ fn validate_cmd_account_and_issuer_addresses(cmd: &Cmd) -> color_eyre::Result<()
             taker_gets,
             taker_pays,
         } => crate::signing::validate_offer_specs(taker_gets, taker_pays)?,
+        Cmd::AmmDeposit { amount, amount2 } => {
+            crate::signing::validate_amm_deposit_specs(amount, amount2)?
+        }
+        Cmd::AmmWithdraw { asset, asset2, lp } => crate::signing::validate_amm_withdraw_input(
+            asset,
+            asset2,
+            lp.as_deref().unwrap_or_default(),
+        )?,
         Cmd::Faucet {
             address: Some(address),
         } => {
@@ -306,7 +314,7 @@ pub async fn execute_cli_command(
                 sequence,
                 account_info.sequence,
             )?;
-            let sim = super::poll::simulate_tx_requiring_tes_success(&rpc, tx_json)
+            let sim = super::submit::simulate_tx_requiring_tes_success(&rpc, tx_json)
                 .await
                 .map_err(|e| color_eyre::eyre::eyre!(e))?;
             let (tx_sequence, fee_drops, last_ledger_sequence) =
@@ -356,7 +364,7 @@ pub async fn execute_cli_command(
                 &taker_pays,
                 account_info.sequence,
             )?;
-            let sim = super::poll::simulate_tx_requiring_tes_success(&rpc, tx_json)
+            let sim = super::submit::simulate_tx_requiring_tes_success(&rpc, tx_json)
                 .await
                 .map_err(|e| color_eyre::eyre::eyre!(e))?;
             let (tx_sequence, fee_drops, last_ledger_sequence) =
@@ -381,6 +389,116 @@ pub async fn execute_cli_command(
                 fee_drops,
                 last_ledger_sequence,
                 network,
+            )?;
+            let summary = rpc.submit_signed_tx(&blob).await?;
+            println!("Transaction Hash: {}", summary.hash);
+            if wait {
+                let result = wait_validated(
+                    &rpc,
+                    &summary.hash,
+                    last_ledger_sequence,
+                    WAIT_POLL,
+                    WAIT_LIMIT,
+                )
+                .await?;
+                println!("Validated: {result}");
+            }
+        }
+        Cmd::AmmDeposit { amount, amount2 } => {
+            let wallet = cli_wallet(signing_credential.as_ref())?;
+            let account = wallet.classic_address.clone();
+            rpc.ensure_network(network).await?;
+            let account_info = rpc.account_info(&account).await?;
+            let tx_json = signing::build_amm_deposit_tx_json_for_simulate(
+                &account,
+                &amount,
+                &amount2,
+                account_info.sequence,
+            )?;
+            let sim = super::submit::simulate_tx_requiring_tes_success(&rpc, tx_json)
+                .await
+                .map_err(|e| color_eyre::eyre::eyre!(e))?;
+            let (tx_sequence, fee_drops, last_ledger_sequence) =
+                signing::sequence_fee_ledger_from_simulate(&sim.tx_json)?;
+            println!(
+                "AMMDeposit from {account}: up to {amount} + {amount2} (fee {fee_drops} drops)"
+            );
+            if !prompt_production_confirmation(
+                &format!("AMM deposit up to {amount} + {amount2}"),
+                network,
+                yes,
+            ) {
+                println!("Transaction cancelled by user.");
+                return Ok(());
+            }
+            let blob = signing::create_and_sign_amm_deposit(
+                &wallet,
+                &account,
+                &amount,
+                &amount2,
+                tx_sequence,
+                fee_drops,
+                last_ledger_sequence,
+            )?;
+            let summary = rpc.submit_signed_tx(&blob).await?;
+            println!("Transaction Hash: {}", summary.hash);
+            if wait {
+                let result = wait_validated(
+                    &rpc,
+                    &summary.hash,
+                    last_ledger_sequence,
+                    WAIT_POLL,
+                    WAIT_LIMIT,
+                )
+                .await?;
+                println!("Validated: {result}");
+            }
+        }
+        Cmd::AmmWithdraw { asset, asset2, lp } => {
+            let wallet = cli_wallet(signing_credential.as_ref())?;
+            let account = wallet.classic_address.clone();
+            rpc.ensure_network(network).await?;
+            let account_info = rpc.account_info(&account).await?;
+            let lp_token = match lp.as_deref().map(str::trim) {
+                Some(value) => Some((rpc.amm_lp_token(&asset, &asset2).await?, value)),
+                None => None,
+            };
+            let lp_in = lp_token
+                .as_ref()
+                .map(|((currency, issuer), value)| (currency.as_str(), issuer.as_str(), *value));
+            let what = lp_in.map_or("all LP tokens".to_string(), |(_, _, v)| format!("{v} LP"));
+            let tx_json = signing::build_amm_withdraw_tx_json_for_simulate(
+                &account,
+                &asset,
+                &asset2,
+                lp_in,
+                account_info.sequence,
+            )?;
+            let sim = super::submit::simulate_tx_requiring_tes_success(&rpc, tx_json)
+                .await
+                .map_err(|e| color_eyre::eyre::eyre!(e))?;
+            let (tx_sequence, fee_drops, last_ledger_sequence) =
+                signing::sequence_fee_ledger_from_simulate(&sim.tx_json)?;
+            println!(
+                "AMMWithdraw from {account}: {what} of {asset}/{asset2} (fee {fee_drops} drops)"
+            );
+            if !prompt_production_confirmation(
+                &format!("AMM withdraw {what} of {asset}/{asset2}"),
+                network,
+                yes,
+            ) {
+                println!("Transaction cancelled by user.");
+                return Ok(());
+            }
+            let blob = signing::create_and_sign_amm_withdraw(
+                &wallet,
+                &account,
+                &asset,
+                &asset2,
+                lp_in,
+                tx_sequence,
+                fee_drops,
+                last_ledger_sequence,
             )?;
             let summary = rpc.submit_signed_tx(&blob).await?;
             println!("Transaction Hash: {}", summary.hash);
@@ -460,7 +578,7 @@ pub async fn execute_cli_command(
                 None,
                 account_info.sequence,
             )?;
-            let sim = super::poll::simulate_tx_requiring_tes_success(&rpc, tx_json)
+            let sim = super::submit::simulate_tx_requiring_tes_success(&rpc, tx_json)
                 .await
                 .map_err(|e| color_eyre::eyre::eyre!(e))?;
             let (sequence, fee_drops, last_ledger_sequence) =
@@ -670,12 +788,10 @@ mod tests {
                 "account_lines" => json!({"lines": []}),
                 "amm_info" => json!({
                     "amm": {
-                        "Asset": {"currency": "XRP"},
-                        "Asset2": {"currency": "RLUSD", "issuer": RLUSD_ISSUER},
-                        "LPToken": {"value": "42", "currency": "03"},
-                        "TradingFee": 12,
-                        "Amount": "2000000",
-                        "Amount2": {
+                        "lp_token": {"value": "42", "currency": "03"},
+                        "trading_fee": 12,
+                        "amount": "2000000",
+                        "amount2": {
                             "currency": "RLUSD",
                             "value": "3",
                             "issuer": RLUSD_ISSUER

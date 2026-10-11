@@ -4,7 +4,7 @@ use serde_json::{Value, json};
 
 use super::format::{decode_uri, format_amount, format_asset};
 use super::types::{
-    AccountOfferRow, AccountTxPage, AggregatePrice, AmmSummary, ArcValue, FeeSummary,
+    AccountOfferRow, AccountTxPage, AggregatePrice, AmmSummary, ArcValue, EscrowRow, FeeSummary,
     LedgerObjectRow, NFTOKEN_FLAG_MUTABLE, NftRow, NodeValidatorListSummary, OfferRow,
     PathAlternative, PriceStats, RipplePathFindResult, ServerInfoSummary, SimulateResult,
     TrustLineRow, TxRow, TxSummary,
@@ -257,30 +257,39 @@ pub(crate) fn parse_account_lines_value(value: &Value) -> Vec<TrustLineRow> {
         .collect()
 }
 
+/// rippled `amm_info` (snake_case; the pool assets are implied by `amount` / `amount2`).
 pub(crate) fn parse_amm_info_value(value: &Value) -> AmmSummary {
     let amm = value
         .get("result")
         .and_then(|v| v.get("amm"))
         .cloned()
         .unwrap_or_default();
+    let lp = |k: &str| {
+        amm.get("lp_token")
+            .and_then(|t| t.get(k))
+            .and_then(Value::as_str)
+    };
     AmmSummary {
-        asset1: format_asset(amm.get("Asset")),
-        asset2: format_asset(amm.get("Asset2")),
+        asset1: format_asset(amm.get("amount")),
+        asset2: format_asset(amm.get("amount2")),
         lp_token: format!(
             "{} {}",
-            amm.get("LPToken")
-                .and_then(|t| t.get("value"))
-                .and_then(Value::as_str)
-                .unwrap_or("0"),
-            amm.get("LPToken")
-                .and_then(|t| t.get("currency"))
-                .and_then(Value::as_str)
-                .unwrap_or("?")
+            lp("value").unwrap_or("0"),
+            lp("currency").unwrap_or("?")
         ),
-        trading_fee: amm.get("TradingFee").and_then(Value::as_u64).unwrap_or(0) as u16,
-        pool1: format_amount(amm.get("Amount")),
-        pool2: format_amount(amm.get("Amount2")),
+        trading_fee: amm.get("trading_fee").and_then(Value::as_u64).unwrap_or(0) as u16,
+        pool1: format_amount(amm.get("amount")),
+        pool2: format_amount(amm.get("amount2")),
     }
+}
+
+/// The pool's LP token `(currency, issuer = AMM account)` — `LPTokenIn` for AMMWithdraw.
+/// rippled `amm_info` names it `lp_token`; `LPToken` (ledger-object casing) is accepted too.
+pub(crate) fn parse_amm_lp_token(value: &Value) -> Option<(String, String)> {
+    let amm = value.get("result")?.get("amm")?;
+    let lp = amm.get("lp_token").or_else(|| amm.get("LPToken"))?;
+    let field = |k: &str| lp.get(k).and_then(Value::as_str).map(str::to_string);
+    Some((field("currency")?, field("issuer")?))
 }
 
 /// Consume the RPC `Value` and move `tx`/`meta` into `ArcValue` (no deep clone).
@@ -413,6 +422,56 @@ pub(crate) fn parse_account_offers_value(value: &Value) -> Vec<AccountOfferRow> 
             })
         })
         .collect()
+}
+
+/// `account_objects` (type `escrow`) → rows. `offer_sequence` comes from the object's `Sequence`
+/// when the node includes it; otherwise the caller resolves it from `PreviousTxnID`.
+pub(crate) fn parse_account_escrows_value(value: &Value) -> Vec<EscrowRow> {
+    let u32_field = |o: &Value, k: &str| {
+        o.get(k)
+            .and_then(Value::as_u64)
+            .and_then(|n| u32::try_from(n).ok())
+    };
+    let str_field = |o: &Value, k: &str| {
+        o.get(k)
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string()
+    };
+    value
+        .get("result")
+        .and_then(|r| r.get("account_objects"))
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|o| o.get("LedgerEntryType").and_then(Value::as_str) == Some("Escrow"))
+        .map(|o| EscrowRow {
+            owner: str_field(o, "Account"),
+            destination: str_field(o, "Destination"),
+            amount: format_amount(o.get("Amount")),
+            finish_after: u32_field(o, "FinishAfter"),
+            cancel_after: u32_field(o, "CancelAfter"),
+            has_condition: o.get("Condition").is_some(),
+            offer_sequence: u32_field(o, "Sequence"),
+            previous_txn_id: str_field(o, "PreviousTxnID"),
+        })
+        .collect()
+}
+
+/// `tx` response → the sequence an Escrow is addressed by: `Sequence`, or `TicketSequence` when
+/// the EscrowCreate used a ticket (`Sequence` 0). API v2 nests fields under `tx_json`.
+pub(crate) fn escrow_offer_sequence_from_tx(value: &Value) -> Option<u32> {
+    let result = value.get("result")?;
+    let tx = result.get("tx_json").unwrap_or(result);
+    let field = |k: &str| {
+        tx.get(k)
+            .and_then(Value::as_u64)
+            .and_then(|n| u32::try_from(n).ok())
+    };
+    match field("Sequence") {
+        Some(seq) if seq != 0 => Some(seq),
+        _ => field("TicketSequence"),
+    }
 }
 
 pub(crate) fn is_not_found_error(message: &str) -> bool {
@@ -665,18 +724,16 @@ mod tests {
         assert_eq!(rows[0].limit, "1000");
     }
 
-    /// TC-015
+    /// TC-015: real rippled `amm_info` shape (snake_case, assets implied by the amounts).
     #[test]
     fn parse_amm_info_extracts_assets_pools_lp_token_and_fee() {
         let v = json!({
             "result": {
                 "amm": {
-                    "Asset": {"currency": "XRP"},
-                    "Asset2": {"currency": "USD", "issuer": "rIssuer2"},
-                    "LPToken": {"value": "42", "currency": "03"},
-                    "TradingFee": 12,
-                    "Amount": "2000000",
-                    "Amount2": {"currency": "USD", "value": "3", "issuer": "rIssuer2"}
+                    "lp_token": {"value": "42", "currency": "03", "issuer": "rAMM"},
+                    "trading_fee": 12,
+                    "amount": "2000000",
+                    "amount2": {"currency": "USD", "value": "3", "issuer": "rIssuer2"}
                 }
             }
         });
@@ -687,6 +744,21 @@ mod tests {
         assert_eq!(s.trading_fee, 12);
         assert_eq!(s.pool1, "2.000000");
         assert_eq!(s.pool2, "3 USD");
+    }
+
+    /// TC-224: LP token identity for AMMWithdraw from `amm_info` (`lp_token`, or `LPToken`).
+    #[test]
+    fn parse_amm_lp_token_reads_currency_and_issuer() {
+        let lp = json!({"currency": "03AB", "issuer": "rAMM", "value": "10"});
+        for key in ["lp_token", "LPToken"] {
+            let v = json!({"result": {"amm": {key: lp.clone()}}});
+            assert_eq!(
+                parse_amm_lp_token(&v),
+                Some(("03AB".to_string(), "rAMM".to_string())),
+                "{key}"
+            );
+        }
+        assert_eq!(parse_amm_lp_token(&json!({"result": {"amm": {}}})), None);
     }
 
     /// TC-016
@@ -784,6 +856,42 @@ mod tests {
         assert_eq!(rows[1].price, "500000.000000");
         assert_eq!(rows[2].quality, "oops");
         assert_eq!(rows[2].price, "-");
+    }
+
+    /// TC-218: escrow rows keep owner/destination/times/condition; `Sequence` is used when present.
+    /// The creating tx yields `Sequence`, or `TicketSequence` when Sequence is 0 (v1 and v2 shapes).
+    #[test]
+    fn parse_account_escrows_and_offer_sequence() {
+        let v = json!({"result": {"account_objects": [
+            {"LedgerEntryType": "Escrow", "Account": "rOwner", "Destination": "rDest",
+             "Amount": "1500000", "FinishAfter": 800, "CancelAfter": 900,
+             "PreviousTxnID": "AB", "Sequence": 7},
+            {"LedgerEntryType": "Escrow", "Account": "rOwner", "Destination": "rDest",
+             "Amount": "1", "Condition": "A0", "PreviousTxnID": "CD"},
+            {"LedgerEntryType": "Check", "Account": "rOwner"}
+        ]}});
+        let rows = parse_account_escrows_value(&v);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(
+            (
+                rows[0].finish_after,
+                rows[0].cancel_after,
+                rows[0].offer_sequence
+            ),
+            (Some(800), Some(900), Some(7))
+        );
+        assert_eq!(rows[0].amount, format_amount(Some(&json!("1500000"))));
+        assert!(!rows[0].has_condition && rows[1].has_condition);
+        assert_eq!(
+            (rows[1].offer_sequence, rows[1].previous_txn_id.as_str()),
+            (None, "CD")
+        );
+
+        let v1 = json!({"result": {"Sequence": 12}});
+        let v2 = json!({"result": {"tx_json": {"Sequence": 0, "TicketSequence": 30}}});
+        assert_eq!(escrow_offer_sequence_from_tx(&v1), Some(12));
+        assert_eq!(escrow_offer_sequence_from_tx(&v2), Some(30));
+        assert_eq!(escrow_offer_sequence_from_tx(&json!({"result": {}})), None);
     }
 
     /// TC-183: account_offers rows use lowercase keys; entries without a u32 `seq` are skipped.

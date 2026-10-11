@@ -12,9 +12,10 @@ use crate::{
     action::Action,
     components::shared::{fmt, theme},
     xrpl::{
-        AccountSetSubmitParams, FxrpDirectMintPaymentParams, FxrpExecuteDirectMintParams,
-        OfferCancelSubmitParams, OfferCreateSubmitParams, PaymentQuoteParams, PaymentSubmitParams,
-        SetRegularKeySubmitParams, TrustSetSubmitParams,
+        AccountSetSubmitParams, AmmDepositSubmitParams, AmmWithdrawSubmitParams,
+        EscrowCloseSubmitParams, EscrowCreateSubmitParams, FxrpDirectMintPaymentParams,
+        FxrpExecuteDirectMintParams, OfferCancelSubmitParams, OfferCreateSubmitParams,
+        PaymentQuoteParams, PaymentSubmitParams, SetRegularKeySubmitParams, TrustSetSubmitParams,
     },
 };
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -203,6 +204,145 @@ impl WalletPanel {
         };
         Some(Action::OfferCancelSubmit(OfferCancelSubmitParams {
             offer_sequence,
+            skip_mainnet_prompt: self.skip_mainnet_prompt,
+        }))
+    }
+
+    pub(super) fn open_escrow_create_composer(&mut self) {
+        self.composer = Some(ComposerPhase::EscrowCreate {
+            row: 0,
+            destination: String::new(),
+            amount_xrp: "1".to_string(),
+            finish_after: "1h".to_string(),
+            cancel_after: String::new(),
+        });
+        self.is_form_editing = false;
+    }
+
+    /// Same validation as the poll task, so a bad form flashes instead of round-tripping.
+    pub(super) fn queue_submit_escrow_create(&mut self) -> Option<Action> {
+        let Some(ComposerPhase::EscrowCreate {
+            destination,
+            amount_xrp,
+            finish_after,
+            cancel_after,
+            ..
+        }) = &self.composer
+        else {
+            return None;
+        };
+        let params = EscrowCreateSubmitParams {
+            destination: destination.trim().to_string(),
+            amount_xrp: amount_xrp.trim().to_string(),
+            finish_after: finish_after.trim().to_string(),
+            cancel_after: cancel_after.trim().to_string(),
+            skip_mainnet_prompt: self.skip_mainnet_prompt,
+        };
+        if let Err(e) = crate::signing::validate_escrow_create_input(
+            &params.destination,
+            &params.amount_xrp,
+            &params.finish_after,
+            &params.cancel_after,
+        ) {
+            self.set_submit_flash(SubmitFlash::Error(format!("EscrowCreate · {e}")));
+            return None;
+        }
+        Some(Action::EscrowCreateSubmit(params))
+    }
+
+    pub(super) fn open_amm_deposit_composer(&mut self) {
+        self.composer = Some(ComposerPhase::AmmDeposit {
+            row: 0,
+            amount: "XRP:1000000".to_string(),
+            amount2: String::new(),
+        });
+        self.is_form_editing = false;
+    }
+
+    pub(super) fn open_amm_withdraw_composer(&mut self) {
+        self.composer = Some(ComposerPhase::AmmWithdraw {
+            row: 0,
+            asset: "XRP".to_string(),
+            asset2: String::new(),
+            lp_amount: String::new(),
+        });
+        self.is_form_editing = false;
+    }
+
+    /// Queue the open AMM deposit / withdraw after the same validation the poll task runs.
+    pub(super) fn queue_submit_amm(&mut self) -> Option<Action> {
+        let skip_mainnet_prompt = self.skip_mainnet_prompt;
+        let queued = match &self.composer {
+            Some(ComposerPhase::AmmDeposit {
+                amount, amount2, ..
+            }) => crate::signing::validate_amm_deposit_specs(amount, amount2).map(|()| {
+                Action::AmmDepositSubmit(AmmDepositSubmitParams {
+                    amount: amount.trim().to_string(),
+                    amount2: amount2.trim().to_string(),
+                    skip_mainnet_prompt,
+                })
+            }),
+            Some(ComposerPhase::AmmWithdraw {
+                asset,
+                asset2,
+                lp_amount,
+                ..
+            }) => crate::signing::validate_amm_withdraw_input(asset, asset2, lp_amount).map(|()| {
+                Action::AmmWithdrawSubmit(AmmWithdrawSubmitParams {
+                    asset: asset.trim().to_string(),
+                    asset2: asset2.trim().to_string(),
+                    lp_amount: lp_amount.trim().to_string(),
+                    skip_mainnet_prompt,
+                })
+            }),
+            _ => return None,
+        };
+        match queued {
+            Ok(action) => Some(action),
+            Err(e) => {
+                self.set_submit_flash(SubmitFlash::Error(format!("AMM · {e}")));
+                None
+            }
+        }
+    }
+
+    pub(super) fn open_escrows_composer(&mut self) -> Action {
+        self.composer = Some(ComposerPhase::Escrows {
+            escrows: None,
+            selected: 0,
+        });
+        self.is_form_editing = false;
+        Action::RefreshAccountEscrows
+    }
+
+    /// `cancel == false` → EscrowFinish. Refuses rows this tool cannot close.
+    pub(super) fn queue_submit_escrow_close(&mut self, cancel: bool) -> Option<Action> {
+        let row = match &self.composer {
+            Some(ComposerPhase::Escrows {
+                escrows: Some(Ok(rows)),
+                selected,
+            }) => rows.get(*selected).cloned(),
+            _ => None,
+        };
+        let refuse = match &row {
+            None => Some("no escrow selected"),
+            Some(r) if r.offer_sequence.is_none() => {
+                Some("escrow sequence unknown (creating tx lookup failed) — refresh with Esc → 0")
+            }
+            Some(r) if r.has_condition && !cancel => {
+                Some("crypto-condition escrow: finishing needs a fulfillment (not supported)")
+            }
+            Some(_) => None,
+        };
+        if let Some(msg) = refuse {
+            self.set_submit_flash(SubmitFlash::Error(msg.into()));
+            return None;
+        }
+        let row = row?;
+        Some(Action::EscrowCloseSubmit(EscrowCloseSubmitParams {
+            owner: row.owner,
+            offer_sequence: row.offer_sequence?,
+            cancel,
             skip_mainnet_prompt: self.skip_mainnet_prompt,
         }))
     }
@@ -520,7 +660,7 @@ impl WalletPanel {
 
         let popup_w = area.width.clamp(54, 74);
         let popup_h = match phase {
-            ComposerPhase::PickKind { .. } => 23u16,
+            ComposerPhase::PickKind { .. } => 16u16,
             ComposerPhase::AccountSet => 21u16,
             ComposerPhase::Payment { is_iou, .. } => {
                 if *is_iou {
@@ -536,6 +676,10 @@ impl WalletPanel {
             ComposerPhase::FxrpDirectMint { .. } => 16u16,
             ComposerPhase::FxrpExecuteDirectMint { .. } => 16u16,
             ComposerPhase::OfferCancel { .. } => 16u16,
+            ComposerPhase::EscrowCreate { .. } => 16u16,
+            ComposerPhase::Escrows { .. } => 18u16,
+            ComposerPhase::AmmDeposit { .. } => 14u16,
+            ComposerPhase::AmmWithdraw { .. } => 15u16,
         }
         .min(area.height.saturating_sub(2))
         .max(8);
@@ -562,6 +706,10 @@ impl WalletPanel {
             ComposerPhase::FxrpDirectMint { .. } => "FXRP Direct Mint",
             ComposerPhase::FxrpExecuteDirectMint { .. } => "FXRP Execute (C3)",
             ComposerPhase::OfferCancel { .. } => "Cancel offer",
+            ComposerPhase::EscrowCreate { .. } => "Create escrow",
+            ComposerPhase::Escrows { .. } => "Finish / cancel escrow",
+            ComposerPhase::AmmDeposit { .. } => "AMM deposit (two-asset)",
+            ComposerPhase::AmmWithdraw { .. } => "AMM withdraw",
         };
         let block = theme::panel_block(inner_title, true);
         let inner = block.inner(popup);
@@ -587,9 +735,13 @@ impl WalletPanel {
                         Span::styled(format!(" — {blurb}"), theme::dim_style()),
                     ])
                 };
+                // Hint first and scroll to keep the selection visible: the wallet panel is often
+                // shorter than the 12-row list.
+                let first_row = 2u16;
+                let scroll = (first_row + *selected as u16 + 1).saturating_sub(inner.height);
                 Paragraph::new(vec![
                     Line::from(Span::styled(
-                        "What do you want to do?",
+                        "1–9, 0, d, w jump · j/k move · Enter open · Esc close",
                         theme::secondary_style(),
                     )),
                     Line::from(""),
@@ -601,12 +753,12 @@ impl WalletPanel {
                     row(5, "6", "FXRP Mint", "pay Core Vault + memo"),
                     row(6, "7", "FXRP Execute", "paste FDC proof → Flare"),
                     row(7, "8", "OfferCancel", "cancel own DEX offer"),
-                    Line::from(""),
-                    Line::from(Span::styled(
-                        "1–8 jump · j/k move · Enter open · Esc close",
-                        theme::secondary_style(),
-                    )),
+                    row(8, "9", "EscrowCreate", "lock XRP until a time"),
+                    row(9, "0", "Escrows", "finish / cancel escrow"),
+                    row(10, "d", "AMMDeposit", "add both assets to a pool"),
+                    row(11, "w", "AMMWithdraw", "return LP tokens"),
                 ])
+                .scroll((scroll, 0))
             }
             ComposerPhase::DangerConfirm {
                 hint,
@@ -1083,9 +1235,219 @@ impl WalletPanel {
                 )));
                 Paragraph::new(lines)
             }
+            ComposerPhase::EscrowCreate {
+                row,
+                destination,
+                amount_xrp,
+                finish_after,
+                cancel_after,
+            } => {
+                let net_note = if self.network.is_production() && !self.skip_mainnet_prompt {
+                    " · production writes need --yes"
+                } else {
+                    ""
+                };
+                let field = |i: usize, label: &str, value: &str| {
+                    Line::from(vec![
+                        Span::styled(
+                            format!("{label:<12}[{}] ", if *row == i { "*" } else { " " }),
+                            if *row == i {
+                                highlight_style
+                            } else {
+                                label_style
+                            },
+                        ),
+                        Span::styled(value.to_string(), value_style),
+                    ])
+                };
+                Paragraph::new(vec![
+                    Line::from(Span::styled(
+                        format!("XRP only · times from now: 90s / 30m / 2h / 7d{net_note}"),
+                        theme::secondary_style(),
+                    )),
+                    Line::from(""),
+                    field(0, "Destination", destination),
+                    field(1, "Amount XRP", amount_xrp),
+                    field(2, "FinishAfter", finish_after),
+                    field(3, "CancelAfter", cancel_after),
+                    Line::from(Span::styled(
+                        "CancelAfter empty = no refund deadline (only Finish releases it)",
+                        theme::dim_style(),
+                    )),
+                    Line::from(""),
+                    Line::from(Span::styled(
+                        "e edit · Tab rows · Ctrl+S / S submit · Esc back",
+                        theme::secondary_style(),
+                    )),
+                ])
+            }
+            ComposerPhase::Escrows { escrows, selected } => {
+                let net_note = if self.network.is_production() && !self.skip_mainnet_prompt {
+                    " · production writes need --yes"
+                } else {
+                    ""
+                };
+                let mut lines = vec![
+                    Line::from(Span::styled(
+                        format!("Escrows you own or receive (seq · amount → dest){net_note}"),
+                        theme::secondary_style(),
+                    )),
+                    Line::from(""),
+                ];
+                let when = |label: &str, t: Option<u32>| {
+                    t.map(|t| {
+                        format!(
+                            " {label} {}",
+                            crate::xrpl::format_ripple_time_utc(u64::from(t))
+                        )
+                    })
+                    .unwrap_or_default()
+                };
+                match escrows {
+                    None => lines.push(Line::from(Span::styled(
+                        "loading account_objects…",
+                        theme::dim_style(),
+                    ))),
+                    Some(Err(e)) => {
+                        lines.push(Line::from(Span::styled(e.clone(), theme::error_style())))
+                    }
+                    Some(Ok(rows)) if rows.is_empty() => {
+                        lines.push(Line::from(Span::styled("(no escrows)", theme::dim_style())))
+                    }
+                    Some(Ok(rows)) => {
+                        let start = selected.saturating_sub(4);
+                        for (i, r) in rows.iter().enumerate().skip(start).take(5) {
+                            let on = i == *selected;
+                            let style = if on { highlight_style } else { label_style };
+                            let seq = r
+                                .offer_sequence
+                                .map_or_else(|| "?".to_string(), |s| s.to_string());
+                            lines.push(Line::from(Span::styled(
+                                format!(
+                                    "{}#{seq}  {} → {}{}",
+                                    if on { "⟩ " } else { "  " },
+                                    r.amount,
+                                    Self::shorten_display(&r.destination, 20),
+                                    if r.has_condition { "  [condition]" } else { "" },
+                                ),
+                                style,
+                            )));
+                            lines.push(Line::from(Span::styled(
+                                format!(
+                                    "    {}{}",
+                                    when("finish ≥", r.finish_after),
+                                    when(" · cancel ≥", r.cancel_after)
+                                ),
+                                theme::dim_style(),
+                            )));
+                        }
+                    }
+                }
+                lines.push(Line::from(""));
+                lines.push(Line::from(Span::styled(
+                    "j/k select · s finish · c cancel · Esc back",
+                    theme::secondary_style(),
+                )));
+                Paragraph::new(lines)
+            }
+            ComposerPhase::AmmDeposit {
+                row,
+                amount,
+                amount2,
+            } => {
+                let field = |i: usize, label: &str, value: &str| {
+                    form_field(
+                        *row == i,
+                        label,
+                        value,
+                        highlight_style,
+                        label_style,
+                        value_style,
+                    )
+                };
+                Paragraph::new(vec![
+                    Line::from(Span::styled(
+                        format!(
+                            "Maxima in both assets (XRP:drops / CUR:issuer:value){}",
+                            self.production_note()
+                        ),
+                        theme::secondary_style(),
+                    )),
+                    Line::from(""),
+                    field(0, "Amount", amount),
+                    field(1, "Amount2", amount2),
+                    Line::from(""),
+                    Line::from(Span::styled(
+                        "e edit · Tab rows · Ctrl+S / S submit · Esc back",
+                        theme::secondary_style(),
+                    )),
+                ])
+            }
+            ComposerPhase::AmmWithdraw {
+                row,
+                asset,
+                asset2,
+                lp_amount,
+            } => {
+                let field = |i: usize, label: &str, value: &str| {
+                    form_field(
+                        *row == i,
+                        label,
+                        value,
+                        highlight_style,
+                        label_style,
+                        value_style,
+                    )
+                };
+                Paragraph::new(vec![
+                    Line::from(Span::styled(
+                        format!("Pool assets: XRP or CUR:issuer{}", self.production_note()),
+                        theme::secondary_style(),
+                    )),
+                    Line::from(""),
+                    field(0, "Asset", asset),
+                    field(1, "Asset2", asset2),
+                    field(2, "LP amount", lp_amount),
+                    Line::from(Span::styled(
+                        "LP amount empty = withdraw all",
+                        theme::dim_style(),
+                    )),
+                    Line::from(""),
+                    Line::from(Span::styled(
+                        "e edit · Tab rows · Ctrl+S / S submit · Esc back",
+                        theme::secondary_style(),
+                    )),
+                ])
+            }
         };
         frame.render_widget(body, inner);
     }
+
+    fn production_note(&self) -> &'static str {
+        if self.network.is_production() && !self.skip_mainnet_prompt {
+            " · production writes need --yes"
+        } else {
+            ""
+        }
+    }
+}
+
+/// `Label       [*] value` row of a composer form.
+fn form_field(
+    on: bool,
+    label: &str,
+    value: &str,
+    highlight: Style,
+    label_style: Style,
+    value_style: Style,
+) -> Line<'static> {
+    Line::from(vec![
+        Span::styled(
+            format!("{label:<12}[{}] ", if on { "*" } else { " " }),
+            if on { highlight } else { label_style },
+        ),
+        Span::styled(value.to_string(), value_style),
+    ])
 }
 
 #[cfg(test)]

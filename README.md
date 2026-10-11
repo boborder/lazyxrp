@@ -118,9 +118,11 @@ rc book --base XRP --quote USD --issuer <r-issuer>
 | `offers <ADDR>` | Open DEX offers (`seq`, TakerGets, TakerPays; first 200) |
 | `offer-cancel <SEQ>` | Cancel your offer `SEQ` (requires signing key; simulate first; `--yes` on mainnet/xahau) |
 | `offer-create <GETS> <PAYS>` | Place a DEX offer; specs `XRP:drops` or `CUR:issuer:value` (requires signing key; simulate first; `--yes` on mainnet/xahau) |
+| `amm-deposit <AMOUNT> <AMOUNT2>` | Two-asset AMM deposit; both specs are maxima and name the pool (requires signing key; simulate first; `--yes` on mainnet/xahau) |
+| `amm-withdraw <ASSET> <ASSET2> [--lp N]` | AMM withdraw; assets `XRP` / `CUR:issuer`; without `--lp` withdraws all (requires signing key; simulate first; `--yes` on mainnet/xahau) |
 | `faucet [ADDR]` | testnet/devnet only: fund `ADDR`, or generate a wallet locally and fund it (seed printed once; only the address is sent) |
 
-Writes (`send`, `offer-create`, `offer-cancel`) wait until the transaction is validated and exit non-zero unless the final result is `tes…` (`--no-wait` returns right after submit). Before signing, the endpoint's `network_id` must match `--network`: a mainnet `XRPL_RPC_SERVER` under `--network testnet` is refused.
+Writes (`send`, `offer-create`, `offer-cancel`, `amm-deposit`, `amm-withdraw`) wait until the transaction is validated and exit non-zero unless the final result is `tes…` (`--no-wait` returns right after submit). Before signing, the endpoint's `network_id` must match `--network`: a mainnet `XRPL_RPC_SERVER` under `--network testnet` is refused.
 
 **Migrating to 0.3.0:** bare `lazyxrp info` (without `-x`) and `lazyxrp watch` were removed; the bare form exits with an error pointing at `lazyxrp -x info` (use `lazyxrp` with no arguments for the TUI). `send` simulates before signing (same as the TUI), needs `--yes` on mainnet/xahau or an interactive confirmation, and exits non-zero when signing or submission fails.
 

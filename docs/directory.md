@@ -45,7 +45,8 @@ lazyxrp/
 │   │   ├── format.rs
 │   │   ├── parse.rs
 │   │   ├── nft_image.rs          # NFT metadata/image fetch and limits
-│   │   ├── poll.rs
+│   │   ├── poll.rs               # poll loop + read batch; PollCommand dispatch
+│   │   ├── submit.rs             # write paths: guard → simulate → sign → submit, quote
 │   │   ├── toml.rs
 │   │   ├── types.rs
 │   │   ├── util.rs               # JSON path helpers + reconnect backoff
@@ -132,7 +133,7 @@ lazyxrp/
 - `bin/rp.rs`: `rp` バイナリの薄いエントリ（`lazyxrp::run_rp()`）。`cargo install` / リリース tarball で常に付く。
 - `uninstall.rs`: `lazyxrp --self-uninstall` — 実行中バイナリ・同階層の `{name}.bak`・同階層の `rp`（実体/symlink）、`Config` で解決した config/data ディレクトリの削除（`cargo uninstall` は呼ばない）。
 - `app.rs`: TUI アプリ本体。イベントループ、コンポーネント管理、バックグラウンド処理起動を担当。
-- `xrpl/`: XRPL 連携一式。`mod.rs` は再エクスポートのみ。`address.rs`（classic/X-Address 解決・ネットワーク一致検査）、`client.rs`（`RpcClient` façade・JSON-RPC / HTTPS dUNL fetch・`tx` lookup）、`dunl.rs`（XRPLF dUNL JSON・manifest ST）、`format.rs`（金額・path・ripple time 整形、`xrp_to_drops` / `hex_to_ascii` / `path_find_*`）、`parse.rs`（JSON-RPC レスポンスパーサ・book helper）、`util.rs`（JSON パスヘルパ + 再接続バックオフ）、`types.rs`（行データ型・`BookPair`・`PollContext` / `PollCommand`）、`poll.rs`（定期ポーリング・ウォレット送信パス）、`ws.rs`（WebSocket）、`cli_exec.rs`（非 TUI の `execute_cli_command` / `execute_rp_lookup`）、`toml.rs`（`xrp-ledger.toml` パーサ）。
+- `xrpl/`: XRPL 連携一式。`mod.rs` は再エクスポートのみ。`address.rs`（classic/X-Address 解決・ネットワーク一致検査）、`client.rs`（`RpcClient` façade・JSON-RPC / HTTPS dUNL fetch・`tx` lookup）、`dunl.rs`（XRPLF dUNL JSON・manifest ST）、`format.rs`（金額・path・ripple time 整形、`xrp_to_drops` / `hex_to_ascii` / `path_find_*`）、`parse.rs`（JSON-RPC レスポンスパーサ・book helper）、`util.rs`（JSON パスヘルパ + 再接続バックオフ）、`types.rs`（行データ型・`BookPair`・`PollContext` / `PollCommand`）、`poll.rs`（定期ポーリング・`PollCommand` 振り分け）、`submit.rs`（ウォレット送信パス: mainnet guard → simulate → sign → submit、`submit_*` 各種・`simulate_tx_requiring_tes_success`・Payment quote）、`ws.rs`（WebSocket）、`cli_exec.rs`（非 TUI の `execute_cli_command` / `execute_rp_lookup`）、`toml.rs`（`xrp-ledger.toml` パーサ）。
 - `cli.rs`: コマンドライン引数とサブコマンド定義（`Cli`）および `rp` 用 `RpCli`。
 - `action.rs`: アプリ内部で流す `Action`。
 - `config.rs`: 既定値 + 設定ファイルのロードとマージ、`XRPL_*` 環境変数（シード・RPC/WS・ネットワーク）の反映。

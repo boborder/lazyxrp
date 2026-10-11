@@ -5,8 +5,9 @@ use strum::Display;
 use crate::{
     network::Network,
     xrpl::{
-        AccountOfferRow, AccountSetSubmitParams, AccountSummary, AggregatePrice, AmmSummary,
-        BookMidPrice, DunlSummary, EscrowCreateSubmitParams, FeeSummary, FlareFeedPrice,
+        AccountOfferRow, AccountSetSubmitParams, AccountSummary, AggregatePrice,
+        AmmDepositSubmitParams, AmmSummary, AmmWithdrawSubmitParams, BookMidPrice, DunlSummary,
+        EscrowCloseSubmitParams, EscrowCreateSubmitParams, EscrowRow, FeeSummary, FlareFeedPrice,
         FlareWalletSummary, FxrpDirectMintInfo, FxrpDirectMintPaymentParams,
         FxrpExecuteDirectMintParams, GeneratedWalletKeys, LedgerObjectRow, NftRow,
         OfferCancelSubmitParams, OfferCreateSubmitParams, OfferRow, PathFindSnapshot,
@@ -149,6 +150,18 @@ pub enum Action {
     EscrowCreateSubmit(EscrowCreateSubmitParams),
     EscrowCreateSubmitOk(String),
     EscrowCreateSubmitErr(String),
+    /// Fetch escrows the signing account owns or receives (Wallet escrow composer).
+    RefreshAccountEscrows,
+    XrplAccountEscrows(Vec<EscrowRow>),
+    /// Queue EscrowFinish / EscrowCancel sign+submit from Wallet composer (poll task).
+    EscrowCloseSubmit(EscrowCloseSubmitParams),
+    EscrowCloseSubmitOk(String),
+    EscrowCloseSubmitErr(String),
+    /// Queue AMMDeposit / AMMWithdraw sign+submit from Wallet composer (poll task).
+    AmmDepositSubmit(AmmDepositSubmitParams),
+    AmmWithdrawSubmit(AmmWithdrawSubmitParams),
+    AmmSubmitOk(String),
+    AmmSubmitErr(String),
     /// Queue OfferCreate sign+submit from Wallet form (poll task).
     OfferCreateSubmit(OfferCreateSubmitParams),
     OfferCreateSubmitOk(String),

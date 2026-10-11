@@ -12,10 +12,9 @@
 - 注意: ソース内に直接の利用がなくても、この依存は `std` 実装の有効化に必要。未使用依存として削除しない
 - 検証: `cargo check` / `cargo build --bins` を連続実行して再発有無を確認する
 
-### P-003: EscrowCreate composer/poll still unwired
+### ~~P-003: EscrowCreate composer/poll still unwired~~ → 解決（2026-10-11）
 
-- 症状: EscrowCreate の signing / poll コメントは残るが composer UI と poll 配線が未完了
-- 対応: 配線時は `finalize_simulate_sign_submit` を再利用し、型固有バリデーションは caller に残す
+- 実態は signing も未実装で、poll の `_ => {}` が `EscrowCreateSubmit` を黙って捨てていた。signing / `submit_escrow_*` / composer（`9` Create・`0` Finish/Cancel）を追加し、poll の `PollCommand` match から catch-all を外した（新しい command の取りこぼしはコンパイルエラーになる）。TC-215–221、testnet E2E は `docs/test.md`。
 
 ### P-005: `config.rs` remains one file
 

@@ -4,7 +4,7 @@
 
 **Planning view**. Requirements → [`requirements.md`](docs/requirements.md) · System behavior → [`architecture.md`](docs/architecture.md) · UI/UX → [`DESIGN.md`](DESIGN.md).
 
-**Current version:** `Cargo.toml` → 0.3.0（2026-10-10 公開: GitHub Release + crates.io）
+**Current version:** `Cargo.toml` → 0.3.1（2026-10-11 公開: GitHub Release + crates.io）
 **Last updated:** 2026-10-11
 
 **Priority:** P0 = リリースブロッカー · P1 = 次マイルストーンの主目標 · P2 = 計画済み · P3 = 余力・需要次第。各 horizon 内は上から着手。
@@ -19,7 +19,7 @@ XRPL エコシステム（開発者・ユーザー双方）で人気の CLI/TUI 
 
 | Item | Priority | 前提 / Notes |
 |------|----------|--------------|
-| TX surface completion — F-01 AccountDelete, F-03 EscrowFinish/Cancel | Later | 0.4.0 の `poll.rs` 分割 + EscrowCreate 後（同じ submit 追加パターン） |
+| TX surface completion — F-01 AccountDelete | Later | 0.4.0 の EscrowCreate / Finish / Cancel と同じ submit 追加パターン（F-03 EscrowFinish/Cancel は 0.4.0 に前倒し済み） |
 | Watch / Operate UI 分離 | Later | `docs/security.md` 構造課題。署名系 UI を閲覧専用起動から外す |
 | Action エラー型移行（`String` → 型付き） | Later | `docs/security.md` 構造課題。UI 文言の SSOT 化と同時に |
 | Global row cache (A1) — render perf at scale | Later | 計測で問題が出たら |
@@ -31,29 +31,18 @@ XRPL エコシステム（開発者・ユーザー双方）で人気の CLI/TUI 
 
 | # | Item | Source | Priority | 完了条件 |
 |---|------|--------|----------|----------|
-| 1 | `poll.rs` 分割（2,574 行: poll loop / read batch / submit 群） | `docs/security.md` 構造課題 | P1 | `submit_*` + `simulate_then_finalize` を `xrpl/submit.rs` へ移動、挙動不変（既存 TC 緑・新規 TC なし）。#3・#4 の前提 |
-| 2 | Sequence / LastLedgerSequence 整合検査 | `docs/security.md` Fee cap 節の残余 | P2 | simulate 由来 `Sequence` ≠ `account_info` なら署名拒否。LLS は 0.3.0 から `ledger_index + 20` を自前補完（TC-200）なので、**ノード返却 LLS が `ledger_index` から過大（> +100 目安）なら拒否**を追加 + TC |
-| 3 | B-02 EscrowCreate composer UI | `docs/problems.md` P-003 | P2 | #1 後。signing/poll 既存、composer + Action 配線 + TC。testnet で validated 1 件 |
-| 4 | F-04 AMM Deposit/Withdraw TX | DEX trading の後続 | P2 | #1 後。composer + `-x` CLI、simulate 経路再利用、testnet で validated |
+| 1 | ~~`poll.rs` 分割~~ **済**（2026-10-11） | `docs/security.md` 構造課題 | P1 | 書き込み経路（`submit_*`・`simulate_then_finalize`・quote・関連テスト）を `xrpl/submit.rs`（1,526 行）へ移動、`poll.rs` は 2,633 → 1,120 行。挙動不変（260 テスト緑、新規 TC なし） |
+| 2 | ~~Sequence / LastLedgerSequence 整合検査~~ **済**（0.3.1、監査 run-2） | `docs/security.md` Fee cap 節の残余 | P2 | TC-204 |
+| 3 | ~~B-02 EscrowCreate composer UI~~ **済**（2026-10-11、F-03 Finish/Cancel を前倒し） | `docs/problems.md` P-003 | P2 | 実際は signing も未実装（poll が黙って捨てていた）。signing + `submit_escrow_*` + composer `9` Create（相対時間 `90s`〜`7d`、CancelAfter 任意）・`0` 一覧から Finish/Cancel、TUI のみ。TC-215–221、testnet で Create ×2 / Cancel / Finish を validated |
+| 4 | ~~F-04 AMM Deposit/Withdraw TX~~ **済**（2026-10-11） | DEX trading の後続 | P2 | two-asset deposit・withdraw 全額 / LP 量。composer `d` / `w` + `-x amm-deposit` / `-x amm-withdraw`。TC-222–226、testnet で CLI ×2 / TUI ×2 を validated（プールは使い捨てスクリプトで作成、AMMCreate は対象外） |
 | 5 | Fake WebSocket integration fixtures | `docs/test.md` | P2 | ledger close → poll trigger → panel 更新をローカル WS で検証 |
 | 6 | 二重送信ガード（同一内容の連続 submit） | `docs/security.md` 未修正リスト | P3 | 直前 submit の結果待ち中に同一 params を拒否 + TC |
 | 7 | `account_offers` marker paging（> 200 件） | `client.rs` ponytail 注記 | P3 | 200 件超アカウントで全件表示 |
 | 8 | Mainnet C3 execute smoke (`execute=true`) | — | P3 | **外部ブロック**: FDC verifier API key + 実資金。入手まで据え置き |
 
-## Next (次期) — **0.3.1: live 検証 + testnet DX**（実装済み・未リリース）
+## Next (次期)
 
-0.3.0 の testnet E2E で、mock が実ノードの `simulate` 応答と違っていたため全 write の失敗を見逃した（TC-200）。faucet・OfferCreate・validated 確認には外部の xrpl.js が要った。この 2 点を塞いだ。
-
-| # | Item | Priority | 状態 |
-|---|------|----------|------|
-| 1 | ~~Testnet E2E の自動化（opt-in）~~ **済** | P1 | `mise run e2e-testnet`（`tests/testnet_e2e.rs`、`#[ignore]`）: faucet ×2 → send → offer-create → offers → offer-cancel、全 write validated（約 27 秒）。`docs/maintenance.md` のリリース前手順に記載 |
-| 2 | ~~`-x faucet [ADDR]`（testnet/devnet 限定）~~ **済** | P1 | ADDR 省略時はローカル生成（seed は表示のみ、faucet へは address だけ）。応答の address 不一致は Err（TC-201） |
-| 3 | ~~`-x offer-create <GETS> <PAYS>`~~ **済** | P1 | spec は RPC 前に検証（TC-190/191） |
-| 4 | ~~submit 後の validated 確認~~ **済**（CLI） | P2 | CLI write は標準で validated まで待機、`tes` 以外・LLS 超過で非 0 終了、`--no-wait` で従来動作（TC-202）。TUI は Tx History に最終結果が出る（E2E で確認）ため追加なし |
-| 5 | ~~Endpoint network 照合（S-017）~~ **済** | P0 | E2E 中に発見: mainnet の `XRPL_RPC_SERVER` 下で `--network testnet` の write が `--yes` なしで mainnet へ届き得た。署名前に `server_info.network_id` を照合（TC-203、live 確認済み） |
-| 6 | ~~OSS パッケージ整備~~ **済** | P1 | crate から `docs/` を外し `tests/`・`CHANGELOG.md`・`SECURITY.md` を同梱（`cargo package` 警告 0、249 KiB）。description / keywords / categories 更新、crate doc を docs.rs の入口に（公開 API は `run` / `run_rp` のみ）、README バッジ、MSRV 1.94.1 を実測して CI job 化、private vulnerability reporting 有効化、GitHub description / topics 設定、`mise run release` が CHANGELOG を確定 |
-| 6b | ~~セキュリティ監査 run-2 対応~~ **済** | P0 | simulate の Sequence/LLS 照合、Core Vault ピン（`expected_core_vault`、破壊的）、quote の通貨照合、tx hash ローカル計算、simulate 文字列 sanitize、CLI wait の expired 競合、faucet/RPC redirect 無効化、env 秘密の起動時取得 + zeroize、spec 末尾拒否、CLI send 入力検証、keygen popup 消去、TUI に署名 Fee 表示、Actions SHA 固定（TC-204–214、testnet E2E 緑） |
-| 7 | 0.3.1 リリース | P0 | `mise run e2e-testnet` 緑 → `mise run release 0.3.1` → push。README に「既定で validated 待ち」「network 照合」を記載済み |
+0.3.1 は公開済み（下の Shipped）。中期 #1–#4 済み（未リリース）。次は #5 から。
 
 ## Short-term (短期) — 0.3.0 公開後の残務
 
@@ -82,6 +71,7 @@ XRPL エコシステム（開発者・ユーザー双方）で人気の CLI/TUI 
 | XRPL poll efficiency pass | 0.2.11 | **Done** (2026-09-17) | dUNL excluded from XRPL backoff both ways + stale-on-error with 60 s retry cooldown; Account-tab panels (`account_tx`, wallet overview) gated like Market/Assets |
 | Status bar health tracks | 0.2.11 | **Done** (2026-09-17) | XRPL chip goes STALE during quiet backoff + OFFLINE on `server_info` errors; flare dot (`flr:`) with red-on-failure/orange-stale; `dunl:` data-age marker with `!` past cache TTL |
 | DEX trading + CLI redesign + keymap docs | 0.3.0 | **Done** (2026-10-10) | Wallet composer OfferCancel (`8`) + Payment Send max / `p` path quote (`slippage_bps`); CLI: bare subcommands + `watch` removed, `-x send` simulate-first + non-zero exit on failure, `-x offers` / `-x offer-cancel`; shared Payment validation (P-004); live `simulate` LLS fill (TC-200); `--seed`/`--mnemonic` kept with stderr warning (FR-13); global keybindings user-mergeable (DESIGN §6); `rc` alias stays README-only |
+| Live 検証 + testnet DX + 監査 run-2 | 0.3.1 | **Done** (2026-10-11) | `-x faucet` / `-x offer-create`、CLI write の validated 待ち、endpoint `network_id` 照合（S-017）、opt-in testnet E2E、監査 run-2 修正（TC-204–214、Core Vault ピンは破壊的）、OSS パッケージ整備、dependabot + Actions SHA 固定 |
 
 ## Task tracking
 
