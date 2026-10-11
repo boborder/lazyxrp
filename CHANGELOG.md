@@ -4,6 +4,8 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-10-11
+
 ### Fixed
 
 - FXRP Mint (C2) payments were refused at `simulate` ("Field 'Memos.Memo.MemoFormat' has bad type"): unset memo fields were sent as `null`. Null fields are now dropped before `simulate`.
@@ -93,7 +95,8 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 See [GitHub Releases](https://github.com/boborder/lazyxrp/releases) for 0.2.11 and older.
 
-[Unreleased]: https://github.com/boborder/lazyxrp/compare/v0.4.1...HEAD
+[Unreleased]: https://github.com/boborder/lazyxrp/compare/v0.4.2...HEAD
+[0.4.2]: https://github.com/boborder/lazyxrp/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/boborder/lazyxrp/compare/v0.3.0...v0.4.1
 [0.4.0]: https://github.com/boborder/lazyxrp/compare/v0.3.0...v0.4.0
 [0.3.1]: https://github.com/boborder/lazyxrp/compare/v0.3.0...v0.3.1
