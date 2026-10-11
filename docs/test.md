@@ -108,6 +108,8 @@ cargo deny check
 | TC-231 | P1 | `src/flare.rs` | C3 `executeDirectMinting` selector = deployed `0x78d0299e` (`IXRPPayment.Proof`); a real Coston2 DA `{response, proof}` answer decodes (and its `{data, merkleProof}` alias encodes identically); malformed / old hex-`response` shape rejected |
 | TC-232 | P1 | `src/xrpl/submit.rs` | AccountDelete (local JSON-RPC): an X-address destination's tag reaches simulate and the signed blob; the blob carries the simulate-chosen fee (owner reserve), not a base fee. Mainnet without `--yes` refused (TC-088 table) |
 | TC-233 | P1 | `src/components/panels/wallet.rs` | AccountDelete composer: `s` never queues directly — invalid destination flashes, valid one opens `DELETE` type-to-confirm; Esc keeps the destination; partial word refused; `DELETE` + Enter queues the trimmed destination |
+| TC-234 | P1 | `src/lib.rs` | `--watch -x <write>` (send / offer-cancel / offer-create / amm-deposit / amm-withdraw / account-delete) refused before any RPC; reads, faucet and the TUI path still resolve |
+| TC-235 | P1 | `src/lib.rs` | `enter_watch_mode` drops seed, mnemonic (plaintext + secret) and Flare EVM key from `Config`, returns the key's address (None without a key) |
 | TC-104 | P1 | `src/xrpl/parse.rs`, `src/components/shared/fps.rs` | account_tx marker survives parsing; tick-rate label refreshes after 1s |
 | TC-105 | P2 | `src/xrpl/client.rs` | Local HTTP 429 retried before success |
 | TC-106 | P1 | `src/xrpl/submit.rs`, `src/app.rs` | Submit failure emits error + account resync; user actions mark dirty |

@@ -4,6 +4,10 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ## [Unreleased]
 
+### Added
+
+- `--watch`: read-only start. No signing key is loaded (env, config, `--seed` / `--mnemonic`, `FLARE_EVM_KEY`); the TUI shows the account panel for the key's address (or `--account`) without the composer or key generation, and `-x` writes are refused.
+
 ## [0.5.0] - 2026-10-11
 
 ### Added

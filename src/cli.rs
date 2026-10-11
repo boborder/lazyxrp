@@ -63,6 +63,12 @@ pub struct Cli {
     #[arg(long, default_value_t = false)]
     pub allow_insecure_rpc: bool,
 
+    /// Read-only: never load the signing key (env, config, `--seed`/`--mnemonic`) or the Flare
+    /// EVM key. The TUI shows the account panel (default: the key's address unless `--account`);
+    /// `-x` writes are refused.
+    #[arg(long, default_value_t = false)]
+    pub watch: bool,
+
     /// Watch account for the TUI (overrides config).
     #[arg(long, global = true)]
     pub account: Option<String>,
@@ -249,6 +255,19 @@ impl Cmd {
             Cmd::AccountDelete { .. } => "account-delete",
             Cmd::Faucet { .. } => "faucet",
         }
+    }
+
+    /// Subcommands that sign a transaction (refused under `--watch`).
+    pub fn signs(&self) -> bool {
+        matches!(
+            self,
+            Cmd::Send { .. }
+                | Cmd::OfferCancel { .. }
+                | Cmd::OfferCreate { .. }
+                | Cmd::AmmDeposit { .. }
+                | Cmd::AmmWithdraw { .. }
+                | Cmd::AccountDelete { .. }
+        )
     }
 }
 

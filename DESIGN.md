@@ -161,7 +161,7 @@ Defaults: [`config.json5`](config.json5) `keybindings.Splash`. User merge: `~/.c
 |---------|-----|--------|
 | Table, modal closed | `j`/`k`, arrows | Row + scrollbar |
 | Table | `Enter` | TX detail |
-| Wallet | `t` | Composer picker: Payment, AccountSet, SetRegularKey, OfferCreate, TrustSet, FXRP Mint, Execute, OfferCancel, EscrowCreate, Escrows, AMMDeposit, AMMWithdraw, AccountDelete |
+| Wallet | `t` | Composer picker: Payment, AccountSet, SetRegularKey, OfferCreate, TrustSet, FXRP Mint, Execute, OfferCancel, EscrowCreate, Escrows, AMMDeposit, AMMWithdraw, AccountDelete. Under `--watch` the Wallet panel is replaced by the read-only Account panel (no `t` / `g`) |
 | Picker | `Tab`, `j`/`k`, arrows, `1`–`9`, `0`, `d`, `w`, `x` | Phase select; the list scrolls to keep the selection visible when the wallet panel is short |
 | Forms | `Tab`, `[` `]`, `Enter` | Field nav; AccountSet `e` edits |
 | Payment | `i` | XRP ↔ IOU (resets row); last row **Send max** (`XRP:drops` / `CUR:issuer:value`, empty = same currency) → cross-currency via default paths, preview adds `spend ≤ …` |

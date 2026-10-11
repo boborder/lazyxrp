@@ -103,6 +103,7 @@ WebSocket ledger close coalesces poll triggers (`MIN_POLL_INTERVAL`). Scheduled 
 | `--tick-rate` | TUI loop tick rate |
 | `--seed` / `--mnemonic` | Override credentials (**non-preferred** — use env/config) |
 | `--account` | Watch address override |
+| `--watch` | Read-only (TC-234–235): `lib::enter_watch_mode` drops every key from `Config` (seed / mnemonic incl. plaintext, `flare_evm_key`) before the TUI / CLI start, keeping only the key's address as the default `--account`. No key → Account panel instead of Wallet (no composer, no `g`); poll task gets no credential; `-x` signing subcommands (`Cmd::signs`) refused in `resolve_lazyxrp_command`. Insecure-endpoint signing checks see no credential |
 | `-x` / `--exec` | Script CLI mode |
 
 ### Config file (`Config::xrpl`)

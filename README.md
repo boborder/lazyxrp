@@ -84,7 +84,9 @@ lazyxrp --account <r-address>
 lazyxrp --network testnet --account <r-address>
 ```
 
-TUI flags: `--tick-rate`, `--account`, `--server`, `--ws-server`, `--network`, `--yes`, `--seed`, `--mnemonic`, `--allow-insecure-rpc`.
+TUI flags: `--tick-rate`, `--account`, `--server`, `--ws-server`, `--network`, `--yes`, `--seed`, `--mnemonic`, `--allow-insecure-rpc`, `--watch`.
+
+`--watch` is read-only: no signing key is loaded (env, config, `--seed` / `--mnemonic`, nor `FLARE_EVM_KEY`). The TUI shows the account panel for the key's address (or `--account`) without the composer; `-x` writes are refused.
 
 ## Script CLI (`-x` / `rc`)
 

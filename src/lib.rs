@@ -206,10 +206,17 @@ pub async fn run() -> color_eyre::Result<()> {
             Some(secrecy::SecretString::from(mnemonic.to_string()))
         };
     }
-    let credential = signing::credential_from_secrets(
+    let mut credential = signing::credential_from_secrets(
         config.xrpl.signing.secret_seed.as_ref(),
         config.xrpl.signing.secret_mnemonic.as_ref(),
     )?;
+    let watch_address = if args.watch {
+        let address = enter_watch_mode(&mut config, credential.as_ref())?;
+        credential = None;
+        address
+    } else {
+        None
+    };
     let network = resolve_network(args.network, &config);
     let rpc_url = ensure_secure_endpoint(
         &resolve_rpc_url(args.server.clone(), &config, &network),
@@ -242,7 +249,7 @@ pub async fn run() -> color_eyre::Result<()> {
                 tick_rate,
                 rpc_url,
                 ws_url,
-                args.account.clone(),
+                args.account.clone().or(watch_address),
                 network,
                 config,
                 None,
@@ -258,6 +265,18 @@ pub async fn run() -> color_eyre::Result<()> {
     Ok(())
 }
 
+/// `--watch`: keep the signing key's address for display, drop every key from `config`.
+fn enter_watch_mode(
+    config: &mut Config,
+    credential: Option<&signing::SigningCredential>,
+) -> color_eyre::Result<Option<String>> {
+    let address = credential.map(|c| c.address()).transpose()?;
+    let s = &mut config.xrpl.signing;
+    (s.seed, s.mnemonic, s.secret_seed, s.secret_mnemonic) = (None, None, None, None);
+    config.flare_evm_key = None;
+    Ok(address)
+}
+
 /// `None` = launch the TUI; `Some` = script subcommand (requires `-x`).
 fn resolve_lazyxrp_command(args: &Cli) -> color_eyre::Result<Option<Cmd>> {
     match (args.command.clone(), args.exec) {
@@ -271,6 +290,10 @@ fn resolve_lazyxrp_command(args: &Cli) -> color_eyre::Result<Option<Cmd>> {
                 "bare `{name}` subcommand was removed; use `lazyxrp -x {name}` (alias: rc='lazyxrp -x')"
             )
         }
+        (Some(cmd), true) if args.watch && cmd.signs() => color_eyre::eyre::bail!(
+            "`{}` signs a transaction; `--watch` is read-only",
+            cmd.subcommand_name()
+        ),
         (Some(cmd), true) => Ok(Some(cmd)),
     }
 }
@@ -450,5 +473,64 @@ mod command_resolve_tests {
             resolve_lazyxrp_command(&args).unwrap(),
             Some(Cmd::Info)
         ));
+    }
+
+    /// TC-234: `--watch` refuses every signing `-x` subcommand before any RPC; reads and the
+    /// (non-signing) faucet still run; the TUI path is unaffected.
+    #[test]
+    fn watch_refuses_write_subcommands() {
+        const DEST: &str = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh";
+        for argv in [
+            vec!["send", DEST],
+            vec!["offer-cancel", "5"],
+            vec!["offer-create", "XRP:1", "XRP:2"],
+            vec!["amm-deposit", "XRP:1", "XRP:2"],
+            vec!["amm-withdraw", "XRP", "XRP"],
+            vec!["account-delete", DEST],
+        ] {
+            let args =
+                Cli::try_parse_from(["lazyxrp", "--watch", "-x"].into_iter().chain(argv.clone()))
+                    .unwrap();
+            let err = resolve_lazyxrp_command(&args).expect_err("write under --watch");
+            assert!(err.to_string().contains("--watch"), "{argv:?}: {err}");
+        }
+        for argv in [vec!["info"], vec!["offers", DEST], vec!["faucet"]] {
+            let args =
+                Cli::try_parse_from(["lazyxrp", "--watch", "-x"].into_iter().chain(argv.clone()))
+                    .unwrap();
+            assert!(
+                resolve_lazyxrp_command(&args).unwrap().is_some(),
+                "{argv:?}"
+            );
+        }
+        let args = Cli::try_parse_from(["lazyxrp", "--watch"]).unwrap();
+        assert!(resolve_lazyxrp_command(&args).unwrap().is_none());
+    }
+
+    /// TC-235: watch mode keeps only the address: every key (seed, mnemonic, plaintext fields,
+    /// Flare EVM key) is dropped from the config the TUI / CLI receive.
+    #[test]
+    fn watch_mode_drops_all_keys_and_keeps_address() {
+        use secrecy::SecretString;
+        let mut config = Config::default();
+        config.xrpl.signing.seed = Some("plain".into());
+        config.xrpl.signing.mnemonic = Some("plain".into());
+        config.xrpl.signing.secret_seed =
+            Some(SecretString::from("sEdSkooMk31MeTjbHVE7vLvgCpEMAdB"));
+        config.flare_evm_key = Some(SecretString::from("0x01"));
+        let credential =
+            signing::credential_from_secrets(config.xrpl.signing.secret_seed.as_ref(), None)
+                .unwrap();
+        let expected = credential.as_ref().unwrap().address().unwrap();
+
+        let address = enter_watch_mode(&mut config, credential.as_ref()).unwrap();
+        assert_eq!(address, Some(expected));
+        assert!(config.xrpl.signing.seed.is_none() && config.xrpl.signing.mnemonic.is_none());
+        assert!(config.xrpl.signing.secret_seed.is_none());
+        assert!(config.xrpl.signing.secret_mnemonic.is_none());
+        assert!(config.flare_evm_key.is_none());
+
+        let mut empty = Config::default();
+        assert_eq!(enter_watch_mode(&mut empty, None).unwrap(), None);
     }
 }
