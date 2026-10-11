@@ -4,6 +4,8 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-10-11
+
 ### Added
 
 - `--watch`: read-only start. No signing key is loaded (env, config, `--seed` / `--mnemonic`, `FLARE_EVM_KEY`); the TUI shows the account panel for the key's address (or `--account`) without the composer or key generation, and `-x` writes are refused.
@@ -109,7 +111,8 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 See [GitHub Releases](https://github.com/boborder/lazyxrp/releases) for 0.2.11 and older.
 
-[Unreleased]: https://github.com/boborder/lazyxrp/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/boborder/lazyxrp/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/boborder/lazyxrp/compare/v0.4.1...v0.6.0
 [0.5.0]: https://github.com/boborder/lazyxrp/compare/v0.4.1...v0.5.0
 [0.4.2]: https://github.com/boborder/lazyxrp/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/boborder/lazyxrp/compare/v0.3.0...v0.4.1
