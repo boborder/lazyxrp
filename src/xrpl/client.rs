@@ -389,19 +389,26 @@ impl RpcClient {
     }
 
     pub async fn account_offers(&self, account: &str) -> color_eyre::Result<Vec<AccountOfferRow>> {
-        // ponytail: first 200 offers only, add marker paging if accounts exceed it
-        let value = match self
-            .rpc_value(
-                "account_offers",
-                json!({ "account": account, "limit": 200 }),
-            )
-            .await
-        {
-            Ok(value) => value,
-            Err(e) if is_not_found_error(&format!("{e}")) => return Ok(vec![]),
-            Err(e) => return Err(e),
-        };
-        Ok(parse_account_offers_value(&value))
+        // ponytail: 50 pages × 200 caps a node that keeps returning markers
+        let mut rows = Vec::new();
+        let mut marker: Option<Value> = None;
+        for _ in 0..50 {
+            let mut req = json!({ "account": account, "limit": 200 });
+            if let Some(m) = marker.take() {
+                req["marker"] = m;
+            }
+            let value = match self.rpc_value("account_offers", req).await {
+                Ok(value) => value,
+                Err(e) if is_not_found_error(&format!("{e}")) => return Ok(vec![]),
+                Err(e) => return Err(e),
+            };
+            rows.extend(parse_account_offers_value(&value));
+            marker = value.get("result").and_then(|r| r.get("marker")).cloned();
+            if marker.is_none() {
+                break;
+            }
+        }
+        Ok(rows)
     }
 
     /// Escrows the account owns or receives, each with the `OfferSequence` Finish/Cancel needs.
@@ -774,5 +781,37 @@ mod tests {
         let value = rpc.rpc_value("server_info", json!({})).await.unwrap();
         assert_eq!(value, json!({"result": {}}));
         server.await.unwrap();
+    }
+
+    /// TC-229: `account_offers` follows `marker` across pages until the node stops returning one.
+    #[tokio::test]
+    async fn account_offers_follows_marker_pages() {
+        use crate::test_support::rpc_mock;
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let offer = |seq: u32| json!({"seq": seq, "taker_gets": "1", "taker_pays": "2"});
+        let server = tokio::spawn(rpc_mock::serve_raw(
+            listener,
+            2,
+            move |body| match body["params"][0].get("marker") {
+                None => json!({"result": {"offers": [offer(1), offer(2)], "marker": "M1"}}),
+                Some(m) => {
+                    assert_eq!(m, "M1");
+                    json!({"result": {"offers": [offer(3)]}})
+                }
+            },
+        ));
+        let rpc = RpcClient::connect(&url).unwrap();
+        let seqs: Vec<u32> = rpc
+            .account_offers("rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh")
+            .await
+            .unwrap()
+            .iter()
+            .map(|o| o.seq)
+            .collect();
+        assert_eq!(seqs, [1, 2, 3]);
+        server.await.unwrap().unwrap();
     }
 }

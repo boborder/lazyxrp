@@ -1,5 +1,6 @@
 use std::{borrow::Cow, time::Duration};
 
+use futures::StreamExt;
 use serde_json::Value;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio_util::sync::CancellationToken;
@@ -135,10 +136,12 @@ async fn connect_and_subscribe(
     loop {
         tokio::select! {
             _ = cancel.cancelled() => return Ok(()),
-            msg = ws.xrpl_receive() => {
+            // Raw frames: `xrpl_receive` re-wraps stream messages as `XRPLResponse`, which
+            // drops the top-level `type` (ledgerClosed was never seen, TC-227).
+            msg = ws.next() => {
                 match msg {
-                    Ok(Some(ws_msg)) => {
-                        let value = serde_json::to_value(ws_msg)?;
+                    Some(Ok(text)) => {
+                        let value: Value = serde_json::from_str(&text)?;
                         let event_type = value.get("type").and_then(Value::as_str).unwrap_or_default();
                         if event_type == "ledgerClosed" {
                             let ledger_index = json_u32(&value, &["ledger_index"]);
@@ -163,10 +166,10 @@ async fn connect_and_subscribe(
                             let _ = action_tx.send(Action::XrplAccountTx(Box::new(TxSummary { hash })));
                         }
                     }
-                    Ok(None) => {
+                    None => {
                         return Err(color_eyre::eyre::eyre!("websocket closed"));
                     }
-                    Err(e) => {
+                    Some(Err(e)) => {
                         return Err(e.into());
                     }
                 }
@@ -186,5 +189,114 @@ mod tests {
         assert!(should_emit_ledger_trigger(None, 100));
         assert!(!should_emit_ledger_trigger(Some(100), 100));
         assert!(should_emit_ledger_trigger(Some(100), 101));
+    }
+
+    /// TC-227: local WebSocket fixture — subscribe carries the watched account + ledger stream;
+    /// a ledger close emits `XrplLedgerClose` + one poll trigger (duplicate index dropped);
+    /// an account tx emits `XrplAccountTx`; a server close reconnects and resubscribes.
+    #[tokio::test]
+    async fn ws_fixture_ledger_close_triggers_poll_and_reconnects() {
+        use crate::action::Action;
+        use futures::{SinkExt, StreamExt};
+        use serde_json::{Value, json};
+        use std::time::Duration;
+        use tokio::{net::TcpListener, sync::mpsc, time::timeout};
+        use tokio_tungstenite::{accept_async, tungstenite::Message};
+
+        const WATCH: &str = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh";
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.expect("bind");
+        let url = format!("ws://{}", listener.local_addr().expect("addr"));
+        let closed = |i: u32| {
+            Message::text(
+                // Full rippled shape: a typed parse of this (via `XRPLResponse`) loses `type`.
+                json!({"type": "ledgerClosed", "ledger_index": i, "ledger_hash": "AA",
+                       "ledger_time": 1, "txn_count": 0, "validated_ledgers": "1-200",
+                       "fee_base": 10, "reserve_base": 1_000_000, "reserve_inc": 200_000})
+                .to_string(),
+            )
+        };
+        let server = tokio::spawn(async move {
+            let mut subscribes = Vec::new();
+            for session in 0..2 {
+                let (tcp, _) = listener.accept().await.expect("accept");
+                let mut ws = accept_async(tcp).await.expect("handshake");
+                let Some(Ok(Message::Text(sub))) = ws.next().await else {
+                    panic!("expected subscribe");
+                };
+                subscribes.push(serde_json::from_str::<Value>(&sub).expect("json"));
+                if session == 0 {
+                    for msg in [
+                        closed(100),
+                        closed(100),
+                        Message::text(
+                            json!({"type": "transaction", "transaction": {"hash": "AB12"}})
+                                .to_string(),
+                        ),
+                        closed(101),
+                    ] {
+                        ws.send(msg).await.expect("send");
+                    }
+                    ws.close(None).await.expect("close");
+                } else {
+                    ws.send(closed(102)).await.expect("send");
+                    return (subscribes, ws);
+                }
+            }
+            unreachable!()
+        });
+
+        let (_net_tx, net_rx) = tokio::sync::watch::channel(crate::network::Network::Testnet);
+        let (action_tx, mut actions) = mpsc::unbounded_channel();
+        let (trigger_tx, mut triggers) = mpsc::unbounded_channel();
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let task = super::start_ws_task(
+            url,
+            true,
+            net_rx,
+            Some(WATCH.into()),
+            action_tx,
+            trigger_tx,
+            cancel.clone(),
+        );
+
+        let mut ledgers = Vec::new();
+        let mut tx_hashes = Vec::new();
+        while ledgers.len() < 3 {
+            match timeout(Duration::from_secs(10), actions.recv()).await {
+                Ok(Some(Action::XrplLedgerClose {
+                    ledger_index,
+                    base_fee,
+                    ..
+                })) => {
+                    assert_eq!(base_fee, 10);
+                    ledgers.push(ledger_index);
+                }
+                Ok(Some(Action::XrplAccountTx(tx))) => tx_hashes.push(tx.hash.clone()),
+                other => panic!("unexpected {other:?} after {ledgers:?}"),
+            }
+        }
+        assert_eq!(
+            ledgers,
+            [100, 101, 102],
+            "duplicate 100 dropped; 102 after reconnect"
+        );
+        assert_eq!(tx_hashes, ["AB12"]);
+        let mut trigger_count = 0;
+        while triggers.try_recv().is_ok() {
+            trigger_count += 1;
+        }
+        assert_eq!(trigger_count, 3);
+
+        let (subscribes, _ws) = server.await.expect("server");
+        for sub in &subscribes {
+            assert_eq!(sub["command"], "subscribe");
+            assert_eq!(sub["accounts"], json!([WATCH]));
+            assert_eq!(sub["streams"], json!(["ledger"]));
+        }
+        cancel.cancel();
+        timeout(Duration::from_secs(5), task)
+            .await
+            .expect("task stops on cancel")
+            .expect("join");
     }
 }

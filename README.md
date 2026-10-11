@@ -115,7 +115,7 @@ rc book --base XRP --quote USD --issuer <r-issuer>
 | `amm --asset1 … --asset2 …` | AMM pool info |
 | `tx-history <ADDR> [--limit N]` | Transaction history |
 | `send <DEST> [--amount AMT]` | Send XRP (requires `XRPL_SEED` or `XRPL_MNEMONIC`) |
-| `offers <ADDR>` | Open DEX offers (`seq`, TakerGets, TakerPays; first 200) |
+| `offers <ADDR>` | Open DEX offers (`seq`, TakerGets, TakerPays; all pages) |
 | `offer-cancel <SEQ>` | Cancel your offer `SEQ` (requires signing key; simulate first; `--yes` on mainnet/xahau) |
 | `offer-create <GETS> <PAYS>` | Place a DEX offer; specs `XRP:drops` or `CUR:issuer:value` (requires signing key; simulate first; `--yes` on mainnet/xahau) |
 | `amm-deposit <AMOUNT> <AMOUNT2>` | Two-asset AMM deposit; both specs are maxima and name the pool (requires signing key; simulate first; `--yes` on mainnet/xahau) |

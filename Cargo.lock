@@ -4480,6 +4480,7 @@ dependencies = [
  "strum 0.28.0",
  "time",
  "tokio",
+ "tokio-tungstenite",
  "tokio-util",
  "toml",
  "tracing",

@@ -4,6 +4,15 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ## [Unreleased]
 
+### Added
+
+- Wallet: submitting the same write with identical parameters again is refused until the first one's result arrives (double `s` / repeated confirm).
+- `-x offers` and the OfferCancel list now include every open offer (`account_offers` marker paging; previously the first 200).
+
+### Fixed
+
+- WebSocket ledger-close and account-transaction events were never recognized (the XRPL client re-wrapped stream messages and dropped their `type`), so the TUI refreshed only on the poll interval and the Server panel showed `Reserve: - XRP`. Raw frames are now read.
+
 ## [0.4.0] - 2026-10-11
 
 ### Added

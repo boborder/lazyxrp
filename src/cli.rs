@@ -181,7 +181,7 @@ pub enum Cmd {
         #[arg(long, default_value = "0.000123")]
         amount: String,
     },
-    /// List an account's open DEX offers (`account_offers`, first 200)
+    /// List an account's open DEX offers (`account_offers`, all pages)
     Offers {
         address: String,
     },

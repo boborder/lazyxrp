@@ -101,6 +101,9 @@ cargo deny check
 | TC-101 | P1 | `src/lib.rs` | Signing seed refuses plaintext RPC/WS endpoints |
 | TC-102 | P1 | `src/xrpl/client.rs` | Rate-limited RPC errors retryable; permanent XRPL errors not |
 | TC-103 | P2 | `src/xrpl/ws.rs`, `src/components/shared/fps.rs` | Duplicate ledger-close emits one trigger; FPS counts draws not ticks |
+| TC-227 | P1 | `src/xrpl/ws.rs` | Local WebSocket fixture (real rippled frame shapes): subscribe has account + `ledger` stream; ledger close → `XrplLedgerClose` + one poll trigger (duplicate dropped); account tx → `XrplAccountTx`; server close → reconnect + resubscribe; cancel stops the task |
+| TC-228 | P1 | `src/components/panels/wallet.rs` | Double-submit guard: identical write params refused (flash) until that write's Ok/Err arrives; different params or a retry after the result go through |
+| TC-229 | P2 | `src/xrpl/client.rs` | `account_offers` follows `marker` across pages (local JSON-RPC) until none is returned |
 | TC-104 | P1 | `src/xrpl/parse.rs`, `src/components/shared/fps.rs` | account_tx marker survives parsing; tick-rate label refreshes after 1s |
 | TC-105 | P2 | `src/xrpl/client.rs` | Local HTTP 429 retried before success |
 | TC-106 | P1 | `src/xrpl/submit.rs`, `src/app.rs` | Submit failure emits error + account resync; user actions mark dirty |

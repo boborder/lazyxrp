@@ -95,6 +95,10 @@ image = { version = "0.25", default-features = false, features = ["gif", "jpeg",
 [target.'cfg(all(target_os = "linux", target_env = "gnu"))'.dependencies]
 openssl = { version = "0.10", features = ["vendored"] }
 
+[dev-dependencies]
+# Already in the tree via xrpl-rust; local WebSocket fixture server for ws.rs tests.
+tokio-tungstenite = "0.24"
+
 [build-dependencies]
 anyhow = "1"
 vergen-gix = { version = "9", features = ["build"] }

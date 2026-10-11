@@ -78,7 +78,7 @@ Risks without a matching S entry (e.g. R-006 mainnet guard bypass, R-008 RPC 429
 - **`install.sh`**: GitHub token を curl `-K -`(stdin) / wget `--config`(fd) 経由にして argv から除去。想定外文字を含む token は無視。
 - **`cd.yml`**: `cargo package --locked`（token なし）で検証ビルドし、token 付きは `cargo publish --locked --no-verify`。
 
-調査して**修正しなかった**もの（同一オペレーター内の操作 / ハードニング）: 二重送信、Ctrl-N 後のネットワーク表示と接続先のずれ、config の keybindings からの Action 束縛、URL に入れた provider token のログ出力、dUNL 署名未検証（表示専用）、NFT デコードの寸法上限、CD の ref/environment 制約（GitHub 側 ruleset で担保）。
+調査して**修正しなかった**もの（同一オペレーター内の操作 / ハードニング）: Ctrl-N 後のネットワーク表示と接続先のずれ、config の keybindings からの Action 束縛、URL に入れた provider token のログ出力、dUNL 署名未検証（表示専用）、NFT デコードの寸法上限、CD の ref/environment 制約（GitHub 側 ruleset で担保）。二重送信は 2026-10-11 に対応（TUI: 同一 params の write は結果 Ok/Err 到着まで拒否、TC-228）。
 
 ## 2026-10-11 セキュリティ監査 run-2 対応
 

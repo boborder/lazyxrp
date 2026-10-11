@@ -160,6 +160,8 @@ pub struct WalletPanel {
     tick_size: String,
     transfer_rate: String,
     submit_flash: Option<SubmitFlash>,
+    /// Debug form of the last queued write; an identical one is refused until a result arrives.
+    pending_submit: Option<String>,
     /// Last AssetManager C1 snapshot (Core Vault address for Direct Mint).
     fxrp_direct_mint: Option<crate::xrpl::FxrpDirectMintInfo>,
     /// Key generation result overlay (GenerateWalletKeysOk → show, Esc to dismiss).
@@ -187,6 +189,7 @@ impl Default for WalletPanel {
             tick_size: String::new(),
             transfer_rate: String::new(),
             submit_flash: None,
+            pending_submit: None,
             fxrp_direct_mint: None,
             keygen_result: None,
         }
@@ -228,6 +231,9 @@ impl Component for WalletPanel {
     }
 
     fn update(&mut self, action: &Action) -> color_eyre::Result<Option<Action>> {
+        if is_write_result(action) {
+            self.pending_submit = None;
+        }
         match action {
             Action::Tick => self.tick = self.tick.wrapping_add(1),
             Action::XrplWalletOverview(acc) => {
@@ -434,6 +440,161 @@ impl Component for WalletPanel {
     }
 
     fn on_key_event(&mut self, key: KeyEvent) -> color_eyre::Result<Option<Action>> {
+        let out = self.key_action(key)?;
+        Ok(self.guard_double_submit(out))
+    }
+
+    fn draw(&mut self, frame: &mut Frame, area: Rect) -> color_eyre::Result<()> {
+        if self.seed_address.is_none() {
+            render_empty(
+                frame,
+                area,
+                "Wallet",
+                "seed not set — set XRPL_SEED env var or configure in config file",
+                self.is_focused,
+            );
+            return Ok(());
+        }
+
+        if let Some(Err(ref e)) = self.seed_address {
+            render_error(
+                frame,
+                area,
+                "Wallet",
+                &format!("invalid seed: {e}"),
+                self.is_focused,
+            );
+            return Ok(());
+        }
+
+        if !self.wallet_configured {
+            render_empty(
+                frame,
+                area,
+                "Wallet",
+                "set XRPL_SEED to view wallet",
+                self.is_focused,
+            );
+            return Ok(());
+        }
+
+        if !self.has_received_wallet_data {
+            render_loading(
+                frame,
+                area,
+                "Wallet",
+                self.tick,
+                "loading...",
+                self.is_focused,
+            );
+            return Ok(());
+        }
+
+        let Some(account) = self.account.as_ref() else {
+            render_empty(frame, area, "Wallet", "None", self.is_focused);
+            return Ok(());
+        };
+
+        let block = titled_block("Wallet", self.is_focused);
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
+
+        let label_style = theme::dim_style();
+        let value_style = theme::accent_style();
+
+        let [summary_area, hint] =
+            Layout::vertical([Constraint::Fill(1), Constraint::Length(1)]).areas(inner);
+
+        let flag_labels = Self::flag_labels(account.flags);
+        let flag_spans: Vec<Span> = if flag_labels.is_empty() {
+            vec![Span::styled(" (none)", theme::dim_style())]
+        } else {
+            flag_labels
+                .iter()
+                .flat_map(|l| {
+                    vec![
+                        Span::raw(" "),
+                        Span::styled(format!("[{l}]"), theme::flag_style()),
+                    ]
+                })
+                .collect()
+        };
+
+        let mut summary = vec![
+            Line::from(vec![
+                Span::styled("Account ", label_style),
+                Span::styled(Self::shorten_display(&account.account, 42), value_style),
+            ]),
+            Line::from(vec![
+                Span::styled("Balance ", label_style),
+                Span::styled(
+                    format!(
+                        "{} XRP",
+                        fmt::fmt_xrp(account.balance_xrp.parse().unwrap_or(0.0))
+                    ),
+                    value_style,
+                ),
+                Span::styled(
+                    format!(
+                        "  seq {}",
+                        fmt::group_digits_u64(u64::from(account.sequence))
+                    ),
+                    theme::dim_style(),
+                ),
+                Span::styled(
+                    format!("  owner {}", account.owner_count),
+                    theme::dim_style(),
+                ),
+            ]),
+            {
+                let mut spans: Vec<Span> = vec![Span::styled("Flags", label_style)];
+                spans.extend(flag_spans);
+                spans.push(Span::styled(
+                    "  ·  t send/configure  g new keys",
+                    theme::dim_style(),
+                ));
+                Line::from(spans)
+            },
+        ];
+        if let Some(ref rk) = account.regular_key {
+            summary.push(Line::from(vec![
+                Span::styled("RegKey ", label_style),
+                Span::styled(Self::shorten_display(rk, 36), theme::warning_style()),
+            ]));
+        }
+        if let Some(ref dh) = account.domain_hex {
+            let domain_str = crate::xrpl::hex_to_ascii(dh.trim()).unwrap_or_else(|| dh.clone());
+            summary.push(Line::from(vec![
+                Span::styled("Domain ", label_style),
+                Span::styled(domain_str, theme::dim_style()),
+            ]));
+        }
+        summary.push(Line::from(Span::styled(
+            "Recent txs below · j/k select · f filter · Enter detail",
+            theme::dim_style(),
+        )));
+        frame.render_widget(Paragraph::new(summary), summary_area);
+
+        let note_line = self
+            .submit_flash
+            .as_ref()
+            .map(|f| match f {
+                SubmitFlash::Success(s) => {
+                    Line::from(Span::styled(s.clone(), theme::success_style()))
+                }
+                SubmitFlash::Error(s) => Line::from(Span::styled(s.clone(), theme::error_style())),
+            })
+            .unwrap_or_default();
+        frame.render_widget(Paragraph::new(note_line), hint);
+
+        self.render_composer(frame, area);
+        self.render_keygen_popup(frame, area);
+        Ok(())
+    }
+}
+
+impl WalletPanel {
+    fn key_action(&mut self, key: KeyEvent) -> color_eyre::Result<Option<Action>> {
         if !self.is_focused {
             return Ok(None);
         }
@@ -1032,153 +1193,68 @@ impl Component for WalletPanel {
         Ok(None)
     }
 
-    fn draw(&mut self, frame: &mut Frame, area: Rect) -> color_eyre::Result<()> {
-        if self.seed_address.is_none() {
-            render_empty(
-                frame,
-                area,
-                "Wallet",
-                "seed not set — set XRPL_SEED env var or configure in config file",
-                self.is_focused,
-            );
-            return Ok(());
+    /// Refuse a write identical to one still awaiting its Ok/Err (double `s`, repeated confirm).
+    fn guard_double_submit(&mut self, out: Option<Action>) -> Option<Action> {
+        let action = out?;
+        if !is_write_submit(&action) {
+            return Some(action);
         }
-
-        if let Some(Err(ref e)) = self.seed_address {
-            render_error(
-                frame,
-                area,
-                "Wallet",
-                &format!("invalid seed: {e}"),
-                self.is_focused,
-            );
-            return Ok(());
+        let key = format!("{action:?}");
+        if self.pending_submit.as_deref() == Some(key.as_str()) {
+            self.set_submit_flash(SubmitFlash::Error(
+                "already submitted · waiting for its result".into(),
+            ));
+            return None;
         }
-
-        if !self.wallet_configured {
-            render_empty(
-                frame,
-                area,
-                "Wallet",
-                "set XRPL_SEED to view wallet",
-                self.is_focused,
-            );
-            return Ok(());
-        }
-
-        if !self.has_received_wallet_data {
-            render_loading(
-                frame,
-                area,
-                "Wallet",
-                self.tick,
-                "loading...",
-                self.is_focused,
-            );
-            return Ok(());
-        }
-
-        let Some(account) = self.account.as_ref() else {
-            render_empty(frame, area, "Wallet", "None", self.is_focused);
-            return Ok(());
-        };
-
-        let block = titled_block("Wallet", self.is_focused);
-        let inner = block.inner(area);
-        frame.render_widget(block, area);
-
-        let label_style = theme::dim_style();
-        let value_style = theme::accent_style();
-
-        let [summary_area, hint] =
-            Layout::vertical([Constraint::Fill(1), Constraint::Length(1)]).areas(inner);
-
-        let flag_labels = Self::flag_labels(account.flags);
-        let flag_spans: Vec<Span> = if flag_labels.is_empty() {
-            vec![Span::styled(" (none)", theme::dim_style())]
-        } else {
-            flag_labels
-                .iter()
-                .flat_map(|l| {
-                    vec![
-                        Span::raw(" "),
-                        Span::styled(format!("[{l}]"), theme::flag_style()),
-                    ]
-                })
-                .collect()
-        };
-
-        let mut summary = vec![
-            Line::from(vec![
-                Span::styled("Account ", label_style),
-                Span::styled(Self::shorten_display(&account.account, 42), value_style),
-            ]),
-            Line::from(vec![
-                Span::styled("Balance ", label_style),
-                Span::styled(
-                    format!(
-                        "{} XRP",
-                        fmt::fmt_xrp(account.balance_xrp.parse().unwrap_or(0.0))
-                    ),
-                    value_style,
-                ),
-                Span::styled(
-                    format!(
-                        "  seq {}",
-                        fmt::group_digits_u64(u64::from(account.sequence))
-                    ),
-                    theme::dim_style(),
-                ),
-                Span::styled(
-                    format!("  owner {}", account.owner_count),
-                    theme::dim_style(),
-                ),
-            ]),
-            {
-                let mut spans: Vec<Span> = vec![Span::styled("Flags", label_style)];
-                spans.extend(flag_spans);
-                spans.push(Span::styled(
-                    "  ·  t send/configure  g new keys",
-                    theme::dim_style(),
-                ));
-                Line::from(spans)
-            },
-        ];
-        if let Some(ref rk) = account.regular_key {
-            summary.push(Line::from(vec![
-                Span::styled("RegKey ", label_style),
-                Span::styled(Self::shorten_display(rk, 36), theme::warning_style()),
-            ]));
-        }
-        if let Some(ref dh) = account.domain_hex {
-            let domain_str = crate::xrpl::hex_to_ascii(dh.trim()).unwrap_or_else(|| dh.clone());
-            summary.push(Line::from(vec![
-                Span::styled("Domain ", label_style),
-                Span::styled(domain_str, theme::dim_style()),
-            ]));
-        }
-        summary.push(Line::from(Span::styled(
-            "Recent txs below · j/k select · f filter · Enter detail",
-            theme::dim_style(),
-        )));
-        frame.render_widget(Paragraph::new(summary), summary_area);
-
-        let note_line = self
-            .submit_flash
-            .as_ref()
-            .map(|f| match f {
-                SubmitFlash::Success(s) => {
-                    Line::from(Span::styled(s.clone(), theme::success_style()))
-                }
-                SubmitFlash::Error(s) => Line::from(Span::styled(s.clone(), theme::error_style())),
-            })
-            .unwrap_or_default();
-        frame.render_widget(Paragraph::new(note_line), hint);
-
-        self.render_composer(frame, area);
-        self.render_keygen_popup(frame, area);
-        Ok(())
+        self.pending_submit = Some(key);
+        Some(action)
     }
+}
+
+fn is_write_submit(action: &Action) -> bool {
+    matches!(
+        action,
+        Action::AccountSetSubmit(_)
+            | Action::PaymentSubmit(_)
+            | Action::FxrpDirectMintPaymentSubmit(_)
+            | Action::FxrpExecuteDirectMintSubmit(_)
+            | Action::SetRegularKeySubmit(_)
+            | Action::EscrowCreateSubmit(_)
+            | Action::EscrowCloseSubmit(_)
+            | Action::AmmDepositSubmit(_)
+            | Action::AmmWithdrawSubmit(_)
+            | Action::OfferCreateSubmit(_)
+            | Action::OfferCancelSubmit(_)
+            | Action::TrustSetSubmit(_)
+    )
+}
+
+fn is_write_result(action: &Action) -> bool {
+    matches!(
+        action,
+        Action::AccountSetSubmitOk(_)
+            | Action::AccountSetSubmitErr(_)
+            | Action::PaymentSubmitOk(_)
+            | Action::PaymentSubmitErr(_)
+            | Action::FxrpDirectMintPaymentSubmitOk(_)
+            | Action::FxrpDirectMintPaymentSubmitErr(_)
+            | Action::FxrpExecuteDirectMintSubmitOk(_)
+            | Action::FxrpExecuteDirectMintSubmitErr(_)
+            | Action::SetRegularKeySubmitOk(_)
+            | Action::SetRegularKeySubmitErr(_)
+            | Action::EscrowCreateSubmitOk(_)
+            | Action::EscrowCreateSubmitErr(_)
+            | Action::EscrowCloseSubmitOk(_)
+            | Action::EscrowCloseSubmitErr(_)
+            | Action::AmmSubmitOk(_)
+            | Action::AmmSubmitErr(_)
+            | Action::OfferCreateSubmitOk(_)
+            | Action::OfferCreateSubmitErr(_)
+            | Action::OfferCancelSubmitOk(_)
+            | Action::OfferCancelSubmitErr(_)
+            | Action::TrustSetSubmitOk(_)
+            | Action::TrustSetSubmitErr(_)
+    )
 }
 
 #[cfg(test)]
@@ -1417,6 +1493,44 @@ mod tests {
             panel.composer,
             Some(ComposerPhase::PickKind { selected: 11 })
         ));
+    }
+
+    /// TC-228: double-submit guard — the same write with identical params is refused (flash)
+    /// until its Ok/Err arrives; different params, or the same after the result, go through.
+    #[test]
+    fn identical_submit_refused_until_result() {
+        const ISS: &str = "rJrRMgiRgrU6hDF4pgu5DXQdWyPbY35ErN";
+        let mut panel = WalletPanel::new(true);
+        panel.is_focused = true;
+        panel.composer = Some(ComposerPhase::PickKind { selected: 0 });
+        panel.on_key_event(key('d')).expect("open");
+        if let Some(ComposerPhase::AmmDeposit { amount2, .. }) = &mut panel.composer {
+            *amount2 = format!("USD:{ISS}:10");
+        }
+        let submit = |p: &mut WalletPanel| p.on_key_event(key('s')).expect("s");
+        assert!(matches!(
+            submit(&mut panel),
+            Some(Action::AmmDepositSubmit(_))
+        ));
+        assert!(submit(&mut panel).is_none(), "identical while pending");
+        assert!(matches!(
+            &panel.submit_flash,
+            Some(SubmitFlash::Error(m)) if m.contains("already submitted")
+        ));
+        if let Some(ComposerPhase::AmmDeposit { amount2, .. }) = &mut panel.composer {
+            *amount2 = format!("USD:{ISS}:11");
+        }
+        assert!(
+            matches!(submit(&mut panel), Some(Action::AmmDepositSubmit(_))),
+            "different params"
+        );
+        panel
+            .update(&Action::AmmSubmitErr("tecX".into()))
+            .expect("result");
+        assert!(
+            matches!(submit(&mut panel), Some(Action::AmmDepositSubmit(_))),
+            "retry after result"
+        );
     }
 
     /// TC-219: EscrowCreate composer — `9` opens it; invalid input flashes instead of queuing;
