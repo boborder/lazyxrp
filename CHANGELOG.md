@@ -4,6 +4,8 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-10-11
+
 ### Added
 
 - Wallet: submitting the same write with identical parameters again is refused until the first one's result arrives (double `s` / repeated confirm).
@@ -86,7 +88,8 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 See [GitHub Releases](https://github.com/boborder/lazyxrp/releases) for 0.2.11 and older.
 
-[Unreleased]: https://github.com/boborder/lazyxrp/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/boborder/lazyxrp/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/boborder/lazyxrp/compare/v0.3.0...v0.4.1
 [0.4.0]: https://github.com/boborder/lazyxrp/compare/v0.3.0...v0.4.0
 [0.3.1]: https://github.com/boborder/lazyxrp/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/boborder/lazyxrp/compare/v0.2.11...v0.3.0
