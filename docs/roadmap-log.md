@@ -5,12 +5,13 @@
 ## Cautions（計画上の注意点）
 
 - **セキュリティは非交渉。** mainnet write は simulate + `--yes`、seed/mnemonic は `credential_from_secrets` 経由のみ、config の world-readable 警告を外さない。採用（人気）追求のために緩めない。詳細は [`security.md`](security.md)。
-- Mainnet C3 execute smoke は FDC verifier API key + 実資金が必要（外部依存。入手できるまで中期に置きっぱなしで可）。
+- C3 は testnet（XRPL testnet + Coston2）で検証済み（2026-10-11）。mainnet での実行は未実施・計画外（ユーザー判断: 実資金は testnet）。FDC proof の取得（verifier `prepareRequest` → `FdcHub` → DA layer）は lazyxrp の外。
 - Keymap customization は `src/config.rs` を触る → AGENTS.md 契約により config キーに言及する全 `docs/` を同一変更内で同期。組み込みデフォルトは `config.json5`。
 - OfferCancel（旧 F-02）は DEX trading に統合済み。個別タスクとしては追わない。
 
 ## Pivot log（進路変更記録）
 
+- **2026-10-11** — 0.4.1 公開後、中期 #8（C3 smoke）をユーザー判断で testnet 実資金に切替えて実施。lazyxrp 経由では一度も通っていなかったことが判明: C2 は simulate で `MemoFormat: null` 拒否（0.3.0 で simulate 必須化して以降壊れていた）、C3 は存在しない selector（`bytes data` 版 ABI）を呼んでいた。2026-09-12 の Coston2 成功は外部スクリプトによるもので、lazyxrp のコード経路は未検証だった。修正後、実 DA 応答を fixture にして TC-230/231。注意: 32-byte memo では公開 executor が数分で先に実行するため、自前 C3 の検証は 48-byte memo（executor 指定）で行った。
 - **2026-10-11** — 0.4.0 公開後に中期 #5–#7。#5 の fake WS fixture を実 rippled のフレーム形で書いたところ、`xrpl_receive`（`XRPLResponse` への型付き parse）が stream メッセージの `type` を落とし、ledger close / account tx イベントが**一度も**認識されていなかったことが判明（TUI は interval poll だけで動いていた）。生フレーム（`Stream<String>`）を読むよう修正し testnet で受信確認。同日 `amm_info` も ledger-object 表記で parse していて実応答で空だった（TC-015）。教訓（TC-200 の再確認）: fixture / mock は実ノードの応答形をそのまま写す。#6 二重送信ガードは WalletPanel の出口 1 か所、#7 は marker 追従（上限 50 page）。
 - **2026-10-11** — 中期 #4 AMM Deposit/Withdraw を実施。判断（ユーザー選択）: deposit は two-asset（`tfTwoAsset`）のみ、withdraw は全額（`tfWithdrawAll`）か LP 量（`tfLPToken`）、プールは composer に直接入力、CLI `-x amm-deposit` / `-x amm-withdraw` も追加。AMMCreate は作らず、testnet 検証用プールは使い捨て xrpl.js スクリプトで作成（ユーザー選択）。そのため `tests/testnet_e2e.rs` には AMM を入れていない（プールを自前で作れない）。注意: `LPTokenIn` の currency / issuer は `amm_info` から引く（AMM アカウントは計算でなく問い合わせ）。picker が 12 行になり wallet パネル（40 行端末で約 16 行）に収まらないため、選択行が見えるようスクロールさせた。
 - **2026-10-11** — 0.3.1 公開後、中期 #1 `poll.rs` 分割（書き込み経路を `xrpl/submit.rs` へ、挙動不変）と #3 EscrowCreate を実施。docs は「signing/poll 既存・UI 未配線」としていたが、実際は signing も無く poll の catch-all が `EscrowCreateSubmit` を黙って捨てていた（catch-all を外して再発防止）。判断（ユーザー選択）: 時間は相対指定（`90s`/`30m`/`2h`/`7d`）、CancelAfter は任意、長期 F-03 EscrowFinish/Cancel を前倒しして lazyxrp 内で完結、CLI `-x escrow-*` は作らず TUI のみ。注意: Escrow ledger object には `Sequence` が無いことがあるので、Finish/Cancel の `OfferSequence` は作成 tx（`PreviousTxnID`）から引く。tmux が無い環境では PTY + pyte で TUI E2E を実施。

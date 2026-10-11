@@ -4,6 +4,11 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ## [Unreleased]
 
+### Fixed
+
+- FXRP Mint (C2) payments were refused at `simulate` ("Field 'Memos.Memo.MemoFormat' has bad type"): unset memo fields were sent as `null`. Null fields are now dropped before `simulate`.
+- FXRP Execute (C3) called an `executeDirectMinting` signature the AssetManager does not have and could never succeed. It now sends the deployed `IXRPPayment.Proof` and takes the DA layer answer as returned (`{"response": {…}, "proof": [...]}`); the old hex-`response` form is rejected. A reverted execution is now reported as an error instead of a success. Verified on XRPL testnet + Coston2.
+
 ## [0.4.1] - 2026-10-11
 
 ### Added

@@ -547,7 +547,10 @@ impl RpcClient {
     ///
     /// Returns the auto-filled `tx_json` (Fee, Sequence, etc.) and metadata
     /// without committing to the ledger.
-    pub async fn simulate_tx(&self, tx_json: Value) -> color_eyre::Result<SimulateResult> {
+    pub async fn simulate_tx(&self, mut tx_json: Value) -> color_eyre::Result<SimulateResult> {
+        // xrpl-rust serializes some unset fields (e.g. `Memo.MemoFormat`) as `null`; rippled
+        // rejects those as "bad type" (the signed binary omits them).
+        drop_nulls(&mut tx_json);
         let value = self
             .rpc_value("simulate", json!({ "tx_json": tx_json }))
             .await?;
@@ -607,6 +610,18 @@ impl RpcClient {
         price.base_asset = base_asset.to_string();
         price.quote_asset = quote_asset.to_string();
         Ok(price)
+    }
+}
+
+/// Remove `null` object members at any depth (a JSON null is never a valid XRPL field value).
+fn drop_nulls(value: &mut Value) {
+    match value {
+        Value::Object(map) => {
+            map.retain(|_, v| !v.is_null());
+            map.values_mut().for_each(drop_nulls);
+        }
+        Value::Array(items) => items.iter_mut().for_each(drop_nulls),
+        _ => {}
     }
 }
 
@@ -813,5 +828,42 @@ mod tests {
             .collect();
         assert_eq!(seqs, [1, 2, 3]);
         server.await.unwrap().unwrap();
+    }
+
+    /// TC-230: `simulate` never sends JSON nulls — xrpl-rust serializes unset `Memo` fields as
+    /// `null`, which rippled rejects ("Field 'Memos.Memo.MemoFormat' has bad type").
+    #[tokio::test]
+    async fn simulate_request_drops_null_fields() {
+        use crate::test_support::rpc_mock;
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(rpc_mock::serve(listener, 1, |_| {
+            json!({"engine_result": "tesSUCCESS", "ledger_index": 1,
+                   "tx_json": {"Sequence": 7, "Fee": "12"}})
+        }));
+        let memo = crate::signing::build_direct_mint_memo_data(
+            "0xabcdef0123456789abcdef0123456789abcdef01",
+        )
+        .unwrap();
+        let tx_json = crate::signing::build_payment_tx_json_for_simulate(
+            "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+            "rJrRMgiRgrU6hDF4pgu5DXQdWyPbY35ErN",
+            "1",
+            None,
+            None,
+            None,
+            None,
+            Some(&memo),
+            7,
+        )
+        .unwrap();
+        let rpc = RpcClient::connect(&url).unwrap();
+        rpc.simulate_tx(tx_json).await.unwrap();
+        let requests = server.await.unwrap().unwrap();
+        let sent = &requests[0]["params"][0]["tx_json"];
+        assert!(!sent.to_string().contains("null"), "{sent}");
+        assert_eq!(sent["Memos"][0]["Memo"]["MemoData"], json!(memo));
     }
 }

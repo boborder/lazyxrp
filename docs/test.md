@@ -104,6 +104,8 @@ cargo deny check
 | TC-227 | P1 | `src/xrpl/ws.rs` | Local WebSocket fixture (real rippled frame shapes): subscribe has account + `ledger` stream; ledger close → `XrplLedgerClose` + one poll trigger (duplicate dropped); account tx → `XrplAccountTx`; server close → reconnect + resubscribe; cancel stops the task |
 | TC-228 | P1 | `src/components/panels/wallet.rs` | Double-submit guard: identical write params refused (flash) until that write's Ok/Err arrives; different params or a retry after the result go through |
 | TC-229 | P2 | `src/xrpl/client.rs` | `account_offers` follows `marker` across pages (local JSON-RPC) until none is returned |
+| TC-230 | P1 | `src/xrpl/client.rs` | `simulate` request carries no JSON nulls (Direct Mint memo built by xrpl-rust has `MemoFormat: null`; rippled rejects it) |
+| TC-231 | P1 | `src/flare.rs` | C3 `executeDirectMinting` selector = deployed `0x78d0299e` (`IXRPPayment.Proof`); a real Coston2 DA `{response, proof}` answer decodes (and its `{data, merkleProof}` alias encodes identically); malformed / old hex-`response` shape rejected |
 | TC-104 | P1 | `src/xrpl/parse.rs`, `src/components/shared/fps.rs` | account_tx marker survives parsing; tick-rate label refreshes after 1s |
 | TC-105 | P2 | `src/xrpl/client.rs` | Local HTTP 429 retried before success |
 | TC-106 | P1 | `src/xrpl/submit.rs`, `src/app.rs` | Submit failure emits error + account resync; user actions mark dirty |
@@ -267,6 +269,16 @@ cargo deny check
 **Automated (opt-in):** `mise run e2e-testnet` (`tests/testnet_e2e.rs`, `#[ignore]`, not in CI): `-x faucet` ×2 → `send` → `offer-create` → `offers` → `offer-cancel` → `offers` = `[]`, every write `Validated: tesSUCCESS`. Run before each release. Passed 2026-10-11 (≈ 27 s).
 
 **AMM (manual, 2026-10-11):** pool XRP/TST created on testnet by a throwaway xrpl.js script (lazyxrp has no AMMCreate). CLI `-x amm-deposit XRP:1000000 TST:<iss>:10` and `-x amm-withdraw XRP TST:<iss> --lp 1000`, then TUI composer `d` (deposit, Amount2 limited the XRP side to 0.5 XRP) and `w` with empty LP (withdraw all; the sole LP's withdrawal deleted the pool): all `tesSUCCESS`.
+
+**FXRP C2 + C3 (manual, 2026-10-11, XRPL testnet + Coston2):** config `[flare] network = "coston2"`, `[flare.fassets] execute = true`, `expected_core_vault = "rDhpmiPq4BVBDWMVdSrmkgt8thKyRzGV1p"`, `FLARE_EVM_KEY` = executor `0xeD50…2C98`.
+
+| Step | Result | Hash |
+|------|--------|------|
+| TUI composer `6` FXRP Mint, 10 XRP, recipient = executor | first try failed at simulate (`MemoFormat` null → TC-230); after the fix `tesSUCCESS`; a public executor finalized it within minutes → FXRP 9.8 | `FB8556096C0BF6AE25F858DB9AF65CC0381E51FF100505672229EAACCE5A1A78` |
+| TUI `7` C3 with that payment's proof | revert `PaymentAlreadyConfirmed` (0x18dce79f) — already minted by the public executor | — |
+| 5 XRP payment with a 48-byte memo (executor = ours, throwaway xrpl.js) → proof (verifier `prepareRequest` with the Flare-published testnet key, `FdcHub.requestAttestation`, DA `proof-by-request-round`; throwaway viem script) → TUI `7` C3 | `executeDirectMinting` succeeded; FXRP 9.8 → 14.7 (4.9 = 5 − 0.1 min fee; executor fee to ourselves) | XRPL `C0FC83E57C37BC4782B48E4CB4EB0123829137B52A4C1CC8B6F57E38B548AE6A`, Flare `0x1460dc9ae36bbe58beb4a8fd1a6d6bd358d4fd3f5a315583646cd31d111e5f02` |
+
+Before the fix, C3 called a selector the contract does not have (`0x548cddd4`, `bytes data`); the deployed one is `0x78d0299e` (decoded `IXRPPayment.Response`) → TC-231.
 
 **2026-10-10 CLI (manual, 0.3.0)** — testnet rippled 3.4.1, faucet account `r15nczQYUNYBVLws8M9zkFE2SaSkU4kkk`. All hashes `validated: true`, `tesSUCCESS`.
 

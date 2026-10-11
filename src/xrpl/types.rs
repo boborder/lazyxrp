@@ -619,10 +619,11 @@ pub struct FxrpDirectMintPaymentParams {
     pub skip_mainnet_prompt: bool,
 }
 
-/// FXRP C3: paste FDC Payment proof JSON and call `executeDirectMinting` (flagged).
+/// FXRP C3: paste FDC `XRPPayment` proof JSON and call `executeDirectMinting` (flagged).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FxrpExecuteDirectMintParams {
-    /// FDC DA proof JSON: `{proof,response}` or `{merkleProof,data}` (hex strings).
+    /// DA layer `proof-by-request-round` answer `{response, proof}` (`response` = decoded
+    /// attestation object), or the contract-shaped `{data, merkleProof}`.
     pub proof_json: String,
     pub skip_mainnet_prompt: bool,
 }
