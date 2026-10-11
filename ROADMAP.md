@@ -4,7 +4,7 @@
 
 **Planning view**. Requirements → [`requirements.md`](docs/requirements.md) · System behavior → [`architecture.md`](docs/architecture.md) · UI/UX → [`DESIGN.md`](DESIGN.md).
 
-**Current version:** `Cargo.toml` → 0.6.0（2026-10-11 公開: GitHub Release + crates.io）
+**Current version:** `Cargo.toml` → 0.6.1（2026-10-11 公開: GitHub Release + crates.io）
 **Last updated:** 2026-10-11
 
 **Priority:** P0 = リリースブロッカー · P1 = 次マイルストーンの主目標 · P2 = 計画済み · P3 = 余力・需要次第。各 horizon 内は上から着手。
@@ -77,6 +77,7 @@ XRPL エコシステム（開発者・ユーザー双方）で人気の CLI/TUI 
 | C3 testnet smoke | 0.4.2 | **Done** (2026-10-11) | FXRP C2 simulate の null 拒否修正（TC-230）、C3 ABI 修正（TC-231）。XRPL testnet + Coston2 で mint / execute を確認 |
 | AccountDelete | 0.5.0 | **Done** (2026-10-11) | 長期 F-01。composer `x` + `-x account-delete`、TUI は `DELETE` 入力の確認必須（TC-232–233）。testnet で TUI / CLI validated |
 | Watch / Operate 分離 | 0.6.0 | **Done** (2026-10-11) | `--watch` 閲覧専用起動（TC-234–235） |
+| AMM no-pool 表示 + ponytail 監査 ×2 | 0.6.1 | **Done** (2026-10-11) | プールなしペアでステータスバーにエラーを出さずパネル表示に。依存 7 個削除（`config`・`signal-hook`・`tracing-error`・`strum`・`url`・`time`・build-dep `anyhow`）、挙動不変 |
 
 ## Task tracking
 
