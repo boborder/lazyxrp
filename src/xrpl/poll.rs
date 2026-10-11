@@ -122,12 +122,14 @@ struct PollBatchInputs<'a> {
     active_tab: usize,
 }
 
-/// `amm_info` for the configured book pair (`Market` tab AMM panel).
+/// `amm_info` for the configured book pair (`Market` tab AMM panel). No pool for the pair
+/// (`actNotFound`) is `Ok(None)`, not an error: it must not flag the status bar every poll.
 async fn fetch_amm_info(
     rpc: &RpcClient,
     book_pair: &BookPair,
-) -> Result<color_eyre::Result<crate::xrpl::types::AmmSummary>, tokio::time::error::Elapsed> {
-    tokio::time::timeout(
+) -> Result<color_eyre::Result<Option<crate::xrpl::types::AmmSummary>>, tokio::time::error::Elapsed>
+{
+    let res = tokio::time::timeout(
         RPC_TIMEOUT,
         rpc.amm_info(
             book_pair.gets_currency(),
@@ -136,7 +138,12 @@ async fn fetch_amm_info(
             book_pair.pays_issuer(),
         ),
     )
-    .await
+    .await?;
+    Ok(match res {
+        Ok(s) => Ok(Some(s)),
+        Err(e) if super::parse::is_not_found_error(&e.to_string()) => Ok(None),
+        Err(e) => Err(e),
+    })
 }
 
 async fn maybe_account_tx(
@@ -284,7 +291,7 @@ async fn poll_batch(
     if let Some(amm_info_result) = amm_info_result {
         send_rpc_outcome!(
             amm_info_result,
-            |v| Action::XrplAmmInfo(Box::new(v)),
+            |v| Action::XrplAmmInfo(v.map(Box::new)),
             "amm_info"
         );
     }
@@ -1102,15 +1109,22 @@ mod tests {
         assert!(until.is_none(), "success must clear the backoff window");
     }
 
-    /// The Market-tab AMM read reaches `amm_info` with the book pair's assets and maps to `XrplAmmInfo`.
+    /// The Market-tab AMM read maps a pool to `XrplAmmInfo(Some)`, and "no pool" (`actNotFound`)
+    /// to `XrplAmmInfo(None)` — never `XrplError`, which would flag the status bar every poll.
     #[tokio::test]
-    async fn fetch_amm_info_feeds_amm_action() {
+    async fn fetch_amm_info_maps_pool_and_no_pool() {
         use crate::test_support::rpc_mock;
         use serde_json::{Value, json};
+        use std::sync::atomic::{AtomicBool, Ordering};
         use tokio::net::TcpListener;
 
+        static SERVED_POOL: AtomicBool = AtomicBool::new(false);
         fn result_for(method: &str) -> Value {
             assert_eq!(method, "amm_info");
+            if SERVED_POOL.swap(true, Ordering::SeqCst) {
+                return json!({"error": "actNotFound", "error_code": 19,
+                    "error_message": "Account not found.", "status": "error"});
+            }
             json!({"amm": {
                 "amount": "5000000",
                 "amount2": {"currency": "USD", "issuer": "rIss", "value": "10"},
@@ -1120,7 +1134,7 @@ mod tests {
         }
         let listener = TcpListener::bind(("127.0.0.1", 0)).await.expect("bind");
         let url = format!("http://{}", listener.local_addr().expect("addr"));
-        let server = tokio::spawn(rpc_mock::serve(listener, 1, result_for));
+        let server = tokio::spawn(rpc_mock::serve(listener, 2, result_for));
         let rpc = RpcClient::connect(&url).expect("rpc client");
         let pair = BookPair {
             base: "XRP".into(),
@@ -1130,19 +1144,26 @@ mod tests {
             limit: 10,
         };
         let (tx, mut rx) = mpsc::unbounded_channel();
-        assert!(send_timed(
-            &tx,
-            "amm_info",
-            fetch_amm_info(&rpc, &pair).await,
-            |v| Action::XrplAmmInfo(Box::new(v))
-        ));
+        for _ in 0..2 {
+            assert!(send_timed(
+                &tx,
+                "amm_info",
+                fetch_amm_info(&rpc, &pair).await,
+                |v| Action::XrplAmmInfo(v.map(Box::new))
+            ));
+        }
         let _ = server.await;
         match rx.try_recv() {
-            Ok(Action::XrplAmmInfo(s)) => {
+            Ok(Action::XrplAmmInfo(Some(s))) => {
                 assert_eq!(s.trading_fee, 500);
                 assert!(s.lp_token.contains('7'), "{}", s.lp_token);
             }
-            other => panic!("expected XrplAmmInfo, got {other:?}"),
+            other => panic!("expected XrplAmmInfo(Some), got {other:?}"),
         }
+        let no_pool = rx.try_recv();
+        assert!(
+            matches!(no_pool, Ok(Action::XrplAmmInfo(None))),
+            "{no_pool:?}"
+        );
     }
 }

@@ -6,7 +6,7 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ### Fixed
 
-- Market tab AMM panel stayed on "loading" forever: nothing ever fetched `amm_info`. It is now polled for the configured book pair (mainnet XRP/RLUSD shows the pool).
+- Market tab AMM panel stayed on "loading" forever: nothing ever fetched `amm_info`. It is now polled for the configured book pair (mainnet XRP/RLUSD shows the pool); a pair without a pool shows "no AMM pool for this pair" in the panel, without a status-bar error.
 
 ### Changed
 

@@ -31,7 +31,7 @@ impl Component for AmmPanel {
         match action {
             Action::Tick => self.tick = self.tick.wrapping_add(1),
             Action::XrplAmmInfo(amm) => {
-                self.amm = Some((**amm).clone());
+                self.amm = amm.as_deref().cloned();
                 self.has_received_amm_info = true;
                 self.error = None;
             }
@@ -62,8 +62,11 @@ impl Component for AmmPanel {
         }
         let Some(amm) = &self.amm else {
             frame.render_widget(
-                Paragraph::new(Span::styled("(no AMM data)", theme::dim_style()))
-                    .block(titled_block("AMM Pool", self.is_focused)),
+                Paragraph::new(Span::styled(
+                    "no AMM pool for this pair",
+                    theme::dim_style(),
+                ))
+                .block(titled_block("AMM Pool", self.is_focused)),
                 area,
             );
             return Ok(());
@@ -115,14 +118,14 @@ mod tests {
         assert!(loading.contains("loading AMM info"));
 
         panel
-            .update(&Action::XrplAmmInfo(Box::new(AmmSummary {
+            .update(&Action::XrplAmmInfo(Some(Box::new(AmmSummary {
                 asset1: "XRP".into(),
                 asset2: "USD".into(),
                 lp_token: "42 USD".into(),
                 trading_fee: 12,
                 pool1: "2.000000".into(),
                 pool2: "3 USD".into(),
-            })))
+            }))))
             .unwrap();
         let out = crate::test_support::render_to_string(80, 10, |frame| {
             panel.draw(frame, frame.area()).unwrap()

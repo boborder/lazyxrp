@@ -42,7 +42,8 @@ pub enum Action {
     XrplAccountTx(Box<TxSummary>),
     XrplAccountNfts(Vec<NftRow>),
     XrplTrustLines(Vec<TrustLineRow>),
-    XrplAmmInfo(Box<AmmSummary>),
+    /// `None` = no AMM pool for the configured pair.
+    XrplAmmInfo(Option<Box<AmmSummary>>),
     XrplTxHistory(Vec<TxRow>, Option<serde_json::Value>),
     /// Append page to existing tx history (pagination).
     XrplTxHistoryAppend(Vec<TxRow>, Option<serde_json::Value>),
