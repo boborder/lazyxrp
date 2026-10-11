@@ -88,7 +88,7 @@ openssl = { version = "0.10", features = ["vendored"] }
 
 [dev-dependencies]
 # Already in the tree via xrpl-rust; local WebSocket fixture server for ws.rs tests.
-tokio-tungstenite = "0.24"
+tokio-tungstenite = "0.30"
 
 [build-dependencies]
 vergen-gix = { version = "9", features = ["build"] }
