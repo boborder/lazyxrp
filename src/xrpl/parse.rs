@@ -2,7 +2,7 @@
 
 use serde_json::{Value, json};
 
-use super::format::{decode_uri, format_amount, format_asset};
+use super::format::{format_amount, format_asset, hex_to_ascii};
 use super::types::{
     AccountOfferRow, AccountTxPage, AggregatePrice, AmmSummary, ArcValue, EscrowRow, FeeSummary,
     LedgerObjectRow, NFTOKEN_FLAG_MUTABLE, NftRow, NodeValidatorListSummary, OfferRow,
@@ -230,7 +230,10 @@ pub(crate) fn parse_account_nfts_value(value: &Value) -> Vec<NftRow> {
                 taxon: json_u32(&n, &["NFTokenTaxon"]),
                 serial: json_u32(&n, &["nft_serial"]),
                 transfer_fee: json_u32(&n, &["TransferFee"]) as u16,
-                uri: decode_uri(json_str(&n, &["URI"])),
+                uri: {
+                    let uri = json_str(&n, &["URI"]);
+                    hex_to_ascii(uri).unwrap_or_else(|| uri.to_string())
+                },
                 is_mutable: (flags & NFTOKEN_FLAG_MUTABLE) != 0,
                 raw_json: ArcValue::new(n),
             }
@@ -1254,14 +1257,12 @@ mod tests {
     /// TC-073
     #[test]
     fn ledger_object_tab_filters() {
-        use crate::xrpl::{is_escrow_type, is_misc_ledger_type, is_pay_channel_type};
+        use crate::xrpl::is_misc_ledger_type;
         assert!(is_misc_ledger_type("Check"));
         assert!(is_misc_ledger_type("Ticket"));
         assert!(is_misc_ledger_type("MPToken"));
         assert!(is_misc_ledger_type("DID"));
         assert!(!is_misc_ledger_type("PayChannel"));
-        assert!(is_pay_channel_type("PayChannel"));
-        assert!(is_escrow_type("Escrow"));
     }
 
     /// TC-080, TC-081, TC-082: `parse_ripple_path_find` — alternatives with

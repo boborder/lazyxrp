@@ -118,15 +118,8 @@ pub fn generate_wallet_keys_local(key_type: &str) -> color_eyre::Result<Generate
         master_seed_hex,
         account_id: wallet.classic_address.clone(),
         public_key: wallet.public_key.clone(),
-        public_key_hex: wallet.public_key.clone(),
         key_type: key_type_label.into(),
     })
-}
-
-/// Trim whitespace from a family seed (`s...` / `sEd...`); shells and dotenv often add `\n`.
-#[must_use]
-pub fn trim_family_seed(seed: &str) -> &str {
-    seed.trim()
 }
 
 /// Prefix bytes (after base58-check decode) for Ed25519 family seeds (`sEd...`).
@@ -148,7 +141,7 @@ pub fn wallet_from_family_seed(
     use xrpl::core::keypairs::generate_seed;
     use xrpl::wallet::Wallet;
 
-    let seed = trim_family_seed(seed);
+    let seed = seed.trim();
     if seed.starts_with("sEd") {
         let payload = decode_base58(seed, XRPL_ED25519_SEED_PREFIX).map_err(|e| {
             color_eyre::eyre::eyre!(
@@ -330,6 +323,16 @@ pub(crate) fn send_max_xrp_drops(spec: &str) -> color_eyre::Result<u64> {
     }
 }
 
+/// Sign `tx` with `wallet` and return the binary-encoded blob (hex).
+macro_rules! sign_blob {
+    ($tx:ident, $wallet:expr) => {{
+        xrpl::transaction::sign(&mut $tx, $wallet, false)
+            .map_err(|e| color_eyre::eyre::eyre!("sign error: {:?}", e))?;
+        xrpl::core::binarycodec::encode(&$tx)
+            .map_err(|e| color_eyre::eyre::eyre!("encode error: {:?}", e))
+    }};
+}
+
 /// Create, sign, and encode a Payment transaction as a submit-ready blob.
 ///
 /// `amount_spec`: XRP value (XRP mode) or IOU value (IOU mode).
@@ -350,13 +353,10 @@ pub fn create_and_sign_payment(
     sequence: u32,
     fee_drops: u32,
     last_ledger_sequence: u32,
-    _network: &Network,
 ) -> color_eyre::Result<String> {
-    use xrpl::core::binarycodec::encode;
     use xrpl::models::XRPAmount;
     use xrpl::models::transactions::payment::Payment;
     use xrpl::models::transactions::{CommonFields, TransactionType};
-    use xrpl::transaction::sign;
 
     let amount = payment_amount(amount_spec, iou_currency, iou_issuer)?;
     let mut common = CommonFields::from_account(account.to_string())
@@ -377,10 +377,7 @@ pub fn create_and_sign_payment(
         ..Default::default()
     };
 
-    sign(&mut payment, wallet, false)
-        .map_err(|e| color_eyre::eyre::eyre!("sign error: {:?}", e))?;
-
-    encode(&payment).map_err(|e| color_eyre::eyre::eyre!("encode error: {:?}", e))
+    sign_blob!(payment, wallet)
 }
 
 /// Unsigned Payment JSON for `simulate` (XRP or IOU; `send_max_spec` → cross-currency via default paths).
@@ -523,13 +520,10 @@ pub fn create_and_sign_set_regular_key(
     sequence: u32,
     fee_drops: u32,
     last_ledger_sequence: u32,
-    _network: &Network,
 ) -> color_eyre::Result<String> {
-    use xrpl::core::binarycodec::encode;
     use xrpl::models::XRPAmount;
     use xrpl::models::transactions::set_regular_key::SetRegularKey;
     use xrpl::models::transactions::{CommonFields, TransactionType};
-    use xrpl::transaction::sign;
 
     let mut tx = SetRegularKey {
         common_fields: CommonFields::from_account(account.to_string())
@@ -540,9 +534,7 @@ pub fn create_and_sign_set_regular_key(
         regular_key: regular_key.map(|k| k.to_string().into()),
     };
 
-    sign(&mut tx, wallet, false).map_err(|e| color_eyre::eyre::eyre!("sign error: {:?}", e))?;
-
-    encode(&tx).map_err(|e| color_eyre::eyre::eyre!("encode error: {:?}", e))
+    sign_blob!(tx, wallet)
 }
 
 /// Shared field helper: trim and require non-empty (composer / TrustSet / Offer fields).
@@ -694,13 +686,10 @@ pub fn create_and_sign_offer_create(
     sequence: u32,
     fee_drops: u32,
     last_ledger_sequence: u32,
-    _network: &Network,
 ) -> color_eyre::Result<String> {
-    use xrpl::core::binarycodec::encode;
     use xrpl::models::XRPAmount;
     use xrpl::models::transactions::offer_create::OfferCreate;
     use xrpl::models::transactions::{CommonFields, TransactionType};
-    use xrpl::transaction::sign;
 
     let taker_gets = parse_offer_amount(taker_gets_spec)?;
 
@@ -717,9 +706,7 @@ pub fn create_and_sign_offer_create(
         ..Default::default()
     };
 
-    sign(&mut tx, wallet, false).map_err(|e| color_eyre::eyre::eyre!("sign error: {:?}", e))?;
-
-    encode(&tx).map_err(|e| color_eyre::eyre::eyre!("encode error: {:?}", e))
+    sign_blob!(tx, wallet)
 }
 
 /// Unsigned OfferCancel JSON for `simulate`.
@@ -750,11 +737,9 @@ pub fn create_and_sign_offer_cancel(
     fee_drops: u32,
     last_ledger_sequence: u32,
 ) -> color_eyre::Result<String> {
-    use xrpl::core::binarycodec::encode;
     use xrpl::models::XRPAmount;
     use xrpl::models::transactions::offer_cancel::OfferCancel;
     use xrpl::models::transactions::{CommonFields, TransactionType};
-    use xrpl::transaction::sign;
 
     let mut tx = OfferCancel {
         common_fields: CommonFields::from_account(account.to_string())
@@ -765,19 +750,7 @@ pub fn create_and_sign_offer_cancel(
         offer_sequence,
     };
 
-    sign(&mut tx, wallet, false).map_err(|e| color_eyre::eyre::eyre!("sign error: {:?}", e))?;
-
-    encode(&tx).map_err(|e| color_eyre::eyre::eyre!("encode error: {:?}", e))
-}
-
-/// Sign `tx` with `wallet` and return the binary-encoded blob (hex).
-macro_rules! sign_blob {
-    ($tx:ident, $wallet:expr) => {{
-        xrpl::transaction::sign(&mut $tx, $wallet, false)
-            .map_err(|e| color_eyre::eyre::eyre!("sign error: {:?}", e))?;
-        xrpl::core::binarycodec::encode(&$tx)
-            .map_err(|e| color_eyre::eyre::eyre!("encode error: {:?}", e))
-    }};
+    sign_blob!(tx, wallet)
 }
 
 /// Relative duration for escrow times: `<n>s|m|h|d`, n > 0, result fits u32 seconds.
@@ -1278,14 +1251,11 @@ pub fn create_and_sign_trust_set(
     sequence: u32,
     fee_drops: u32,
     last_ledger_sequence: u32,
-    _network: &Network,
 ) -> color_eyre::Result<String> {
-    use xrpl::core::binarycodec::encode;
     use xrpl::models::IssuedCurrencyAmount;
     use xrpl::models::XRPAmount;
     use xrpl::models::transactions::trust_set::TrustSet;
     use xrpl::models::transactions::{CommonFields, TransactionType};
-    use xrpl::transaction::sign;
 
     let currency = require_nonempty_field("currency", currency)?;
 
@@ -1306,8 +1276,7 @@ pub fn create_and_sign_trust_set(
         ..Default::default()
     };
 
-    sign(&mut tx, wallet, false).map_err(|e| color_eyre::eyre::eyre!("sign error: {:?}", e))?;
-    encode(&tx).map_err(|e| color_eyre::eyre::eyre!("encode error: {:?}", e))
+    sign_blob!(tx, wallet)
 }
 
 /// Unsigned TrustSet JSON for `simulate` (v1: Limit + Currency + Issuer only).
@@ -1402,11 +1371,9 @@ pub fn create_and_sign_account_set(
     transfer_rate: Option<u32>,
 ) -> color_eyre::Result<String> {
     use std::borrow::Cow;
-    use xrpl::core::binarycodec::encode;
     use xrpl::models::transactions::account_set::AccountSet;
     use xrpl::models::transactions::{CommonFields, TransactionType};
     use xrpl::models::{Model, XRPAmount};
-    use xrpl::transaction::sign;
 
     let mut tx = AccountSet {
         common_fields: CommonFields::from_account(account.to_string())
@@ -1425,9 +1392,7 @@ pub fn create_and_sign_account_set(
     tx.validate()
         .map_err(|e| color_eyre::eyre::eyre!("account_set validation: {e}"))?;
 
-    sign(&mut tx, wallet, false).map_err(|e| color_eyre::eyre::eyre!("sign error: {:?}", e))?;
-
-    encode(&tx).map_err(|e| color_eyre::eyre::eyre!("encode error: {:?}", e))
+    sign_blob!(tx, wallet)
 }
 
 #[cfg(test)]
@@ -1710,7 +1675,6 @@ mod tests {
             1,
             12,
             100,
-            &Network::Mainnet,
         )
         .expect("signed payment");
 

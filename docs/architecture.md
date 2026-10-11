@@ -231,7 +231,7 @@ display = "full"      # full | compact | off
 
 ### 6.4 Connection bootstrap
 
-`src/lib.rs`: `resolve_network`, `resolve_rpc_url`, `resolve_ws_url`. `src/main.rs` is thin `lazyxrp::run()`.
+`src/lib.rs`: network = `--network` or `config.xrpl.network` (env merged by `Config::new`); `resolve_rpc_url`, `resolve_ws_url`. `src/main.rs` is thin `lazyxrp::run()`.
 
 ### 6.5 StatusBar network indicator
 

@@ -8,19 +8,12 @@ fn validate_cmd_account_and_issuer_addresses(cmd: &Cmd) -> color_eyre::Result<()
     use crate::signing::require_classic_address_shape;
 
     match cmd {
-        Cmd::Account { address } => {
-            require_classic_address_shape("account", address)?;
-        }
-        Cmd::Nfts { address } => {
-            require_classic_address_shape("account", address)?;
-        }
-        Cmd::Lines { address } => {
-            require_classic_address_shape("account", address)?;
-        }
-        Cmd::TxHistory { address, .. } => {
-            require_classic_address_shape("account", address)?;
-        }
-        Cmd::AccountStatus { address } => {
+        Cmd::Account { address }
+        | Cmd::Nfts { address }
+        | Cmd::Lines { address }
+        | Cmd::TxHistory { address, .. }
+        | Cmd::AccountStatus { address }
+        | Cmd::Offers { address } => {
             require_classic_address_shape("account", address)?;
         }
         Cmd::Summary { account } => {
@@ -42,9 +35,6 @@ fn validate_cmd_account_and_issuer_addresses(cmd: &Cmd) -> color_eyre::Result<()
             if let Some(issuer) = issuer2.as_deref().filter(|s| !s.is_empty()) {
                 require_classic_address_shape("issuer", issuer)?;
             }
-        }
-        Cmd::Offers { address } => {
-            require_classic_address_shape("account", address)?;
         }
         Cmd::OfferCreate {
             taker_gets,
@@ -194,6 +184,51 @@ pub(crate) async fn wait_validated(
     }
 }
 
+/// Simulate (never sign without it) → `describe` prints the summary and returns the confirmation
+/// prompt → confirm → sign → submit → optionally wait for validation. `Ok` on user cancel.
+/// `describe(engine_result, fee_drops, tx_sequence)`; `sign(tx_sequence, fee_drops, last_ledger_sequence)`.
+#[allow(clippy::too_many_arguments)]
+async fn simulate_confirm_submit(
+    rpc: &RpcClient,
+    network: &Network,
+    yes: bool,
+    wait: bool,
+    announce_success: bool,
+    tx_json: serde_json::Value,
+    describe: impl FnOnce(&str, u32, u32) -> color_eyre::Result<String>,
+    sign: impl FnOnce(u32, u32, u32) -> color_eyre::Result<String>,
+) -> color_eyre::Result<()> {
+    let sim = super::submit::simulate_tx_requiring_tes_success(rpc, tx_json)
+        .await
+        .map_err(|e| color_eyre::eyre::eyre!(e))?;
+    let (tx_sequence, fee_drops, last_ledger_sequence) =
+        signing::sequence_fee_ledger_from_simulate(&sim.tx_json)?;
+    let prompt = describe(&sim.engine_result, fee_drops, tx_sequence)?;
+    if !prompt_production_confirmation(&prompt, network, yes) {
+        println!("Transaction cancelled by user.");
+        return Ok(());
+    }
+    let blob = sign(tx_sequence, fee_drops, last_ledger_sequence)?;
+    // Sign/submit failures propagate so scripts see a non-zero exit.
+    let summary = rpc.submit_signed_tx(&blob).await?;
+    println!("Transaction Hash: {}", summary.hash);
+    if announce_success {
+        println!("Transaction submitted successfully!");
+    }
+    if wait {
+        let result = wait_validated(
+            rpc,
+            &summary.hash,
+            last_ledger_sequence,
+            WAIT_POLL,
+            WAIT_LIMIT,
+        )
+        .await?;
+        println!("Validated: {result}");
+    }
+    Ok(())
+}
+
 pub async fn execute_cli_command(
     cmd: Cmd,
     rpc_url: &str,
@@ -317,41 +352,29 @@ pub async fn execute_cli_command(
                 sequence,
                 account_info.sequence,
             )?;
-            let sim = super::submit::simulate_tx_requiring_tes_success(&rpc, tx_json)
-                .await
-                .map_err(|e| color_eyre::eyre::eyre!(e))?;
-            let (tx_sequence, fee_drops, last_ledger_sequence) =
-                signing::sequence_fee_ledger_from_simulate(&sim.tx_json)?;
-            println!("OfferCancel #{sequence} from {account} (fee {fee_drops} drops)");
-            if !prompt_production_confirmation(
-                &format!("Cancel offer #{sequence} of {account}"),
+            simulate_confirm_submit(
+                &rpc,
                 network,
                 yes,
-            ) {
-                println!("Transaction cancelled by user.");
-                return Ok(());
-            }
-            let blob = signing::create_and_sign_offer_cancel(
-                &wallet,
-                &account,
-                sequence,
-                tx_sequence,
-                fee_drops,
-                last_ledger_sequence,
-            )?;
-            let summary = rpc.submit_signed_tx(&blob).await?;
-            println!("Transaction Hash: {}", summary.hash);
-            if wait {
-                let result = wait_validated(
-                    &rpc,
-                    &summary.hash,
-                    last_ledger_sequence,
-                    WAIT_POLL,
-                    WAIT_LIMIT,
-                )
-                .await?;
-                println!("Validated: {result}");
-            }
+                wait,
+                false,
+                tx_json,
+                |_, fee_drops, _| {
+                    println!("OfferCancel #{sequence} from {account} (fee {fee_drops} drops)");
+                    Ok(format!("Cancel offer #{sequence} of {account}"))
+                },
+                |tx_sequence, fee_drops, last_ledger_sequence| {
+                    signing::create_and_sign_offer_cancel(
+                        &wallet,
+                        &account,
+                        sequence,
+                        tx_sequence,
+                        fee_drops,
+                        last_ledger_sequence,
+                    )
+                },
+            )
+            .await?;
         }
         Cmd::OfferCreate {
             taker_gets,
@@ -367,45 +390,32 @@ pub async fn execute_cli_command(
                 &taker_pays,
                 account_info.sequence,
             )?;
-            let sim = super::submit::simulate_tx_requiring_tes_success(&rpc, tx_json)
-                .await
-                .map_err(|e| color_eyre::eyre::eyre!(e))?;
-            let (tx_sequence, fee_drops, last_ledger_sequence) =
-                signing::sequence_fee_ledger_from_simulate(&sim.tx_json)?;
-            println!(
-                "OfferCreate from {account}: give {taker_gets}, want {taker_pays} (fee {fee_drops} drops, offer seq {tx_sequence})"
-            );
-            if !prompt_production_confirmation(
-                &format!("Place offer: give {taker_gets}, want {taker_pays}"),
+            simulate_confirm_submit(
+                &rpc,
                 network,
                 yes,
-            ) {
-                println!("Transaction cancelled by user.");
-                return Ok(());
-            }
-            let blob = signing::create_and_sign_offer_create(
-                &wallet,
-                &account,
-                &taker_gets,
-                &taker_pays,
-                tx_sequence,
-                fee_drops,
-                last_ledger_sequence,
-                network,
-            )?;
-            let summary = rpc.submit_signed_tx(&blob).await?;
-            println!("Transaction Hash: {}", summary.hash);
-            if wait {
-                let result = wait_validated(
-                    &rpc,
-                    &summary.hash,
-                    last_ledger_sequence,
-                    WAIT_POLL,
-                    WAIT_LIMIT,
-                )
-                .await?;
-                println!("Validated: {result}");
-            }
+                wait,
+                false,
+                tx_json,
+                |_, fee_drops, tx_sequence| {
+                    println!(
+                        "OfferCreate from {account}: give {taker_gets}, want {taker_pays} (fee {fee_drops} drops, offer seq {tx_sequence})"
+                    );
+                    Ok(format!("Place offer: give {taker_gets}, want {taker_pays}"))
+                },
+                |tx_sequence, fee_drops, last_ledger_sequence| {
+                    signing::create_and_sign_offer_create(
+                        &wallet,
+                        &account,
+                        &taker_gets,
+                        &taker_pays,
+                        tx_sequence,
+                        fee_drops,
+                        last_ledger_sequence,
+                    )
+                },
+            )
+            .await?;
         }
         Cmd::AmmDeposit { amount, amount2 } => {
             let wallet = cli_wallet(signing_credential.as_ref())?;
@@ -418,44 +428,32 @@ pub async fn execute_cli_command(
                 &amount2,
                 account_info.sequence,
             )?;
-            let sim = super::submit::simulate_tx_requiring_tes_success(&rpc, tx_json)
-                .await
-                .map_err(|e| color_eyre::eyre::eyre!(e))?;
-            let (tx_sequence, fee_drops, last_ledger_sequence) =
-                signing::sequence_fee_ledger_from_simulate(&sim.tx_json)?;
-            println!(
-                "AMMDeposit from {account}: up to {amount} + {amount2} (fee {fee_drops} drops)"
-            );
-            if !prompt_production_confirmation(
-                &format!("AMM deposit up to {amount} + {amount2}"),
+            simulate_confirm_submit(
+                &rpc,
                 network,
                 yes,
-            ) {
-                println!("Transaction cancelled by user.");
-                return Ok(());
-            }
-            let blob = signing::create_and_sign_amm_deposit(
-                &wallet,
-                &account,
-                &amount,
-                &amount2,
-                tx_sequence,
-                fee_drops,
-                last_ledger_sequence,
-            )?;
-            let summary = rpc.submit_signed_tx(&blob).await?;
-            println!("Transaction Hash: {}", summary.hash);
-            if wait {
-                let result = wait_validated(
-                    &rpc,
-                    &summary.hash,
-                    last_ledger_sequence,
-                    WAIT_POLL,
-                    WAIT_LIMIT,
-                )
-                .await?;
-                println!("Validated: {result}");
-            }
+                wait,
+                false,
+                tx_json,
+                |_, fee_drops, _| {
+                    println!(
+                        "AMMDeposit from {account}: up to {amount} + {amount2} (fee {fee_drops} drops)"
+                    );
+                    Ok(format!("AMM deposit up to {amount} + {amount2}"))
+                },
+                |tx_sequence, fee_drops, last_ledger_sequence| {
+                    signing::create_and_sign_amm_deposit(
+                        &wallet,
+                        &account,
+                        &amount,
+                        &amount2,
+                        tx_sequence,
+                        fee_drops,
+                        last_ledger_sequence,
+                    )
+                },
+            )
+            .await?;
         }
         Cmd::AmmWithdraw { asset, asset2, lp } => {
             let wallet = cli_wallet(signing_credential.as_ref())?;
@@ -477,45 +475,33 @@ pub async fn execute_cli_command(
                 lp_in,
                 account_info.sequence,
             )?;
-            let sim = super::submit::simulate_tx_requiring_tes_success(&rpc, tx_json)
-                .await
-                .map_err(|e| color_eyre::eyre::eyre!(e))?;
-            let (tx_sequence, fee_drops, last_ledger_sequence) =
-                signing::sequence_fee_ledger_from_simulate(&sim.tx_json)?;
-            println!(
-                "AMMWithdraw from {account}: {what} of {asset}/{asset2} (fee {fee_drops} drops)"
-            );
-            if !prompt_production_confirmation(
-                &format!("AMM withdraw {what} of {asset}/{asset2}"),
+            simulate_confirm_submit(
+                &rpc,
                 network,
                 yes,
-            ) {
-                println!("Transaction cancelled by user.");
-                return Ok(());
-            }
-            let blob = signing::create_and_sign_amm_withdraw(
-                &wallet,
-                &account,
-                &asset,
-                &asset2,
-                lp_in,
-                tx_sequence,
-                fee_drops,
-                last_ledger_sequence,
-            )?;
-            let summary = rpc.submit_signed_tx(&blob).await?;
-            println!("Transaction Hash: {}", summary.hash);
-            if wait {
-                let result = wait_validated(
-                    &rpc,
-                    &summary.hash,
-                    last_ledger_sequence,
-                    WAIT_POLL,
-                    WAIT_LIMIT,
-                )
-                .await?;
-                println!("Validated: {result}");
-            }
+                wait,
+                false,
+                tx_json,
+                |_, fee_drops, _| {
+                    println!(
+                        "AMMWithdraw from {account}: {what} of {asset}/{asset2} (fee {fee_drops} drops)"
+                    );
+                    Ok(format!("AMM withdraw {what} of {asset}/{asset2}"))
+                },
+                |tx_sequence, fee_drops, last_ledger_sequence| {
+                    signing::create_and_sign_amm_withdraw(
+                        &wallet,
+                        &account,
+                        &asset,
+                        &asset2,
+                        lp_in,
+                        tx_sequence,
+                        fee_drops,
+                        last_ledger_sequence,
+                    )
+                },
+            )
+            .await?;
         }
         Cmd::AccountDelete { destination } => {
             use super::address::{ensure_xaddress_matches_network, resolve_payment_destination};
@@ -533,46 +519,36 @@ pub async fn execute_cli_command(
                 tag,
                 account_info.sequence,
             )?;
-            let sim = super::submit::simulate_tx_requiring_tes_success(&rpc, tx_json)
-                .await
-                .map_err(|e| color_eyre::eyre::eyre!(e))?;
-            let (tx_sequence, fee_drops, last_ledger_sequence) =
-                signing::sequence_fee_ledger_from_simulate(&sim.tx_json)?;
             let tag_note = tag.map_or(String::new(), |t| format!(" (tag {t})"));
-            println!(
-                "AccountDelete {account} → {dest}{tag_note}: balance {} XRP minus fee {fee_drops} drops goes to the destination; the account is removed (irreversible)",
-                account_info.balance_xrp
-            );
-            if !prompt_production_confirmation(
-                &format!("AccountDelete {account} (remaining XRP to {dest}{tag_note})"),
+            simulate_confirm_submit(
+                &rpc,
                 network,
                 yes,
-            ) {
-                println!("Transaction cancelled by user.");
-                return Ok(());
-            }
-            let blob = signing::create_and_sign_account_delete(
-                &wallet,
-                &account,
-                &dest,
-                tag,
-                tx_sequence,
-                fee_drops,
-                last_ledger_sequence,
-            )?;
-            let summary = rpc.submit_signed_tx(&blob).await?;
-            println!("Transaction Hash: {}", summary.hash);
-            if wait {
-                let result = wait_validated(
-                    &rpc,
-                    &summary.hash,
-                    last_ledger_sequence,
-                    WAIT_POLL,
-                    WAIT_LIMIT,
-                )
-                .await?;
-                println!("Validated: {result}");
-            }
+                wait,
+                false,
+                tx_json,
+                |_, fee_drops, _| {
+                    println!(
+                        "AccountDelete {account} → {dest}{tag_note}: balance {} XRP minus fee {fee_drops} drops goes to the destination; the account is removed (irreversible)",
+                        account_info.balance_xrp
+                    );
+                    Ok(format!(
+                        "AccountDelete {account} (remaining XRP to {dest}{tag_note})"
+                    ))
+                },
+                |tx_sequence, fee_drops, last_ledger_sequence| {
+                    signing::create_and_sign_account_delete(
+                        &wallet,
+                        &account,
+                        &dest,
+                        tag,
+                        tx_sequence,
+                        fee_drops,
+                        last_ledger_sequence,
+                    )
+                },
+            )
+            .await?;
         }
         Cmd::Faucet { address } => {
             let url = faucet_url(network)?;
@@ -638,64 +614,46 @@ pub async fn execute_cli_command(
                 None,
                 account_info.sequence,
             )?;
-            let sim = super::submit::simulate_tx_requiring_tes_success(&rpc, tx_json)
-                .await
-                .map_err(|e| color_eyre::eyre::eyre!(e))?;
-            let (sequence, fee_drops, last_ledger_sequence) =
-                signing::sequence_fee_ledger_from_simulate(&sim.tx_json)?;
-            println!("Simulate: {} (fee {} drops)", sim.engine_result, fee_drops);
-
-            let amount_drops = xrp_to_drops(&amount)?;
-            let needed_drops = amount_drops
-                .checked_add(u64::from(fee_drops))
-                .ok_or_else(|| color_eyre::eyre::eyre!("amount too large"))?;
-            if balance_drops < needed_drops {
-                return Err(color_eyre::eyre::eyre!(
-                    "Insufficient balance: current {} drops, need {} drops",
-                    balance_drops,
-                    needed_drops
-                ));
-            }
-
-            if !prompt_production_confirmation(
-                &format!("Send {} XRP to {}", amount, destination_classic),
+            simulate_confirm_submit(
+                &rpc,
                 network,
                 yes,
-            ) {
-                println!("Transaction cancelled by user.");
-                return Ok(());
-            }
-
-            let signed_tx_blob = signing::create_and_sign_payment(
-                &wallet,
-                &account,
-                &destination_classic,
-                &amount,
-                None, // iou_currency: XRP-only
-                None, // iou_issuer: XRP-only
-                None, // send_max
-                destination_tag,
-                None, // memo_data
-                sequence,
-                fee_drops,
-                last_ledger_sequence,
-                network,
-            )?;
-            // Sign/submit failures propagate so scripts see a non-zero exit.
-            let tx_summary = rpc.submit_signed_tx(&signed_tx_blob).await?;
-            println!("Transaction Hash: {}", tx_summary.hash);
-            println!("Transaction submitted successfully!");
-            if wait {
-                let result = wait_validated(
-                    &rpc,
-                    &tx_summary.hash,
-                    last_ledger_sequence,
-                    WAIT_POLL,
-                    WAIT_LIMIT,
-                )
-                .await?;
-                println!("Validated: {result}");
-            }
+                wait,
+                true,
+                tx_json,
+                |engine_result, fee_drops, _| {
+                    println!("Simulate: {} (fee {} drops)", engine_result, fee_drops);
+                    let amount_drops = xrp_to_drops(&amount)?;
+                    let needed_drops = amount_drops
+                        .checked_add(u64::from(fee_drops))
+                        .ok_or_else(|| color_eyre::eyre::eyre!("amount too large"))?;
+                    if balance_drops < needed_drops {
+                        return Err(color_eyre::eyre::eyre!(
+                            "Insufficient balance: current {} drops, need {} drops",
+                            balance_drops,
+                            needed_drops
+                        ));
+                    }
+                    Ok(format!("Send {} XRP to {}", amount, destination_classic))
+                },
+                |sequence, fee_drops, last_ledger_sequence| {
+                    signing::create_and_sign_payment(
+                        &wallet,
+                        &account,
+                        &destination_classic,
+                        &amount,
+                        None, // iou_currency: XRP-only
+                        None, // iou_issuer: XRP-only
+                        None, // send_max
+                        destination_tag,
+                        None, // memo_data
+                        sequence,
+                        fee_drops,
+                        last_ledger_sequence,
+                    )
+                },
+            )
+            .await?;
         }
     }
     Ok(())

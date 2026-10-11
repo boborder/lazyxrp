@@ -126,16 +126,6 @@ fn is_rp_alias_bin(name: &str) -> bool {
     stem.eq_ignore_ascii_case("rp")
 }
 
-fn resolve_network(cli_network: Option<Network>, config: &Config) -> Network {
-    cli_network
-        .or_else(|| {
-            env::var(config::XRPL_NETWORK_ENV)
-                .ok()
-                .and_then(|s| s.parse().ok())
-        })
-        .unwrap_or(config.xrpl.network)
-}
-
 fn resolve_rpc_url(cli_server: Option<String>, config: &Config, network: &Network) -> String {
     cli_server
         .or_else(|| env::var(config::XRPL_RPC_SERVER_ENV).ok())
@@ -147,7 +137,7 @@ async fn run_rp_inner() -> color_eyre::Result<()> {
     let args = RpCli::parse();
     let config = Config::new()?;
     crate::logging::init(config.resolved_data_dir())?;
-    let network = resolve_network(args.network, &config);
+    let network = args.network.unwrap_or(config.xrpl.network);
     let rpc_url = ensure_secure_endpoint(
         &resolve_rpc_url(args.server.clone(), &config, &network),
         EndpointKind::Http,
@@ -186,7 +176,7 @@ pub async fn run() -> color_eyre::Result<()> {
         eprintln!(
             "lazyxrp: warning: --seed exposes the family seed in process argv and shell history; prefer XRPL_SEED or config"
         );
-        let family_seed = signing::trim_family_seed(cli_seed);
+        let family_seed = cli_seed.trim();
         config.xrpl.signing.seed = None;
         config.xrpl.signing.secret_seed = if family_seed.is_empty() {
             None
@@ -217,7 +207,7 @@ pub async fn run() -> color_eyre::Result<()> {
     } else {
         None
     };
-    let network = resolve_network(args.network, &config);
+    let network = args.network.unwrap_or(config.xrpl.network);
     let rpc_url = ensure_secure_endpoint(
         &resolve_rpc_url(args.server.clone(), &config, &network),
         EndpointKind::Http,
@@ -306,28 +296,6 @@ mod network_resolve_tests {
     use crate::config::Config;
     use crate::test_support::{TestEnvGuard, env_lock};
 
-    /// TC-042
-    #[test]
-    fn resolve_network_cli_overrides_env() -> color_eyre::Result<()> {
-        let _env_lock = env_lock();
-        let _test_env = TestEnvGuard::new(&[
-            "LAZYXRP_CONFIG",
-            "LAZYXRP_DATA",
-            "XDG_CONFIG_HOME",
-            config::XRPL_NETWORK_ENV,
-        ]);
-        _test_env.remove("LAZYXRP_CONFIG");
-        _test_env.remove("LAZYXRP_DATA");
-        _test_env.remove("XDG_CONFIG_HOME");
-        let config = Config::new()?;
-        let cli = Cli::try_parse_from(["lazyxrp", "--network", "devnet"])
-            .map_err(|e| color_eyre::eyre::eyre!("{e}"))?;
-        _test_env.set(config::XRPL_NETWORK_ENV, "testnet");
-        let network = resolve_network(cli.network, &config);
-        assert_eq!(network, Network::Devnet);
-        Ok(())
-    }
-
     fn minimal_config_toml() -> &'static str {
         r#"[xrpl]
 account = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
@@ -368,7 +336,7 @@ network = "mainnet"
         let config = Config::new()?;
         let cli =
             Cli::try_parse_from(["lazyxrp", "info"]).map_err(|e| color_eyre::eyre::eyre!("{e}"))?;
-        let network = resolve_network(cli.network, &config);
+        let network = cli.network.unwrap_or(config.xrpl.network);
         let url = resolve_rpc_url(cli.server.clone(), &config, &network);
         assert_eq!(url, "https://xrplcluster.com");
         std::fs::remove_dir_all(&root).ok();
@@ -392,7 +360,7 @@ network = "mainnet"
         let config = Config::new()?;
         let cli = Cli::try_parse_from(["lazyxrp", "--ws-server", "wss://cli", "info"])
             .map_err(|e| color_eyre::eyre::eyre!("{e}"))?;
-        let network = resolve_network(cli.network, &config);
+        let network = cli.network.unwrap_or(config.xrpl.network);
         let url = resolve_ws_url(&cli, &config, &network);
         assert_eq!(url, "wss://cli");
         std::fs::remove_dir_all(&root).ok();

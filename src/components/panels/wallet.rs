@@ -151,8 +151,6 @@ pub struct WalletPanel {
     account: Option<AccountSummary>,
     tick: usize,
     has_received_wallet_data: bool,
-    /// False when no signing key is configured; the wallet tab shows a hint.
-    wallet_configured: bool,
     seed_address: Option<Result<String, String>>,
     pub is_focused: bool,
     skip_mainnet_prompt: bool,
@@ -182,7 +180,6 @@ impl Default for WalletPanel {
             account: None,
             tick: 0,
             has_received_wallet_data: false,
-            wallet_configured: true,
             seed_address: None,
             is_focused: false,
             skip_mainnet_prompt: false,
@@ -247,34 +244,21 @@ impl Component for WalletPanel {
             Action::XrplWalletOverview(acc) => {
                 self.account = acc.clone();
                 self.has_received_wallet_data = true;
-                self.wallet_configured = true;
-            }
-            Action::XrplWalletNotConfigured => {
-                self.has_received_wallet_data = true;
-                self.wallet_configured = false;
             }
             Action::AccountSetSubmitOk(hash) => {
-                self.set_submit_flash(SubmitFlash::Success(format!(
-                    "AccountSet submitted · {hash}"
-                )));
-                if matches!(&self.composer, Some(ComposerPhase::AccountSet)) {
-                    self.composer = None;
-                    self.is_form_editing = false;
-                    return Ok(Some(Action::SetKeymapSuppression(false)));
-                }
+                return self.submit_ok(
+                    format!("AccountSet submitted · {hash}"),
+                    matches!(&self.composer, Some(ComposerPhase::AccountSet)),
+                );
             }
             Action::AccountSetSubmitErr(msg) => {
                 self.set_submit_flash(SubmitFlash::Error(format!("AccountSet · {msg}")));
             }
             Action::PaymentSubmitOk(hash) => {
-                self.set_submit_flash(SubmitFlash::Success(format!(
-                    "Payment sent · {hash} (see Recent Transactions below)"
-                )));
-                if matches!(&self.composer, Some(ComposerPhase::Payment { .. })) {
-                    self.composer = None;
-                    self.is_form_editing = false;
-                    return Ok(Some(Action::SetKeymapSuppression(false)));
-                }
+                return self.submit_ok(
+                    format!("Payment sent · {hash} (see Recent Transactions below)"),
+                    matches!(&self.composer, Some(ComposerPhase::Payment { .. })),
+                );
             }
             Action::PaymentSubmitErr(msg) => {
                 self.set_submit_flash(SubmitFlash::Error(format!("Payment · {msg}")));
@@ -291,40 +275,28 @@ impl Component for WalletPanel {
                 self.set_submit_flash(SubmitFlash::Error(format!("Quote · {msg}")));
             }
             Action::SetRegularKeySubmitOk(hash) => {
-                self.set_submit_flash(SubmitFlash::Success(format!(
-                    "SetRegularKey submitted · {hash}"
-                )));
-                if matches!(&self.composer, Some(ComposerPhase::SetRegularKey { .. })) {
-                    self.composer = None;
-                    self.is_form_editing = false;
-                    return Ok(Some(Action::SetKeymapSuppression(false)));
-                }
+                return self.submit_ok(
+                    format!("SetRegularKey submitted · {hash}"),
+                    matches!(&self.composer, Some(ComposerPhase::SetRegularKey { .. })),
+                );
             }
             Action::SetRegularKeySubmitErr(msg) => {
                 self.set_submit_flash(SubmitFlash::Error(format!("SetRegularKey · {msg}")));
             }
             Action::AccountDeleteSubmitOk(hash) => {
-                self.set_submit_flash(SubmitFlash::Success(format!(
-                    "AccountDelete submitted · {hash}"
-                )));
-                if matches!(&self.composer, Some(ComposerPhase::AccountDelete { .. })) {
-                    self.composer = None;
-                    self.is_form_editing = false;
-                    return Ok(Some(Action::SetKeymapSuppression(false)));
-                }
+                return self.submit_ok(
+                    format!("AccountDelete submitted · {hash}"),
+                    matches!(&self.composer, Some(ComposerPhase::AccountDelete { .. })),
+                );
             }
             Action::AccountDeleteSubmitErr(msg) => {
                 self.set_submit_flash(SubmitFlash::Error(format!("AccountDelete · {msg}")));
             }
             Action::OfferCreateSubmitOk(hash) => {
-                self.set_submit_flash(SubmitFlash::Success(format!(
-                    "OfferCreate submitted · {hash}"
-                )));
-                if matches!(&self.composer, Some(ComposerPhase::OfferCreate { .. })) {
-                    self.composer = None;
-                    self.is_form_editing = false;
-                    return Ok(Some(Action::SetKeymapSuppression(false)));
-                }
+                return self.submit_ok(
+                    format!("OfferCreate submitted · {hash}"),
+                    matches!(&self.composer, Some(ComposerPhase::OfferCreate { .. })),
+                );
             }
             Action::OfferCreateSubmitErr(msg) => {
                 self.set_submit_flash(SubmitFlash::Error(format!("OfferCreate · {msg}")));
@@ -341,14 +313,10 @@ impl Component for WalletPanel {
                 }
             }
             Action::OfferCancelSubmitOk(hash) => {
-                self.set_submit_flash(SubmitFlash::Success(format!(
-                    "OfferCancel submitted · {hash}"
-                )));
-                if matches!(&self.composer, Some(ComposerPhase::OfferCancel { .. })) {
-                    self.composer = None;
-                    self.is_form_editing = false;
-                    return Ok(Some(Action::SetKeymapSuppression(false)));
-                }
+                return self.submit_ok(
+                    format!("OfferCancel submitted · {hash}"),
+                    matches!(&self.composer, Some(ComposerPhase::OfferCancel { .. })),
+                );
             }
             Action::OfferCancelSubmitErr(msg) => {
                 self.set_submit_flash(SubmitFlash::Error(format!("OfferCancel · {msg}")));
@@ -365,50 +333,40 @@ impl Component for WalletPanel {
                 }
             }
             Action::EscrowCreateSubmitOk(hash) => {
-                self.set_submit_flash(SubmitFlash::Success(format!(
-                    "EscrowCreate submitted · {hash}"
-                )));
-                if matches!(&self.composer, Some(ComposerPhase::EscrowCreate { .. })) {
-                    self.composer = None;
-                    self.is_form_editing = false;
-                    return Ok(Some(Action::SetKeymapSuppression(false)));
-                }
+                return self.submit_ok(
+                    format!("EscrowCreate submitted · {hash}"),
+                    matches!(&self.composer, Some(ComposerPhase::EscrowCreate { .. })),
+                );
             }
             Action::EscrowCreateSubmitErr(msg) => {
                 self.set_submit_flash(SubmitFlash::Error(format!("EscrowCreate · {msg}")));
             }
             Action::EscrowCloseSubmitOk(hash) => {
-                self.set_submit_flash(SubmitFlash::Success(format!("Escrow closed · {hash}")));
-                if matches!(&self.composer, Some(ComposerPhase::Escrows { .. })) {
-                    self.composer = None;
-                    self.is_form_editing = false;
-                    return Ok(Some(Action::SetKeymapSuppression(false)));
-                }
+                return self.submit_ok(
+                    format!("Escrow closed · {hash}"),
+                    matches!(&self.composer, Some(ComposerPhase::Escrows { .. })),
+                );
             }
             Action::EscrowCloseSubmitErr(msg) => {
                 self.set_submit_flash(SubmitFlash::Error(format!("Escrow · {msg}")));
             }
             Action::AmmSubmitOk(msg) => {
-                self.set_submit_flash(SubmitFlash::Success(format!("{msg} submitted")));
-                if matches!(
-                    &self.composer,
-                    Some(ComposerPhase::AmmDeposit { .. } | ComposerPhase::AmmWithdraw { .. })
-                ) {
-                    self.composer = None;
-                    self.is_form_editing = false;
-                    return Ok(Some(Action::SetKeymapSuppression(false)));
-                }
+                return self.submit_ok(
+                    format!("{msg} submitted"),
+                    matches!(
+                        &self.composer,
+                        Some(ComposerPhase::AmmDeposit { .. } | ComposerPhase::AmmWithdraw { .. })
+                    ),
+                );
             }
             Action::AmmSubmitErr(msg) => {
                 self.set_submit_flash(SubmitFlash::Error(format!("AMM · {msg}")));
             }
             Action::TrustSetSubmitOk(hash) => {
-                self.set_submit_flash(SubmitFlash::Success(format!("TrustSet submitted · {hash}")));
-                if matches!(&self.composer, Some(ComposerPhase::TrustSet { .. })) {
-                    self.composer = None;
-                    self.is_form_editing = false;
-                    return Ok(Some(Action::SetKeymapSuppression(false)));
-                }
+                return self.submit_ok(
+                    format!("TrustSet submitted · {hash}"),
+                    matches!(&self.composer, Some(ComposerPhase::TrustSet { .. })),
+                );
             }
             Action::TrustSetSubmitErr(msg) => {
                 self.set_submit_flash(SubmitFlash::Error(format!("TrustSet · {msg}")));
@@ -417,30 +375,24 @@ impl Component for WalletPanel {
                 self.fxrp_direct_mint = Some((**info).clone());
             }
             Action::FxrpDirectMintPaymentSubmitOk(hash) => {
-                self.set_submit_flash(SubmitFlash::Success(format!(
-                    "FXRP Direct Mint Payment · {hash} · next: composer [7] Execute if flare.fassets.execute=true"
-                )));
-                if matches!(&self.composer, Some(ComposerPhase::FxrpDirectMint { .. })) {
-                    self.composer = None;
-                    self.is_form_editing = false;
-                    return Ok(Some(Action::SetKeymapSuppression(false)));
-                }
+                return self.submit_ok(
+                    format!(
+                        "FXRP Direct Mint Payment · {hash} · next: composer [7] Execute if flare.fassets.execute=true"
+                    ),
+                    matches!(&self.composer, Some(ComposerPhase::FxrpDirectMint { .. })),
+                );
             }
             Action::FxrpDirectMintPaymentSubmitErr(msg) => {
                 self.set_submit_flash(SubmitFlash::Error(format!("FXRP Mint · {msg}")));
             }
             Action::FxrpExecuteDirectMintSubmitOk(hash) => {
-                self.set_submit_flash(SubmitFlash::Success(format!(
-                    "FXRP executeDirectMinting · {hash}"
-                )));
-                if matches!(
-                    &self.composer,
-                    Some(ComposerPhase::FxrpExecuteDirectMint { .. })
-                ) {
-                    self.composer = None;
-                    self.is_form_editing = false;
-                    return Ok(Some(Action::SetKeymapSuppression(false)));
-                }
+                return self.submit_ok(
+                    format!("FXRP executeDirectMinting · {hash}"),
+                    matches!(
+                        &self.composer,
+                        Some(ComposerPhase::FxrpExecuteDirectMint { .. })
+                    ),
+                );
             }
             Action::FxrpExecuteDirectMintSubmitErr(msg) => {
                 self.set_submit_flash(SubmitFlash::Error(format!("FXRP Execute · {msg}")));
@@ -483,17 +435,6 @@ impl Component for WalletPanel {
                 area,
                 "Wallet",
                 &format!("invalid seed: {e}"),
-                self.is_focused,
-            );
-            return Ok(());
-        }
-
-        if !self.wallet_configured {
-            render_empty(
-                frame,
-                area,
-                "Wallet",
-                "set XRPL_SEED to view wallet",
                 self.is_focused,
             );
             return Ok(());
@@ -616,6 +557,21 @@ impl Component for WalletPanel {
 }
 
 impl WalletPanel {
+    /// Flash a submit success; when `closes_composer`, also dismiss it and release keymap suppression.
+    fn submit_ok(
+        &mut self,
+        text: String,
+        closes_composer: bool,
+    ) -> color_eyre::Result<Option<Action>> {
+        self.set_submit_flash(SubmitFlash::Success(text));
+        if !closes_composer {
+            return Ok(None);
+        }
+        self.composer = None;
+        self.is_form_editing = false;
+        Ok(Some(Action::SetKeymapSuppression(false)))
+    }
+
     fn key_action(&mut self, key: KeyEvent) -> color_eyre::Result<Option<Action>> {
         if !self.is_focused {
             return Ok(None);

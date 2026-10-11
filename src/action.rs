@@ -19,13 +19,11 @@ use crate::{
 #[derive(Debug, Clone, PartialEq, Eq, Display, Serialize, Deserialize)]
 pub enum Action {
     Tick,
-    Render,
     Resize(u16, u16),
     Suspend,
     Resume,
     Quit,
     ClearScreen,
-    Error(String),
     Help,
     XrplServerInfo(Box<ServerInfoSummary>),
     /// XRPL Foundation dUNL manifest (`https://unl.xrplf.org`).
@@ -50,8 +48,6 @@ pub enum Action {
     XrplTxHistoryAppend(Vec<TxRow>, Option<serde_json::Value>),
     /// Wallet tab account summary (tx history uses `XrplTxHistory` from the same poll cycle).
     XrplWalletOverview(Option<AccountSummary>),
-    /// Wallet tab shown but no seed configured — show hint instead of loading spinner.
-    XrplWalletNotConfigured,
     BookMidPrice(BookMidPrice),
     /// Aggregate price from `get_aggregate_price`.
     XrplOraclePrices(Vec<AggregatePrice>),

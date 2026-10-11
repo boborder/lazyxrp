@@ -83,7 +83,6 @@ mod tests {
             master_seed_hex: "DEADBEEF01".into(),
             account_id: "rTestAccountAddress123".into(),
             public_key: "aTestPublicKey99".into(),
-            public_key_hex: "CAFEBABE".into(),
             key_type: "ed25519".into(),
         }
     }

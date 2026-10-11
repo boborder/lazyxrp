@@ -48,13 +48,12 @@ cargo deny check
 | TC-024-025 | P2 | `src/config.rs` | parse_color — RGB shorthand; unknown returns None |
 | TC-026 | P0 | `src/config.rs` | Config::new — loads default keybindings |
 | TC-027-029,031-032 | P1 | `src/config.rs` | parse_key_event — modifier composition, case insensitivity, invalid keys error |
-| TC-030 | P2 | `src/config.rs` | key_event_to_string — reverse mapping |
 | TC-033-035, TC-092 | P1 | `src/config.rs` | Config source precedence — file overrides default, `XRPL_RPC_SERVER` env overrides file, XDG resolution, `~/.config` fallback |
 | TC-036 | P2 | `src/config.rs` | Config validation — invalid key sequence format |
 | TC-037 | P0 | `src/network.rs` | Network::default — is Mainnet |
 | TC-038-040 | P0 | `src/network.rs` | Network::from_str — roundtrip mainnet/testnet/devnet, case-insensitive, unknown errors |
 | TC-041 | P1 | `src/network.rs` | Network::is_production — correct boolean |
-| TC-042 | P0 | `src/lib.rs` | resolve_network — CLI flag overrides env |
+| TC-042 | P0 | `src/lib.rs` | network resolution — `--network` overrides `XRPL_NETWORK` (merged by `Config::new`) |
 | TC-043 | P0 | `src/lib.rs` | resolve_rpc_url — mainnet default when no CLI/env/config override |
 | TC-044 | P1 | `src/lib.rs` | resolve_ws_url — CLI --ws-server is top priority |
 | TC-045-046 | P1 | `src/signing.rs` | credential_from_secrets — none / seed / mnemonic / both-rejected outcome matrix |
@@ -263,7 +262,7 @@ cargo deny check
 
 | Risk | Covered by | Evidence |
 |------|------------|----------|
-| R-006 mainnet write guard bypass | TC-088 `mainnet_write_guard_blocks` | `src/xrpl/submit.rs` |
+| R-006 mainnet write guard bypass | TC-088 `mainnet_submit_without_yes_is_rejected` | `src/xrpl/submit.rs` |
 | R-007 config merge precedence | TC-033-035/TC-092 `config_source_precedence`, TC-036 | `src/config.rs` |
 | R-001 seed priority chain | TC-045/046/049 `credential_from_secrets` + env override | `src/signing.rs`, `src/config.rs` |
 | R-016 endpoint network ≠ selected network | TC-203 `endpoint_network_id_must_match` + CLI/TUI refusal | `src/network.rs`, `src/xrpl/cli_exec.rs`, `src/xrpl/submit.rs` |

@@ -17,7 +17,6 @@
 - `ratatui`（`Cargo.toml` `0.30`、`Cargo.lock` `0.30.2`; `serde`, `macros`）
 - `crossterm`（`Cargo.toml` `0.29`、`Cargo.lock` `0.29.0`; `serde`, `event-stream`）
 - `strum`（`Cargo.toml` `0.28`、`Cargo.lock` `0.28.0`; `derive` — `Action` 表示など）
-- `signal-hook`（`Cargo.toml` `0.4`、`Cargo.lock` `0.4.4` — `SIGTSTP` 処理）
 - `clap`（`Cargo.toml` `4`、`Cargo.lock` `4.6.6`; `derive`, `cargo`, `wrap_help`, `unicode`, `string`）
 - `ratatui-image`（`Cargo.toml` `11`、`default-features = false`; `crossterm`。`image-defaults` は `image/default`（AVIF エンコーダ `ravif`・rayon・bmp/tiff 等）を引き込みビルドが遅くなるため使わない）— Kitty / Sixel / iTerm2 / halfblocks image preview。
 - `image`（`Cargo.toml` `0.25`、`default-features = false`; PNG/JPEG/GIF/WebP のみ）— NFT image decode。
@@ -43,7 +42,7 @@
 
 ### 設定・シリアライズ
 
-- `config`（`Cargo.toml` `0.15`、`Cargo.lock` `0.15.25`; default-features off, `toml`/`convert-case` — `ron`/`async` なし）
+- `toml`（ユーザー `config.toml` を `std::fs` + `toml::from_str` で読む。旧 `config` crate は 0.6.1 で削除）
 - `directories`（`Cargo.toml` `6`、`Cargo.lock` `6.0.0` — `ProjectDirs`）
 - `serde`（`Cargo.toml` `1`、`Cargo.lock` `1.0.229`、`derive`）
 - `serde_json`（`Cargo.toml` `1`、`Cargo.lock` `1.0.151`）
@@ -53,7 +52,6 @@
 
 - `tracing`（`Cargo.toml` `0.1`、`Cargo.lock` `0.1.44`）
 - `tracing-subscriber`（`Cargo.toml` `0.3`、`Cargo.lock` `0.3.23`; `env-filter`）
-- `tracing-error`（`Cargo.toml` `0.2`、`Cargo.lock` `0.2.1`）
 - `color-eyre`（`Cargo.toml` `0.6`、`Cargo.lock` `0.6.5`）
 
 ### セキュリティ

@@ -5,7 +5,7 @@ use std::{
 
 use crossterm::{
     cursor,
-    event::{Event as CrosstermEvent, EventStream, KeyEvent, KeyEventKind, MouseEvent},
+    event::{Event as CrosstermEvent, EventStream, KeyEvent, KeyEventKind},
     terminal::{EnterAlternateScreen, LeaveAlternateScreen},
 };
 use futures::{FutureExt, StreamExt};
@@ -23,10 +23,7 @@ pub enum Event {
     Init,
     Error,
     Tick,
-    FocusGained,
-    FocusLost,
     Key(KeyEvent),
-    Mouse(MouseEvent),
     Resize(u16, u16),
 }
 
@@ -89,10 +86,7 @@ impl Tui {
                 crossterm_event = event_stream.next().fuse() => match crossterm_event {
                     Some(Ok(event)) => match event {
                         CrosstermEvent::Key(key) if key.kind == KeyEventKind::Press => Event::Key(key),
-                        CrosstermEvent::Mouse(mouse) => Event::Mouse(mouse),
                         CrosstermEvent::Resize(x, y) => Event::Resize(x, y),
-                        CrosstermEvent::FocusLost => Event::FocusLost,
-                        CrosstermEvent::FocusGained => Event::FocusGained,
                         _ => continue, // ignore other events
                     }
                     Some(Err(_)) => Event::Error,
@@ -151,7 +145,13 @@ impl Tui {
     pub fn suspend(&mut self) -> color_eyre::Result<()> {
         self.exit()?;
         #[cfg(not(windows))]
-        signal_hook::low_level::raise(signal_hook::consts::signal::SIGTSTP)?;
+        {
+            // SAFETY: `raise` has no memory-safety preconditions; SIGTSTP stops the process
+            // until the shell resumes it.
+            if unsafe { libc::raise(libc::SIGTSTP) } != 0 {
+                return Err(std::io::Error::last_os_error().into());
+            }
+        }
         Ok(())
     }
 

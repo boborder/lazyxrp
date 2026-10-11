@@ -12,7 +12,7 @@ use ratatui::{
 // use serde::{Deserialize, Serialize};
 use tokio::sync::{mpsc, watch};
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::{
     action::Action,
@@ -169,7 +169,7 @@ impl App {
         let (net_tx, _net_rx) = watch::channel(network);
         let (tab_tx, _tab_rx) = watch::channel(0usize);
         if let Some(cli_seed) = seed {
-            let trimmed_seed = crate::signing::trim_family_seed(&cli_seed);
+            let trimmed_seed = cli_seed.trim();
             config.xrpl.signing.seed = None;
             config.xrpl.signing.secret_seed = if trimmed_seed.is_empty() {
                 None
@@ -459,7 +459,7 @@ impl App {
             // Dirty policy: keys/resize/data/UI => always; Tick => splash only here;
             // FPS label refresh marks dirty after fps.note_action. `run()` draws once
             // per loop iteration when dirty (`draw_frame`), coalescing queued actions.
-            // `Action::Render` is only the FPS counter's frame signal, never dispatched.
+            // The FPS frame counter is fed directly by `draw_frame`.
             match &action {
                 Action::Tick => {
                     self.last_tick_key_events.drain(..);
@@ -698,20 +698,16 @@ impl App {
     fn draw_frame(&mut self, tui: &mut Tui) -> color_eyre::Result<()> {
         self.render(tui)?;
         self.needs_draw = false;
-        let _ = self.fps.note_action(&Action::Render);
+        self.fps.note_frame();
         Ok(())
     }
 
     fn render(&mut self, tui: &mut Tui) -> color_eyre::Result<()> {
         if !self.startup_done {
             let splash = &mut self.splash;
-            let action_tx = &self.action_tx;
             tui.terminal.draw(|frame| {
-                if let Err(err) = splash.draw(frame, frame.area())
-                    && let Err(e) =
-                        action_tx.send(Action::Error(format!("Failed to draw: {err:?}")))
-                {
-                    warn!(?e, "action channel closed while reporting draw error");
+                if let Err(err) = splash.draw(frame, frame.area()) {
+                    error!(?err, "failed to draw splash");
                 }
             })?;
             return Ok(());
@@ -723,7 +719,6 @@ impl App {
         let panels = &mut self.panels;
         let status_bar = &mut self.status_bar;
         let fps = &mut self.fps;
-        let action_tx = &self.action_tx;
 
         tui.terminal.draw(|frame| {
             let [tabs_area, main_area, hints_area, status_area] = Layout::vertical([
@@ -759,39 +754,24 @@ impl App {
             // Active panel
             if let Some(panel) = panels.get_mut(active_tab)
                 && let Err(err) = panel.draw(frame, main_area)
-                && let Err(e) =
-                    action_tx.send(Action::Error(format!("Failed to draw panel: {err:?}")))
             {
-                warn!(?e, "action channel closed while reporting panel draw error");
+                error!(?err, "failed to draw panel");
             }
 
             // FPS counter (top-right corner of main area)
             let fps_area = Rect::new(main_area.right().saturating_sub(10), main_area.top(), 10, 1);
-            if let Err(err) = fps.draw(frame, fps_area)
-                && let Err(e) =
-                    action_tx.send(Action::Error(format!("Failed to draw fps: {err:?}")))
-            {
-                warn!(?e, "action channel closed while reporting fps draw error");
+            if let Err(err) = fps.draw(frame, fps_area) {
+                error!(?err, "failed to draw fps");
             }
 
             // StatusBar
-            if let Err(err) = status_bar.draw(frame, status_area)
-                && let Err(e) =
-                    action_tx.send(Action::Error(format!("Failed to draw status: {err:?}")))
-            {
-                warn!(
-                    ?e,
-                    "action channel closed while reporting status draw error"
-                );
+            if let Err(err) = status_bar.draw(frame, status_area) {
+                error!(?err, "failed to draw status");
             }
 
             // Help overlay
-            if show_help
-                && let Err(err) = help.draw(frame, frame.area())
-                && let Err(e) =
-                    action_tx.send(Action::Error(format!("Failed to draw help: {err:?}")))
-            {
-                warn!(?e, "action channel closed while reporting help draw error");
+            if show_help && let Err(err) = help.draw(frame, frame.area()) {
+                error!(?err, "failed to draw help");
             }
         })?;
         Ok(())

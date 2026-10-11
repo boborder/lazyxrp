@@ -1,11 +1,7 @@
-use std::sync::OnceLock;
-
-use tracing_error::ErrorLayer;
 use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 
 use crate::config;
 
-static LOG_ENV: OnceLock<String> = OnceLock::new();
 const LOG_FILE: &str = concat!(env!("CARGO_PKG_NAME"), ".log");
 
 pub fn init(directory: std::path::PathBuf) -> color_eyre::Result<()> {
@@ -21,11 +17,10 @@ pub fn init(directory: std::path::PathBuf) -> color_eyre::Result<()> {
     // If the `RUST_LOG` environment variable is set, use that as the default, otherwise use the
     // value of the `LOG_ENV` environment variable. If the `LOG_ENV` environment variable contains
     // errors, then this will return an error.
-    let log_env =
-        LOG_ENV.get_or_init(|| format!("{}_LOG_LEVEL", config::PROJECT_NAME.to_uppercase()));
+    let log_env = format!("{}_LOG_LEVEL", config::PROJECT_NAME.to_uppercase());
     let env_filter = env_filter
         .try_from_env()
-        .or_else(|_| env_filter.with_env_var(log_env).from_env())?;
+        .or_else(|_| env_filter.with_env_var(&log_env).from_env())?;
     let file_subscriber = fmt::layer()
         .with_file(true)
         .with_line_number(true)
@@ -35,7 +30,6 @@ pub fn init(directory: std::path::PathBuf) -> color_eyre::Result<()> {
         .with_filter(env_filter);
     tracing_subscriber::registry()
         .with(file_subscriber)
-        .with(ErrorLayer::default())
         .try_init()?;
     Ok(())
 }

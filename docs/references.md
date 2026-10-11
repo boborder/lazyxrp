@@ -35,7 +35,6 @@
 
 ## 設定 / エラー / ロギング
 
-- [config crate docs](https://docs.rs/config/latest/config/)
 - [tracing crate docs](https://docs.rs/tracing/latest/tracing/)
 - [tracing-subscriber crate docs](https://docs.rs/tracing-subscriber/latest/tracing_subscriber/)
 - [secrecy crate docs](https://docs.rs/secrecy/latest/secrecy/)

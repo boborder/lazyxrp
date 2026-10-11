@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crossterm::event::{KeyEvent, MouseEvent};
+use crossterm::event::KeyEvent;
 use ratatui::{
     Frame,
     layout::{Rect, Size},
@@ -69,7 +69,6 @@ pub trait Component {
     fn on_event(&mut self, event: Option<&Event>) -> color_eyre::Result<Option<Action>> {
         let action = match event {
             Some(Event::Key(key_event)) => self.on_key_event(*key_event)?,
-            Some(Event::Mouse(mouse_event)) => self.on_mouse_event(*mouse_event)?,
             _ => None,
         };
         Ok(action)
@@ -85,19 +84,6 @@ pub trait Component {
     /// * [`color_eyre::Result<Option<Action>>`] - An action to be processed or none.
     fn on_key_event(&mut self, key: KeyEvent) -> color_eyre::Result<Option<Action>> {
         let _ = key; // to appease clippy
-        Ok(None)
-    }
-    /// Handle mouse events and produce actions if necessary.
-    ///
-    /// # Arguments
-    ///
-    /// * `mouse` - A mouse event to be processed.
-    ///
-    /// # Returns
-    ///
-    /// * [`color_eyre::Result<Option<Action>>`] - An action to be processed or none.
-    fn on_mouse_event(&mut self, mouse: MouseEvent) -> color_eyre::Result<Option<Action>> {
-        let _ = mouse; // to appease clippy
         Ok(None)
     }
     /// Update the state of the component based on a received action. (REQUIRED)

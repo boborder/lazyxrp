@@ -4,6 +4,14 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ## [Unreleased]
 
+### Fixed
+
+- Market tab AMM panel stayed on "loading" forever: nothing ever fetched `amm_info`. It is now polled for the configured book pair (mainnet XRP/RLUSD shows the pool).
+
+### Changed
+
+- Internal cleanup (no CLI/TUI behavior change): shared submit helpers for TUI and `-x` writes, dead actions/events removed, dependencies `config`, `signal-hook`, `tracing-error` and build-dep `anyhow` dropped. User `config.toml` is now read with `toml` directly: keys are matched as written (the old loader lowercased keys and coerced quoted numbers).
+
 ## [0.6.0] - 2026-10-11
 
 ### Added

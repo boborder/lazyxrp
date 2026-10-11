@@ -35,8 +35,7 @@ fn is_safe_uninstall_dir(path: &Path) -> bool {
     // Require final component to contain "lazyxrp" (default XDG / ProjectDirs layout).
     path.file_name()
         .and_then(|n| n.to_str())
-        .map(|n| n.to_ascii_lowercase().contains("lazyxrp"))
-        .unwrap_or(false)
+        .is_some_and(|n| n.to_ascii_lowercase().contains("lazyxrp"))
 }
 
 fn sibling_rp_alias_safe(binary: &Path) -> Option<PathBuf> {

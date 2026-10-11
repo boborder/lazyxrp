@@ -30,31 +30,16 @@ fn dunl_summary_cache() -> &'static Mutex<Option<DunlCacheEntry>> {
     CACHE.get_or_init(|| Mutex::new(None))
 }
 
-/// Return cached dUNL when still within [`DUNL_CACHE_TTL`].
-pub(crate) fn dunl_cache_get_if_fresh() -> Option<DunlSummary> {
+/// Cached dUNL while within [`DUNL_CACHE_TTL`], or (stale-on-error) while a failed refresh is
+/// still in its [`DUNL_RETRY_BACKOFF`] cooldown.
+pub(crate) fn dunl_cache_get() -> Option<DunlSummary> {
     let guard = dunl_summary_cache().lock().ok()?;
     guard.as_ref().and_then(|entry| {
-        if entry.fetched_at.elapsed() < DUNL_CACHE_TTL {
-            Some(entry.summary.clone())
-        } else {
-            None
-        }
-    })
-}
-
-/// Serve the cached summary while a failed refresh is still in cooldown.
-/// The caller has already checked [`dunl_cache_get_if_fresh`], so no TTL check here.
-pub(crate) fn dunl_cache_stale_in_cooldown() -> Option<DunlSummary> {
-    let guard = dunl_summary_cache().lock().ok()?;
-    guard.as_ref().and_then(|entry| {
-        if entry
+        let fresh = entry.fetched_at.elapsed() < DUNL_CACHE_TTL;
+        let cooling_down = entry
             .last_failed_at
-            .is_some_and(|failed_at| failed_at.elapsed() < DUNL_RETRY_BACKOFF)
-        {
-            Some(entry.summary.clone())
-        } else {
-            None
-        }
+            .is_some_and(|failed_at| failed_at.elapsed() < DUNL_RETRY_BACKOFF);
+        (fresh || cooling_down).then(|| entry.summary.clone())
     })
 }
 
@@ -336,25 +321,25 @@ mod tests {
     /// TC-123: dUNL cache — fresh hit within TTL, stale entry served during failure cooldown,
     /// none after clear.
     #[test]
-    fn dunl_cache_fresh_and_stale_reads() {
+    fn dunl_cache_get_hit_and_miss() {
         let _guard = DunlSummaryCacheGuard;
         let dunl = parse_xrplf_dunl_json(dunl_sample()).expect("parse dUNL");
 
         // Fresh within TTL: hit; cleared: miss.
         dunl_summary_cache_clear();
         dunl_cache_store(dunl.clone());
-        assert_eq!(dunl_cache_get_if_fresh().expect("cache hit"), dunl);
+        assert_eq!(dunl_cache_get().expect("cache hit"), dunl);
         dunl_summary_cache_clear();
-        assert!(dunl_cache_get_if_fresh().is_none());
+        assert!(dunl_cache_get().is_none());
 
         // Failure cooldown serves the stale entry; cleared: none.
         dunl_summary_cache_clear();
         dunl_cache_store(dunl.clone());
         dunl_cache_mark_failed();
-        assert_eq!(dunl_cache_stale_in_cooldown().expect("stale served"), dunl);
+        assert_eq!(dunl_cache_get().expect("stale served"), dunl);
         dunl_summary_cache_clear();
         dunl_cache_mark_failed();
-        assert!(dunl_cache_stale_in_cooldown().is_none());
+        assert!(dunl_cache_get().is_none());
     }
 
     /// Drops with the test: clears the shared manifest decode cache even if an assert panics.

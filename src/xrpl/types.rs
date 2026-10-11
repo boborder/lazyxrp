@@ -258,8 +258,6 @@ pub struct GeneratedWalletKeys {
     pub account_id: String,
     /// Public key (starts with `a` for Ed25519).
     pub public_key: String,
-    /// Hex-encoded public key.
-    pub public_key_hex: String,
     /// Key algorithm: `"ed25519"` or `"secp256k1"`.
     pub key_type: String,
 }
@@ -271,7 +269,6 @@ impl std::fmt::Debug for GeneratedWalletKeys {
             .field("master_seed_hex", &"[REDACTED]")
             .field("account_id", &self.account_id)
             .field("public_key", &self.public_key)
-            .field("public_key_hex", &self.public_key_hex)
             .field("key_type", &self.key_type)
             .finish()
     }
@@ -497,16 +494,6 @@ pub fn is_misc_ledger_type(t: &str) -> bool {
             | "SignerList"
             | "DID"
     )
-}
-
-#[must_use]
-pub fn is_pay_channel_type(t: &str) -> bool {
-    t == "PayChannel"
-}
-
-#[must_use]
-pub fn is_escrow_type(t: &str) -> bool {
-    t == "Escrow"
 }
 
 #[derive(Debug, Clone)]
@@ -875,7 +862,6 @@ mod generated_wallet_keys_security_tests {
             master_seed_hex: "DEADBEEF".into(),
             account_id: "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh".into(),
             public_key: "aPub".into(),
-            public_key_hex: "ED00".into(),
             key_type: "ed25519".into(),
         };
         let dbg = format!("{r:?}");

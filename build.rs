@@ -1,7 +1,6 @@
-use anyhow::Result;
 use vergen_gix::{BuildBuilder, Emitter, GixBuilder};
 
-fn main() -> Result<()> {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     // crates.io / `cargo install` unpacks without `.git`. Always emit fallbacks
     // first so `env!("VERGEN_*")` in `src/cli.rs` still compiles; successful
     // vergen instructions overwrite these.

@@ -7,7 +7,6 @@ use ratatui::{
     text::{Line, Span},
     widgets::Paragraph,
 };
-use tokio::sync::mpsc::UnboundedSender;
 
 use crate::components::Component;
 use crate::{
@@ -122,10 +121,6 @@ impl Default for SplashScreen {
 }
 
 impl Component for SplashScreen {
-    fn register_action_handler(&mut self, _tx: UnboundedSender<Action>) -> color_eyre::Result<()> {
-        Ok(())
-    }
-
     fn register_config_handler(&mut self, config: Arc<Config>) -> color_eyre::Result<()> {
         self.config = config;
         Ok(())

@@ -4,8 +4,8 @@ use serde_json::{Value, json};
 use xrpl::asynch::clients::{AsyncJsonRpcClient, XRPLClient};
 
 use super::dunl::{
-    DUNL_RETRY_BACKOFF, XRPLF_DUNL_URL, dunl_cache_get_if_fresh, dunl_cache_mark_failed,
-    dunl_cache_stale_in_cooldown, dunl_cache_store, parse_xrplf_dunl_json,
+    DUNL_RETRY_BACKOFF, XRPLF_DUNL_URL, dunl_cache_get, dunl_cache_mark_failed, dunl_cache_store,
+    parse_xrplf_dunl_json,
 };
 use super::format::drops_to_xrp;
 pub use super::format::{path_find_snapshot, xrp_to_drops};
@@ -29,7 +29,11 @@ pub(crate) const RPC_TIMEOUT: Duration = Duration::from_secs(20);
 /// Hard cap for JSON-RPC / dUNL response bodies (DoS guard).
 pub(crate) const MAX_RPC_BODY_BYTES: usize = 16 * 1024 * 1024;
 
-fn default_retry_delay_ms(attempt: usize, message: &str) -> u64 {
+fn retry_delay_ms(attempt: usize, message: &str) -> u64 {
+    // Unit tests retry against local fixtures; skip the real backoff.
+    if cfg!(test) {
+        return 0;
+    }
     let delay = if is_rate_limited_error(message) {
         Duration::from_secs(2 * (attempt + 1) as u64)
     } else if is_transient_xrpl_error(message) {
@@ -42,12 +46,9 @@ fn default_retry_delay_ms(attempt: usize, message: &str) -> u64 {
     delay.as_millis() as u64
 }
 
-type RetryDelayMsFn = fn(usize, &str) -> u64;
-
 pub struct RpcClient {
     client: AsyncJsonRpcClient,
     http: reqwest::Client,
-    retry_delay_ms: RetryDelayMsFn,
 }
 
 pub(crate) async fn read_response_text_capped(
@@ -85,13 +86,6 @@ pub(crate) async fn read_response_text_capped(
 
 impl RpcClient {
     pub fn connect(rpc_url: &str) -> color_eyre::Result<Self> {
-        Self::connect_with_retry_delay(rpc_url, default_retry_delay_ms)
-    }
-
-    pub(crate) fn connect_with_retry_delay(
-        rpc_url: &str,
-        retry_delay_ms: RetryDelayMsFn,
-    ) -> color_eyre::Result<Self> {
         Ok(Self {
             client: AsyncJsonRpcClient::connect(rpc_url.parse()?),
             // No redirects: an https endpoint must not bounce `submit` (signed blob) elsewhere.
@@ -99,7 +93,6 @@ impl RpcClient {
                 .http1_only()
                 .redirect(reqwest::redirect::Policy::none())
                 .build()?,
-            retry_delay_ms,
         })
     }
 
@@ -138,7 +131,7 @@ impl RpcClient {
                 Err(e) if attempt < 2 && is_retryable_rpc_error(&format!("{e}")) => {
                     let message = format!("{e}");
                     last_error = Some(e);
-                    let delay_ms = (self.retry_delay_ms)(attempt, &message);
+                    let delay_ms = retry_delay_ms(attempt, &message);
                     tracing::warn!(
                         attempt = attempt + 1,
                         delay_ms,
@@ -150,6 +143,19 @@ impl RpcClient {
             }
         }
         Err(last_error.unwrap_or_else(|| color_eyre::eyre::eyre!("{method} failed")))
+    }
+
+    /// `rpc_value`, but an account/object/ledger "not found" error is `None` instead of an error.
+    async fn rpc_value_or_none(
+        &self,
+        method: &str,
+        params: Value,
+    ) -> color_eyre::Result<Option<Value>> {
+        match self.rpc_value(method, params).await {
+            Ok(value) => Ok(Some(value)),
+            Err(e) if is_not_found_error(&format!("{e}")) => Ok(None),
+            Err(e) => Err(e),
+        }
     }
 
     pub async fn server_info(&self) -> color_eyre::Result<ServerInfoSummary> {
@@ -170,13 +176,10 @@ impl RpcClient {
     }
 
     pub async fn fetch_xrplf_dunl(&self) -> color_eyre::Result<DunlSummary> {
-        if let Some(cached) = dunl_cache_get_if_fresh() {
-            return Ok(cached);
-        }
         // Stale-on-error: a failed refresh keeps serving the cached summary for
         // DUNL_RETRY_BACKOFF instead of erroring / re-hitting the mirror every poll.
-        if let Some(stale) = dunl_cache_stale_in_cooldown() {
-            return Ok(stale);
+        if let Some(cached) = dunl_cache_get() {
+            return Ok(cached);
         }
         // ponytail: a first-ever fetch failure has no cache to serve and errors every
         // poll until the first success — acceptable; a failure cache for the empty case
@@ -199,7 +202,7 @@ impl RpcClient {
                 // Warn only when a cached summary will actually be served —
                 // first-ever failure has no entry (mark_failed is a no-op) and
                 // errors every poll until the first success.
-                if dunl_cache_stale_in_cooldown().is_some() {
+                if dunl_cache_get().is_some() {
                     tracing::warn!(
                         "dUNL refresh failed; serving cached manifest for up to {}s",
                         DUNL_RETRY_BACKOFF.as_secs()
@@ -237,16 +240,14 @@ impl RpcClient {
     }
 
     pub async fn account_nfts(&self, watch_address: &str) -> color_eyre::Result<Vec<NftRow>> {
-        let value = match self
-            .rpc_value(
+        let Some(value) = self
+            .rpc_value_or_none(
                 "account_nfts",
                 json!({ "account": watch_address, "limit": 100 }),
             )
-            .await
-        {
-            Ok(value) => value,
-            Err(e) if is_not_found_error(&format!("{e}")) => return Ok(vec![]),
-            Err(e) => return Err(e),
+            .await?
+        else {
+            return Ok(vec![]);
         };
         Ok(parse_account_nfts_value(&value))
     }
@@ -255,13 +256,11 @@ impl RpcClient {
         &self,
         watch_address: &str,
     ) -> color_eyre::Result<Vec<TrustLineRow>> {
-        let value = match self
-            .rpc_value("account_lines", json!({ "account": watch_address }))
-            .await
-        {
-            Ok(value) => value,
-            Err(e) if is_not_found_error(&format!("{e}")) => return Ok(vec![]),
-            Err(e) => return Err(e),
+        let Some(value) = self
+            .rpc_value_or_none("account_lines", json!({ "account": watch_address }))
+            .await?
+        else {
+            return Ok(vec![]);
         };
         Ok(parse_account_lines_value(&value))
     }
@@ -343,27 +342,15 @@ impl RpcClient {
 
         let account = match info_res {
             Ok(Ok(acc)) => Some(acc),
-            Ok(Err(e)) => {
-                let error_text = format!("{e}");
-                if is_not_found_error(&error_text) {
-                    None
-                } else {
-                    return Err(e);
-                }
-            }
+            Ok(Err(e)) if is_not_found_error(&format!("{e}")) => None,
+            Ok(Err(e)) => return Err(e),
             Err(_) => return Err(color_eyre::eyre::eyre!("account_info timeout")),
         };
 
         let (txs, marker) = match tx_res {
             Ok(Ok(page)) => (page.rows, page.marker),
-            Ok(Err(e)) => {
-                let error_text = format!("{e}");
-                if is_not_found_error(&error_text) {
-                    (vec![], None)
-                } else {
-                    return Err(e);
-                }
-            }
+            Ok(Err(e)) if is_not_found_error(&format!("{e}")) => (vec![], None),
+            Ok(Err(e)) => return Err(e),
             Err(_) => return Err(color_eyre::eyre::eyre!("account_tx timeout")),
         };
 
@@ -374,16 +361,14 @@ impl RpcClient {
         &self,
         watch_address: &str,
     ) -> color_eyre::Result<Vec<LedgerObjectRow>> {
-        let value = match self
-            .rpc_value(
+        let Some(value) = self
+            .rpc_value_or_none(
                 "account_objects",
                 json!({ "account": watch_address, "limit": 200 }),
             )
-            .await
-        {
-            Ok(value) => value,
-            Err(e) if is_not_found_error(&format!("{e}")) => return Ok(vec![]),
-            Err(e) => return Err(e),
+            .await?
+        else {
+            return Ok(vec![]);
         };
         Ok(parse_account_objects_value(&value))
     }
@@ -397,10 +382,8 @@ impl RpcClient {
             if let Some(m) = marker.take() {
                 req["marker"] = m;
             }
-            let value = match self.rpc_value("account_offers", req).await {
-                Ok(value) => value,
-                Err(e) if is_not_found_error(&format!("{e}")) => return Ok(vec![]),
-                Err(e) => return Err(e),
+            let Some(value) = self.rpc_value_or_none("account_offers", req).await? else {
+                return Ok(vec![]);
             };
             rows.extend(parse_account_offers_value(&value));
             marker = value.get("result").and_then(|r| r.get("marker")).cloned();
@@ -416,16 +399,14 @@ impl RpcClient {
     /// failed lookup leaves `offer_sequence` `None` and the composer refuses that row.
     pub async fn account_escrows(&self, account: &str) -> color_eyre::Result<Vec<EscrowRow>> {
         // ponytail: first 200 escrows, one `tx` lookup each without Sequence; page if needed
-        let value = match self
-            .rpc_value(
+        let Some(value) = self
+            .rpc_value_or_none(
                 "account_objects",
                 json!({ "account": account, "type": "escrow", "limit": 200 }),
             )
-            .await
-        {
-            Ok(value) => value,
-            Err(e) if is_not_found_error(&format!("{e}")) => return Ok(vec![]),
-            Err(e) => return Err(e),
+            .await?
+        else {
+            return Ok(vec![]);
         };
         let mut rows = parse_account_escrows_value(&value);
         for row in rows.iter_mut().filter(|r| r.offer_sequence.is_none()) {
@@ -444,8 +425,8 @@ impl RpcClient {
         taker_pays_issuer: Option<&str>,
         limit: u16,
     ) -> color_eyre::Result<Vec<OfferRow>> {
-        let value = match self
-            .rpc_value(
+        let Some(value) = self
+            .rpc_value_or_none(
                 "book_offers",
                 json!({
                     "taker_gets": book_currency(taker_gets_currency, taker_gets_issuer),
@@ -453,11 +434,9 @@ impl RpcClient {
                     "limit": limit
                 }),
             )
-            .await
-        {
-            Ok(value) => value,
-            Err(e) if is_not_found_error(&format!("{e}")) => return Ok(vec![]),
-            Err(e) => return Err(e),
+            .await?
+        else {
+            return Ok(vec![]);
         };
         Ok(parse_book_offers_value(&value))
     }
@@ -724,7 +703,7 @@ mod tests {
             );
             let _ = s.write_all(head.as_bytes()).await;
         });
-        let rpc = RpcClient::connect_with_retry_delay(&format!("http://{addr}"), |_, _| 0).unwrap();
+        let rpc = RpcClient::connect(&format!("http://{addr}")).unwrap();
         assert!(rpc.rpc_value("server_info", json!({})).await.is_err());
         server.abort();
         target_srv.abort();
@@ -786,13 +765,7 @@ mod tests {
             }
         });
 
-        fn zero_retry_delay_ms(_attempt: usize, _message: &str) -> u64 {
-            0
-        }
-
-        let rpc =
-            RpcClient::connect_with_retry_delay(&format!("http://{address}"), zero_retry_delay_ms)
-                .unwrap();
+        let rpc = RpcClient::connect(&format!("http://{address}")).unwrap();
         let value = rpc.rpc_value("server_info", json!({})).await.unwrap();
         assert_eq!(value, json!({"result": {}}));
         server.await.unwrap();

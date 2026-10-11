@@ -58,10 +58,6 @@ pub(crate) fn hex_to_ascii(hex: &str) -> Option<String> {
         .and_then(|bytes| String::from_utf8(bytes).ok())
 }
 
-pub(crate) fn decode_uri(hex: &str) -> String {
-    hex_to_ascii(hex).unwrap_or_else(|| hex.to_string())
-}
-
 pub(crate) fn format_asset(v: Option<&Value>) -> String {
     match v {
         Some(Value::Object(m)) => m

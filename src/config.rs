@@ -354,32 +354,30 @@ impl Config {
         non_empty_path_or(&self.paths.config_dir, config_dir)
     }
 
-    pub fn new() -> color_eyre::Result<Self, config::ConfigError> {
+    pub fn new() -> color_eyre::Result<Self> {
+        use color_eyre::eyre::WrapErr as _;
         // Security (S-007): embedded config is a compile-time constant — parse failure
         // indicates a build-time bug, not a runtime condition.
         let default_config: Config = json5::from_str(CONFIG)
             .expect("embedded config.json5 is malformed — this is a build-time bug");
-        let data_dir = data_dir();
         let config_dir = config_dir();
-        let mut builder = config::Config::builder()
-            .set_default("data_dir", data_dir.to_string_lossy().as_ref())?
-            .set_default("config_dir", config_dir.to_string_lossy().as_ref())?;
         let config_file = config_dir.join("config.toml");
-        let found_config = config_file.exists();
-        builder = builder.add_source(
-            config::File::from(config_file)
-                .format(config::FileFormat::Toml)
-                .required(false),
-        );
-        if !found_config {
-            // Before `logging::init`, tracing may have no subscriber — surface this on stderr.
-            eprintln!(
-                "lazyxrp: warning: no configuration file found under {}; defaults apply",
-                config_dir.display()
-            );
-        }
-
-        let mut config: Self = builder.build()?.try_deserialize()?;
+        // Empty / missing `paths` fall back to `data_dir()` / `config_dir()` in `resolved_*_dir`.
+        let mut config: Self = match std::fs::read_to_string(&config_file) {
+            Ok(text) => toml::from_str(&text)
+                .wrap_err_with(|| format!("parsing {}", config_file.display()))?,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                // Before `logging::init`, tracing may have no subscriber — surface this on stderr.
+                eprintln!(
+                    "lazyxrp: warning: no configuration file found under {}; defaults apply",
+                    config_dir.display()
+                );
+                Self::default()
+            }
+            Err(e) => {
+                return Err(e).wrap_err_with(|| format!("reading {}", config_file.display()));
+            }
+        };
 
         // Security (S-003): if a signing credential is present in config, warn about file permissions
         // BEFORE we move it out of the plain-text fields.
@@ -404,8 +402,7 @@ impl Config {
         // Env secrets win over the file. Taken once here, before the poll/UI tasks start; no
         // later `remove_var` runs while tasks may read the env. On Linux `remove_var` does not
         // rewrite the initial `/proc/self/environ` block (same-uid readers still see it).
-        if let Some(s) = take_secret_env(crate::signing::SEED_ENV, crate::signing::trim_family_seed)
-        {
+        if let Some(s) = take_secret_env(crate::signing::SEED_ENV, str::trim) {
             config.xrpl.signing.secret_seed = Some(s);
         }
         if let Some(s) = take_secret_env(crate::signing::MNEMONIC_ENV, str::trim) {
@@ -616,71 +613,6 @@ fn parse_key_code_with_modifiers(
         _ => return Err(format!("Unable to parse {raw}")),
     };
     Ok(KeyEvent::new(c, modifiers))
-}
-
-/// Canonical string form for key chords (matches `parse_key_event` grammar).
-#[cfg_attr(not(test), allow(dead_code))]
-pub fn key_event_to_string(key_event: &KeyEvent) -> String {
-    let char;
-    let key_code = match key_event.code {
-        KeyCode::Backspace => "backspace",
-        KeyCode::Enter => "enter",
-        KeyCode::Left => "left",
-        KeyCode::Right => "right",
-        KeyCode::Up => "up",
-        KeyCode::Down => "down",
-        KeyCode::Home => "home",
-        KeyCode::End => "end",
-        KeyCode::PageUp => "pageup",
-        KeyCode::PageDown => "pagedown",
-        KeyCode::Tab => "tab",
-        KeyCode::BackTab => "backtab",
-        KeyCode::Delete => "delete",
-        KeyCode::Insert => "insert",
-        KeyCode::F(c) => {
-            char = format!("f({c})");
-            &char
-        }
-        KeyCode::Char(' ') => "space",
-        KeyCode::Char(c) => {
-            char = c.to_string();
-            &char
-        }
-        KeyCode::Esc => "esc",
-        KeyCode::Null => "",
-        KeyCode::CapsLock => "",
-        KeyCode::Menu => "",
-        KeyCode::ScrollLock => "",
-        KeyCode::Media(_) => "",
-        KeyCode::NumLock => "",
-        KeyCode::PrintScreen => "",
-        KeyCode::Pause => "",
-        KeyCode::KeypadBegin => "",
-        KeyCode::Modifier(_) => "",
-    };
-
-    let mut modifiers = Vec::with_capacity(3);
-
-    if key_event.modifiers.intersects(KeyModifiers::CONTROL) {
-        modifiers.push("ctrl");
-    }
-
-    if key_event.modifiers.intersects(KeyModifiers::SHIFT) {
-        modifiers.push("shift");
-    }
-
-    if key_event.modifiers.intersects(KeyModifiers::ALT) {
-        modifiers.push("alt");
-    }
-
-    let mut key = modifiers.join("-");
-
-    if !key.is_empty() {
-        key.push('-');
-    }
-    key.push_str(key_code);
-
-    key
 }
 
 pub fn parse_key_sequence(raw: &str) -> color_eyre::Result<Vec<KeyEvent>, String> {
@@ -1015,18 +947,6 @@ mod tests {
                 .map(|ev| (ev.code, ev.modifiers));
             assert_eq!(parsed, expected, "key event for {input:?}");
         }
-    }
-
-    /// TC-030: key_event_to_string — modifiers listed before key
-    #[test]
-    fn key_event_to_string_lists_modifiers_before_key() {
-        assert_eq!(
-            key_event_to_string(&KeyEvent::new(
-                KeyCode::Char('a'),
-                KeyModifiers::CONTROL | KeyModifiers::ALT
-            )),
-            "ctrl-alt-a".to_string()
-        );
     }
 
     fn sample_xrpl_config_toml(poll_interval_ms: u64) -> String {

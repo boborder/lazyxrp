@@ -51,8 +51,8 @@ impl FpsCounter {
         false
     }
 
-    /// Returns `true` when the on-screen FPS label should refresh.
-    fn render_tick(&mut self) -> bool {
+    /// Count one drawn frame; returns `true` when the on-screen FPS label should refresh.
+    pub fn note_frame(&mut self) -> bool {
         self.frame_count += 1;
         let now = Instant::now();
         let elapsed = (now - self.last_frame_update).as_secs_f64();
@@ -65,11 +65,10 @@ impl FpsCounter {
         false
     }
 
-    /// Update counters; `true` if the FPS widget text changed.
+    /// Update tick counter; `true` if the tick-rate label text changed.
     pub fn note_action(&mut self, action: &Action) -> bool {
         match action {
             Action::Tick => self.app_tick(),
-            Action::Render => self.render_tick(),
             _ => false,
         }
     }
@@ -121,7 +120,7 @@ mod tests {
         let mut fps = FpsCounter::default();
         assert!(!fps.note_action(&Action::Tick));
         assert_eq!(fps.recorded_frames(), 0);
-        assert!(!fps.note_action(&Action::Render));
+        assert!(!fps.note_frame());
         assert_eq!(fps.recorded_frames(), 1);
     }
 

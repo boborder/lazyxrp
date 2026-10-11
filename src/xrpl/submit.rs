@@ -40,10 +40,6 @@ pub(crate) async fn simulate_tx_requiring_tes_success(
     }
 }
 
-pub(super) fn mainnet_write_guard_blocks(network: &Network, skip_mainnet_prompt: bool) -> bool {
-    network.is_production() && !skip_mainnet_prompt
-}
-
 /// Mainnet guard, then load seed + wallet for AccountSet / Payment submit.
 pub(super) fn resolve_submit_wallet<E>(
     network: &Network,
@@ -56,7 +52,7 @@ pub(super) fn resolve_submit_wallet<E>(
 where
     E: Fn(String) -> Action,
 {
-    if mainnet_write_guard_blocks(network, skip_mainnet_prompt) {
+    if network.is_production() && !skip_mainnet_prompt {
         send_action(action_tx, submit_err(mainnet_err.into()));
         return None;
     }
@@ -226,6 +222,78 @@ pub(super) async fn simulate_then_finalize<E, FS, FO>(
     finalize_simulate_sign_submit(rpc, action_tx, sim, sign_blob, submit_err, on_ok).await;
 }
 
+/// Account fetch → build tx_json → simulate → sign → submit for an already-resolved wallet.
+/// `build(account, sequence)`, `sign(wallet, account, sequence, fee, last_ledger_sequence)`.
+#[allow(clippy::too_many_arguments)]
+pub(super) async fn run_submit_with_wallet<E, B, S, O>(
+    rpc: &RpcClient,
+    network: &Network,
+    wallet: &xrpl::wallet::Wallet,
+    submit_err: E,
+    action_tx: &UnboundedSender<Action>,
+    build: B,
+    sign: S,
+    on_ok: O,
+) where
+    E: Fn(String) -> Action + Copy,
+    B: FnOnce(&str, u32) -> color_eyre::Result<Value>,
+    S: FnOnce(&xrpl::wallet::Wallet, &str, u32, u32, u32) -> color_eyre::Result<String>,
+    O: FnOnce(String) -> Vec<Action>,
+{
+    let account: &str = &wallet.classic_address;
+    let Some(account_info) =
+        fetch_account_summary_for_submit(rpc, network, account, submit_err, action_tx).await
+    else {
+        return;
+    };
+    simulate_then_finalize(
+        rpc,
+        action_tx,
+        submit_err,
+        build(account, account_info.sequence),
+        |sequence, fee_drops, last_ledger_sequence| {
+            sign(wallet, account, sequence, fee_drops, last_ledger_sequence)
+        },
+        on_ok,
+    )
+    .await;
+}
+
+/// Mainnet guard + wallet, then [`run_submit_with_wallet`]. Callers validate inputs first.
+#[allow(clippy::too_many_arguments)]
+pub(super) async fn run_submit<E, B, S, O>(
+    rpc: &RpcClient,
+    network: &Network,
+    skip_mainnet_prompt: bool,
+    signing_credential: Option<&crate::signing::SigningCredential>,
+    mainnet_err: &str,
+    submit_err: E,
+    action_tx: &UnboundedSender<Action>,
+    build: B,
+    sign: S,
+    on_ok: O,
+) where
+    E: Fn(String) -> Action + Copy,
+    B: FnOnce(&str, u32) -> color_eyre::Result<Value>,
+    S: FnOnce(&xrpl::wallet::Wallet, &str, u32, u32, u32) -> color_eyre::Result<String>,
+    O: FnOnce(String) -> Vec<Action>,
+{
+    let Some(wallet) = resolve_submit_wallet(
+        network,
+        skip_mainnet_prompt,
+        signing_credential,
+        mainnet_err,
+        submit_err,
+        action_tx,
+    ) else {
+        return;
+    };
+    run_submit_with_wallet(
+        rpc, network, &wallet, submit_err, action_tx, build, sign, on_ok,
+    )
+    .await;
+}
+
 pub(super) fn account_set_params_nonempty(p: &AccountSetSubmitParams) -> bool {
     let ds = p.domain_ascii.trim();
     let ts = p.tick_size.trim();
@@ -265,7 +333,6 @@ pub(super) async fn submit_account_set_transaction(
     ) else {
         return;
     };
-    let account = wallet.classic_address.clone();
 
     let tick_size = if params.tick_size.trim().is_empty() {
         None
@@ -307,29 +374,27 @@ pub(super) async fn submit_account_set_transaction(
     let set_flag = signing::parse_account_set_flag_choice(params.set_flag.as_deref());
     let clear_flag = signing::parse_account_set_flag_choice(params.clear_flag.as_deref());
 
-    let Some(account_info) =
-        fetch_account_summary_for_submit(rpc, network, &account, submit_err, action_tx).await
-    else {
-        return;
-    };
-
-    simulate_then_finalize(
+    run_submit_with_wallet(
         rpc,
-        action_tx,
+        network,
+        &wallet,
         submit_err,
-        signing::build_account_set_tx_json_for_simulate(
-            &account,
-            account_info.sequence,
-            set_flag,
-            clear_flag,
-            domain_hex.as_deref(),
-            tick_size,
-            transfer_rate,
-        ),
-        |sequence, fee_drops, last_ledger_sequence| {
+        action_tx,
+        |account, sequence| {
+            signing::build_account_set_tx_json_for_simulate(
+                account,
+                sequence,
+                set_flag,
+                clear_flag,
+                domain_hex.as_deref(),
+                tick_size,
+                transfer_rate,
+            )
+        },
+        |wallet, account, sequence, fee_drops, last_ledger_sequence| {
             signing::create_and_sign_account_set(
-                &wallet,
-                &account,
+                wallet,
+                account,
                 sequence,
                 fee_drops,
                 last_ledger_sequence,
@@ -381,46 +446,29 @@ pub(super) async fn submit_trust_set_transaction(
         return;
     };
 
-    let Some(wallet) = resolve_submit_wallet(
+    run_submit(
+        rpc,
         network,
         params.skip_mainnet_prompt,
         signing_credential,
         "production network: restart lazyxrp with --yes to allow TrustSet writes",
         submit_err,
         action_tx,
-    ) else {
-        return;
-    };
-    let account = wallet.classic_address.clone();
-
-    let Some(account_info) =
-        fetch_account_summary_for_submit(rpc, network, &account, submit_err, action_tx).await
-    else {
-        return;
-    };
-
-    simulate_then_finalize(
-        rpc,
-        action_tx,
-        submit_err,
-        signing::build_trust_set_tx_json_for_simulate(
-            &account,
-            &currency,
-            &issuer,
-            &limit,
-            account_info.sequence,
-        ),
-        |sequence, fee_drops, last_ledger_sequence| {
+        |account, sequence| {
+            signing::build_trust_set_tx_json_for_simulate(
+                account, &currency, &issuer, &limit, sequence,
+            )
+        },
+        |wallet, account, sequence, fee_drops, last_ledger_sequence| {
             signing::create_and_sign_trust_set(
-                &wallet,
-                &account,
+                wallet,
+                account,
                 &currency,
                 &issuer,
                 &limit,
                 sequence,
                 fee_drops,
                 last_ledger_sequence,
-                network,
             )
         },
         |hash| {
@@ -458,44 +506,31 @@ pub(super) async fn submit_offer_create_transaction(
         return;
     };
 
-    let Some(wallet) = resolve_submit_wallet(
+    run_submit(
+        rpc,
         network,
         params.skip_mainnet_prompt,
         signing_credential,
         "production network: restart lazyxrp with --yes to allow OfferCreate writes",
         submit_err,
         action_tx,
-    ) else {
-        return;
-    };
-    let account = wallet.classic_address.clone();
-
-    let Some(account_info) =
-        fetch_account_summary_for_submit(rpc, network, &account, submit_err, action_tx).await
-    else {
-        return;
-    };
-
-    simulate_then_finalize(
-        rpc,
-        action_tx,
-        submit_err,
-        signing::build_offer_create_tx_json_for_simulate(
-            &account,
-            &taker_gets,
-            &taker_pays,
-            account_info.sequence,
-        ),
-        |sequence, fee_drops, last_ledger_sequence| {
+        |account, sequence| {
+            signing::build_offer_create_tx_json_for_simulate(
+                account,
+                &taker_gets,
+                &taker_pays,
+                sequence,
+            )
+        },
+        |wallet, account, sequence, fee_drops, last_ledger_sequence| {
             signing::create_and_sign_offer_create(
-                &wallet,
-                &account,
+                wallet,
+                account,
                 &taker_gets,
                 &taker_pays,
                 sequence,
                 fee_drops,
                 last_ledger_sequence,
-                network,
             )
         },
         |hash| {
@@ -517,37 +552,25 @@ pub(super) async fn submit_offer_cancel_transaction(
     signing_credential: Option<&crate::signing::SigningCredential>,
 ) {
     let submit_err = Action::OfferCancelSubmitErr;
-    let Some(wallet) = resolve_submit_wallet(
+    run_submit(
+        rpc,
         network,
         params.skip_mainnet_prompt,
         signing_credential,
         "production network: restart lazyxrp with --yes to allow OfferCancel writes",
         submit_err,
         action_tx,
-    ) else {
-        return;
-    };
-    let account = wallet.classic_address.clone();
-
-    let Some(account_info) =
-        fetch_account_summary_for_submit(rpc, network, &account, submit_err, action_tx).await
-    else {
-        return;
-    };
-
-    simulate_then_finalize(
-        rpc,
-        action_tx,
-        submit_err,
-        signing::build_offer_cancel_tx_json_for_simulate(
-            &account,
-            params.offer_sequence,
-            account_info.sequence,
-        ),
-        |sequence, fee_drops, last_ledger_sequence| {
+        |account, sequence| {
+            signing::build_offer_cancel_tx_json_for_simulate(
+                account,
+                params.offer_sequence,
+                sequence,
+            )
+        },
+        |wallet, account, sequence, fee_drops, last_ledger_sequence| {
             signing::create_and_sign_offer_cancel(
-                &wallet,
-                &account,
+                wallet,
+                account,
                 params.offer_sequence,
                 sequence,
                 fee_drops,
@@ -573,11 +596,6 @@ fn ripple_now_secs() -> u64 {
     unix.saturating_sub(super::RIPPLE_EPOCH_UNIX as u64)
 }
 
-/// Relative escrow time → absolute Ripple-epoch seconds (u32 field).
-fn ripple_time_after(now: u64, secs: u32) -> Result<u32, String> {
-    u32::try_from(now + u64::from(secs)).map_err(|_| "escrow time out of range".to_string())
-}
-
 pub(super) async fn submit_escrow_create_transaction(
     rpc: &RpcClient,
     network: &Network,
@@ -600,29 +618,14 @@ pub(super) async fn submit_escrow_create_transaction(
     };
     let destination = params.destination.trim().to_string();
 
-    let Some(wallet) = resolve_submit_wallet(
-        network,
-        params.skip_mainnet_prompt,
-        signing_credential,
-        "production network: restart lazyxrp with --yes to allow EscrowCreate writes",
-        submit_err,
-        action_tx,
-    ) else {
-        return;
-    };
-    let account = wallet.classic_address.clone();
-
-    let Some(account_info) =
-        fetch_account_summary_for_submit(rpc, network, &account, submit_err, action_tx).await
-    else {
-        return;
-    };
-
     // Times are fixed once here so simulate and the signed tx carry the same values.
     let now = ripple_now_secs();
-    let times = ripple_time_after(now, finish_secs).and_then(|finish| {
+    let after = |secs: u32| {
+        u32::try_from(now + u64::from(secs)).map_err(|_| "escrow time out of range".to_string())
+    };
+    let times = after(finish_secs).and_then(|finish| {
         cancel_secs
-            .map(|c| ripple_time_after(now, c))
+            .map(after)
             .transpose()
             .map(|cancel| (finish, cancel))
     });
@@ -631,22 +634,28 @@ pub(super) async fn submit_escrow_create_transaction(
         return;
     };
 
-    simulate_then_finalize(
+    run_submit(
         rpc,
-        action_tx,
+        network,
+        params.skip_mainnet_prompt,
+        signing_credential,
+        "production network: restart lazyxrp with --yes to allow EscrowCreate writes",
         submit_err,
-        signing::build_escrow_create_tx_json_for_simulate(
-            &account,
-            &destination,
-            amount_drops,
-            finish_after,
-            cancel_after,
-            account_info.sequence,
-        ),
-        |sequence, fee_drops, last_ledger_sequence| {
+        action_tx,
+        |account, sequence| {
+            signing::build_escrow_create_tx_json_for_simulate(
+                account,
+                &destination,
+                amount_drops,
+                finish_after,
+                cancel_after,
+                sequence,
+            )
+        },
+        |wallet, account, sequence, fee_drops, last_ledger_sequence| {
             signing::create_and_sign_escrow_create(
-                &wallet,
-                &account,
+                wallet,
+                account,
                 &destination,
                 amount_drops,
                 finish_after,
@@ -683,39 +692,27 @@ pub(super) async fn submit_escrow_close_transaction(
     ) else {
         return;
     };
-    let Some(wallet) = resolve_submit_wallet(
+    run_submit(
+        rpc,
         network,
         params.skip_mainnet_prompt,
         signing_credential,
         "production network: restart lazyxrp with --yes to allow EscrowFinish/EscrowCancel writes",
         submit_err,
         action_tx,
-    ) else {
-        return;
-    };
-    let account = wallet.classic_address.clone();
-
-    let Some(account_info) =
-        fetch_account_summary_for_submit(rpc, network, &account, submit_err, action_tx).await
-    else {
-        return;
-    };
-
-    simulate_then_finalize(
-        rpc,
-        action_tx,
-        submit_err,
-        signing::build_escrow_close_tx_json_for_simulate(
-            &account,
-            &owner,
-            params.offer_sequence,
-            params.cancel,
-            account_info.sequence,
-        ),
-        |sequence, fee_drops, last_ledger_sequence| {
+        |account, sequence| {
+            signing::build_escrow_close_tx_json_for_simulate(
+                account,
+                &owner,
+                params.offer_sequence,
+                params.cancel,
+                sequence,
+            )
+        },
+        |wallet, account, sequence, fee_drops, last_ledger_sequence| {
             signing::create_and_sign_escrow_close(
-                &wallet,
-                &account,
+                wallet,
+                account,
                 &owner,
                 params.offer_sequence,
                 params.cancel,
@@ -754,37 +751,21 @@ pub(super) async fn submit_amm_deposit_transaction(
     {
         return;
     }
-    let Some(wallet) = resolve_submit_wallet(
+    run_submit(
+        rpc,
         network,
         params.skip_mainnet_prompt,
         signing_credential,
         "production network: restart lazyxrp with --yes to allow AMMDeposit writes",
         submit_err,
         action_tx,
-    ) else {
-        return;
-    };
-    let account = wallet.classic_address.clone();
-    let Some(account_info) =
-        fetch_account_summary_for_submit(rpc, network, &account, submit_err, action_tx).await
-    else {
-        return;
-    };
-
-    simulate_then_finalize(
-        rpc,
-        action_tx,
-        submit_err,
-        signing::build_amm_deposit_tx_json_for_simulate(
-            &account,
-            amount,
-            amount2,
-            account_info.sequence,
-        ),
-        |sequence, fee_drops, last_ledger_sequence| {
+        |account, sequence| {
+            signing::build_amm_deposit_tx_json_for_simulate(account, amount, amount2, sequence)
+        },
+        |wallet, account, sequence, fee_drops, last_ledger_sequence| {
             signing::create_and_sign_amm_deposit(
-                &wallet,
-                &account,
+                wallet,
+                account,
                 amount,
                 amount2,
                 sequence,
@@ -914,37 +895,26 @@ pub(super) async fn submit_account_delete_transaction(
     ) else {
         return;
     };
-    let Some(wallet) = resolve_submit_wallet(
+    run_submit(
+        rpc,
         network,
         params.skip_mainnet_prompt,
         signing_credential,
         "production network: restart lazyxrp with --yes to allow AccountDelete writes",
         submit_err,
         action_tx,
-    ) else {
-        return;
-    };
-    let account = wallet.classic_address.clone();
-    let Some(account_info) =
-        fetch_account_summary_for_submit(rpc, network, &account, submit_err, action_tx).await
-    else {
-        return;
-    };
-
-    simulate_then_finalize(
-        rpc,
-        action_tx,
-        submit_err,
-        signing::build_account_delete_tx_json_for_simulate(
-            &account,
-            &destination.classic,
-            destination.destination_tag,
-            account_info.sequence,
-        ),
-        |sequence, fee_drops, last_ledger_sequence| {
+        |account, sequence| {
+            signing::build_account_delete_tx_json_for_simulate(
+                account,
+                &destination.classic,
+                destination.destination_tag,
+                sequence,
+            )
+        },
+        |wallet, account, sequence, fee_drops, last_ledger_sequence| {
             signing::create_and_sign_account_delete(
-                &wallet,
-                &account,
+                wallet,
+                account,
                 &destination.classic,
                 destination.destination_tag,
                 sequence,
@@ -996,10 +966,7 @@ pub(super) async fn submit_set_regular_key_transaction(
     ) else {
         return;
     };
-    let account = wallet.classic_address.clone();
-    if let Some(ref key) = regular_key
-        && key == &account
-    {
+    if regular_key.as_deref() == Some(wallet.classic_address.as_str()) {
         send_action(
             action_tx,
             submit_err("regular_key must not match the account master address".into()),
@@ -1007,30 +974,27 @@ pub(super) async fn submit_set_regular_key_transaction(
         return;
     }
 
-    let Some(account_info) =
-        fetch_account_summary_for_submit(rpc, network, &account, submit_err, action_tx).await
-    else {
-        return;
-    };
-
-    simulate_then_finalize(
+    run_submit_with_wallet(
         rpc,
-        action_tx,
+        network,
+        &wallet,
         submit_err,
-        signing::build_set_regular_key_tx_json_for_simulate(
-            &account,
-            regular_key.as_deref(),
-            account_info.sequence,
-        ),
-        |sequence, fee_drops, last_ledger_sequence| {
+        action_tx,
+        |account, sequence| {
+            signing::build_set_regular_key_tx_json_for_simulate(
+                account,
+                regular_key.as_deref(),
+                sequence,
+            )
+        },
+        |wallet, account, sequence, fee_drops, last_ledger_sequence| {
             signing::create_and_sign_set_regular_key(
-                &wallet,
-                &account,
+                wallet,
+                account,
                 regular_key.as_deref(),
                 sequence,
                 fee_drops,
                 last_ledger_sequence,
-                network,
             )
         },
         |hash| {
@@ -1190,7 +1154,6 @@ pub(super) async fn submit_payment_transaction(
                 sequence,
                 fee_drops,
                 last_ledger_sequence,
-                network,
             )
         },
         submit_err,
@@ -1343,7 +1306,6 @@ pub(super) async fn submit_fxrp_direct_mint_payment(
                 sequence,
                 fee_drops,
                 last_ledger_sequence,
-                network,
             )
         },
         submit_err,
@@ -1411,7 +1373,7 @@ pub(super) async fn submit_fxrp_execute_direct_mint(
         send_action(action_tx, submit_err(format!("{e}")));
         return;
     }
-    if mainnet_write_guard_blocks(network, params.skip_mainnet_prompt) {
+    if network.is_production() && !params.skip_mainnet_prompt {
         send_action(
             action_tx,
             submit_err(
@@ -1476,15 +1438,6 @@ mod tests {
             Action::PaymentSubmitErr(message) if message == "submit: tefPAST_SEQ"
         ));
         assert!(matches!(rx.try_recv().unwrap(), Action::RefreshAccount));
-    }
-
-    #[test]
-    fn mainnet_write_guard_blocks_without_yes() {
-        assert!(mainnet_write_guard_blocks(&Network::Mainnet, false));
-        assert!(mainnet_write_guard_blocks(&Network::Xahau, false));
-        assert!(!mainnet_write_guard_blocks(&Network::Mainnet, true));
-        assert!(!mainnet_write_guard_blocks(&Network::Testnet, false));
-        assert!(!mainnet_write_guard_blocks(&Network::XahauTest, false));
     }
 
     /// TC-199: poll write paths against local JSON-RPC — Payment and OfferCancel run

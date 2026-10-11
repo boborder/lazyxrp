@@ -15,7 +15,7 @@ use crate::{
             widgets::{render_empty, render_loading, titled_block_with_count},
         },
     },
-    xrpl::{ArcValue, LedgerObjectRow, is_escrow_type, is_misc_ledger_type, is_pay_channel_type},
+    xrpl::{ArcValue, LedgerObjectRow, is_misc_ledger_type},
 };
 
 #[derive(Clone, Copy, Default)]
@@ -31,8 +31,8 @@ impl LedgerObjectFilter {
     fn keep(&self, r: &LedgerObjectRow) -> bool {
         match self {
             LedgerObjectFilter::MiscObjects => is_misc_ledger_type(&r.ledger_type),
-            LedgerObjectFilter::PayChannelOnly => is_pay_channel_type(&r.ledger_type),
-            LedgerObjectFilter::EscrowOnly => is_escrow_type(&r.ledger_type),
+            LedgerObjectFilter::PayChannelOnly => r.ledger_type == "PayChannel",
+            LedgerObjectFilter::EscrowOnly => r.ledger_type == "Escrow",
         }
     }
 }
