@@ -11,7 +11,7 @@ use crate::{
         Component,
         shared::{
             theme,
-            widgets::{render_error, render_loading, titled_block},
+            widgets::{render_error, render_loading},
         },
     },
     xrpl::AmmSummary,
@@ -66,12 +66,12 @@ impl Component for AmmPanel {
                     "no AMM pool for this pair",
                     theme::dim_style(),
                 ))
-                .block(titled_block("AMM Pool", self.is_focused)),
+                .block(theme::panel_block("AMM Pool", self.is_focused)),
                 area,
             );
             return Ok(());
         };
-        let block = titled_block("AMM Pool", self.is_focused);
+        let block = theme::panel_block("AMM Pool", self.is_focused);
         let label_style = theme::dim_style();
         let value_style = theme::accent_style();
         let lines = vec![

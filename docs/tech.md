@@ -16,7 +16,6 @@
 
 - `ratatui`（`Cargo.toml` `0.30`、`Cargo.lock` `0.30.2`; `serde`, `macros`）
 - `crossterm`（`Cargo.toml` `0.29`、`Cargo.lock` `0.29.0`; `serde`, `event-stream`）
-- `strum`（`Cargo.toml` `0.28`、`Cargo.lock` `0.28.0`; `derive` — `Action` 表示など）
 - `clap`（`Cargo.toml` `4`、`Cargo.lock` `4.6.6`; `derive`, `cargo`, `wrap_help`, `unicode`, `string`）
 - `ratatui-image`（`Cargo.toml` `11`、`default-features = false`; `crossterm`。`image-defaults` は `image/default`（AVIF エンコーダ `ravif`・rayon・bmp/tiff 等）を引き込みビルドが遅くなるため使わない）— Kitty / Sixel / iTerm2 / halfblocks image preview。
 - `image`（`Cargo.toml` `0.25`、`default-features = false`; PNG/JPEG/GIF/WebP のみ）— NFT image decode。
@@ -26,10 +25,10 @@
 - `xrpl-rust`（`Cargo.toml` `1.1`、`Cargo.lock` `1.3.0`）
 - `kobe-xrpl = 3.4` / `kobe-primitives = 3.4` — BIP39 secp256k1 mnemonic → BIP44 `m/44'/144'/0'/0/0` account derivation。
 - `tokio-tungstenite = (xrpl-rust 経由)`
-- `url = 2`
+- URL 解析は `reqwest::Url`（`url` crate の再 export。直接依存は持たない）
 - `base64 = 0.23` — XRPLF dUNL blob / validator manifest decode（`base64::engine::general_purpose::STANDARD`）
 - `hex = 0.4` — seed / domain / validator key の hex encode/decode
-- `time = 0.3`（`default-features = false, features = ["alloc"]`）— Ripple epoch → `format_ripple_time_utc` の暦変換
+- Ripple epoch → `format_ripple_time_utc` の暦変換は `xrpl/format.rs` の `civil_from_days`（依存なし。旧 `time` crate は削除）
 - Payment 署名はクレート公開 API の `wallet::Wallet` + `transaction::sign`（`models::transactions::payment::Payment`）を利用し、送信時は `binarycodec::encode` した `tx_blob` に変換する。既存の XRPL family seed と BIP39 mnemonic（secp256k1 only）は `SigningCredential` に統合する。
 ### Flare / EVM
 

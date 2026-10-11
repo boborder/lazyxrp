@@ -1,21 +1,15 @@
 use serde::{Deserialize, Serialize};
-use strum::EnumString;
 
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, EnumString, clap::ValueEnum,
-)]
-#[strum(serialize_all = "lowercase", ascii_case_insensitive)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, clap::ValueEnum)]
 #[serde(rename_all = "lowercase")]
 pub enum Network {
     #[default]
     Mainnet,
     Testnet,
     Devnet,
-    #[strum(serialize = "xahau", ascii_case_insensitive)]
     #[serde(rename = "xahau")]
     #[value(name = "xahau")]
     Xahau,
-    #[strum(serialize = "xahau-test", ascii_case_insensitive)]
     #[serde(rename = "xahau-test")]
     #[value(name = "xahau-test")]
     XahauTest,
@@ -102,7 +96,7 @@ mod tests {
         assert_eq!(Network::default(), Network::Mainnet);
     }
 
-    /// FromStr parses every variant, case-insensitively; unknown names error.
+    /// Case-insensitive parse (env `XRPL_NETWORK`); unknown names error.
     #[test]
     fn from_str_contract() {
         for (s, net) in [
@@ -116,9 +110,13 @@ mod tests {
             ("XAHAU", Network::Xahau),
             ("Xahau-Test", Network::XahauTest),
         ] {
-            assert_eq!(s.parse::<Network>().unwrap(), net, "input {s:?}");
+            assert_eq!(
+                <Network as clap::ValueEnum>::from_str(s, true).unwrap(),
+                net,
+                "input {s:?}"
+            );
         }
-        assert!("foonet".parse::<Network>().is_err());
+        assert!(<Network as clap::ValueEnum>::from_str("foonet", true).is_err());
     }
 
     #[test]

@@ -23,8 +23,7 @@ pub struct PathConfig {
 }
 
 /// Flare chain selection. Default: Flare mainnet.
-#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq, strum::EnumString)]
-#[strum(serialize_all = "lowercase", ascii_case_insensitive)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum FlareNetwork {
     #[default]
@@ -45,8 +44,7 @@ impl FlareNetwork {
 }
 
 /// `[flare] display` — panel density on Overview / Market tabs.
-#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq, strum::EnumString)]
-#[strum(serialize_all = "lowercase", ascii_case_insensitive)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum FlareDisplay {
     #[default]
@@ -411,7 +409,7 @@ impl Config {
         config.flare_evm_key = take_secret_env(&config.flare.fassets.evm_key_env, str::trim);
 
         if let Ok(v) = env::var(XRPL_NETWORK_ENV)
-            && let Ok(n) = v.parse::<Network>()
+            && let Ok(n) = <Network as clap::ValueEnum>::from_str(&v, true)
         {
             config.xrpl.network = n;
         }
@@ -800,18 +798,10 @@ mod tests {
     /// TC-113: FlareNetwork parses case-insensitively, defaults to Flare
     #[test]
     fn flare_network_parse() {
-        assert_eq!(
-            "flare".parse::<FlareNetwork>().unwrap(),
-            FlareNetwork::Flare
-        );
-        assert_eq!(
-            "COSTON2".parse::<FlareNetwork>().unwrap(),
-            FlareNetwork::Coston2
-        );
-        assert_eq!(
-            "Songbird".parse::<FlareNetwork>().unwrap(),
-            FlareNetwork::Songbird
-        );
+        let parse = |s: &str| serde_json::from_str::<FlareNetwork>(&format!("\"{s}\"")).unwrap();
+        assert_eq!(parse("flare"), FlareNetwork::Flare);
+        assert_eq!(parse("coston2"), FlareNetwork::Coston2);
+        assert_eq!(parse("songbird"), FlareNetwork::Songbird);
         assert_eq!(FlareNetwork::default(), FlareNetwork::Flare);
         assert_eq!(
             FlareNetwork::Coston2.rpc_url(),
@@ -822,11 +812,9 @@ mod tests {
     /// TC-114: FlareDisplay parses and defaults to full
     #[test]
     fn flare_display_parse() {
-        assert_eq!("off".parse::<FlareDisplay>().unwrap(), FlareDisplay::Off);
-        assert_eq!(
-            "Compact".parse::<FlareDisplay>().unwrap(),
-            FlareDisplay::Compact
-        );
+        let parse = |s: &str| serde_json::from_str::<FlareDisplay>(&format!("\"{s}\"")).unwrap();
+        assert_eq!(parse("off"), FlareDisplay::Off);
+        assert_eq!(parse("compact"), FlareDisplay::Compact);
         assert_eq!(FlareDisplay::default(), FlareDisplay::Full);
     }
 

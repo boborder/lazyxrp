@@ -11,10 +11,7 @@ use crate::{
     action::Action,
     components::{
         Component,
-        shared::{
-            fmt, theme,
-            widgets::{render_loading, titled_block},
-        },
+        shared::{fmt, theme, widgets::render_loading},
     },
     config::Config,
     xrpl::AccountSummary,
@@ -82,7 +79,7 @@ impl Component for AccountPanel {
             return Ok(());
         };
 
-        let block = titled_block("Account", self.is_focused);
+        let block = theme::panel_block("Account", self.is_focused);
         let inner = block.inner(area);
         frame.render_widget(block, area);
 

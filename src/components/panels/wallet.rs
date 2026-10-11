@@ -14,7 +14,7 @@ use crate::{
         Component,
         shared::{
             fmt, theme,
-            widgets::{render_empty, render_error, render_loading, titled_block},
+            widgets::{render_empty, render_error, render_loading},
         },
     },
     config::Config,
@@ -220,6 +220,25 @@ fn submit_shortcut(key: &KeyEvent, is_form_editing: bool) -> bool {
         && (key.modifiers.contains(KeyModifiers::CONTROL) || !is_form_editing)
 }
 
+fn submit_err(action: &Action) -> Option<(&'static str, &String)> {
+    Some(match action {
+        Action::AccountSetSubmitErr(m) => ("AccountSet", m),
+        Action::PaymentSubmitErr(m) => ("Payment", m),
+        Action::SetRegularKeySubmitErr(m) => ("SetRegularKey", m),
+        Action::AccountDeleteSubmitErr(m) => ("AccountDelete", m),
+        Action::OfferCreateSubmitErr(m) => ("OfferCreate", m),
+        Action::OfferCancelSubmitErr(m) => ("OfferCancel", m),
+        Action::EscrowCreateSubmitErr(m) => ("EscrowCreate", m),
+        Action::EscrowCloseSubmitErr(m) => ("Escrow", m),
+        Action::AmmSubmitErr(m) => ("AMM", m),
+        Action::TrustSetSubmitErr(m) => ("TrustSet", m),
+        Action::FxrpDirectMintPaymentSubmitErr(m) => ("FXRP Mint", m),
+        Action::FxrpExecuteDirectMintSubmitErr(m) => ("FXRP Execute", m),
+        Action::GenerateWalletKeysErr(m) => ("Keygen", m),
+        _ => return None,
+    })
+}
+
 impl Component for WalletPanel {
     fn register_config_handler(&mut self, config: Arc<Config>) -> color_eyre::Result<()> {
         self.seed_address = match crate::signing::credential_from_secrets(
@@ -239,6 +258,10 @@ impl Component for WalletPanel {
         if is_write_result(action) {
             self.pending_submit = None;
         }
+        if let Some((label, msg)) = submit_err(action) {
+            self.set_submit_flash(SubmitFlash::Error(format!("{label} · {msg}")));
+            return Ok(None);
+        }
         match action {
             Action::Tick => self.tick = self.tick.wrapping_add(1),
             Action::XrplWalletOverview(acc) => {
@@ -251,17 +274,11 @@ impl Component for WalletPanel {
                     matches!(&self.composer, Some(ComposerPhase::AccountSet)),
                 );
             }
-            Action::AccountSetSubmitErr(msg) => {
-                self.set_submit_flash(SubmitFlash::Error(format!("AccountSet · {msg}")));
-            }
             Action::PaymentSubmitOk(hash) => {
                 return self.submit_ok(
                     format!("Payment sent · {hash} (see Recent Transactions below)"),
                     matches!(&self.composer, Some(ComposerPhase::Payment { .. })),
                 );
-            }
-            Action::PaymentSubmitErr(msg) => {
-                self.set_submit_flash(SubmitFlash::Error(format!("Payment · {msg}")));
             }
             Action::PaymentQuoteOk(spec) => {
                 if let Some(ComposerPhase::Payment { send_max, .. }) = &mut self.composer {
@@ -280,26 +297,17 @@ impl Component for WalletPanel {
                     matches!(&self.composer, Some(ComposerPhase::SetRegularKey { .. })),
                 );
             }
-            Action::SetRegularKeySubmitErr(msg) => {
-                self.set_submit_flash(SubmitFlash::Error(format!("SetRegularKey · {msg}")));
-            }
             Action::AccountDeleteSubmitOk(hash) => {
                 return self.submit_ok(
                     format!("AccountDelete submitted · {hash}"),
                     matches!(&self.composer, Some(ComposerPhase::AccountDelete { .. })),
                 );
             }
-            Action::AccountDeleteSubmitErr(msg) => {
-                self.set_submit_flash(SubmitFlash::Error(format!("AccountDelete · {msg}")));
-            }
             Action::OfferCreateSubmitOk(hash) => {
                 return self.submit_ok(
                     format!("OfferCreate submitted · {hash}"),
                     matches!(&self.composer, Some(ComposerPhase::OfferCreate { .. })),
                 );
-            }
-            Action::OfferCreateSubmitErr(msg) => {
-                self.set_submit_flash(SubmitFlash::Error(format!("OfferCreate · {msg}")));
             }
             Action::XrplAccountOffers(rows) => {
                 if let Some(ComposerPhase::OfferCancel { offers, selected }) = &mut self.composer {
@@ -318,9 +326,6 @@ impl Component for WalletPanel {
                     matches!(&self.composer, Some(ComposerPhase::OfferCancel { .. })),
                 );
             }
-            Action::OfferCancelSubmitErr(msg) => {
-                self.set_submit_flash(SubmitFlash::Error(format!("OfferCancel · {msg}")));
-            }
             Action::XrplAccountEscrows(rows) => {
                 if let Some(ComposerPhase::Escrows { escrows, selected }) = &mut self.composer {
                     *selected = (*selected).min(rows.len().saturating_sub(1));
@@ -338,17 +343,11 @@ impl Component for WalletPanel {
                     matches!(&self.composer, Some(ComposerPhase::EscrowCreate { .. })),
                 );
             }
-            Action::EscrowCreateSubmitErr(msg) => {
-                self.set_submit_flash(SubmitFlash::Error(format!("EscrowCreate · {msg}")));
-            }
             Action::EscrowCloseSubmitOk(hash) => {
                 return self.submit_ok(
                     format!("Escrow closed · {hash}"),
                     matches!(&self.composer, Some(ComposerPhase::Escrows { .. })),
                 );
-            }
-            Action::EscrowCloseSubmitErr(msg) => {
-                self.set_submit_flash(SubmitFlash::Error(format!("Escrow · {msg}")));
             }
             Action::AmmSubmitOk(msg) => {
                 return self.submit_ok(
@@ -359,17 +358,11 @@ impl Component for WalletPanel {
                     ),
                 );
             }
-            Action::AmmSubmitErr(msg) => {
-                self.set_submit_flash(SubmitFlash::Error(format!("AMM · {msg}")));
-            }
             Action::TrustSetSubmitOk(hash) => {
                 return self.submit_ok(
                     format!("TrustSet submitted · {hash}"),
                     matches!(&self.composer, Some(ComposerPhase::TrustSet { .. })),
                 );
-            }
-            Action::TrustSetSubmitErr(msg) => {
-                self.set_submit_flash(SubmitFlash::Error(format!("TrustSet · {msg}")));
             }
             Action::FxrpDirectMintInfo(info) => {
                 self.fxrp_direct_mint = Some((**info).clone());
@@ -382,9 +375,6 @@ impl Component for WalletPanel {
                     matches!(&self.composer, Some(ComposerPhase::FxrpDirectMint { .. })),
                 );
             }
-            Action::FxrpDirectMintPaymentSubmitErr(msg) => {
-                self.set_submit_flash(SubmitFlash::Error(format!("FXRP Mint · {msg}")));
-            }
             Action::FxrpExecuteDirectMintSubmitOk(hash) => {
                 return self.submit_ok(
                     format!("FXRP executeDirectMinting · {hash}"),
@@ -394,14 +384,8 @@ impl Component for WalletPanel {
                     ),
                 );
             }
-            Action::FxrpExecuteDirectMintSubmitErr(msg) => {
-                self.set_submit_flash(SubmitFlash::Error(format!("FXRP Execute · {msg}")));
-            }
             Action::GenerateWalletKeysOk(result) => {
                 self.keygen_result = Some(result.clone());
-            }
-            Action::GenerateWalletKeysErr(msg) => {
-                self.set_submit_flash(SubmitFlash::Error(format!("Keygen · {msg}")));
             }
             Action::NetworkChange(net) => {
                 self.network = *net;
@@ -458,7 +442,7 @@ impl Component for WalletPanel {
             return Ok(());
         };
 
-        let block = titled_block("Wallet", self.is_focused);
+        let block = theme::panel_block("Wallet", self.is_focused);
         let inner = block.inner(area);
         frame.render_widget(block, area);
 
@@ -486,7 +470,7 @@ impl Component for WalletPanel {
         let mut summary = vec![
             Line::from(vec![
                 Span::styled("Account ", label_style),
-                Span::styled(Self::shorten_display(&account.account, 42), value_style),
+                Span::styled(fmt::truncate_middle(&account.account, 42), value_style),
             ]),
             Line::from(vec![
                 Span::styled("Balance ", label_style),
@@ -522,7 +506,7 @@ impl Component for WalletPanel {
         if let Some(ref rk) = account.regular_key {
             summary.push(Line::from(vec![
                 Span::styled("RegKey ", label_style),
-                Span::styled(Self::shorten_display(rk, 36), theme::warning_style()),
+                Span::styled(fmt::truncate_middle(rk, 36), theme::warning_style()),
             ]));
         }
         if let Some(ref dh) = account.domain_hex {

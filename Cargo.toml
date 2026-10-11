@@ -58,8 +58,6 @@ libc = "0.2"
 ratatui = { version = "0.30", features = ["serde", "macros"] }
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = "1"
-time = { version = "0.3", default-features = false, features = ["alloc"] }
-strum = { version = "0.28", features = ["derive"] }
 tokio = { version = "1", features = [
     "macros",
     "rt-multi-thread",
@@ -77,7 +75,6 @@ secrecy = { version = "0.10", features = ["serde"] }
 kobe-xrpl = "3.4"
 kobe-primitives = { version = "3.4", default-features = false, features = ["bip32", "encoding"] }
 xrpl-rust = "1.1"
-url = "2"
 # native-tls (not default rustls/aws-lc-rs): aws-lc-sys alone is ~7 min of a clean build.
 reqwest = { version = "0.13", default-features = false, features = ["json", "stream", "native-tls", "charset", "http2", "system-proxy"] }
 alloy = { version = "2", default-features = false, features = ["std", "reqwest", "reqwest-native-tls", "essentials"] }

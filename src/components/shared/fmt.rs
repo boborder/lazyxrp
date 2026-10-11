@@ -60,11 +60,6 @@ pub fn fmt_xrp(xrp: f64) -> String {
     };
     group_digits(final_str)
 }
-/// Format an integer drops value as a thousands-separated drops string.
-pub fn fmt_drops(drops: u64) -> String {
-    group_digits_u64(drops)
-}
-
 /// Truncate long text with an ellipsis in the middle.
 pub fn truncate_middle(s: &str, max_chars: usize) -> String {
     let char_count = s.chars().count();
@@ -160,13 +155,6 @@ mod tests {
         assert_eq!(fmt_xrp(1.5), "1.5");
         assert_eq!(fmt_xrp(55660.60415), "55,660.60415");
         assert_eq!(fmt_xrp(1_000_000.123456), "1,000,000.123456");
-    }
-
-    #[test]
-    fn fmt_drops_groups_thousands() {
-        assert_eq!(fmt_drops(0), "0");
-        assert_eq!(fmt_drops(12), "12");
-        assert_eq!(fmt_drops(1_234_567), "1,234,567");
     }
 
     #[test]

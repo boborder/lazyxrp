@@ -1,7 +1,7 @@
 use ratatui::{
     Frame,
     layout::{Constraint, Rect},
-    text::{Line, Span},
+    text::{Line, Span, Text},
     widgets::{Block, Cell, Paragraph, Row, Table},
 };
 
@@ -56,10 +56,6 @@ pub fn tx_table<'a>(txs: impl IntoIterator<Item = &'a TxRow>) -> Table<'static> 
     .column_spacing(1)
 }
 
-pub fn titled_block(title: &str, is_focused: bool) -> Block<'static> {
-    theme::panel_block(title, is_focused)
-}
-
 pub fn titled_block_with_count(
     title: &str,
     selected: Option<usize>,
@@ -82,6 +78,19 @@ pub fn spinner(tick: usize) -> &'static str {
     SPINNER_FRAMES[tick % SPINNER_FRAMES.len()]
 }
 
+fn render_state<'a>(
+    frame: &mut Frame,
+    area: Rect,
+    title: &str,
+    text: impl Into<Text<'a>>,
+    is_focused: bool,
+) {
+    frame.render_widget(
+        Paragraph::new(text).block(theme::panel_block(title, is_focused)),
+        area,
+    );
+}
+
 pub fn render_loading(
     frame: &mut Frame,
     area: Rect,
@@ -95,17 +104,16 @@ pub fn render_loading(
         Span::raw(" "),
         Span::styled(msg, theme::dim_style()),
     ]);
-    frame.render_widget(
-        Paragraph::new(line).block(titled_block(title, is_focused)),
-        area,
-    );
+    render_state(frame, area, title, line, is_focused);
 }
 
 pub fn render_empty(frame: &mut Frame, area: Rect, title: &str, msg: &str, is_focused: bool) {
-    frame.render_widget(
-        Paragraph::new(Span::styled(msg, theme::dim_style()))
-            .block(titled_block(title, is_focused)),
+    render_state(
+        frame,
         area,
+        title,
+        Span::styled(msg, theme::dim_style()),
+        is_focused,
     );
 }
 
@@ -114,10 +122,7 @@ pub fn render_error(frame: &mut Frame, area: Rect, title: &str, msg: &str, is_fo
         Span::styled("error: ", theme::error_style()),
         Span::raw(msg),
     ]);
-    frame.render_widget(
-        Paragraph::new(line).block(titled_block(title, is_focused)),
-        area,
-    );
+    render_state(frame, area, title, line, is_focused);
 }
 
 /// Centered popup rect (~80% of `area`) that never panics when `area` is smaller than `min_w`/`min_h`.

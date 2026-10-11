@@ -625,15 +625,15 @@ impl WalletPanel {
         let spend = if send_max.trim().is_empty() {
             String::new()
         } else {
-            format!(" · spend ≤ {}", Self::shorten_display(send_max.trim(), 24))
+            format!(" · spend ≤ {}", fmt::truncate_middle(send_max.trim(), 24))
         };
         if is_iou {
             return (
                 format!(
                     "▸ Pay {} {currency_trimmed} (issued by {}) → {}{spend}",
                     amount_trimmed,
-                    Self::shorten_display(issuer_trimmed, 20),
-                    Self::shorten_display(destination_trimmed, 20)
+                    fmt::truncate_middle(issuer_trimmed, 20),
+                    fmt::truncate_middle(destination_trimmed, 20)
                 ),
                 theme::success_style(),
             );
@@ -642,7 +642,7 @@ impl WalletPanel {
             format!(
                 "▸ Send {} XRP → {}{spend}",
                 amount_trimmed,
-                Self::shorten_display(destination_trimmed, 30)
+                fmt::truncate_middle(destination_trimmed, 30)
             ),
             theme::success_style(),
         )
@@ -678,10 +678,6 @@ impl WalletPanel {
             labels.push("PasswordSpent");
         }
         labels
-    }
-
-    pub(super) fn shorten_display(text: &str, max: usize) -> String {
-        fmt::truncate_middle(text, max)
     }
 
     pub(super) fn render_composer(&self, frame: &mut Frame, area: Rect) {
@@ -1289,8 +1285,8 @@ impl WalletPanel {
                                     "{}#{}  {} → {}",
                                     if on { "⟩ " } else { "  " },
                                     r.seq,
-                                    Self::shorten_display(&r.taker_gets, 24),
-                                    Self::shorten_display(&r.taker_pays, 24),
+                                    fmt::truncate_middle(&r.taker_gets, 24),
+                                    fmt::truncate_middle(&r.taker_pays, 24),
                                 ),
                                 if on { highlight_style } else { label_style },
                             )));
@@ -1396,7 +1392,7 @@ impl WalletPanel {
                                     "{}#{seq}  {} → {}{}",
                                     if on { "⟩ " } else { "  " },
                                     r.amount,
-                                    Self::shorten_display(&r.destination, 20),
+                                    fmt::truncate_middle(&r.destination, 20),
                                     if r.has_condition { "  [condition]" } else { "" },
                                 ),
                                 style,

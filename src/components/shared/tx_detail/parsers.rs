@@ -16,6 +16,14 @@ fn detail_line(label: impl Into<Cow<'static, str>>, value: String) -> Line<'stat
     ])
 }
 
+fn ripple_time_line(label: &'static str, secs: u64) -> Line<'static> {
+    let unix = secs as i64 + super::RIPPLE_EPOCH;
+    detail_line(
+        label,
+        crate::components::shared::fmt::fmt_local_datetime(unix),
+    )
+}
+
 /// Shared preamble for typed parsers: type guard, common lines, then extras.
 fn typed_detail<'a>(
     tx: &'a Value,
@@ -99,9 +107,7 @@ pub(crate) fn offer_create_detail_lines<'a>(_tx: &'a Value) -> Option<Vec<Line<'
         }
 
         if let Some(exp) = _tx.get("Expiration").and_then(Value::as_u64) {
-            let unix = exp as i64 + super::RIPPLE_EPOCH;
-            let ts = crate::components::shared::fmt::fmt_local_datetime(unix);
-            lines.push(detail_line("Expiration", ts));
+            lines.push(ripple_time_line("Expiration", exp));
         }
         if let Some(seq) = _tx.get("OfferSequence").and_then(Value::as_u64) {
             lines.push(detail_line("OfferSequence", seq.to_string()));
@@ -154,9 +160,7 @@ pub(crate) fn check_create_detail_lines<'a>(_tx: &'a Value) -> Option<Vec<Line<'
             lines.push(detail_line("DestinationTag", tag.to_string()));
         }
         if let Some(exp) = _tx.get("Expiration").and_then(Value::as_u64) {
-            let unix = exp as i64 + super::RIPPLE_EPOCH;
-            let ts = crate::components::shared::fmt::fmt_local_datetime(unix);
-            lines.push(detail_line("Expiration", ts));
+            lines.push(ripple_time_line("Expiration", exp));
         }
     })
 }
@@ -203,14 +207,10 @@ pub(crate) fn escrow_create_detail_lines<'a>(_tx: &'a Value) -> Option<Vec<Line<
             lines.push(detail_line("DestinationTag", tag.to_string()));
         }
         if let Some(finish) = _tx.get("FinishAfter").and_then(Value::as_u64) {
-            let unix = finish as i64 + super::RIPPLE_EPOCH;
-            let ts = crate::components::shared::fmt::fmt_local_datetime(unix);
-            lines.push(detail_line("FinishAfter", ts));
+            lines.push(ripple_time_line("FinishAfter", finish));
         }
         if let Some(cancel) = _tx.get("CancelAfter").and_then(Value::as_u64) {
-            let unix = cancel as i64 + super::RIPPLE_EPOCH;
-            let ts = crate::components::shared::fmt::fmt_local_datetime(unix);
-            lines.push(detail_line("CancelAfter", ts));
+            lines.push(ripple_time_line("CancelAfter", cancel));
         }
         if let Some(cond) = _tx.get("Condition").and_then(Value::as_str) {
             lines.push(detail_line("Condition", cond.to_string()));
@@ -269,9 +269,7 @@ pub(crate) fn payment_channel_create_detail_lines<'a>(_tx: &'a Value) -> Option<
             lines.push(detail_line("DestinationTag", tag.to_string()));
         }
         if let Some(cancel) = _tx.get("CancelAfter").and_then(Value::as_u64) {
-            let unix = cancel as i64 + super::RIPPLE_EPOCH;
-            let ts = crate::components::shared::fmt::fmt_local_datetime(unix);
-            lines.push(detail_line("CancelAfter", ts));
+            lines.push(ripple_time_line("CancelAfter", cancel));
         }
     })
 }
@@ -287,9 +285,7 @@ pub(crate) fn payment_channel_fund_detail_lines<'a>(_tx: &'a Value) -> Option<Ve
         }
 
         if let Some(exp) = _tx.get("Expiration").and_then(Value::as_u64) {
-            let unix = exp as i64 + super::RIPPLE_EPOCH;
-            let ts = crate::components::shared::fmt::fmt_local_datetime(unix);
-            lines.push(detail_line("Expiration", ts));
+            lines.push(ripple_time_line("Expiration", exp));
         }
     })
 }
@@ -395,9 +391,7 @@ pub(crate) fn nftoken_create_offer_detail_lines<'a>(_tx: &'a Value) -> Option<Ve
             lines.push(detail_line("Owner", owner.to_string()));
         }
         if let Some(exp) = _tx.get("Expiration").and_then(Value::as_u64) {
-            let unix = exp as i64 + super::RIPPLE_EPOCH;
-            let ts = crate::components::shared::fmt::fmt_local_datetime(unix);
-            lines.push(detail_line("Expiration", ts));
+            lines.push(ripple_time_line("Expiration", exp));
         }
         if let Some(dest) = _tx.get("Destination").and_then(Value::as_str) {
             lines.push(detail_line("Destination", dest.to_string()));

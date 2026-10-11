@@ -1,7 +1,5 @@
 //! Pure formatting helpers for XRPL amounts, paths, and time.
 
-use time::OffsetDateTime;
-
 use serde_json::Value;
 
 use super::types::{
@@ -11,18 +9,30 @@ use super::types::{
 
 /// Ripple epoch seconds (2000-01-01 UTC) → `YYYY-MM-DD HH:MM UTC`.
 pub fn format_ripple_time_utc(seconds: u64) -> String {
+    // Clamp the rare absurd-seconds case to 9999-12-31T23:59:59Z.
     let unix = RIPPLE_EPOCH_UNIX
-        .saturating_add(seconds.min(i64::MAX as u64 - RIPPLE_EPOCH_UNIX as u64) as i64);
-    // `time` (without `large-dates`) represents years -9999..=9999; clamp the
-    // rare absurd-seconds case to 9999-12-31T23:59:59Z so conversion is total.
-    let dt = OffsetDateTime::from_unix_timestamp(unix.min(253_402_300_799))
-        .expect("clamped timestamp is representable");
-    let (y, m, d) = (dt.year(), u8::from(dt.month()), dt.day());
+        .saturating_add(seconds.min(i64::MAX as u64 - RIPPLE_EPOCH_UNIX as u64) as i64)
+        .min(253_402_300_799);
+    let (y, m, d) = civil_from_days(unix.div_euclid(86_400));
+    let sod = unix.rem_euclid(86_400);
     format!(
         "{y:04}-{m:02}-{d:02} {hh:02}:{mm:02} UTC",
-        hh = dt.hour(),
-        mm = dt.minute()
+        hh = sod / 3600,
+        mm = sod % 3600 / 60
     )
+}
+
+/// Days since 1970-01-01 → proleptic Gregorian (year, month, day) (Hinnant's algorithm).
+fn civil_from_days(days: i64) -> (i64, i64, i64) {
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    (yoe + era * 400 + i64::from(m <= 2), m, d)
 }
 
 pub fn xrp_to_drops(xrp: &str) -> color_eyre::Result<u64> {
@@ -386,7 +396,18 @@ mod tests {
         // Ripple epoch 946684800 + 838204893 = unix 1784889693 → 2026-07-24 10:41 UTC
         assert_eq!(format_ripple_time_utc(838_204_893), "2026-07-24 10:41 UTC");
         assert_eq!(format_ripple_time_utc(0), "2000-01-01 00:00 UTC");
+        assert_eq!(format_ripple_time_utc(59 * 86_400), "2000-02-29 00:00 UTC");
         assert_eq!(format_ripple_time_utc(u64::MAX), "9999-12-31 23:59 UTC");
+    }
+
+    #[test]
+    fn civil_from_days_boundaries() {
+        assert_eq!(civil_from_days(0), (1970, 1, 1));
+        // Unix day 10_957 = 946_684_800 / 86_400 = the Ripple epoch.
+        assert_eq!(civil_from_days(10_956), (1999, 12, 31));
+        assert_eq!(civil_from_days(10_957), (2000, 1, 1));
+        assert_eq!(civil_from_days(19_782), (2024, 2, 29));
+        assert_eq!(civil_from_days(19_783), (2024, 3, 1));
     }
 
     /// TC-141: xrp_to_drops — parses whole/fractional XRP into drops,

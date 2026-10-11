@@ -1,6 +1,5 @@
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use strum::Display;
 
 use crate::{
     network::Network,
@@ -16,7 +15,7 @@ use crate::{
     },
 };
 
-#[derive(Debug, Clone, PartialEq, Eq, Display, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Action {
     Tick,
     Resize(u16, u16),

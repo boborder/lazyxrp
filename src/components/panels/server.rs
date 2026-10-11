@@ -11,12 +11,7 @@ use crate::{
     action::Action,
     components::{
         Component,
-        shared::{
-            fmt,
-            selectable_table::SelectableTableState,
-            theme,
-            widgets::{render_loading, titled_block},
-        },
+        shared::{fmt, selectable_table::SelectableTableState, theme, widgets::render_loading},
     },
     xrpl::{DunlSummary, ServerInfoSummary},
 };
@@ -236,7 +231,7 @@ impl Component for ServerPanel {
             );
             return Ok(());
         }
-        let block = titled_block("Server", self.is_focused);
+        let block = theme::panel_block("Server", self.is_focused);
         let inner = block.inner(area);
         frame.render_widget(block, area);
 
@@ -270,7 +265,7 @@ impl Component for ServerPanel {
             .unwrap_or_else(|| "-".to_string());
         let fee = self
             .base_fee
-            .map(|v| fmt::fmt_drops(v as u64))
+            .map(|v| fmt::group_digits_u64(v as u64))
             .unwrap_or_else(|| "-".to_string());
         let reserve = self
             .reserve_base

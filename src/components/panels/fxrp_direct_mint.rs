@@ -9,10 +9,7 @@ use crate::{
     action::Action,
     components::{
         Component,
-        shared::{
-            fmt, theme,
-            widgets::{render_loading, titled_block},
-        },
+        shared::{fmt, theme, widgets::render_loading},
     },
     flare::{bips_to_percent_display, uba_to_xrp_display},
     xrpl::FxrpDirectMintInfo,
@@ -112,7 +109,7 @@ impl Component for FxrpDirectMintPanel {
     }
 
     fn draw(&mut self, frame: &mut Frame, area: Rect) -> color_eyre::Result<()> {
-        let block = titled_block("FXRP Direct Mint", self.is_focused);
+        let block = theme::panel_block("FXRP Direct Mint", self.is_focused);
         let inner = block.inner(area);
         frame.render_widget(block, area);
         self.render_content(frame, inner);

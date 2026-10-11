@@ -2,9 +2,9 @@ use std::future::Future;
 use std::net::{IpAddr, SocketAddr};
 
 use futures::StreamExt;
+use reqwest::Url;
 use serde_json::Value;
 use std::pin::Pin;
-use url::Url;
 
 const MAX_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
 const MAX_METADATA_DEPTH: usize = 32;

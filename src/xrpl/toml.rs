@@ -1,7 +1,7 @@
 use std::time::Duration;
 
+use reqwest::Url;
 use tracing::debug;
-use url::Url;
 
 use super::nft_image::{client_for_url, fetch_via};
 use super::types::XrplTomlData;

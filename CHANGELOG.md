@@ -10,7 +10,7 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ### Changed
 
-- Internal cleanup (no CLI/TUI behavior change): shared submit helpers for TUI and `-x` writes, dead actions/events removed, dependencies `config`, `signal-hook`, `tracing-error` and build-dep `anyhow` dropped. User `config.toml` is now read with `toml` directly: keys are matched as written (the old loader lowercased keys and coerced quoted numbers).
+- Internal cleanup (no CLI/TUI behavior change): shared submit helpers for TUI and `-x` writes, dead actions/events and pass-through wrappers removed, dependencies `config`, `signal-hook`, `tracing-error`, `strum`, `url`, `time` and build-dep `anyhow` dropped. User `config.toml` is now read with `toml` directly: keys are matched as written (the old loader lowercased keys and coerced quoted numbers).
 
 ## [0.6.0] - 2026-10-11
 
