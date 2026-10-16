@@ -12,9 +12,9 @@ use super::client::{RPC_TIMEOUT, RpcClient, xrp_to_drops};
 use super::types::{
     AccountDeleteSubmitParams, AccountSetSubmitParams, AmmDepositSubmitParams,
     AmmWithdrawSubmitParams, EscrowCloseSubmitParams, EscrowCreateSubmitParams,
-    FxrpDirectMintPaymentParams, FxrpExecuteDirectMintParams, OfferCancelSubmitParams,
-    OfferCreateSubmitParams, PaymentQuoteParams, PaymentSubmitParams, SetRegularKeySubmitParams,
-    SimulateResult, TrustSetSubmitParams,
+    FxrpDirectMintPaymentParams, FxrpExecuteDirectMintParams, GenericTxSubmitParams,
+    OfferCancelSubmitParams, OfferCreateSubmitParams, PaymentQuoteParams, PaymentSubmitParams,
+    SetRegularKeySubmitParams, SimulateResult, SmartAccountInstructionParams, TrustSetSubmitParams,
 };
 use serde_json::Value;
 use tracing::warn;
@@ -589,7 +589,7 @@ pub(super) async fn submit_offer_cancel_transaction(
 }
 
 /// Seconds since the Ripple epoch, from the local clock (simulate rejects a past FinishAfter).
-fn ripple_now_secs() -> u64 {
+pub(super) fn ripple_now_secs() -> u64 {
     let unix = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_secs());
@@ -928,6 +928,74 @@ pub(super) async fn submit_account_delete_transaction(
                 Action::RefreshAccount,
                 Action::RefreshTxHistory,
             ]
+        },
+    )
+    .await;
+}
+
+/// Any spec'd transaction type (`txspec`): fields validated and `Time` fields fixed to absolute
+/// seconds once, then the shared mainnet gate → `account_info` → simulate (`tesSUCCESS`, bound to
+/// the request) → sign → submit. Simulate catches ledger-state failures (`tec*`) before signing.
+pub(super) async fn submit_generic_transaction(
+    rpc: &RpcClient,
+    network: &Network,
+    params: GenericTxSubmitParams,
+    action_tx: &UnboundedSender<Action>,
+    signing_credential: Option<&crate::signing::SigningCredential>,
+) {
+    let submit_err = Action::GenericTxSubmitErr;
+    let Some(spec) = unwrap_or_submit_err(
+        super::txspec::lookup(&params.tx_type).ok_or_else(|| {
+            format!(
+                "unknown transaction type {}",
+                super::util::sanitize_remote(&params.tx_type)
+            )
+        }),
+        submit_err,
+        action_tx,
+    ) else {
+        return;
+    };
+    let Some(fields) = unwrap_or_submit_err(
+        spec.prepare(&params.fields, ripple_now_secs()),
+        submit_err,
+        action_tx,
+    ) else {
+        return;
+    };
+    let mainnet_err = format!(
+        "production network: restart lazyxrp with --yes to allow {} writes",
+        spec.tx_type
+    );
+    run_submit(
+        rpc,
+        network,
+        params.skip_mainnet_prompt,
+        signing_credential,
+        &mainnet_err,
+        submit_err,
+        action_tx,
+        |account, sequence| (spec.build_json)(account, &fields, sequence),
+        |wallet, account, sequence, fee_drops, last_ledger_sequence| {
+            (spec.sign)(
+                wallet,
+                account,
+                &fields,
+                sequence,
+                fee_drops,
+                last_ledger_sequence,
+            )
+        },
+        |hash| {
+            let mut actions = vec![
+                Action::GenericTxSubmitOk(format!("{} · {hash}", spec.tx_type)),
+                Action::RefreshAccount,
+                Action::RefreshTxHistory,
+            ];
+            if spec.family == "NFT" {
+                actions.push(Action::RefreshNfts);
+            }
+            actions
         },
     )
     .await;
@@ -1320,6 +1388,164 @@ pub(super) async fn submit_fxrp_direct_mint_payment(
     .await;
 }
 
+/// Smart Account instruction (`0x01` FXRP transfer / `0x02` redeem): a Payment of exactly
+/// `getInstructionFee(id)` drops to the pinned operator, no `DestinationTag`, one 32-byte memo.
+/// The operator (and fee) come from one Flare RPC answer, so signing needs
+/// `[flare.smart_accounts] expected_operator` to match.
+pub(super) async fn submit_smart_account_instruction(
+    rpc: &RpcClient,
+    network: &Network,
+    params: SmartAccountInstructionParams,
+    expected_operator: Option<&str>,
+    action_tx: &UnboundedSender<Action>,
+    signing_credential: Option<&crate::signing::SigningCredential>,
+) {
+    let submit_err = Action::SmartAccountInstructionSubmitErr;
+    // Wallet id 0: "use 0 if unassigned" (Flare Smart Accounts docs).
+    let reference = if params.redeem {
+        signing::encode_fxrp_redeem_instruction(0, params.value)
+    } else {
+        signing::encode_fxrp_transfer_instruction(0, params.value, &params.recipient)
+    };
+    let Some(reference) = unwrap_or_submit_err(reference, submit_err, action_tx) else {
+        return;
+    };
+    let memo = signing::smart_account_memo_data(&reference);
+    if unwrap_or_submit_err(
+        signing::check_smart_account_fee(params.fee_drops),
+        submit_err,
+        action_tx,
+    )
+    .is_none()
+    {
+        return;
+    }
+    let Some(destination) = unwrap_or_submit_err(
+        resolve_payment_destination(params.operator_xrpl.trim()),
+        submit_err,
+        action_tx,
+    ) else {
+        return;
+    };
+    if destination.destination_tag.is_some() {
+        send_action(
+            action_tx,
+            submit_err("operator must be a classic address (no X-address tag)".into()),
+        );
+        return;
+    }
+    let operator = destination.classic;
+    let Some(wallet) = resolve_submit_wallet(
+        network,
+        params.skip_mainnet_prompt,
+        signing_credential,
+        "production network: restart lazyxrp with --yes to allow Smart Account instruction writes",
+        submit_err,
+        action_tx,
+    ) else {
+        return;
+    };
+    let account = wallet.classic_address.clone();
+    if account == operator {
+        send_action(
+            action_tx,
+            submit_err("operator matches source account".into()),
+        );
+        return;
+    }
+    if let Err(e) = crate::flare::check_operator(&operator, expected_operator) {
+        send_action(action_tx, submit_err(e));
+        return;
+    }
+
+    let Some(account_info) =
+        fetch_account_summary_for_submit(rpc, network, &account, submit_err, action_tx).await
+    else {
+        return;
+    };
+
+    let amount_xrp = super::format::drops_to_xrp(&params.fee_drops.to_string());
+    let tx_json = match signing::build_payment_tx_json_for_simulate(
+        &account,
+        &operator,
+        &amount_xrp,
+        None,
+        None,
+        None,
+        None,
+        Some(memo.as_str()),
+        account_info.sequence,
+    ) {
+        Ok(j) => j,
+        Err(e) => {
+            send_action(action_tx, submit_err(format!("tx_json: {e}")));
+            return;
+        }
+    };
+
+    let sim = match simulate_tx_requiring_tes_success(rpc, tx_json).await {
+        Ok(s) => s,
+        Err(e) => {
+            send_action(action_tx, submit_err(e));
+            return;
+        }
+    };
+
+    let network_fee_drops = match signing::sequence_fee_ledger_from_simulate(&sim.tx_json) {
+        Ok((_, fee, _)) => fee,
+        Err(e) => {
+            send_action(action_tx, submit_err(format!("{e}")));
+            return;
+        }
+    };
+
+    let balance_drops = xrp_to_drops(&account_info.balance_xrp).unwrap_or(0);
+    let total_need = params
+        .fee_drops
+        .saturating_add(u64::from(network_fee_drops));
+    if balance_drops < total_need {
+        send_action(
+            action_tx,
+            submit_err(format!(
+                "insufficient balance: have {balance_drops} drops, need {total_need} (instruction fee {} + network fee {network_fee_drops})",
+                params.fee_drops
+            )),
+        );
+        return;
+    }
+
+    finalize_simulate_sign_submit(
+        rpc,
+        action_tx,
+        sim,
+        |sequence, fee_drops, last_ledger_sequence| {
+            signing::create_and_sign_payment(
+                &wallet,
+                &account,
+                &operator,
+                &amount_xrp,
+                None,
+                None,
+                None,
+                None,
+                Some(memo.as_str()),
+                sequence,
+                fee_drops,
+                last_ledger_sequence,
+            )
+        },
+        submit_err,
+        |hash| {
+            vec![
+                Action::SmartAccountInstructionSubmitOk(hash),
+                Action::RefreshAccount,
+                Action::RefreshTxHistory,
+            ]
+        },
+    )
+    .await;
+}
+
 /// `ripple_path_find` from the signing account in the Send max field's currency →
 /// Send max spec with slippage. Read-only; signing still goes through simulate.
 pub(super) async fn quote_payment(
@@ -1417,8 +1643,6 @@ mod tests {
     use tokio::sync::mpsc;
 
     use super::*;
-    use crate::signing::SEED_ENV;
-    use crate::test_support::{TestEnvGuard, env_lock_async};
 
     /// TC-107: closed action channel returns failure without panicking
     #[test]
@@ -1589,6 +1813,9 @@ mod tests {
         let rpf = &requests[8]["params"][0];
         assert_eq!(rpf["source_currencies"], json!([{"currency": "XRP"}]));
         assert_eq!(rpf["destination_amount"]["value"], "10");
+        // The reported hash is the hash of the blob that was actually submitted.
+        let blob = requests[3]["params"][0]["tx_blob"].as_str().expect("blob");
+        assert_eq!(crate::signing::tx_hash_from_blob(blob).expect("hash"), h);
     }
 
     /// TC-221: escrow paths vs local JSON-RPC — EscrowCreate simulates the absolute
@@ -1892,6 +2119,330 @@ mod tests {
         );
     }
 
+    /// A `tec*` simulate result stops the TUI submit flow before signing/submit and reports it.
+    #[tokio::test]
+    async fn tec_simulate_stops_before_submit() {
+        use crate::test_support::rpc_mock;
+        use secrecy::SecretString;
+        use serde_json::{Value, json};
+        use tokio::net::TcpListener;
+
+        const GENESIS: &str = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh";
+        fn result_for(method: &str) -> Value {
+            match method {
+                "server_info" => json!({"info": {"network_id": 1, "validated_ledger": {"seq": 1}}}),
+                "account_info" => json!({"account_data": {
+                    "Account": GENESIS, "Balance": "10000000", "Sequence": 7,
+                    "OwnerCount": 0, "Flags": 0
+                }}),
+                "simulate" => json!({
+                    "engine_result": "tecUNFUNDED_PAYMENT",
+                    "engine_result_message": "Insufficient XRP balance to send.",
+                    "tx_json": {}
+                }),
+                other => panic!("unexpected local RPC method: {other}"),
+            }
+        }
+
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.expect("bind");
+        let url = format!("http://{}", listener.local_addr().expect("addr"));
+        let server = tokio::spawn(rpc_mock::serve(listener, 3, result_for));
+        let rpc = RpcClient::connect(&url).expect("rpc client");
+        let credential = crate::signing::credential_from_secrets(
+            Some(&SecretString::from("sEdSkooMk31MeTjbHVE7vLvgCpEMAdB")),
+            None,
+        )
+        .expect("credential")
+        .expect("seed set");
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        submit_payment_transaction(
+            &rpc,
+            &Network::Testnet,
+            PaymentSubmitParams {
+                destination: GENESIS.into(),
+                amount: "1".into(),
+                iou_currency: None,
+                iou_issuer: None,
+                destination_tag: None,
+                send_max: None,
+                skip_mainnet_prompt: false,
+            },
+            &tx,
+            Some(&credential),
+        )
+        .await;
+        let got = rx.try_recv();
+        assert!(
+            matches!(&got, Ok(Action::PaymentSubmitErr(e)) if e.contains("tecUNFUNDED_PAYMENT")),
+            "{got:?}"
+        );
+        let requests = server.await.expect("join").expect("serve");
+        assert_eq!(
+            rpc_mock::methods(&requests),
+            ["server_info", "account_info", "simulate"]
+        );
+    }
+
+    const SA_GENESIS: &str = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh";
+    const SA_RECIPIENT: &str = "0xf5488132432118596fa13800b68df4c0ff25131d";
+
+    fn sa_params(redeem: bool, value: u128, fee_drops: u64) -> SmartAccountInstructionParams {
+        SmartAccountInstructionParams {
+            redeem,
+            value,
+            recipient: if redeem {
+                String::new()
+            } else {
+                SA_RECIPIENT.into()
+            },
+            operator_xrpl: SA_GENESIS.into(),
+            fee_drops,
+            skip_mainnet_prompt: false,
+        }
+    }
+
+    fn sa_credential() -> crate::signing::SigningCredential {
+        crate::signing::credential_from_secrets(
+            Some(&secrecy::SecretString::from(
+                "sEdSkooMk31MeTjbHVE7vLvgCpEMAdB",
+            )),
+            None,
+        )
+        .expect("credential")
+        .expect("seed set")
+    }
+
+    /// TC-242: Smart Account transfer and redeem (local JSON-RPC): simulate precedes submit, and
+    /// the signed blob is a Payment to the pinned operator for exactly the instruction fee, with
+    /// no DestinationTag and one Memo whose MemoData is the 32-byte instruction.
+    #[tokio::test]
+    async fn smart_account_instruction_pays_pinned_operator_with_instruction_memo() {
+        use crate::test_support::rpc_mock;
+        use serde_json::{Value, json};
+        use tokio::net::TcpListener;
+        use xrpl::core::binarycodec::decode;
+
+        fn result_for(method: &str) -> Value {
+            match method {
+                "server_info" => json!({"info": {"network_id": 1, "validated_ledger": {"seq": 1}}}),
+                "account_info" => json!({"account_data": {
+                    "Account": "rSigner", "Balance": "10000000", "Sequence": 7,
+                    "OwnerCount": 0, "Flags": 0
+                }}),
+                "simulate" => json!({
+                    "engine_result": "tesSUCCESS",
+                    "ledger_index": 80_000_000,
+                    "tx_json": {"Sequence": 7, "Fee": "12"}
+                }),
+                "submit" => json!({"engine_result": "tesSUCCESS", "tx_json": {"hash": "ABC"}}),
+                other => panic!("unexpected local RPC method: {other}"),
+            }
+        }
+
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.expect("bind");
+        let url = format!("http://{}", listener.local_addr().expect("addr"));
+        let server = tokio::spawn(rpc_mock::serve(listener, 8, result_for));
+        let rpc = RpcClient::connect(&url).expect("rpc client");
+        let credential = sa_credential();
+        let (tx, mut rx) = mpsc::unbounded_channel();
+
+        for params in [
+            sa_params(false, 2_500_000, 200_000),
+            sa_params(true, 3, 1_500_000),
+        ] {
+            submit_smart_account_instruction(
+                &rpc,
+                &Network::Testnet,
+                params,
+                Some(SA_GENESIS),
+                &tx,
+                Some(&credential),
+            )
+            .await;
+            let got = rx.try_recv();
+            assert!(
+                matches!(&got, Ok(Action::SmartAccountInstructionSubmitOk(m)) if m.ends_with("fee 12 drops")),
+                "{got:?}"
+            );
+            // Follow-ups after a successful write: account + history refresh.
+            assert!(matches!(rx.try_recv(), Ok(Action::RefreshAccount)));
+            assert!(matches!(rx.try_recv(), Ok(Action::RefreshTxHistory)));
+        }
+
+        let requests = server.await.expect("join").expect("serve");
+        let methods = rpc_mock::methods(&requests);
+        assert_eq!(
+            methods,
+            [
+                "server_info",
+                "account_info",
+                "simulate",
+                "submit",
+                "server_info",
+                "account_info",
+                "simulate",
+                "submit"
+            ]
+        );
+        // (simulate request, submit request, fee, instruction id, value)
+        for (sim, submit, fee, id, value) in [
+            (
+                &requests[2],
+                &requests[3],
+                "200000",
+                0x01_u8,
+                2_500_000_u128,
+            ),
+            (&requests[6], &requests[7], "1500000", 0x02, 3),
+        ] {
+            let sim = &sim["params"][0]["tx_json"];
+            assert_eq!(sim["Destination"], json!(SA_GENESIS));
+            assert_eq!(sim["Amount"], json!(fee));
+            assert!(sim.get("DestinationTag").is_none(), "{sim}");
+            let blob = submit["params"][0]["tx_blob"].as_str().expect("blob");
+            let signed = decode(blob).expect("decode");
+            assert_eq!(signed["TransactionType"], json!("Payment"));
+            assert_eq!(signed["Destination"], json!(SA_GENESIS));
+            assert_eq!(signed["Amount"], json!(fee));
+            assert!(signed.get("DestinationTag").is_none(), "{signed}");
+            let memos = signed["Memos"].as_array().expect("memos");
+            assert_eq!(memos.len(), 1);
+            let memo = memos[0]["Memo"]["MemoData"].as_str().expect("MemoData");
+            let bytes: [u8; 32] = hex::decode(memo)
+                .expect("hex")
+                .try_into()
+                .expect("32-byte instruction");
+            let decoded = crate::signing::decode_smart_account_instruction(&bytes);
+            assert_eq!(
+                (decoded.id, decoded.wallet_id, decoded.value),
+                (id, 0, value)
+            );
+            if id == 0x01 {
+                assert_eq!(hex::encode(decoded.tail), SA_RECIPIENT[2..]);
+            } else {
+                assert_eq!(decoded.tail, [0; 20]);
+            }
+        }
+    }
+
+    /// TC-243: every Smart Account refusal happens before any RPC (the RPC here is unreachable,
+    /// so an attempted call would surface as a connection error, not the expected message):
+    /// missing / wrong operator pin, zero or absurd fee, zero-address recipient, zero or
+    /// over-wide value, X-address operator, operator == signer.
+    #[tokio::test]
+    async fn smart_account_instruction_refusals_never_reach_rpc() {
+        let rpc = RpcClient::connect("http://127.0.0.1:1").expect("rpc client");
+        let credential = sa_credential();
+        let signer = credential.address().expect("address");
+        let xaddr =
+            xrpl::core::addresscodec::classic_address_to_xaddress(SA_GENESIS, Some(1), true)
+                .expect("xaddr");
+
+        type Tweak = fn(&mut SmartAccountInstructionParams);
+        let cases: Vec<(&str, Option<&str>, Tweak, &str)> = vec![
+            ("pin unset", None, |_| {}, "expected_operator"),
+            ("pin empty", Some(" "), |_| {}, "expected_operator"),
+            (
+                "pin mismatch",
+                Some("rSomeoneElse"),
+                |_| {},
+                "differs from expected_operator",
+            ),
+            (
+                "zero fee",
+                Some(SA_GENESIS),
+                |p| p.fee_drops = 0,
+                "instruction fee",
+            ),
+            (
+                "absurd fee",
+                Some(SA_GENESIS),
+                |p| p.fee_drops = crate::signing::MAX_SMART_ACCOUNT_FEE_DROPS + 1,
+                "instruction fee",
+            ),
+            (
+                "zero recipient",
+                Some(SA_GENESIS),
+                |p| p.recipient = "0x0000000000000000000000000000000000000000".into(),
+                "zero address",
+            ),
+            (
+                "bad recipient",
+                Some(SA_GENESIS),
+                |p| p.recipient = "0xnope".into(),
+                "Flare recipient",
+            ),
+            (
+                "zero value",
+                Some(SA_GENESIS),
+                |p| p.value = 0,
+                "greater than zero",
+            ),
+            (
+                "value over 10 bytes",
+                Some(SA_GENESIS),
+                |p| p.value = crate::signing::SMART_ACCOUNT_VALUE_MAX + 1,
+                "10-byte",
+            ),
+            (
+                "operator not an address",
+                Some(SA_GENESIS),
+                |p| p.operator_xrpl = "not-an-address".into(),
+                "",
+            ),
+        ];
+        for (name, pin, tweak, expect) in cases {
+            let mut params = sa_params(false, 1_000_000, 200_000);
+            tweak(&mut params);
+            let (tx, mut rx) = mpsc::unbounded_channel();
+            submit_smart_account_instruction(
+                &rpc,
+                &Network::Testnet,
+                params,
+                pin,
+                &tx,
+                Some(&credential),
+            )
+            .await;
+            match rx.try_recv() {
+                Ok(Action::SmartAccountInstructionSubmitErr(m)) => {
+                    assert!(m.contains(expect), "{name}: {m}");
+                    assert!(
+                        !m.contains("server_info") && !m.contains("account_info"),
+                        "{name}: RPC was attempted: {m}"
+                    );
+                }
+                other => panic!("{name}: expected submit error, got {other:?}"),
+            }
+            assert!(rx.try_recv().is_err(), "{name}: exactly one action");
+        }
+
+        // X-address operator (carries a tag) and operator == signing account.
+        for (name, operator, expect) in [
+            ("x-address operator", xaddr, "no X-address tag"),
+            ("operator is signer", signer, "matches source account"),
+        ] {
+            let mut params = sa_params(false, 1_000_000, 200_000);
+            params.operator_xrpl = operator.clone();
+            let (tx, mut rx) = mpsc::unbounded_channel();
+            submit_smart_account_instruction(
+                &rpc,
+                &Network::Testnet,
+                params,
+                Some(&operator),
+                &tx,
+                Some(&credential),
+            )
+            .await;
+            match rx.try_recv() {
+                Ok(Action::SmartAccountInstructionSubmitErr(m)) => {
+                    assert!(m.contains(expect), "{name}: {m}");
+                }
+                other => panic!("{name}: expected submit error, got {other:?}"),
+            }
+        }
+    }
+
     /// TC-088 (R-006): every sign+submit path rejects production writes without `--yes`
     /// before any RPC/signing.
     #[tokio::test]
@@ -2091,6 +2642,22 @@ mod tests {
                 }),
             ),
             (
+                "smart_account_instruction",
+                Box::new(|rpc, tx| {
+                    Box::pin(async move {
+                        submit_smart_account_instruction(
+                            rpc,
+                            &Network::Mainnet,
+                            sa_params(false, 1_000_000, 200_000),
+                            None,
+                            &tx,
+                            None,
+                        )
+                        .await;
+                    })
+                }),
+            ),
+            (
                 "amm_deposit",
                 Box::new(|rpc, tx| {
                     Box::pin(async move {
@@ -2147,6 +2714,36 @@ mod tests {
                     })
                 }),
             ),
+            (
+                "generic_nft_mint",
+                Box::new(|rpc, tx| {
+                    Box::pin(async move {
+                        submit_generic_transaction(
+                            rpc,
+                            &Network::Mainnet,
+                            generic_params("NFTokenMint", &[("NFTokenTaxon", "0")], false),
+                            &tx,
+                            None,
+                        )
+                        .await;
+                    })
+                }),
+            ),
+            (
+                "generic_nft_burn",
+                Box::new(|rpc, tx| {
+                    Box::pin(async move {
+                        submit_generic_transaction(
+                            rpc,
+                            &Network::Mainnet,
+                            generic_params("NFTokenBurn", &[("NFTokenID", NFT_ID)], false),
+                            &tx,
+                            None,
+                        )
+                        .await;
+                    })
+                }),
+            ),
         ];
 
         for (name, run) in cases {
@@ -2163,14 +2760,46 @@ mod tests {
                 | Action::OfferCancelSubmitErr(m)
                 | Action::SetRegularKeySubmitErr(m)
                 | Action::FxrpDirectMintPaymentSubmitErr(m)
+                | Action::SmartAccountInstructionSubmitErr(m)
                 | Action::EscrowCreateSubmitErr(m)
                 | Action::EscrowCloseSubmitErr(m)
                 | Action::AmmSubmitErr(m)
-                | Action::AccountDeleteSubmitErr(m) => m,
+                | Action::AccountDeleteSubmitErr(m)
+                | Action::GenericTxSubmitErr(m) => m,
                 other => panic!("{name}: expected submit error, got {other:?}"),
             };
             assert!(msg.contains("production network"), "{name}: {msg}");
             assert!(msg.contains("--yes"), "{name}: {msg}");
+        }
+    }
+
+    /// TC-088: the Flare executeDirectMinting path has its own gate (different signature, so it
+    /// sits outside the table above): enabled execute + mainnet without `--yes` is refused.
+    #[tokio::test]
+    async fn fxrp_execute_direct_mint_mainnet_without_yes_is_rejected() {
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let params = FxrpExecuteDirectMintParams {
+            proof_json: "{}".into(),
+            skip_mainnet_prompt: false,
+        };
+        submit_fxrp_execute_direct_mint(
+            Some("https://flare-api.flare.network/ext/C/rpc"),
+            true,
+            "FLARE_EVM_KEY",
+            None,
+            &Network::Mainnet,
+            params,
+            &tx,
+        )
+        .await;
+        match rx.try_recv() {
+            Ok(Action::FxrpExecuteDirectMintSubmitErr(m)) => {
+                assert!(
+                    m.contains("production network") && m.contains("--yes"),
+                    "{m}"
+                );
+            }
+            other => panic!("expected submit error, got {other:?}"),
         }
     }
 
@@ -2204,9 +2833,6 @@ mod tests {
     /// then fail on the missing seed, not on the guard.
     #[tokio::test]
     async fn mainnet_submit_with_yes_skips_guard_across_tx_types() {
-        let _env_lock = env_lock_async().await;
-        let _test_env = TestEnvGuard::new(&[SEED_ENV]);
-        _test_env.remove(SEED_ENV);
         let rpc = RpcClient::connect("http://127.0.0.1:1").expect("rpc client");
         const GENESIS: &str = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh";
         type SubmitCase = Box<
@@ -2277,6 +2903,256 @@ mod tests {
                 }
                 other => panic!("{name}: expected submit error after guard skip, got {other:?}"),
             }
+        }
+    }
+
+    fn generic_params(tx_type: &str, fields: &[(&str, &str)], skip: bool) -> GenericTxSubmitParams {
+        GenericTxSubmitParams {
+            tx_type: tx_type.into(),
+            fields: fields
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+            skip_mainnet_prompt: skip,
+        }
+    }
+
+    fn test_credential() -> crate::signing::SigningCredential {
+        use secrecy::SecretString;
+        crate::signing::credential_from_secrets(
+            Some(&SecretString::from("sEdSkooMk31MeTjbHVE7vLvgCpEMAdB")),
+            None,
+        )
+        .expect("credential")
+        .expect("seed set")
+    }
+
+    const NFT_ID: &str = "000B013A95F14B0044F78A264E41713C64B5F89242540EE208C3098E00000D65";
+
+    /// TC-252: generic spec'd submit vs local JSON-RPC — `server_info → account_info → simulate →
+    /// submit` per transaction; the simulate request and the signed blob carry the spec's fields;
+    /// the blob carries the simulate-chosen Sequence / Fee / LastLedgerSequence (distinct values);
+    /// a relative `Expiration` is fixed once (simulate and blob agree); the reported hash is
+    /// computed from the signed blob; every refusal (unknown type / field, invalid value) happens
+    /// before any RPC.
+    #[tokio::test]
+    async fn generic_tx_against_local_rpc() {
+        use crate::test_support::rpc_mock;
+        use serde_json::{Value, json};
+        use tokio::net::TcpListener;
+        use xrpl::core::binarycodec::decode;
+
+        fn result_for(method: &str) -> Value {
+            match method {
+                "server_info" => json!({"info": {"network_id": 1, "validated_ledger": {"seq": 1}}}),
+                "account_info" => json!({"account_data": {
+                    "Account": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh", "Balance": "10000000",
+                    "Sequence": 7, "OwnerCount": 0, "Flags": 0
+                }}),
+                "simulate" => json!({
+                    "engine_result": "tesSUCCESS",
+                    "ledger_index": 80_000_000,
+                    "tx_json": {"Sequence": 7, "Fee": "15"}
+                }),
+                "submit" => json!({"engine_result": "tesSUCCESS", "tx_json": {"hash": "ABC"}}),
+                other => panic!("unexpected local RPC method: {other}"),
+            }
+        }
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.expect("bind");
+        let url = format!("http://{}", listener.local_addr().expect("addr"));
+        let server = tokio::spawn(rpc_mock::serve(listener, 8, result_for));
+        let rpc = RpcClient::connect(&url).expect("rpc client");
+        let credential = test_credential();
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let drain = |rx: &mut mpsc::UnboundedReceiver<Action>| {
+            let mut out = Vec::new();
+            while let Ok(a) = rx.try_recv() {
+                out.push(a);
+            }
+            out
+        };
+
+        // Refusals first: nothing may reach the RPC (the server expects exactly 8 requests).
+        for (tx_type, fields) in [
+            ("NoSuchType", vec![]),
+            ("NFTokenMint", vec![("NFTokenTaxon", "1"), ("Bogus", "x")]),
+            (
+                "NFTokenMint",
+                vec![("NFTokenTaxon", "1"), ("TransferFee", "50001")],
+            ),
+            ("NFTokenBurn", vec![("NFTokenID", "abc")]),
+        ] {
+            submit_generic_transaction(
+                &rpc,
+                &Network::Testnet,
+                generic_params(tx_type, &fields, false),
+                &tx,
+                Some(&credential),
+            )
+            .await;
+            let got = drain(&mut rx);
+            assert!(
+                matches!(got.as_slice(), [Action::GenericTxSubmitErr(_)]),
+                "{tx_type} {fields:?}: {got:?}"
+            );
+        }
+
+        submit_generic_transaction(
+            &rpc,
+            &Network::Testnet,
+            generic_params(
+                "NFTokenMint",
+                &[
+                    ("NFTokenTaxon", "3"),
+                    ("URI", "hi"),
+                    ("Flags", "transferable"),
+                    ("TransferFee", "10"),
+                ],
+                false,
+            ),
+            &tx,
+            Some(&credential),
+        )
+        .await;
+        let got = drain(&mut rx);
+        let Some(Action::GenericTxSubmitOk(shown)) = got.first() else {
+            panic!("expected GenericTxSubmitOk, got {got:?}");
+        };
+        let (label, rest) = shown.split_once(" · ").expect("type · hash");
+        assert_eq!(label, "NFTokenMint");
+        let (hash, fee) = rest.split_once(" · ").expect("hash · fee");
+        assert_eq!(fee, "fee 15 drops");
+        assert!(
+            got[1..].contains(&Action::RefreshNfts),
+            "NFT writes refresh the NFT list: {got:?}"
+        );
+
+        submit_generic_transaction(
+            &rpc,
+            &Network::Testnet,
+            generic_params(
+                "NFTokenCreateOffer",
+                &[
+                    ("NFTokenID", NFT_ID),
+                    ("Amount", "XRP:1000000"),
+                    ("Flags", "sell"),
+                    ("Expiration", "1h"),
+                ],
+                false,
+            ),
+            &tx,
+            Some(&credential),
+        )
+        .await;
+        assert!(matches!(
+            drain(&mut rx).first(),
+            Some(Action::GenericTxSubmitOk(_))
+        ));
+
+        let requests = server.await.expect("join").expect("serve");
+        assert_eq!(
+            rpc_mock::methods(&requests),
+            [
+                "server_info",
+                "account_info",
+                "simulate",
+                "submit",
+                "server_info",
+                "account_info",
+                "simulate",
+                "submit"
+            ]
+        );
+        let sim = &requests[2]["params"][0]["tx_json"];
+        assert_eq!(sim["TransactionType"], "NFTokenMint");
+        assert_eq!((&sim["Sequence"], &sim["URI"]), (&json!(7), &json!("6869")));
+        assert_eq!(
+            (&sim["NFTokenTaxon"], &sim["TransferFee"], &sim["Flags"]),
+            (&json!(3), &json!(10), &json!(8))
+        );
+        let blob = requests[3]["params"][0]["tx_blob"].as_str().expect("blob");
+        let signed = decode(blob).expect("decode");
+        assert_eq!(
+            (
+                &signed["Sequence"],
+                &signed["Fee"],
+                &signed["LastLedgerSequence"]
+            ),
+            (&json!(7), &json!("15"), &json!(80_000_020))
+        );
+        assert_eq!(signed["URI"], "6869");
+        assert_eq!(crate::signing::tx_hash_from_blob(blob).expect("hash"), hash);
+
+        let sim_exp = requests[6]["params"][0]["tx_json"]["Expiration"]
+            .as_u64()
+            .expect("Expiration");
+        let blob = requests[7]["params"][0]["tx_blob"].as_str().expect("blob");
+        assert_eq!(decode(blob).expect("decode")["Expiration"], json!(sim_exp));
+        let now = ripple_now_secs();
+        assert!(
+            (now + 3_590..=now + 3_700).contains(&sim_exp),
+            "Expiration {sim_exp} is not ~now + 1h ({now})"
+        );
+    }
+
+    /// TC-253: a failing simulate stops the generic flow before sign / submit — a `tec*` result
+    /// and a `Sequence` that differs from the request both end after `simulate`.
+    #[tokio::test]
+    async fn generic_tx_stops_when_simulate_refuses() {
+        use crate::test_support::rpc_mock;
+        use serde_json::{Value, json};
+        use tokio::net::TcpListener;
+
+        fn node(simulate: Value) -> impl Fn(&str) -> Value {
+            move |method| match method {
+                "server_info" => json!({"info": {"network_id": 1, "validated_ledger": {"seq": 1}}}),
+                "account_info" => json!({"account_data": {
+                    "Account": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh", "Balance": "10000000",
+                    "Sequence": 7, "OwnerCount": 0, "Flags": 0
+                }}),
+                "simulate" => simulate.clone(),
+                other => panic!("{other} must not be called after a refused simulate"),
+            }
+        }
+        let tec = json!({
+            "engine_result": "tecNO_ENTRY",
+            "engine_result_message": "no such NFT",
+            "tx_json": {}
+        });
+        let wrong_sequence = json!({
+            "engine_result": "tesSUCCESS",
+            "ledger_index": 80_000_000,
+            "tx_json": {"Sequence": 8, "Fee": "15"}
+        });
+        for (simulate, want) in [(tec, "tecNO_ENTRY"), (wrong_sequence, "Sequence")] {
+            let listener = TcpListener::bind(("127.0.0.1", 0)).await.expect("bind");
+            let url = format!("http://{}", listener.local_addr().expect("addr"));
+            let respond = node(simulate);
+            let server = tokio::spawn(rpc_mock::serve_raw(
+                listener,
+                3,
+                move |req| json!({"result": respond(req["method"].as_str().unwrap_or_default())}),
+            ));
+            let rpc = RpcClient::connect(&url).expect("rpc client");
+            let (tx, mut rx) = mpsc::unbounded_channel();
+            submit_generic_transaction(
+                &rpc,
+                &Network::Testnet,
+                generic_params("NFTokenBurn", &[("NFTokenID", NFT_ID)], false),
+                &tx,
+                Some(&test_credential()),
+            )
+            .await;
+            match rx.try_recv() {
+                Ok(Action::GenericTxSubmitErr(m)) => assert!(m.contains(want), "{m}"),
+                other => panic!("expected GenericTxSubmitErr({want}), got {other:?}"),
+            }
+            assert!(rx.try_recv().is_err(), "exactly one action");
+            let requests = server.await.expect("join").expect("serve");
+            assert_eq!(
+                rpc_mock::methods(&requests),
+                ["server_info", "account_info", "simulate"]
+            );
         }
     }
 }

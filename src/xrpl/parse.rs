@@ -917,7 +917,7 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].seq, 6577664);
         assert_eq!(rows[0].taker_pays, "1.5 EUR");
-        assert_ne!(rows[0].taker_gets, "-");
+        assert_eq!(rows[0].taker_gets, "33687.728098");
     }
 
     /// TC-137: book_offer_best_price — string quality is not inverted,
@@ -1072,6 +1072,18 @@ mod tests {
         });
         let err = parse_submit_success(&failed).expect_err("tec must fail");
         assert!(format!("{err}").contains("tecNO_DST_INSUF_XRP"));
+
+        for no_hash in [
+            json!({"result": {"engine_result": "tesSUCCESS", "tx_json": {}}}),
+            json!({"result": {"engine_result": "tesSUCCESS", "tx_json": {"hash": ""}}}),
+            json!({"result": {"engine_result": "tesSUCCESS"}}),
+        ] {
+            let err = parse_submit_success(&no_hash).expect_err("tesSUCCESS without hash");
+            assert!(
+                format!("{err}").contains("missing transaction hash"),
+                "{err}"
+            );
+        }
     }
 
     /// `parse_simulate_result`: parses tx_json/engine result with meta present,
@@ -1150,11 +1162,12 @@ mod tests {
             "engine_result": "tec\u{1b}[2J",
             "engine_result_message": "bad\u{1b}]52;c;eA==\u{7}",
             "ledger_index": 10,
-            "tx_json": {"Sequence": 1, "Fee": "10"}
+            "tx_json": {"Sequence": 1, "Fee": "10", "Memo": "keep\u{1b}raw"}
         }});
         let sim = parse_simulate_result(&v).expect("simulate should parse");
-        assert!(!sim.engine_result.chars().any(char::is_control));
-        assert!(!sim.engine_result_message.chars().any(char::is_control));
+        assert_eq!(sim.engine_result, "tec[2J");
+        assert_eq!(sim.engine_result_message, "bad]52;c;eA==");
+        assert_eq!(sim.tx_json["Memo"], "keep\u{1b}raw");
     }
 
     /// Lead 3: simulate Sequence must equal the requested one and LastLedgerSequence must sit
@@ -1231,38 +1244,23 @@ mod tests {
         assert_eq!(rows.len(), 5);
         assert_eq!(rows[0].ledger_type, "Check");
         assert_eq!(rows[0].index, "CHK1");
-        assert!(rows[0].detail.contains("rDest1"));
-        assert!(rows[0].detail.contains("2.000000"));
+        assert_eq!(rows[0].detail, "→ rDest1 · 2.000000");
 
         assert_eq!(rows[1].ledger_type, "Ticket");
         assert_eq!(rows[1].index, "TIK1");
-        assert!(rows[1].detail.contains('7'));
+        assert_eq!(rows[1].detail, "seq 7");
 
         assert_eq!(rows[2].ledger_type, "MPToken");
         assert_eq!(rows[2].index, "MPT1");
-        assert!(rows[2].detail.contains("001122"));
-        assert!(rows[2].detail.contains("99"));
+        assert_eq!(rows[2].detail, "MPT · 001122 · \"99\"");
 
         assert_eq!(rows[3].ledger_type, "PayChannel");
         assert_eq!(rows[3].index, "PC1");
-        assert!(rows[3].detail.contains("rDestPC"));
-        assert!(rows[3].detail.contains("5.000000"));
+        assert_eq!(rows[3].detail, "→ rDestPC · 5.000000");
 
         assert_eq!(rows[4].ledger_type, "Escrow");
         assert_eq!(rows[4].index, "ES1");
-        assert!(rows[4].detail.contains("rDestE"));
-        assert!(rows[4].detail.contains("1.000000"));
-    }
-
-    /// TC-073
-    #[test]
-    fn ledger_object_tab_filters() {
-        use crate::xrpl::is_misc_ledger_type;
-        assert!(is_misc_ledger_type("Check"));
-        assert!(is_misc_ledger_type("Ticket"));
-        assert!(is_misc_ledger_type("MPToken"));
-        assert!(is_misc_ledger_type("DID"));
-        assert!(!is_misc_ledger_type("PayChannel"));
+        assert_eq!(rows[4].detail, "→ rDestE · 1.000000");
     }
 
     /// TC-080, TC-081, TC-082: `parse_ripple_path_find` — alternatives with

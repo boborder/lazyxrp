@@ -8,10 +8,11 @@ use crate::{
         AggregatePrice, AmmDepositSubmitParams, AmmSummary, AmmWithdrawSubmitParams, BookMidPrice,
         DunlSummary, EscrowCloseSubmitParams, EscrowCreateSubmitParams, EscrowRow, FeeSummary,
         FlareFeedPrice, FlareWalletSummary, FxrpDirectMintInfo, FxrpDirectMintPaymentParams,
-        FxrpExecuteDirectMintParams, GeneratedWalletKeys, LedgerObjectRow, NftRow,
-        OfferCancelSubmitParams, OfferCreateSubmitParams, OfferRow, PathFindSnapshot,
+        FxrpExecuteDirectMintParams, GeneratedWalletKeys, GenericTxSubmitParams, LedgerObjectRow,
+        NftRow, OfferCancelSubmitParams, OfferCreateSubmitParams, OfferRow, PathFindSnapshot,
         PaymentQuoteParams, PaymentSubmitParams, ServerInfoSummary, SetRegularKeySubmitParams,
-        TrustLineRow, TrustSetSubmitParams, TxRow, TxSummary, XrplTomlData,
+        SmartAccountInfo, SmartAccountInstructionParams, TrustLineRow, TrustSetSubmitParams, TxRow,
+        TxSummary, XrplTomlData,
     },
 };
 
@@ -23,6 +24,8 @@ pub enum Action {
     Resume,
     Quit,
     ClearScreen,
+    /// Request a redraw (e.g. an off-thread image resize finished; `Tick` alone does not mark dirty).
+    Render,
     Help,
     XrplServerInfo(Box<ServerInfoSummary>),
     /// XRPL Foundation dUNL manifest (`https://unl.xrplf.org`).
@@ -55,6 +58,8 @@ pub enum Action {
     FlareOraclePrices(Vec<FlareFeedPrice>),
     /// FXRP Direct Mint Core Vault + fees from AssetManager (read-only).
     FxrpDirectMintInfo(Box<FxrpDirectMintInfo>),
+    /// Flare Smart Account (personal account, nonce, operator, fees, FXRP balance; read-only).
+    SmartAccountInfo(Box<SmartAccountInfo>),
     /// Flare EVM wallet native + FXRP balances (read-only).
     FlareWalletBalance(Box<FlareWalletSummary>),
     /// A flare poll attempt failed entirely — arms the status-bar flare health dot.
@@ -138,6 +143,10 @@ pub enum Action {
     FxrpExecuteDirectMintSubmit(FxrpExecuteDirectMintParams),
     FxrpExecuteDirectMintSubmitOk(String),
     FxrpExecuteDirectMintSubmitErr(String),
+    /// Queue a Smart Account FXRP transfer / redeem instruction Payment to the operator.
+    SmartAccountInstructionSubmit(SmartAccountInstructionParams),
+    SmartAccountInstructionSubmitOk(String),
+    SmartAccountInstructionSubmitErr(String),
     /// Queue SetRegularKey sign+submit from Wallet form (poll task).
     SetRegularKeySubmit(SetRegularKeySubmitParams),
     SetRegularKeySubmitOk(String),
@@ -162,6 +171,17 @@ pub enum Action {
     AccountDeleteSubmit(AccountDeleteSubmitParams),
     AccountDeleteSubmitOk(String),
     AccountDeleteSubmitErr(String),
+    /// Queue any spec'd transaction (`xrpl::txspec`) sign+submit from the Wallet composer.
+    GenericTxSubmit(GenericTxSubmitParams),
+    GenericTxSubmitOk(String),
+    GenericTxSubmitErr(String),
+    /// Assets tab `x`: start an NFTokenBurn for the selected NFT.
+    NftBurnStart,
+    /// Open the Wallet "Transaction" composer for `tx_type`, prefilled with `fields`.
+    TxComposerOpen {
+        tx_type: String,
+        fields: Vec<(String, String)>,
+    },
     /// Queue OfferCreate sign+submit from Wallet form (poll task).
     OfferCreateSubmit(OfferCreateSubmitParams),
     OfferCreateSubmitOk(String),

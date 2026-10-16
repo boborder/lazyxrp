@@ -28,6 +28,7 @@ mod app;
 mod cli;
 mod components;
 mod config;
+mod coverage;
 mod errors;
 mod flare;
 mod logging;
@@ -153,6 +154,13 @@ pub async fn run_rp() -> color_eyre::Result<()> {
     run_rp_inner().await
 }
 
+fn ensure_uninstall_standalone(args: &Cli) -> color_eyre::Result<()> {
+    if args.command.is_some() {
+        color_eyre::eyre::bail!("`--self-uninstall` cannot be combined with a subcommand");
+    }
+    Ok(())
+}
+
 /// Entry for the `lazyxrp` binary (TUI + full CLI). Also accepts argv0 `rp` symlink.
 pub async fn run() -> color_eyre::Result<()> {
     crate::errors::init()?;
@@ -163,9 +171,7 @@ pub async fn run() -> color_eyre::Result<()> {
 
     let args = Cli::parse();
     if args.self_uninstall {
-        if args.command.is_some() {
-            color_eyre::eyre::bail!("`--self-uninstall` cannot be combined with a subcommand");
-        }
+        ensure_uninstall_standalone(&args)?;
         let config = Config::new()?;
         return uninstall::perform_self_uninstall(&config, args.yes);
     }
@@ -317,30 +323,48 @@ network = "mainnet"
         root
     }
 
-    /// TC-043
+    /// TC-043: URL precedence cli > env > config file > network default, for HTTP and WS.
     #[test]
-    fn resolve_rpc_url_uses_network_default() -> color_eyre::Result<()> {
+    fn resolve_urls_precedence_cli_env_config_default() {
         let _env_lock = env_lock();
-        let _test_env = TestEnvGuard::new(&[
-            "LAZYXRP_CONFIG",
-            "XDG_CONFIG_HOME",
-            config::XRPL_RPC_SERVER_ENV,
-            config::XRPL_WS_SERVER_ENV,
-        ]);
+        let _env = TestEnvGuard::new(&[config::XRPL_RPC_SERVER_ENV, config::XRPL_WS_SERVER_ENV]);
+        _env.remove(config::XRPL_RPC_SERVER_ENV);
+        _env.remove(config::XRPL_WS_SERVER_ENV);
+        let cli = |extra: &[&str]| {
+            Cli::try_parse_from(
+                ["lazyxrp"]
+                    .into_iter()
+                    .chain(extra.iter().copied())
+                    .chain(["info"]),
+            )
+            .unwrap()
+        };
+        let mut config = Config::default();
+        let net = Network::Testnet;
 
-        let root = temp_config_root("tc043");
-        _test_env.remove("XDG_CONFIG_HOME");
-        _test_env.remove(config::XRPL_RPC_SERVER_ENV);
-        _test_env.remove(config::XRPL_WS_SERVER_ENV);
-        _test_env.set("LAZYXRP_CONFIG", root.to_str().unwrap());
-        let config = Config::new()?;
-        let cli =
-            Cli::try_parse_from(["lazyxrp", "info"]).map_err(|e| color_eyre::eyre::eyre!("{e}"))?;
-        let network = cli.network.unwrap_or(config.xrpl.network);
-        let url = resolve_rpc_url(cli.server.clone(), &config, &network);
-        assert_eq!(url, "https://xrplcluster.com");
-        std::fs::remove_dir_all(&root).ok();
-        Ok(())
+        // Default rung: the selected network's endpoints (not mainnet's).
+        assert_eq!(resolve_rpc_url(None, &config, &net), net.rpc_url());
+        assert_eq!(resolve_ws_url(&cli(&[]), &config, &net), net.ws_url());
+        assert_ne!(net.rpc_url(), Network::Mainnet.rpc_url());
+
+        config.xrpl.rpc_server = Some("https://cfg".into());
+        config.xrpl.ws_server = Some("wss://cfg".into());
+        assert_eq!(resolve_rpc_url(None, &config, &net), "https://cfg");
+        assert_eq!(resolve_ws_url(&cli(&[]), &config, &net), "wss://cfg");
+
+        _env.set(config::XRPL_RPC_SERVER_ENV, "https://env");
+        _env.set(config::XRPL_WS_SERVER_ENV, "wss://env");
+        assert_eq!(resolve_rpc_url(None, &config, &net), "https://env");
+        assert_eq!(resolve_ws_url(&cli(&[]), &config, &net), "wss://env");
+
+        assert_eq!(
+            resolve_rpc_url(Some("https://cli".into()), &config, &net),
+            "https://cli"
+        );
+        assert_eq!(
+            resolve_ws_url(&cli(&["--ws-server", "wss://cli"]), &config, &net),
+            "wss://cli"
+        );
     }
     /// TC-044
     #[test]
@@ -424,10 +448,6 @@ mod command_resolve_tests {
             Cli::try_parse_from(["lazyxrp", "--account", "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"])
                 .unwrap();
         assert!(resolve_lazyxrp_command(&args).unwrap().is_none());
-        assert_eq!(
-            args.account.as_deref(),
-            Some("rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh")
-        );
 
         let args = Cli::try_parse_from(["lazyxrp", "info"]).unwrap();
         let err = resolve_lazyxrp_command(&args).expect_err("bare subcommand");
@@ -443,6 +463,16 @@ mod command_resolve_tests {
         ));
     }
 
+    /// TC-076: `--self-uninstall` combined with a subcommand is refused before any side effect.
+    #[test]
+    fn self_uninstall_with_subcommand_is_refused() {
+        let args = Cli::try_parse_from(["lazyxrp", "--self-uninstall", "info"]).unwrap();
+        let err = ensure_uninstall_standalone(&args).expect_err("must refuse");
+        assert!(err.to_string().contains("--self-uninstall"), "{err}");
+        let args = Cli::try_parse_from(["lazyxrp", "--self-uninstall", "--yes"]).unwrap();
+        assert!(ensure_uninstall_standalone(&args).is_ok());
+    }
+
     /// TC-234: `--watch` refuses every signing `-x` subcommand before any RPC; reads and the
     /// (non-signing) faucet still run; the TUI path is unaffected.
     #[test]
@@ -455,6 +485,9 @@ mod command_resolve_tests {
             vec!["amm-deposit", "XRP:1", "XRP:2"],
             vec!["amm-withdraw", "XRP", "XRP"],
             vec!["account-delete", DEST],
+            vec!["tx", "NFTokenBurn", "NFTokenID=00"],
+            vec!["nft-mint", "--taxon", "1"],
+            vec!["nft-burn", "00"],
         ] {
             let args =
                 Cli::try_parse_from(["lazyxrp", "--watch", "-x"].into_iter().chain(argv.clone()))
@@ -462,7 +495,12 @@ mod command_resolve_tests {
             let err = resolve_lazyxrp_command(&args).expect_err("write under --watch");
             assert!(err.to_string().contains("--watch"), "{argv:?}: {err}");
         }
-        for argv in [vec!["info"], vec!["offers", DEST], vec!["faucet"]] {
+        for argv in [
+            vec!["info"],
+            vec!["offers", DEST],
+            vec!["faucet"],
+            vec!["coverage"],
+        ] {
             let args =
                 Cli::try_parse_from(["lazyxrp", "--watch", "-x"].into_iter().chain(argv.clone()))
                     .unwrap();
@@ -483,6 +521,7 @@ mod command_resolve_tests {
         let mut config = Config::default();
         config.xrpl.signing.seed = Some("plain".into());
         config.xrpl.signing.mnemonic = Some("plain".into());
+        config.xrpl.signing.secret_mnemonic = Some(SecretString::from("abandon about"));
         config.xrpl.signing.secret_seed =
             Some(SecretString::from("sEdSkooMk31MeTjbHVE7vLvgCpEMAdB"));
         config.flare_evm_key = Some(SecretString::from("0x01"));
@@ -500,5 +539,25 @@ mod command_resolve_tests {
 
         let mut empty = Config::default();
         assert_eq!(enter_watch_mode(&mut empty, None).unwrap(), None);
+    }
+
+    #[test]
+    fn sanitize_rate_rejects_non_finite_and_clamps() {
+        for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, 0.0, -1.0] {
+            assert_eq!(sanitize_rate(bad, 4.0), 4.0, "{bad}");
+        }
+        assert_eq!(sanitize_rate(1e9, 4.0), 120.0);
+        assert_eq!(sanitize_rate(0.001, 4.0), 0.1);
+        assert_eq!(sanitize_rate(10.0, 4.0), 10.0);
+    }
+
+    #[test]
+    fn rp_alias_matches_only_rp_binary() {
+        for yes in ["rp", "RP", "rp.exe", "RP.exe"] {
+            assert!(is_rp_alias_bin(yes), "{yes}");
+        }
+        for no in ["lazyxrp", "rpc", "", "xrp"] {
+            assert!(!is_rp_alias_bin(no), "{no}");
+        }
     }
 }

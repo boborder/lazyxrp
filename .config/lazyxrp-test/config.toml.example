@@ -22,3 +22,7 @@ seed = "sEd..." # <-- replace with your own faucet seed
 execute = false
 # Core Vault pin for C2 Direct Mint (verify out of band). Unset → C2 payment refused.
 # expected_core_vault = "r..."
+
+[flare.smart_accounts]
+# Operator pin for Smart Account instruction Payments (verify out of band). Unset → refused.
+# expected_operator = "r..."

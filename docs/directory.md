@@ -47,6 +47,7 @@ lazyxrp/
 │   │   ├── nft_image.rs          # NFT metadata/image fetch and limits
 │   │   ├── poll.rs               # poll loop + read batch; PollCommand dispatch
 │   │   ├── submit.rs             # write paths: guard → simulate → sign → submit, quote
+│   │   ├── txspec/               # declarative tx specs: mod.rs (TxSpec / FieldSpec / registry), nft.rs (NFT family)
 │   │   ├── toml.rs
 │   │   ├── types.rs
 │   │   ├── util.rs               # JSON path helpers + reconnect backoff
@@ -129,6 +130,8 @@ lazyxrp/
 ## 3. `src/` 配下の責務
 
 - `lib.rs`: `lazyxrp` / `rp` 両バイナリが共有するライブラリ。`run()`（TUI+CLI）と `run_rp()`（lookup 専用）。
+- `coverage.rs`: XRPL TX 種別カバレッジ（`rows()` = Existing / Spec（`xrpl::txspec::registry()` 由来）/ Planned / Unsupported、read は tx_detail parser 登録から）。`markdown_table()` を `lazyxrp -x coverage` が出力し、ROADMAP.md「XRPL coverage」と README の件数を drift テスト（TC-248）が検証。
+- `xrpl/txspec/`: 宣言的 TX spec（`mod.rs` = `TxSpec` / `FieldSpec` / `FAMILIES` レジストリ・検証・`prepare`、`nft.rs` = NFTokenMint / Burn / CreateOffer / AcceptOffer / CancelOffer）。共通 submit は `submit::submit_generic_transaction`。追加手順は `architecture.md` §2.1。`tests/testnet_e2e.rs` に NFT mint → burn の opt-in テスト。
 - `main.rs`: `lazyxrp` バイナリの薄いエントリ（`lazyxrp::run()`）。
 - `bin/rp.rs`: `rp` バイナリの薄いエントリ（`lazyxrp::run_rp()`）。`cargo install` / リリース tarball で常に付く。
 - `uninstall.rs`: `lazyxrp --self-uninstall` — 実行中バイナリ・同階層の `{name}.bak`・同階層の `rp`（実体/symlink）、`Config` で解決した config/data ディレクトリの削除（`cargo uninstall` は呼ばない）。
@@ -146,6 +149,15 @@ lazyxrp/
 - `test_support.rs`: テスト共通ヘルパ（`TempRootGuard` / `env_lock` / `env_lock_async` / `TestEnvGuard`、`#[cfg(test)]` 限定）。
 - `../tests/cli_smoke.rs`: バイナリ境界スモーク（`lazyxrp` / `rp` 実行ファイルの argv・終了コード・出力をローカル JSON-RPC で検証、TC-158）。
 
+**依存方向（import 規則）:**
+- `components/` が import してよいのは `action`・`config`（`Arc<Config>`）・`xrpl` の行型だけ。`xrpl/client`・`xrpl/poll`・`app` は import しない。`RpcClient` を持たず、データは `Action` 経由で受け取る。
+- `xrpl/` が import してよい内部モジュールは `action::Action`・`network::Network`・`signing` のみ。`xrpl/types.rs` は UI / poll に依存しない leaf。
+- `config.rs` は `action` の `Action` / `Mode` を import する（keybinding デシリアライズ用）。`Mode` は `action.rs` に置く。
+- `signing.rs` は `network`・`secrecy`・XRPL SDK crate のみに依存し、`components/` と `app` を import しない。
+- 新しい TX 種別の write は共有パイプライン（`xrpl/submit.rs` の resolve / simulate / sign / submit、`poll.rs` の handler）を再利用し、種別ごとに独自の simulate・署名を書かない。宣言的な型は `xrpl/txspec/`（architecture.md §2.1）。
+- パネルを追加したら同じ変更で `app::TAB_TITLES` を更新する（タブ index とパネル順を一致させる、security.md I-9）。
+- 結合が強い箇所: `action.rs`（全送受信のハブ）、`poll.rs` の `submit_*`（型ごとの検証 + 共有 simulate/sign/submit）、`tx_detail/parsers.rs`（登録された TX 種別、architecture.md「TX 詳細オーバーレイ」）。
+
 ## 4. `src/components/panels/` 配下の責務
 
 - `server.rs`: サーバー状態表示パネル。
@@ -153,7 +165,7 @@ lazyxrp/
 - `book.rs`: オーダーブック表示パネル。
 - `path_find.rs`: `ripple_path_find` ルート一覧（送信額・ホップ・経路、安い順）。
 - `amm.rs`: AMM プール詳細パネル。
-- `oracle.rs` / `flare_ftso.rs` / `fxrp_direct_mint.rs` / `flare_wallet.rs` / `combined_oracle.rs`: XRPL oracle 集約・Flare FTSOv2・FXRP Direct Mint 読み取り・Overview 用統合表示。
+- `oracle.rs` / `flare_ftso.rs` / `fxrp_direct_mint.rs` / `flare_wallet.rs` / `combined_oracle.rs`: XRPL oracle 集約・Flare FTSOv2・FXRP Direct Mint 読み取り（+ Smart Account 行）・Overview 用統合表示。
 
 - `trust_lines.rs`: TrustLine 一覧パネル（Table + Scrollbar、残高で色分け）。
 - `tx_history.rs`: TX 履歴パネル（Table + Scrollbar、tesSUCCESS で色分け）。

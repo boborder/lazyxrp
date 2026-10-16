@@ -679,6 +679,32 @@ mod tests {
         server.abort();
     }
 
+    /// A declared Content-Length over the cap is rejected before any body is read.
+    #[tokio::test]
+    async fn content_length_over_cap_is_rejected_up_front() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut s, _) = listener.accept().await.unwrap();
+            let mut buf = [0_u8; 1024];
+            let _ = s.read(&mut buf).await;
+            let head = format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                MAX_RPC_BODY_BYTES + 1
+            );
+            let _ = s.write_all(head.as_bytes()).await;
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await; // no body ever sent
+        });
+        let http = reqwest::Client::builder().no_proxy().build().unwrap();
+        let resp = http.get(format!("http://{addr}/")).send().await.unwrap();
+        let err = read_response_text_capped(resp, "test").await.unwrap_err();
+        assert!(err.to_string().contains("Content-Length"), "{err}");
+        server.abort();
+    }
+
     /// TC-210: an RPC endpoint answering 307 is an error — the request (and the signed blob
     /// in `submit`) is never re-posted to the redirect target, which may be plain `http://`.
     #[tokio::test]
@@ -712,15 +738,24 @@ mod tests {
     /// TC-068: XRPL RPC error — not found is not silently swallowed
     #[test]
     fn ensure_no_xrpl_rpc_error_preserves_not_found_as_error() {
-        let value = json!({
-            "result": {
-                "error": "actNotFound",
-                "error_code": 19,
-                "error_message": "Account not found."
-            }
-        });
-        let err = ensure_no_xrpl_rpc_error(&value).expect_err("not found must not be swallowed");
-        assert!(is_not_found_error(&format!("{err}")));
+        let err = |result: Value| {
+            ensure_no_xrpl_rpc_error(&json!({ "result": result }))
+                .expect_err("error result must be Err")
+                .to_string()
+        };
+        assert_eq!(
+            err(json!({"error": "actNotFound", "error_code": 19,
+                       "error_message": "Account not found."})),
+            "[XRPL-NOT_FOUND] Account not found."
+        );
+        // Other errors carry the numeric code; node-supplied text is control-stripped.
+        assert_eq!(
+            err(json!({"error": "malformed", "error_code": 12,
+                       "error_message": "bad\u{1b}[2J tx"})),
+            "[XRPL-12] bad[2J tx"
+        );
+        // No `error` key: Ok pass-through.
+        assert!(ensure_no_xrpl_rpc_error(&json!({"result": {"status": "success"}})).is_ok());
     }
 
     /// TC-102: rate-limited RPC errors remain retryable while permanent XRPL errors do not
@@ -731,6 +766,7 @@ mod tests {
         ));
         assert!(is_retryable_rpc_error("request error: connection reset"));
         assert!(!is_retryable_rpc_error("[XRPL-12] malformed transaction"));
+        assert!(is_retryable_rpc_error("[XRPL-17] tooBusy"));
     }
 
     /// TC-105: local HTTP 429 responses are retried before success
@@ -769,6 +805,61 @@ mod tests {
         let value = rpc.rpc_value("server_info", json!({})).await.unwrap();
         assert_eq!(value, json!({"result": {}}));
         server.await.unwrap();
+    }
+
+    /// TC-102: persistent 429 gives up after exactly 3 attempts and returns the rate-limit error.
+    #[tokio::test]
+    async fn rpc_value_gives_up_after_three_attempts() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let mut served = 0;
+            while let Ok(Ok((mut stream, _))) =
+                tokio::time::timeout(std::time::Duration::from_millis(500), listener.accept()).await
+            {
+                let mut request = [0_u8; 1024];
+                let _ = stream.read(&mut request).await;
+                let _ = stream
+                    .write_all(
+                        b"HTTP/1.1 429 Too Many Requests\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}",
+                    )
+                    .await;
+                served += 1;
+            }
+            served
+        });
+        let rpc = RpcClient::connect(&format!("http://{address}")).unwrap();
+        let err = rpc.rpc_value("server_info", json!({})).await.unwrap_err();
+        assert!(err.to_string().contains("Rate limited (HTTP 429)"), "{err}");
+        assert_eq!(server.await.unwrap(), 3, "exactly 3 attempts");
+    }
+
+    /// TC-102: a transient XRPL error (`tooBusy`, code 17) is retried; success follows.
+    #[tokio::test]
+    async fn rpc_value_retries_transient_xrpl_error() {
+        use crate::test_support::rpc_mock;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static CALLS: AtomicUsize = AtomicUsize::new(0);
+        fn result_for(_: &str) -> Value {
+            if CALLS.fetch_add(1, Ordering::SeqCst) == 0 {
+                json!({"error": "tooBusy", "error_code": 17,
+                       "error_message": "Server is tooBusy"})
+            } else {
+                json!({"status": "success"})
+            }
+        }
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(rpc_mock::serve(listener, 2, result_for));
+        let rpc = RpcClient::connect(&url).unwrap();
+        let value = rpc.rpc_value("server_info", json!({})).await.unwrap();
+        assert_eq!(value["result"]["status"], "success");
+        server.await.unwrap().unwrap();
     }
 
     /// TC-229: `account_offers` follows `marker` across pages until the node stops returning one.

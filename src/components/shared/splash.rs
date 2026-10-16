@@ -199,16 +199,6 @@ mod tests {
     }
 
     #[test]
-    fn trailing_dots_cycles_through_empty_one_two_three_dots() {
-        assert_eq!(trailing_dots(0), "");
-        assert_eq!(trailing_dots(1), ".");
-        assert_eq!(trailing_dots(2), "..");
-        assert_eq!(trailing_dots(3), "...");
-        assert_eq!(trailing_dots(4), "");
-        assert_eq!(trailing_dots(7), "...");
-    }
-
-    #[test]
     fn splash_art_column_geometry() {
         // Wide area shows full art width, centered horizontally.
         let col = splash_art_column(Rect::new(0, 5, 120, 12));

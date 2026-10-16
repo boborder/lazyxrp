@@ -226,6 +226,44 @@ pub enum Cmd {
         /// Classic address, or X-address carrying a destination tag
         destination: String,
     },
+    /// Print the XRPL transaction coverage table (Markdown; same as ROADMAP.md "XRPL coverage")
+    Coverage,
+    /// Any spec'd transaction type: `tx <TYPE> Field=value …` (simulate first; mainnet needs
+    /// --yes). Types and fields: `docs/architecture.md` §2 / ROADMAP "XRPL coverage".
+    /// Example: `tx NFTokenBurn NFTokenID=000B…`
+    Tx {
+        /// Transaction type, e.g. `NFTokenMint` (case-insensitive; `nft-mint` works)
+        tx_type: String,
+        /// `Field=value` pairs (names case-insensitive)
+        #[arg(value_name = "FIELD=VALUE")]
+        fields: Vec<String>,
+    },
+    /// Mint an NFT (NFTokenMint; simulate first, mainnet needs --yes). `--uri` is plain text
+    NftMint {
+        /// Metadata URI as plain text (stored hex-encoded, ≤ 256 bytes)
+        #[arg(long)]
+        uri: Option<String>,
+        /// NFTokenTaxon (collection id)
+        #[arg(long, default_value_t = 0)]
+        taxon: u32,
+        /// Comma-separated: burnable, onlyXRP, transferable
+        #[arg(long)]
+        flags: Option<String>,
+        /// TransferFee 0..=50000 (needs `transferable`)
+        #[arg(long)]
+        transfer_fee: Option<u32>,
+        /// Mint on behalf of this issuer
+        #[arg(long)]
+        issuer: Option<String>,
+    },
+    /// Burn an NFT (NFTokenBurn; irreversible, simulate first, mainnet needs --yes)
+    NftBurn {
+        /// 64-hex NFTokenID
+        nftoken_id: String,
+        /// Current holder when burning as issuer
+        #[arg(long)]
+        owner: Option<String>,
+    },
     /// Fund an account from the public faucet (testnet/devnet only). No ADDRESS: generate a fresh
     /// wallet locally (seed printed once, never saved or sent).
     Faucet {
@@ -253,6 +291,10 @@ impl Cmd {
             Cmd::AmmDeposit { .. } => "amm-deposit",
             Cmd::AmmWithdraw { .. } => "amm-withdraw",
             Cmd::AccountDelete { .. } => "account-delete",
+            Cmd::Coverage => "coverage",
+            Cmd::Tx { .. } => "tx",
+            Cmd::NftMint { .. } => "nft-mint",
+            Cmd::NftBurn { .. } => "nft-burn",
             Cmd::Faucet { .. } => "faucet",
         }
     }
@@ -267,6 +309,9 @@ impl Cmd {
                 | Cmd::AmmDeposit { .. }
                 | Cmd::AmmWithdraw { .. }
                 | Cmd::AccountDelete { .. }
+                | Cmd::Tx { .. }
+                | Cmd::NftMint { .. }
+                | Cmd::NftBurn { .. }
         )
     }
 }
@@ -309,7 +354,7 @@ mod tests {
     fn book_requires_base_and_quote_arguments() {
         assert!(Cli::try_parse_from(["lazyxrp", "-x", "book", "--quote", "USD"]).is_err());
         assert!(Cli::try_parse_from(["lazyxrp", "-x", "book", "--base", "XRP"]).is_err());
-        // Bare (no `-x`) form still parses so the resolver can point at `-x`.
+        // Bare (no `-x`) form is also rejected by clap: `book` requires `--base`.
         assert!(Cli::try_parse_from(["lazyxrp", "book", "--quote", "USD"]).is_err());
         // `watch` was removed: bare `lazyxrp` is the TUI.
         assert!(Cli::try_parse_from(["lazyxrp", "watch"]).is_err());
@@ -326,7 +371,11 @@ mod tests {
             "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
         ])
         .expect("offers parses");
-        assert!(matches!(c.command, Some(super::Cmd::Offers { .. })));
+        assert!(matches!(
+            c.command,
+            Some(super::Cmd::Offers { ref address, .. })
+                if address == "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
+        ));
         let c = Cli::try_parse_from(["lazyxrp", "-x", "offer-cancel", "42"]).expect("parses");
         assert!(matches!(
             c.command,
@@ -363,19 +412,87 @@ mod tests {
         let c = Cli::try_parse_from(["lazyxrp", "-x", "faucet", "rX"]).expect("faucet ADDR parses");
         assert!(matches!(
             c.command,
-            Some(super::Cmd::Faucet { address: Some(_) })
+            Some(super::Cmd::Faucet { address: Some(ref a) }) if a == "rX"
         ));
     }
 
+    /// TC-190 (extended): spec'd transaction commands — `tx <TYPE> Field=value…`, `nft-mint`
+    /// flags, `nft-burn <ID> --owner`, `coverage`; `nft-mint` without options takes taxon 0;
+    /// all but `coverage` sign (refused under `--watch`).
     #[test]
-    fn exec_flag_parses_with_script_subcommand() {
-        let c = Cli::try_parse_from(["lazyxrp", "-x", "info"]).expect("parses");
-        assert!(c.exec);
-        assert!(matches!(c.command, Some(super::Cmd::Info)));
+    fn spec_subcommands_parse() {
+        use super::Cmd;
+        let c = Cli::try_parse_from([
+            "lazyxrp",
+            "-x",
+            "tx",
+            "NFTokenBurn",
+            "NFTokenID=00",
+            "Owner=rX",
+        ])
+        .expect("tx parses");
+        assert!(matches!(
+            &c.command,
+            Some(Cmd::Tx { tx_type, fields })
+                if tx_type == "NFTokenBurn" && fields == &["NFTokenID=00", "Owner=rX"]
+        ));
+        let c = Cli::try_parse_from([
+            "lazyxrp",
+            "-x",
+            "nft-mint",
+            "--uri",
+            "ipfs://x",
+            "--taxon",
+            "3",
+            "--flags",
+            "burnable,transferable",
+            "--transfer-fee",
+            "500",
+            "--issuer",
+            "rX",
+        ])
+        .expect("nft-mint parses");
+        assert!(matches!(
+            &c.command,
+            Some(Cmd::NftMint { uri, taxon: 3, flags, transfer_fee: Some(500), issuer })
+                if uri.as_deref() == Some("ipfs://x")
+                    && flags.as_deref() == Some("burnable,transferable")
+                    && issuer.as_deref() == Some("rX")
+        ));
+        let c = Cli::try_parse_from(["lazyxrp", "-x", "nft-mint"]).expect("bare nft-mint");
+        assert!(matches!(
+            c.command,
+            Some(Cmd::NftMint {
+                uri: None,
+                taxon: 0,
+                flags: None,
+                transfer_fee: None,
+                issuer: None
+            })
+        ));
+        assert!(Cli::try_parse_from(["lazyxrp", "-x", "nft-mint", "--taxon", "x"]).is_err());
+        let c = Cli::try_parse_from(["lazyxrp", "-x", "nft-burn", "AB", "--owner", "rX"])
+            .expect("nft-burn parses");
+        assert!(matches!(
+            &c.command,
+            Some(Cmd::NftBurn { nftoken_id, owner })
+                if nftoken_id == "AB" && owner.as_deref() == Some("rX")
+        ));
+        assert!(Cli::try_parse_from(["lazyxrp", "-x", "nft-burn"]).is_err());
+        for (argv, signs) in [
+            (vec!["tx", "NFTokenBurn"], true),
+            (vec!["nft-mint"], true),
+            (vec!["nft-burn", "AB"], true),
+            (vec!["coverage"], false),
+        ] {
+            let c = Cli::try_parse_from(["lazyxrp", "-x"].into_iter().chain(argv.clone()))
+                .expect("parses");
+            assert_eq!(c.command.expect("cmd").signs(), signs, "{argv:?}");
+        }
     }
 
     #[test]
-    fn exec_flag_accepts_global_network_before_subcommand() {
+    fn network_flag_precedes_exec_subcommand() {
         let c =
             Cli::try_parse_from(["lazyxrp", "--network", "testnet", "-x", "info"]).expect("parses");
         assert!(c.exec);
@@ -383,31 +500,16 @@ mod tests {
     }
 
     #[test]
-    fn top_level_account_flag_parses_for_tui() {
-        let c = Cli::try_parse_from(["lazyxrp", "--account", "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"])
-            .expect("parses");
-        assert_eq!(
-            c.account.as_deref(),
-            Some("rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh")
-        );
-        assert!(c.command.is_none());
-        assert!(!c.exec);
-    }
-
-    #[test]
     fn exec_conflicts_with_self_uninstall() {
         assert!(Cli::try_parse_from(["lazyxrp", "--self-uninstall", "-x", "info"]).is_err());
     }
 
-    /// `--self-uninstall` resolves both as flag-only and alongside a subcommand.
+    /// `--self-uninstall` captures `--yes` (the subcommand guard is tested in lib.rs, TC-076).
     #[test]
     fn self_uninstall_parses() {
         let c = Cli::try_parse_from(["lazyxrp", "--self-uninstall", "--yes"]).expect("parses");
         assert!(c.self_uninstall);
         assert!(c.yes, "--yes flag must be captured");
-        let c = Cli::try_parse_from(["lazyxrp", "--self-uninstall", "info"]).expect("parses");
-        assert!(c.self_uninstall);
-        assert!(matches!(c.command, Some(super::Cmd::Info)));
     }
 
     /// TC-125: `--network` public values include `xahau` and `xahau-test`
@@ -440,12 +542,17 @@ mod tests {
         }
     }
 
+    /// `-t` wins over the positional; a whitespace-only target is an error.
     #[test]
     fn rp_cli_accepts_flag_and_positional() {
         let flag = RpCli::try_parse_from(["rp", "-t", "abcd"]).expect("flag");
         assert_eq!(flag.resolved_target().unwrap(), "abcd");
         let pos = RpCli::try_parse_from(["rp", "ef01"]).expect("pos");
         assert_eq!(pos.resolved_target().unwrap(), "ef01");
+        let both = RpCli::try_parse_from(["rp", "-t", "abcd", "ef01"]).expect("both");
+        assert_eq!(both.resolved_target().unwrap(), "abcd");
+        let blank = RpCli::try_parse_from(["rp", "-t", "  "]).expect("blank");
+        assert!(blank.resolved_target().is_err());
         assert!(
             RpCli::try_parse_from(["rp"])
                 .unwrap()

@@ -169,13 +169,49 @@ mod tests {
         crate::test_support::render_to_string(120, 40, |f| tab.draw(f, f.area()).unwrap())
     }
 
-    /// TC-118: Market Off omits the FTSO panel but keeps XRPL oracle.
+    /// TC-118: Market Off omits the FTSO panel but keeps XRPL oracle; Full shows it.
     #[test]
     fn market_off_omits_ftso_panel() {
+        let mut full = MarketOracleTab::new(FlareDisplay::Full);
+        let prices = Action::FlareOraclePrices(vec![crate::xrpl::FlareFeedPrice {
+            pair: "FLR/USD".into(),
+            price: "0.03".into(),
+            timestamp: 1,
+            source: "test".into(),
+        }]);
+        full.update(&prices).unwrap();
+        assert!(render_tab(&mut full).contains("FTSOv2"), "positive control");
         let mut tab = MarketOracleTab::new(FlareDisplay::Off);
+        tab.update(&prices).unwrap();
         let out = render_tab(&mut tab);
         assert!(!out.contains("FTSOv2"));
         assert!(out.contains("Oracle"));
+    }
+
+    /// With Flare Off the hidden FTSO panel is never focused in either direction.
+    #[test]
+    fn market_off_focus_cycle_skips_hidden_ftso() {
+        let mut tab = MarketOracleTab::new(FlareDisplay::Off);
+        let mut seen_oracle = false;
+        for action in [Action::FocusNext, Action::FocusPrev] {
+            for _ in 0..12 {
+                tab.update(&action).unwrap();
+                assert!(!tab.ftso.is_focused);
+                let n = [
+                    &tab.book.is_focused,
+                    &tab.path.is_focused,
+                    &tab.amm.is_focused,
+                    &tab.trust.is_focused,
+                    &tab.oracle.is_focused,
+                ]
+                .iter()
+                .filter(|f| ***f)
+                .count();
+                assert_eq!(n, 1, "exactly one visible panel focused");
+                seen_oracle |= tab.oracle.is_focused;
+            }
+        }
+        assert!(seen_oracle);
     }
 
     /// TC-119: Market Compact uses a one-line FTSO summary instead of the feed table.

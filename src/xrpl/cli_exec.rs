@@ -4,6 +4,63 @@ use crate::signing::{self, SigningCredential, prompt_production_confirmation};
 
 use super::client::{RpcClient, xrp_to_drops};
 
+/// `-x tx` / `nft-mint` / `nft-burn` → spec + prepared fields (validated, `Time` fields absolute).
+/// Runs before any RPC.
+fn cmd_tx_request(
+    cmd: &Cmd,
+) -> color_eyre::Result<(&'static super::txspec::TxSpec, super::txspec::Fields)> {
+    use super::txspec::{self, Fields};
+    use color_eyre::eyre::eyre;
+
+    fn spec_named(name: &str) -> color_eyre::Result<&'static txspec::TxSpec> {
+        txspec::lookup(name).ok_or_else(|| {
+            let known: Vec<&str> = txspec::registry().map(|s| s.tx_type).collect();
+            eyre!(
+                "unknown transaction type {name:?} (supported: {})",
+                known.join(", ")
+            )
+        })
+    }
+    let (spec, raw) = match cmd {
+        Cmd::Tx { tx_type, fields } => {
+            let spec = spec_named(tx_type)?;
+            (spec, spec.parse_cli_fields(fields).map_err(|e| eyre!(e))?)
+        }
+        Cmd::NftMint {
+            uri,
+            taxon,
+            flags,
+            transfer_fee,
+            issuer,
+        } => {
+            let mut f = Fields::from([("NFTokenTaxon".to_string(), taxon.to_string())]);
+            for (name, value) in [
+                ("URI", uri.clone()),
+                ("Flags", flags.clone()),
+                ("TransferFee", transfer_fee.map(|n| n.to_string())),
+                ("Issuer", issuer.clone()),
+            ] {
+                if let Some(value) = value {
+                    f.insert(name.to_string(), value);
+                }
+            }
+            (spec_named("NFTokenMint")?, f)
+        }
+        Cmd::NftBurn { nftoken_id, owner } => {
+            let mut f = Fields::from([("NFTokenID".to_string(), nftoken_id.clone())]);
+            if let Some(owner) = owner {
+                f.insert("Owner".to_string(), owner.clone());
+            }
+            (spec_named("NFTokenBurn")?, f)
+        }
+        _ => color_eyre::eyre::bail!("not a spec'd transaction command"),
+    };
+    let fields = spec
+        .prepare(&raw, super::submit::ripple_now_secs())
+        .map_err(|e| eyre!(e))?;
+    Ok((spec, fields))
+}
+
 fn validate_cmd_account_and_issuer_addresses(cmd: &Cmd) -> color_eyre::Result<()> {
     use crate::signing::require_classic_address_shape;
 
@@ -51,12 +108,19 @@ fn validate_cmd_account_and_issuer_addresses(cmd: &Cmd) -> color_eyre::Result<()
         Cmd::AccountDelete { destination } => {
             super::address::resolve_payment_destination(destination.trim())?;
         }
+        Cmd::Tx { .. } | Cmd::NftMint { .. } | Cmd::NftBurn { .. } => {
+            cmd_tx_request(cmd)?;
+        }
         Cmd::Faucet {
             address: Some(address),
         } => {
             require_classic_address_shape("account", address)?;
         }
-        Cmd::Info | Cmd::Send { .. } | Cmd::OfferCancel { .. } | Cmd::Faucet { address: None } => {}
+        Cmd::Info
+        | Cmd::Coverage
+        | Cmd::Send { .. }
+        | Cmd::OfferCancel { .. }
+        | Cmd::Faucet { address: None } => {}
     }
     Ok(())
 }
@@ -503,6 +567,11 @@ pub async fn execute_cli_command(
             )
             .await?;
         }
+        Cmd::Coverage => {
+            print!("{}", crate::coverage::markdown_table());
+            let (writable, total) = crate::coverage::write_counts(&crate::coverage::rows());
+            println!("\nWritable: {writable} / {total} XRPL transaction types");
+        }
         Cmd::AccountDelete { destination } => {
             use super::address::{ensure_xaddress_matches_network, resolve_payment_destination};
 
@@ -542,6 +611,41 @@ pub async fn execute_cli_command(
                         &account,
                         &dest,
                         tag,
+                        tx_sequence,
+                        fee_drops,
+                        last_ledger_sequence,
+                    )
+                },
+            )
+            .await?;
+        }
+        generic @ (Cmd::Tx { .. } | Cmd::NftMint { .. } | Cmd::NftBurn { .. }) => {
+            let (spec, fields) = cmd_tx_request(&generic)?;
+            let wallet = cli_wallet(signing_credential.as_ref())?;
+            let account = wallet.classic_address.clone();
+            rpc.ensure_network(network).await?;
+            let account_info = rpc.account_info(&account).await?;
+            let tx_json = (spec.build_json)(&account, &fields, account_info.sequence)?;
+            let summary = spec.summary_line(&fields);
+            simulate_confirm_submit(
+                &rpc,
+                network,
+                yes,
+                wait,
+                false,
+                tx_json,
+                |_, fee_drops, _| {
+                    println!("{account}: {summary} (fee {fee_drops} drops)");
+                    Ok(match spec.confirm {
+                        Some(c) => format!("{summary} — {}", c.hint),
+                        None => summary,
+                    })
+                },
+                |tx_sequence, fee_drops, last_ledger_sequence| {
+                    (spec.sign)(
+                        &wallet,
+                        &account,
+                        &fields,
                         tx_sequence,
                         fee_drops,
                         last_ledger_sequence,
@@ -853,7 +957,7 @@ mod tests {
         async fn read_only_cli_commands_succeed_against_local_rpc() -> color_eyre::Result<()> {
             let listener = TcpListener::bind(("127.0.0.1", 0)).await?;
             let url = format!("http://{}", listener.local_addr()?);
-            let server = tokio::spawn(serve(listener, 11));
+            let server = tokio::spawn(rpc_mock::serve(listener, 11, result_for));
 
             async fn run(step: &str, cmd: Cmd, url: &str) -> color_eyre::Result<()> {
                 execute_cli_command(cmd, url, &Network::Testnet, None, false, false)
@@ -934,9 +1038,9 @@ mod tests {
             )
             .await?;
 
-            let methods = server.await??;
+            let requests = server.await??;
             assert_eq!(
-                methods,
+                rpc_mock::methods(&requests),
                 [
                     "server_info",
                     "account_info",
@@ -951,18 +1055,39 @@ mod tests {
                     "account_info",
                 ]
             );
+            let xrp = json!({"currency": "XRP"});
+            let rlusd = json!({"currency": "RLUSD", "issuer": RLUSD_ISSUER});
+            let book = &requests[2]["params"][0];
+            assert_eq!(
+                (&book["taker_gets"], &book["taker_pays"], &book["limit"]),
+                (&xrp, &rlusd, &json!(5))
+            );
+            let amm = &requests[8]["params"][0];
+            assert_eq!((&amm["asset"], &amm["asset2"]), (&xrp, &rlusd));
             Ok(())
         }
 
         /// TC-188: `-x send` checks the endpoint network, then account_info → simulate → submit
-        /// (no unsimulated signing); sequence/fee/LLS come from the simulate response.
+        /// (no unsimulated signing); the signed Fee comes from the simulate response and a
+        /// simulate for a foreign Sequence aborts before submit.
         #[tokio::test]
         async fn send_simulates_before_signing_and_submits() -> color_eyre::Result<()> {
             use secrecy::SecretString;
+            use xrpl::core::binarycodec::decode;
 
+            fn node(method: &str) -> Value {
+                match method {
+                    "simulate" => json!({
+                        "engine_result": "tesSUCCESS",
+                        "ledger_index": 80_000_000,
+                        "tx_json": {"Sequence": 7, "Fee": "13"}
+                    }),
+                    other => result_for(other),
+                }
+            }
             let listener = TcpListener::bind(("127.0.0.1", 0)).await?;
             let url = format!("http://{}", listener.local_addr()?);
-            let server = tokio::spawn(serve(listener, 4));
+            let server = tokio::spawn(rpc_mock::serve(listener, 4, node));
             let credential = crate::signing::credential_from_secrets(
                 Some(&SecretString::from("sEdSkooMk31MeTjbHVE7vLvgCpEMAdB")),
                 None,
@@ -979,8 +1104,487 @@ mod tests {
                 false,
             )
             .await?;
+            let requests = server.await??;
+            assert_eq!(
+                rpc_mock::methods(&requests),
+                ["server_info", "account_info", "simulate", "submit"]
+            );
+            // The signed Sequence is the requested one (account_info); the Fee is the
+            // simulate response's (13), not the `fee` RPC's open-ledger fee (15).
+            assert_eq!(requests[2]["params"][0]["tx_json"]["Sequence"], 7);
+            let signed = decode(requests[3]["params"][0]["tx_blob"].as_str().unwrap())?;
+            assert_eq!(
+                (&signed["Sequence"], &signed["Fee"]),
+                (&json!(7), &json!("13"))
+            );
+            assert!(signed["LastLedgerSequence"].as_u64().unwrap() > 80_000_000);
+
+            // A simulate response for a different Sequence is refused before submit.
+            fn foreign_sequence(method: &str) -> Value {
+                match method {
+                    "simulate" => json!({
+                        "engine_result": "tesSUCCESS",
+                        "ledger_index": 80_000_000,
+                        "tx_json": {"Sequence": 9, "Fee": "13"}
+                    }),
+                    other => result_for(other),
+                }
+            }
+            let listener = TcpListener::bind(("127.0.0.1", 0)).await?;
+            let url = format!("http://{}", listener.local_addr()?);
+            let server = tokio::spawn(rpc_mock::serve(listener, 3, foreign_sequence));
+            let err = execute_cli_command(
+                Cmd::Send {
+                    destination: GENESIS.into(),
+                    amount: "0.000123".into(),
+                },
+                &url,
+                &Network::Testnet,
+                crate::signing::credential_from_secrets(
+                    Some(&SecretString::from("sEdSkooMk31MeTjbHVE7vLvgCpEMAdB")),
+                    None,
+                )?,
+                false,
+                false,
+            )
+            .await
+            .expect_err("foreign Sequence must abort");
+            assert!(err.to_string().contains("Sequence"), "{err}");
+            assert_eq!(
+                rpc_mock::methods(&server.await??),
+                ["server_info", "account_info", "simulate"]
+            );
+            Ok(())
+        }
+
+        /// TC-048: mainnet with `--yes` skips the prompt and submits (the `yes` flag is honoured
+        /// off testnet too).
+        #[tokio::test]
+        async fn send_on_mainnet_with_yes_submits() -> color_eyre::Result<()> {
+            use secrecy::SecretString;
+
+            fn mainnet_node(method: &str) -> Value {
+                match method {
+                    "server_info" => json!({"info": {"validated_ledger": {"seq": 1}}}),
+                    other => result_for(other),
+                }
+            }
+            let listener = TcpListener::bind(("127.0.0.1", 0)).await?;
+            let url = format!("http://{}", listener.local_addr()?);
+            let server = tokio::spawn(serve_with(listener, 4, mainnet_node));
+            let credential = crate::signing::credential_from_secrets(
+                Some(&SecretString::from("sEdSkooMk31MeTjbHVE7vLvgCpEMAdB")),
+                None,
+            )?;
+            execute_cli_command(
+                Cmd::Send {
+                    destination: GENESIS.into(),
+                    amount: "0.000123".into(),
+                },
+                &url,
+                &Network::Mainnet,
+                credential,
+                true,
+                false,
+            )
+            .await?;
             assert_eq!(
                 server.await??,
+                ["server_info", "account_info", "simulate", "submit"]
+            );
+            Ok(())
+        }
+
+        /// TC-188: a non-`tesSUCCESS` simulate stops the flow before signing/submit.
+        #[tokio::test]
+        async fn send_stops_when_simulate_is_not_tes_success() -> color_eyre::Result<()> {
+            use secrecy::SecretString;
+
+            fn failing_simulate(method: &str) -> Value {
+                match method {
+                    "simulate" => json!({
+                        "engine_result": "tecUNFUNDED_PAYMENT",
+                        "engine_result_message": "Insufficient XRP balance to send.",
+                        "tx_json": {}
+                    }),
+                    other => result_for(other),
+                }
+            }
+            let listener = TcpListener::bind(("127.0.0.1", 0)).await?;
+            let url = format!("http://{}", listener.local_addr()?);
+            let server = tokio::spawn(serve_with(listener, 3, failing_simulate));
+            let credential = crate::signing::credential_from_secrets(
+                Some(&SecretString::from("sEdSkooMk31MeTjbHVE7vLvgCpEMAdB")),
+                None,
+            )?;
+            let err = execute_cli_command(
+                Cmd::Send {
+                    destination: GENESIS.into(),
+                    amount: "0.000123".into(),
+                },
+                &url,
+                &Network::Testnet,
+                credential,
+                false,
+                false,
+            )
+            .await
+            .expect_err("tec simulate must abort");
+            assert!(err.to_string().contains("tecUNFUNDED_PAYMENT"), "{err}");
+            assert_eq!(server.await??, ["server_info", "account_info", "simulate"]);
+            Ok(())
+        }
+
+        const NFT_ID: &str = "000B013A95F14B0044F78A264E41713C64B5F89242540EE208C3098E00000D65";
+
+        /// TC-254: CLI `nft-mint` / `tx` — `server_info → account_info → simulate → submit`;
+        /// simulate and the signed blob carry the spec's fields (plain-text URI → hex, flag bits,
+        /// case-insensitive `Field=value` names), and the blob the simulate Sequence / Fee / LLS.
+        #[tokio::test]
+        async fn generic_tx_cli_signs_through_simulate() -> color_eyre::Result<()> {
+            use xrpl::core::binarycodec::decode;
+
+            let listener = TcpListener::bind(("127.0.0.1", 0)).await?;
+            let url = format!("http://{}", listener.local_addr()?);
+            let server = tokio::spawn(rpc_mock::serve(listener, 8, result_for));
+            execute_cli_command(
+                Cmd::NftMint {
+                    uri: Some("hello".into()),
+                    taxon: 9,
+                    flags: Some("burnable,transferable".into()),
+                    transfer_fee: Some(250),
+                    issuer: None,
+                },
+                &url,
+                &Network::Testnet,
+                test_credential()?,
+                false,
+                false,
+            )
+            .await?;
+            execute_cli_command(
+                Cmd::Tx {
+                    tx_type: "nftokenburn".into(),
+                    fields: vec![
+                        format!("nftokenid={}", NFT_ID.to_lowercase()),
+                        format!("Owner={GENESIS}"),
+                    ],
+                },
+                &url,
+                &Network::Testnet,
+                test_credential()?,
+                false,
+                false,
+            )
+            .await?;
+            let requests = server.await??;
+            assert_eq!(
+                rpc_mock::methods(&requests),
+                [
+                    "server_info",
+                    "account_info",
+                    "simulate",
+                    "submit",
+                    "server_info",
+                    "account_info",
+                    "simulate",
+                    "submit"
+                ]
+            );
+            let sim = &requests[2]["params"][0]["tx_json"];
+            assert_eq!(
+                (
+                    &sim["TransactionType"],
+                    &sim["URI"],
+                    &sim["Flags"],
+                    &sim["NFTokenTaxon"]
+                ),
+                (
+                    &json!("NFTokenMint"),
+                    &json!("68656C6C6F"),
+                    &json!(9),
+                    &json!(9)
+                )
+            );
+            let signed = decode(requests[3]["params"][0]["tx_blob"].as_str().unwrap())?;
+            assert_eq!(
+                (
+                    &signed["Sequence"],
+                    &signed["Fee"],
+                    &signed["LastLedgerSequence"]
+                ),
+                (&json!(7), &json!("12"), &json!(80_000_020))
+            );
+            assert_eq!(
+                (&signed["URI"], &signed["TransferFee"]),
+                (&json!("68656C6C6F"), &json!(250))
+            );
+            let sim = &requests[6]["params"][0]["tx_json"];
+            assert_eq!(
+                (&sim["TransactionType"], &sim["NFTokenID"], &sim["Owner"]),
+                (&json!("NFTokenBurn"), &json!(NFT_ID), &json!(GENESIS))
+            );
+            let signed = decode(requests[7]["params"][0]["tx_blob"].as_str().unwrap())?;
+            assert_eq!(signed["NFTokenID"], NFT_ID);
+            Ok(())
+        }
+
+        /// TC-254: invalid forms and a missing key fail before any RPC (unknown type / field,
+        /// bad id, fee without `transferable`, `Field` without `=`).
+        #[tokio::test]
+        async fn generic_tx_cli_refusals_never_reach_rpc() -> color_eyre::Result<()> {
+            let burn = |id: &str| Cmd::NftBurn {
+                nftoken_id: id.into(),
+                owner: None,
+            };
+            let tx = |t: &str, f: &[&str]| Cmd::Tx {
+                tx_type: t.into(),
+                fields: f.iter().map(|s| s.to_string()).collect(),
+            };
+            let cases: Vec<(Cmd, &str)> = vec![
+                (tx("Payment", &[]), "unknown transaction type"),
+                (tx("NFTokenBurn", &["Bogus=1"]), "unknown field"),
+                (tx("NFTokenBurn", &["NFTokenID"]), "Field=value"),
+                (burn(&NFT_ID[..63]), "NFTokenID"),
+                (
+                    Cmd::NftMint {
+                        uri: None,
+                        taxon: 0,
+                        flags: None,
+                        transfer_fee: Some(5),
+                        issuer: None,
+                    },
+                    "transferable",
+                ),
+                (burn(NFT_ID), "No signing credential"),
+            ];
+            for (cmd, want) in cases {
+                let listener = TcpListener::bind(("127.0.0.1", 0)).await?;
+                let url = format!("http://{}", listener.local_addr()?);
+                let server = tokio::spawn(rpc_mock::serve(listener, 0, result_for));
+                let err = execute_cli_command(cmd, &url, &Network::Testnet, None, true, false)
+                    .await
+                    .expect_err("must be refused");
+                assert!(err.to_string().contains(want), "{want}: {err}");
+                assert!(server.await??.is_empty(), "{want}: reached the RPC");
+            }
+            Ok(())
+        }
+
+        /// TC-254: a non-`tesSUCCESS` simulate stops the generic CLI flow before signing; with
+        /// `wait` a validated result is polled via `tx` after submit (`--no-wait` skips it).
+        #[tokio::test]
+        async fn generic_tx_cli_simulate_stop_and_wait() -> color_eyre::Result<()> {
+            fn tec_simulate(method: &str) -> Value {
+                match method {
+                    "simulate" => json!({
+                        "engine_result": "tecNO_ENTRY",
+                        "engine_result_message": "no such NFT",
+                        "tx_json": {}
+                    }),
+                    other => result_for(other),
+                }
+            }
+            fn validating(method: &str) -> Value {
+                match method {
+                    "tx" => json!({"validated": true, "meta": {"TransactionResult": "tesSUCCESS"}}),
+                    other => result_for(other),
+                }
+            }
+            let burn = || Cmd::NftBurn {
+                nftoken_id: NFT_ID.into(),
+                owner: None,
+            };
+
+            let listener = TcpListener::bind(("127.0.0.1", 0)).await?;
+            let url = format!("http://{}", listener.local_addr()?);
+            let server = tokio::spawn(serve_with(listener, 3, tec_simulate));
+            let err = execute_cli_command(
+                burn(),
+                &url,
+                &Network::Testnet,
+                test_credential()?,
+                true,
+                false,
+            )
+            .await
+            .expect_err("tec simulate must abort");
+            assert!(err.to_string().contains("tecNO_ENTRY"), "{err}");
+            assert_eq!(server.await??, ["server_info", "account_info", "simulate"]);
+
+            let listener = TcpListener::bind(("127.0.0.1", 0)).await?;
+            let url = format!("http://{}", listener.local_addr()?);
+            let server = tokio::spawn(serve_with(listener, 5, validating));
+            execute_cli_command(
+                burn(),
+                &url,
+                &Network::Testnet,
+                test_credential()?,
+                true,
+                true,
+            )
+            .await?;
+            assert_eq!(
+                server.await??,
+                ["server_info", "account_info", "simulate", "submit", "tx"]
+            );
+            Ok(())
+        }
+
+        const AMM_ACCOUNT: &str = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh";
+        const LP_CURRENCY: &str = "03ABABABABABABABABABABABABABABABABABABAB";
+
+        fn write_node(method: &str) -> Value {
+            match method {
+                "amm_info" => json!({"amm": {
+                    "lp_token": {"currency": LP_CURRENCY, "issuer": AMM_ACCOUNT, "value": "42"},
+                    "trading_fee": 12
+                }}),
+                "simulate" => json!({
+                    "engine_result": "tesSUCCESS",
+                    "ledger_index": 80_000_000,
+                    "tx_json": {"Sequence": 7, "Fee": "200000"}
+                }),
+                other => result_for(other),
+            }
+        }
+
+        fn test_credential() -> color_eyre::Result<Option<crate::signing::SigningCredential>> {
+            use secrecy::SecretString;
+            crate::signing::credential_from_secrets(
+                Some(&SecretString::from("sEdSkooMk31MeTjbHVE7vLvgCpEMAdB")),
+                None,
+            )
+        }
+
+        /// CLI `account-delete` — a mismatched X-address network is refused before any
+        /// RPC; a matching X-address tag reaches simulate and the signed blob.
+        #[tokio::test]
+        async fn account_delete_guards_xaddress_network_and_passes_tag() -> color_eyre::Result<()> {
+            use xrpl::core::addresscodec::classic_address_to_xaddress;
+            use xrpl::core::binarycodec::decode;
+
+            let listener = TcpListener::bind(("127.0.0.1", 0)).await?;
+            let url = format!("http://{}", listener.local_addr()?);
+            let server = tokio::spawn(rpc_mock::serve(listener, 0, write_node));
+            let prod_xaddr = classic_address_to_xaddress(GENESIS, Some(1), false)?;
+            let err = execute_cli_command(
+                Cmd::AccountDelete {
+                    destination: prod_xaddr,
+                },
+                &url,
+                &Network::Testnet,
+                test_credential()?,
+                false,
+                false,
+            )
+            .await
+            .expect_err("production X-address on testnet");
+            assert!(err.to_string().contains("production network"), "{err}");
+            assert!(server.await??.is_empty(), "guard must fire before any RPC");
+
+            let listener = TcpListener::bind(("127.0.0.1", 0)).await?;
+            let url = format!("http://{}", listener.local_addr()?);
+            let server = tokio::spawn(rpc_mock::serve(listener, 4, write_node));
+            execute_cli_command(
+                Cmd::AccountDelete {
+                    destination: classic_address_to_xaddress(GENESIS, Some(12345), true)?,
+                },
+                &url,
+                &Network::Testnet,
+                test_credential()?,
+                false,
+                false,
+            )
+            .await?;
+            let requests = server.await??;
+            assert_eq!(
+                rpc_mock::methods(&requests),
+                ["server_info", "account_info", "simulate", "submit"]
+            );
+            let sim = &requests[2]["params"][0]["tx_json"];
+            assert_eq!(
+                (
+                    &sim["TransactionType"],
+                    &sim["Destination"],
+                    &sim["DestinationTag"]
+                ),
+                (&json!("AccountDelete"), &json!(GENESIS), &json!(12345))
+            );
+            let signed = decode(requests[3]["params"][0]["tx_blob"].as_str().unwrap())?;
+            assert_eq!(
+                (&signed["DestinationTag"], &signed["Fee"]),
+                (&json!(12345), &json!("200000"))
+            );
+            Ok(())
+        }
+
+        /// CLI `amm-withdraw --lp` reads the LP token via `amm_info` before simulate and
+        /// signs `LPTokenIn` with that currency/issuer; without `--lp` there is no `amm_info`.
+        #[tokio::test]
+        async fn amm_withdraw_looks_up_lp_token_before_simulate() -> color_eyre::Result<()> {
+            use xrpl::core::binarycodec::decode;
+
+            let asset2 = format!("USD:{RLUSD_ISSUER}");
+            let listener = TcpListener::bind(("127.0.0.1", 0)).await?;
+            let url = format!("http://{}", listener.local_addr()?);
+            let server = tokio::spawn(rpc_mock::serve(listener, 5, write_node));
+            execute_cli_command(
+                Cmd::AmmWithdraw {
+                    asset: "XRP".into(),
+                    asset2: asset2.clone(),
+                    lp: Some("5".into()),
+                },
+                &url,
+                &Network::Testnet,
+                test_credential()?,
+                false,
+                false,
+            )
+            .await?;
+            let requests = server.await??;
+            assert_eq!(
+                rpc_mock::methods(&requests),
+                [
+                    "server_info",
+                    "account_info",
+                    "amm_info",
+                    "simulate",
+                    "submit"
+                ]
+            );
+            assert_eq!(
+                requests[2]["params"][0]["asset"],
+                json!({"currency": "XRP"})
+            );
+            assert_eq!(
+                requests[2]["params"][0]["asset2"],
+                json!({"currency": "USD", "issuer": RLUSD_ISSUER})
+            );
+            let signed = decode(requests[4]["params"][0]["tx_blob"].as_str().unwrap())?;
+            assert_eq!(
+                signed["LPTokenIn"],
+                json!({"currency": LP_CURRENCY, "issuer": AMM_ACCOUNT, "value": "5"})
+            );
+
+            let listener = TcpListener::bind(("127.0.0.1", 0)).await?;
+            let url = format!("http://{}", listener.local_addr()?);
+            let server = tokio::spawn(rpc_mock::serve(listener, 4, write_node));
+            execute_cli_command(
+                Cmd::AmmWithdraw {
+                    asset: "XRP".into(),
+                    asset2,
+                    lp: None,
+                },
+                &url,
+                &Network::Testnet,
+                test_credential()?,
+                false,
+                false,
+            )
+            .await?;
+            assert_eq!(
+                rpc_mock::methods(&server.await??),
                 ["server_info", "account_info", "simulate", "submit"]
             );
             Ok(())
@@ -1190,8 +1794,12 @@ mod tests {
         async fn faucet_funds_destination_on_test_networks_only() -> color_eyre::Result<()> {
             use super::super::{faucet_url, fund_from_faucet};
 
-            assert!(faucet_url(&Network::Testnet)?.contains("altnet"));
-            assert!(faucet_url(&Network::Devnet)?.contains("devnet"));
+            let (testnet, devnet) = (
+                faucet_url(&Network::Testnet)?,
+                faucet_url(&Network::Devnet)?,
+            );
+            assert!(testnet.starts_with("https://") && devnet.starts_with("https://"));
+            assert_ne!(testnet, devnet);
             for network in [Network::Mainnet, Network::Xahau, Network::XahauTest] {
                 assert!(faucet_url(&network).is_err(), "{network:?}");
             }
@@ -1303,37 +1911,6 @@ mod tests {
             );
             assert_eq!(methods, ["tx", "server_info"]);
             Ok(())
-        }
-    }
-
-    mod integration_live_network {
-        use std::time::Duration;
-
-        use super::super::execute_cli_command;
-        use crate::cli::Cmd;
-        use crate::network::Network;
-
-        /// Manual live-network check only. Read-only CLI behavior is covered
-        /// by the local RPC test above; this remains opt-in for real-mainnet signing.
-        #[tokio::test]
-        #[ignore = "manual live-network check: requires XRPL_SEED; mainnet may send real XRP if stdin confirms"]
-        async fn cli_send_live_manual_only() -> color_eyre::Result<()> {
-            tokio::time::timeout(
-                Duration::from_secs(90),
-                execute_cli_command(
-                    Cmd::Send {
-                        destination: "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh".into(),
-                        amount: "0.000123".to_string(),
-                    },
-                    "https://xrplcluster.com",
-                    &Network::Mainnet,
-                    None,
-                    false,
-                    false,
-                ),
-            )
-            .await
-            .map_err(|_| color_eyre::eyre::eyre!("XRPL integration test timed out"))?
         }
     }
 }

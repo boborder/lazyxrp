@@ -53,7 +53,7 @@ pub fn group_digits(s: &str) -> String {
 pub fn fmt_xrp(xrp: f64) -> String {
     let s = format!("{xrp:.6}");
     let trimmed = s.trim_end_matches('0').trim_end_matches('.');
-    let final_str = if trimmed.is_empty() || trimmed == "-" {
+    let final_str = if trimmed.is_empty() || trimmed == "-" || trimmed == "-0" {
         "0"
     } else {
         trimmed
@@ -179,5 +179,14 @@ mod tests {
         assert_eq!(group_digits_u64(1234), "1,234");
         assert_eq!(group_digits_u64(1_234_567), "1,234,567");
         assert_eq!(group_digits_u64(u64::MAX), "18,446,744,073,709,551,615");
+    }
+
+    #[test]
+    fn fmt_edge_cases_for_remote_and_tiny_values() {
+        assert_eq!(short_hex("ééééééééééééééééééé", 3, 3), "ééé…ééé");
+        assert_eq!(group_digits(""), "");
+        assert_eq!(fmt_xrp(-0.0000001), "0");
+        // Non-ASCII input must not panic; digits-only grouping is not defined for it.
+        let _ = group_digits("١٢٣٤٥٦٧");
     }
 }

@@ -199,7 +199,7 @@ mod tests {
     use crate::xrpl::PathFindSnapshot;
 
     #[test]
-    fn path_find_panel_renders_loading_empty_and_route_summary() {
+    fn path_find_panel_renders_loading_and_route_summary() {
         let mut panel = PathFindPanel::default();
         let loading = crate::test_support::render_to_string(100, 12, |frame| {
             panel.draw(frame, frame.area()).unwrap()
@@ -222,6 +222,9 @@ mod tests {
         });
         assert!(out.contains("Receive 100 USD"));
         assert!(out.contains("2 XRP"));
-        assert!(out.contains("XRP"));
+        assert!(
+            out.contains("XRP → USD") || out.contains("rIssuer"),
+            "{out}"
+        );
     }
 }

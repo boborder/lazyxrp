@@ -193,7 +193,8 @@ mod tests {
 
     /// TC-227: local WebSocket fixture — subscribe carries the watched account + ledger stream;
     /// a ledger close emits `XrplLedgerClose` + one poll trigger (duplicate index dropped);
-    /// an account tx emits `XrplAccountTx`; a server close reconnects and resubscribes.
+    /// an account tx emits `XrplAccountTx`; a server close or a malformed (non-JSON) frame
+    /// reconnects and resubscribes.
     #[tokio::test]
     async fn ws_fixture_ledger_close_triggers_poll_and_reconnects() {
         use crate::action::Action;
@@ -217,7 +218,7 @@ mod tests {
         };
         let server = tokio::spawn(async move {
             let mut subscribes = Vec::new();
-            for session in 0..2 {
+            for session in 0..3 {
                 let (tcp, _) = listener.accept().await.expect("accept");
                 let mut ws = accept_async(tcp).await.expect("handshake");
                 let Some(Ok(Message::Text(sub))) = ws.next().await else {
@@ -237,8 +238,14 @@ mod tests {
                         ws.send(msg).await.expect("send");
                     }
                     ws.close(None).await.expect("close");
-                } else {
+                } else if session == 1 {
+                    // A non-JSON frame ends the session (reconnect), after the valid close is handled.
                     ws.send(closed(102)).await.expect("send");
+                    ws.send(Message::text("this is not json"))
+                        .await
+                        .expect("send");
+                } else {
+                    ws.send(closed(103)).await.expect("send");
                     return (subscribes, ws);
                 }
             }
@@ -261,7 +268,7 @@ mod tests {
 
         let mut ledgers = Vec::new();
         let mut tx_hashes = Vec::new();
-        while ledgers.len() < 3 {
+        while ledgers.len() < 4 {
             match timeout(Duration::from_secs(10), actions.recv()).await {
                 Ok(Some(Action::XrplLedgerClose {
                     ledger_index,
@@ -277,15 +284,15 @@ mod tests {
         }
         assert_eq!(
             ledgers,
-            [100, 101, 102],
-            "duplicate 100 dropped; 102 after reconnect"
+            [100, 101, 102, 103],
+            "duplicate 100 dropped; 102 after reconnect; 103 after malformed frame reconnect"
         );
         assert_eq!(tx_hashes, ["AB12"]);
         let mut trigger_count = 0;
         while triggers.try_recv().is_ok() {
             trigger_count += 1;
         }
-        assert_eq!(trigger_count, 3);
+        assert_eq!(trigger_count, 4);
 
         let (subscribes, _ws) = server.await.expect("server");
         for sub in &subscribes {

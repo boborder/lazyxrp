@@ -115,6 +115,8 @@ struct PollBatchInputs<'a> {
     /// `[flare] display` — Off skips FTSO/FXRP read fetches.
     flare_display: crate::config::FlareDisplay,
     flare_wallet_address: Option<&'a str>,
+    /// XRPL account whose Smart Account is read: the signing account, else the watched one.
+    smart_account_owner: &'a str,
     flare_fassets_execute: bool,
     flare_evm_key_set: bool,
     /// When a signing seed is configured, `poll_wallet_overview` fetches `account_tx` once.
@@ -178,6 +180,7 @@ async fn poll_batch(
         flare_feeds,
         flare_display,
         flare_wallet_address,
+        smart_account_owner,
         flare_fassets_execute,
         flare_evm_key_set,
         skip_account_tx,
@@ -372,8 +375,8 @@ async fn poll_batch(
         && !is_backoff_active(*flare_backoff_until)
         && let Some(flare_rpc) = flare_rpc_url
     {
-        // Concurrent: worst-case arm occupancy is one RPC_TIMEOUT, not three.
-        let (ftso_result, mint_result, wallet_result) = tokio::join!(
+        // Concurrent: worst-case arm occupancy is one RPC_TIMEOUT, not four.
+        let (ftso_result, mint_result, smart_result, wallet_result) = tokio::join!(
             tokio::time::timeout(
                 RPC_TIMEOUT,
                 crate::flare::fetch_ftso_prices(flare_rpc, flare_feeds),
@@ -382,6 +385,18 @@ async fn poll_batch(
                 RPC_TIMEOUT,
                 crate::flare::fetch_fxrp_direct_mint_info(flare_rpc),
             ),
+            async {
+                if smart_account_owner.trim().is_empty() {
+                    return None;
+                }
+                Some(
+                    tokio::time::timeout(
+                        RPC_TIMEOUT,
+                        crate::flare::fetch_smart_account_info(flare_rpc, smart_account_owner),
+                    )
+                    .await,
+                )
+            },
             async {
                 match flare_wallet_address {
                     Some(wallet_addr) => Some(
@@ -422,6 +437,17 @@ async fn poll_batch(
             }
             Ok(Err(e)) => warn!(?e, "fxrp direct mint fetch failed (non-fatal)"),
             Err(_) => warn!("fxrp direct mint fetch timed out (non-fatal)"),
+        }
+        match smart_result {
+            Some(Ok(Ok(info))) => {
+                flare_ok = true;
+                if let Err(e) = action_tx.send(Action::SmartAccountInfo(Box::new(info))) {
+                    warn!(?e, "action channel closed (smart account)");
+                }
+            }
+            Some(Ok(Err(e))) => warn!(?e, "smart account fetch failed (non-fatal)"),
+            Some(Err(_)) => warn!("smart account fetch timed out (non-fatal)"),
+            None => {}
         }
         match wallet_result {
             Some(Ok(Ok(summary))) => {
@@ -612,6 +638,7 @@ async fn drive_poll_loop(
         flare_feeds,
         flare_fassets_execute,
         flare_expected_core_vault,
+        flare_expected_operator,
         flare_display,
         flare_evm_key_env,
         flare_evm_key,
@@ -660,6 +687,7 @@ async fn drive_poll_loop(
                     flare_feeds: &flare_feeds,
                     flare_display,
                     flare_wallet_address: flare_wallet_address.as_deref(),
+                    smart_account_owner: seed_address.as_deref().unwrap_or(&watch_address),
                     flare_fassets_execute,
                     flare_evm_key_set: flare_evm_key.is_some(),
                     skip_account_tx: seed_address.is_some(),
@@ -798,6 +826,9 @@ async fn drive_poll_loop(
                     PollCommand::FxrpDirectMintPayment(params) => {
                         submit!(submit_fxrp_direct_mint_payment, params, flare_expected_core_vault.as_deref());
                     }
+                    PollCommand::SmartAccountInstruction(params) => {
+                        submit!(submit_smart_account_instruction, params, flare_expected_operator.as_deref());
+                    }
                     PollCommand::FxrpExecuteDirectMint(params) => {
                         submit_fxrp_execute_direct_mint(
                             flare_rpc_url.as_deref(),
@@ -889,6 +920,9 @@ async fn drive_poll_loop(
                     }
                     PollCommand::AccountDeleteSubmit(params) => {
                         submit!(submit_account_delete_transaction, params);
+                    }
+                    PollCommand::GenericTx(params) => {
+                        submit!(submit_generic_transaction, params);
                     }
                 }
             }
@@ -1104,6 +1138,10 @@ mod tests {
                 "window must be no longer than the escalated backoff"
             );
         }
+        for _ in 0..10 {
+            update_backoff(false, &mut secs, &mut until);
+        }
+        assert_eq!(secs, 60, "backoff must cap at 60 s");
         update_backoff(true, &mut secs, &mut until);
         assert_eq!(secs, 0, "success must reset backoff to the floor");
         assert!(until.is_none(), "success must clear the backoff window");
@@ -1156,7 +1194,9 @@ mod tests {
         match rx.try_recv() {
             Ok(Action::XrplAmmInfo(Some(s))) => {
                 assert_eq!(s.trading_fee, 500);
-                assert!(s.lp_token.contains('7'), "{}", s.lp_token);
+                assert_eq!(s.lp_token, "7 03AB");
+                assert_eq!(s.pool1, "5.000000");
+                assert_eq!(s.pool2, "10 USD");
             }
             other => panic!("expected XrplAmmInfo(Some), got {other:?}"),
         }

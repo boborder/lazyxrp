@@ -39,6 +39,9 @@ use crate::{
 
 /// Tab labels (index mirrors `panels` Vec order)
 pub(crate) const TAB_TITLES: &[&str] = &["󰖟 Overview", "󰀉 Account", "󰠿 Market", "󰒍 Assets"];
+/// Indices into [`TAB_TITLES`] / `panels`.
+const ACCOUNT_TAB: usize = 1;
+const ASSETS_TAB: usize = 3;
 
 fn footer_line(active_tab: usize) -> Line<'static> {
     let bold = Style::new().bold();
@@ -68,7 +71,10 @@ fn footer_line(active_tab: usize) -> Line<'static> {
             hint("r", ":refresh");
         }
         2 => hint("b", ":book"),
-        3 => hint("o", ":objects"),
+        3 => {
+            hint("o", ":objects");
+            hint("x", ":burn NFT");
+        }
         _ => {}
     }
     hint("q", ":quit");
@@ -304,6 +310,7 @@ impl App {
                 flare_rpc_url: flare_rpc_url.clone(),
                 flare_feeds: flare_feeds.clone(),
                 flare_expected_core_vault: self.config.flare.fassets.expected_core_vault.clone(),
+                flare_expected_operator: self.config.flare.smart_accounts.expected_operator.clone(),
                 flare_fassets_execute: self.config.flare.fassets.execute,
                 flare_display: self.config.flare.display,
                 flare_evm_key_env: self.config.flare.fassets.evm_key_env.clone(),
@@ -408,6 +415,14 @@ impl App {
             && (d as usize) <= TAB_TITLES.len()
         {
             action_tx.send(Action::TabJump(d as usize - 1))?;
+            return Ok(());
+        }
+        // Assets tab: `x` starts NFTokenBurn for the selected NFT (NftTab answers with TxComposerOpen).
+        if self.active_tab == ASSETS_TAB
+            && key.code == KeyCode::Char('x')
+            && key.modifiers.is_empty()
+        {
+            action_tx.send(Action::NftBurnStart)?;
             return Ok(());
         }
 
@@ -646,6 +661,13 @@ impl App {
                 Action::AccountDeleteSubmit(params) => {
                     self.send_poll(PollCommand::AccountDeleteSubmit(params.clone()))
                 }
+                Action::GenericTxSubmit(params) => {
+                    self.send_poll(PollCommand::GenericTx(params.clone()))
+                }
+                Action::TxComposerOpen { .. } => {
+                    self.active_tab = ACCOUNT_TAB;
+                    let _ = self.tab_tx.send(self.active_tab);
+                }
                 Action::OfferCreateSubmit(params) => {
                     self.send_poll(PollCommand::OfferCreateSubmit(params.clone()))
                 }
@@ -661,6 +683,9 @@ impl App {
                 }
                 Action::FxrpExecuteDirectMintSubmit(params) => {
                     self.send_poll(PollCommand::FxrpExecuteDirectMint(params.clone()))
+                }
+                Action::SmartAccountInstructionSubmit(params) => {
+                    self.send_poll(PollCommand::SmartAccountInstruction(params.clone()))
                 }
                 Action::GenerateWalletKeys => {
                     self.send_poll(PollCommand::GenerateWalletKeys("ed25519".into()))
@@ -785,8 +810,39 @@ mod tests {
     use super::*;
     use crate::{config::Config, network::Network};
 
-    fn test_app() -> color_eyre::Result<App> {
-        let config = Config::new()?;
+    /// Builds the app from the embedded default config only: holds the env lock and points
+    /// XDG at an empty dir so parallel env-mutating tests and a developer's real
+    /// `config.toml` cannot leak in.
+    async fn test_app() -> color_eyre::Result<App> {
+        use crate::test_support::{TestEnvGuard, env_lock_async};
+        let config = {
+            let _lock = env_lock_async().await;
+            let env = TestEnvGuard::new(&[
+                "LAZYXRP_CONFIG",
+                "LAZYXRP_DATA",
+                "XDG_CONFIG_HOME",
+                "XRPL_NETWORK",
+                "XRPL_RPC_SERVER",
+                "XRPL_WS_SERVER",
+            ]);
+            for key in [
+                "LAZYXRP_CONFIG",
+                "LAZYXRP_DATA",
+                "XRPL_NETWORK",
+                "XRPL_RPC_SERVER",
+                "XRPL_WS_SERVER",
+            ] {
+                env.remove(key);
+            }
+            env.set(
+                "XDG_CONFIG_HOME",
+                std::env::temp_dir()
+                    .join(format!("lazyxrp-app-test-{}", std::process::id()))
+                    .to_str()
+                    .expect("temp xdg path"),
+            );
+            Config::new()?
+        };
         App::new(
             4.0,
             "https://xrplcluster.com".into(),
@@ -799,34 +855,30 @@ mod tests {
         )
     }
 
-    /// TC-061
+    /// TC-061: the `q` key (via the keymap) quits.
     #[tokio::test]
-    async fn quit_action_sets_should_quit() -> color_eyre::Result<()> {
-        let mut app = test_app()?;
-        app.action_tx.send(Action::Quit)?;
+    async fn q_key_quits() -> color_eyre::Result<()> {
+        let mut app = test_app().await?;
+        assert!(!app.should_quit);
+        app.on_key_event(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::empty()))?;
         app.drain_and_dispatch_actions(None)?;
         assert!(app.should_quit);
         Ok(())
     }
 
-    /// TC-062-063: RefreshAccount/RefreshBook send PollCommand
+    /// TC-062-063: `r`/`b` send one PollCommand; a second press inside the 500 ms debounce
+    /// window enqueues nothing.
     #[tokio::test]
-    async fn refresh_actions_send_poll_commands() -> color_eyre::Result<()> {
-        let cases = [
-            (Action::RefreshAccount, PollCommand::Account),
-            (Action::RefreshBook, PollCommand::Book),
-        ];
-        for (action, expected) in cases {
-            let mut app = test_app()?;
-            app.action_tx.send(action)?;
-            app.drain_and_dispatch_actions(None)?;
-            let cmd = app
-                .test_poll_rx
-                .as_mut()
-                .expect("test receiver")
-                .try_recv()
-                .expect("refresh action should enqueue a poll command");
-            assert_eq!(cmd, expected);
+    async fn refresh_keys_send_poll_commands_debounced() -> color_eyre::Result<()> {
+        for (key, expected) in [('r', PollCommand::Account), ('b', PollCommand::Book)] {
+            let mut app = test_app().await?;
+            for _ in 0..2 {
+                app.on_key_event(KeyEvent::new(KeyCode::Char(key), KeyModifiers::empty()))?;
+                app.drain_and_dispatch_actions(None)?;
+            }
+            let rx = app.test_poll_rx.as_mut().expect("test receiver");
+            assert_eq!(rx.try_recv().expect("first press enqueues"), expected);
+            assert!(rx.try_recv().is_err(), "second press must be debounced");
         }
         Ok(())
     }
@@ -834,7 +886,7 @@ mod tests {
     /// TC-064: TabNext / TabPrev wrap around all panels
     #[tokio::test]
     async fn tab_next_and_prev_cycle_all_panels() -> color_eyre::Result<()> {
-        let mut app = test_app()?;
+        let mut app = test_app().await?;
         assert_eq!(app.active_tab, 0);
         for i in 1..=TAB_TITLES.len() {
             app.action_tx.send(Action::TabNext)?;
@@ -855,7 +907,7 @@ mod tests {
     /// `?` opens and Esc closes via the config keymap.
     #[tokio::test]
     async fn help_overlay_opens_and_closes_via_keys_and_actions() -> color_eyre::Result<()> {
-        let mut app = test_app()?;
+        let mut app = test_app().await?;
         assert!(!app.show_help);
         app.action_tx.send(Action::Help)?;
         app.drain_and_dispatch_actions(None)?;
@@ -879,7 +931,7 @@ mod tests {
     /// TC-115: NetworkSwitchCycle advances to the next network via net_tx.
     #[tokio::test]
     async fn network_switch_cycle_sends_next_network() -> color_eyre::Result<()> {
-        let mut app = test_app()?;
+        let mut app = test_app().await?;
         let net_rx = app.net_tx.subscribe();
         app.action_tx.send(Action::NetworkSwitchCycle)?;
         app.drain_and_dispatch_actions(None)?;
@@ -898,7 +950,7 @@ mod tests {
     /// Form/modal typing must not treat bare `q` as quit (modal key priority).
     #[tokio::test]
     async fn keymap_suppressed_ignores_bare_q_but_allows_ctrl_c() -> color_eyre::Result<()> {
-        let mut app = test_app()?;
+        let mut app = test_app().await?;
         app.keymap_suppressed = true;
 
         app.on_key_event(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::empty()))?;
@@ -908,6 +960,48 @@ mod tests {
         app.on_key_event(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL))?;
         app.drain_and_dispatch_actions(None)?;
         assert!(app.should_quit);
+        Ok(())
+    }
+
+    /// TC-256: Assets tab `x` starts an NFTokenBurn for the selected NFT — the NFT tab answers
+    /// with `TxComposerOpen` and the app jumps to the Account tab; other tabs ignore `x`, and an
+    /// empty NFT list opens nothing.
+    #[tokio::test]
+    async fn x_on_assets_tab_opens_burn_composer_for_selected_nft() -> color_eyre::Result<()> {
+        let x = KeyEvent::new(KeyCode::Char('x'), KeyModifiers::empty());
+        let nft = crate::xrpl::NftRow {
+            nft_id: "000B013A95F14B0044F78A264E41713C64B5F89242540EE208C3098E00000D65".into(),
+            taxon: 0,
+            serial: 1,
+            transfer_fee: 0,
+            uri: String::new(),
+            is_mutable: false,
+            raw_json: Default::default(),
+        };
+
+        let mut app = test_app().await?;
+        app.action_tx
+            .send(Action::XrplAccountNfts(vec![nft.clone()]))?;
+        app.drain_and_dispatch_actions(None)?;
+
+        app.active_tab = 2;
+        app.on_key_event(x)?;
+        app.drain_and_dispatch_actions(None)?;
+        assert_eq!(app.active_tab, 2, "x is an Assets-tab key");
+
+        app.active_tab = ASSETS_TAB;
+        app.on_key_event(x)?;
+        app.drain_and_dispatch_actions(None)?;
+        assert_eq!(app.active_tab, ACCOUNT_TAB);
+
+        let mut empty = test_app().await?;
+        empty.active_tab = ASSETS_TAB;
+        empty.on_key_event(x)?;
+        empty.drain_and_dispatch_actions(None)?;
+        assert_eq!(
+            empty.active_tab, ASSETS_TAB,
+            "no NFT selected → nothing opens"
+        );
         Ok(())
     }
 }

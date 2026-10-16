@@ -110,7 +110,32 @@ pub(crate) async fn fetch_via(
     unreachable!("redirect loop returns on every iteration")
 }
 
+/// Public IPFS gateways, tried in order: a single one routinely answers 429/5xx.
+const IPFS_GATEWAYS: [&str; 2] = [
+    "https://ipfs.io/ipfs/",
+    "https://gateway.pinata.cloud/ipfs/",
+];
+
 async fn fetch_resource(uri: &str) -> color_eyre::Result<(Vec<u8>, Option<String>)> {
+    let uri = uri.trim();
+    let candidates: Vec<String> = match uri.strip_prefix("ipfs://") {
+        Some(path) => IPFS_GATEWAYS
+            .iter()
+            .map(|gateway| format!("{gateway}{}", path.trim_start_matches('/')))
+            .collect(),
+        None => vec![uri.to_owned()],
+    };
+    let mut last_err = None;
+    for candidate in candidates {
+        match fetch_one(&candidate).await {
+            Ok(found) => return Ok(found),
+            Err(err) => last_err = Some(err),
+        }
+    }
+    Err(last_err.expect("candidates is never empty"))
+}
+
+async fn fetch_one(uri: &str) -> color_eyre::Result<(Vec<u8>, Option<String>)> {
     let url = resolve_uri(uri)?;
     let fetched = fetch_via(url, MAX_RESPONSE_BYTES, |url| Box::pin(client_for_url(url))).await?;
     if !(200..300).contains(&fetched.status) {
@@ -146,6 +171,8 @@ pub(crate) async fn client_for_url(url: &Url) -> color_eyre::Result<reqwest::Cli
         .connect_timeout(std::time::Duration::from_secs(5))
         .timeout(std::time::Duration::from_secs(15))
         .redirect(reqwest::redirect::Policy::none())
+        // Many CDNs/gateways (Wikimedia, Cloudflare-fronted IPFS gateways) reject UA-less requests.
+        .user_agent(concat!("lazyxrp/", env!("CARGO_PKG_VERSION")))
         .no_proxy()
         .resolve(host, addresses[0])
         .build()?)
@@ -154,7 +181,7 @@ pub(crate) async fn client_for_url(url: &Url) -> color_eyre::Result<reqwest::Cli
 fn resolve_uri(uri: &str) -> color_eyre::Result<Url> {
     let uri = uri.trim();
     let normalized = if let Some(path) = uri.strip_prefix("ipfs://") {
-        format!("https://ipfs.io/ipfs/{}", path.trim_start_matches('/'))
+        format!("{}{}", IPFS_GATEWAYS[0], path.trim_start_matches('/'))
     } else if let Some(path) = uri.strip_prefix("ar://") {
         format!("https://arweave.net/{}", path.trim_start_matches('/'))
     } else {
@@ -343,12 +370,26 @@ mod tests {
 
     #[test]
     fn finds_common_metadata_image_fields() {
-        let metadata =
-            serde_json::json!({"properties": {"image_url": "ipfs://QmExample/image.png"}});
-        assert_eq!(
-            find_image_uri(&metadata).as_deref(),
-            Some("ipfs://QmExample/image.png")
-        );
+        let cases = [
+            (
+                serde_json::json!({"properties": {"image_url": "ipfs://QmExample/image.png"}}),
+                Some("ipfs://QmExample/image.png"),
+            ),
+            (serde_json::json!({"image": "ar://a"}), Some("ar://a")),
+            (
+                serde_json::json!({"imageUrl": "https://x.example/i.png"}),
+                Some("https://x.example/i.png"),
+            ),
+            // Blank values are skipped in favour of the next usable key.
+            (
+                serde_json::json!({"image": "  ", "image_url": "", "imageUrl": "ar://b"}),
+                Some("ar://b"),
+            ),
+            (serde_json::json!({"image": "   "}), None),
+        ];
+        for (metadata, expected) in cases {
+            assert_eq!(find_image_uri(&metadata).as_deref(), expected, "{metadata}");
+        }
     }
 
     /// TC-100: NFT metadata traversal stops at depth limit
@@ -535,5 +576,72 @@ mod tests {
             .expect_err("streamed over-cap body must fail");
         assert!(err.to_string().contains("4 MiB"), "{err}");
         server.abort();
+    }
+
+    /// Exactly `MAX_RESPONSE_BYTES` is accepted (the cap is exclusive of the boundary).
+    #[tokio::test]
+    async fn fetch_via_accepts_body_of_exactly_the_cap() {
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(serve_scripted_responses(listener, |_| {
+            plain_response(
+                format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {MAX_RESPONSE_BYTES}\r\nConnection: close\r\n\r\n"
+                ),
+                &vec![b'x'; MAX_RESPONSE_BYTES],
+            )
+        }));
+        let url = Url::parse(&format!("http://{address}/max.png")).unwrap();
+        let fetched = fetch_via(url, MAX_RESPONSE_BYTES, plain_client_for())
+            .await
+            .expect("exactly the cap is accepted");
+        assert_eq!(fetched.bytes.len(), MAX_RESPONSE_BYTES);
+        server.abort();
+    }
+
+    /// TC-146: the SSRF guard runs on a redirect hop through the real `client_for_url`:
+    /// a public-looking first hop that 302s to 127.0.0.1 is refused before any request.
+    #[tokio::test]
+    async fn redirect_to_loopback_is_refused_by_real_client_factory() {
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(serve_scripted_responses(listener, |_| {
+            plain_response(
+                "HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:9/secret\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".into(),
+                b"",
+            )
+        }));
+        let calls = std::sync::atomic::AtomicUsize::new(0);
+        let url = Url::parse(&format!("http://{address}/start.png")).unwrap();
+        // Hop 0 uses a permissive client (the mock server is on loopback); every later hop
+        // goes through the production guard.
+        let err = fetch_via(url, MAX_RESPONSE_BYTES, |url| {
+            let first = calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0;
+            Box::pin(async move {
+                if first {
+                    Ok(reqwest::Client::builder()
+                        .redirect(reqwest::redirect::Policy::none())
+                        .build()?)
+                } else {
+                    client_for_url(url).await
+                }
+            })
+        })
+        .await
+        .expect_err("redirect to loopback must be refused");
+        assert!(err.to_string().contains("private host"), "{err}");
+        server.abort();
+    }
+
+    /// `localhost` resolves (offline) to loopback, so the DNS-resolving guard refuses it.
+    #[tokio::test]
+    async fn client_for_url_refuses_hostname_resolving_to_loopback() {
+        let url = Url::parse("http://localhost:80/x.png").unwrap();
+        let err = client_for_url(&url).await.expect_err("localhost refused");
+        assert!(err.to_string().contains("private host"), "{err}");
     }
 }

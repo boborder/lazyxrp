@@ -21,9 +21,90 @@ XRPL エコシステム（開発者・ユーザー双方）で人気の CLI/TUI 
 |------|----------|--------------|
 | ~~TX surface completion — F-01 AccountDelete~~ **済**（0.5.0、2026-10-11） | — | composer `x`（`DELETE` 入力の確認必須）+ `-x account-delete`。Fee（owner reserve）は simulate 由来。TC-232–233、testnet で TUI（X-address tag 付き）/ CLI を validated |
 | ~~Watch / Operate UI 分離~~ **済**（0.6.0、2026-10-11） | — | ユーザー選択: `--watch` フラグ。全鍵を起動時に破棄しアドレスだけ表示、TUI は Account パネル（composer・鍵生成なし）、`-x` 署名系は拒否。TC-234–235 |
+| Flare Smart Accounts — proof-based FXRP transfer / redeem（`[Unreleased]`、2026-10-16） | — | 読み取り（personal account / FXRP 残高 + `decimals()` / nonce / operator / fee、FXRP パネル）+ composer `a`（`0x01` transfer・`0x02` redeem を operator へ Payment + 32-byte memo。transfer の額は読み取った `decimals()` で最小単位に整数変換）。署名は `[flare.smart_accounts] expected_operator` と一致時のみ。TC-239–247。読み取りは Coston2 / Flare mainnet で実機確認（FXRP `decimals()` = 6）、書き込みはオフライン（local JSON-RPC）のみ — 実機 E2E 未実施 |
+| Smart Accounts follow-ups（カスタム instruction `0xFE` / `0xFF`、`executeDirectMintingWithData`、vault（Firelight / Upshift）instruction、FDC proof 取得） | Later | 未対応（意図的にスコープ外）。需要と検証環境（Coston2 executor）が揃ってから。`docs/architecture.md` §6.9 |
 | Action エラー型移行（`String` → 型付き） | Later | `docs/security.md` 構造課題。UI 文言の SSOT 化と同時に |
 | Global row cache (A1) — render perf at scale | Later | 計測で問題が出たら |
 | パネル内キー（`j`/`k`・`t`・composer）の設定化 | Later | グローバルキーは設定可（DESIGN §6）。需要が出たら中期へ |
+
+## XRPL coverage (TX 種別カバレッジ)
+
+**SSOT は `src/coverage.rs`**（`lazyxrp -x coverage` が同じ表を出力）。この表は手で更新せず、出力を貼り直す — `roadmap_table_matches_registry`（TC-248）が行ごとの不一致（Type / Read / TUI / CLI / Status。Note 列は自由記述）で失敗する。Status: **Existing** = 型ごとの手書き write 経路 · **Spec** = `src/xrpl/txspec/` の宣言的 spec（TUI composer「Transaction」+ `-x tx` が共通経路。`-x nft-mint` / `-x nft-burn` は別名） · **Planned** = xrpl-rust 1.3.0 に型付きモデルあり、未配線 · **Unsupported** = 型付きモデルなし（署名不可）。Read = TX detail パーサ登録済み。擬似トランザクション（`EnableAmendment` / `SetFee` / `UNLModify`）は対象外。
+
+<!-- xrpl-coverage:start -->
+| Type | Read | TUI write | CLI write | Status | Note |
+|------|------|-----------|-----------|--------|------|
+| Payment | ✓ | ✓ | ✓ | Existing |  |
+| AccountSet | ✓ | ✓ | – | Existing |  |
+| TrustSet | ✓ | ✓ | – | Existing |  |
+| OfferCreate | ✓ | ✓ | ✓ | Existing |  |
+| OfferCancel | ✓ | ✓ | ✓ | Existing |  |
+| SetRegularKey | ✓ | ✓ | – | Existing |  |
+| EscrowCreate | ✓ | ✓ | – | Existing |  |
+| EscrowFinish | ✓ | ✓ | – | Existing |  |
+| EscrowCancel | ✓ | ✓ | – | Existing |  |
+| AMMDeposit | ✓ | ✓ | ✓ | Existing |  |
+| AMMWithdraw | ✓ | ✓ | ✓ | Existing |  |
+| AccountDelete | – | ✓ | ✓ | Existing |  |
+| NFTokenMint | ✓ | ✓ | ✓ | Spec | NFT |
+| NFTokenBurn | ✓ | ✓ | ✓ | Spec | NFT |
+| NFTokenCreateOffer | ✓ | ✓ | ✓ | Spec | NFT |
+| NFTokenAcceptOffer | ✓ | ✓ | ✓ | Spec | NFT |
+| NFTokenCancelOffer | ✓ | ✓ | ✓ | Spec | NFT |
+| XChainCreateBridge | ✓ | ✓ | ✓ | Spec | XChain |
+| XChainModifyBridge | ✓ | ✓ | ✓ | Spec | XChain |
+| XChainCreateClaimID | ✓ | ✓ | ✓ | Spec | XChain |
+| XChainCommit | ✓ | ✓ | ✓ | Spec | XChain |
+| XChainClaim | ✓ | ✓ | ✓ | Spec | XChain |
+| XChainAccountCreateCommit | ✓ | ✓ | ✓ | Spec | XChain |
+| CheckCreate | ✓ | ✓ | ✓ | Spec | Account objects |
+| CheckCash | ✓ | ✓ | ✓ | Spec | Account objects |
+| CheckCancel | ✓ | ✓ | ✓ | Spec | Account objects |
+| TicketCreate | ✓ | ✓ | ✓ | Spec | Account objects |
+| DepositPreauth | ✓ | ✓ | ✓ | Spec | Account objects |
+| SignerListSet | ✓ | ✓ | ✓ | Spec | Account objects |
+| Clawback | ✓ | ✓ | ✓ | Spec | Account objects |
+| PaymentChannelCreate | ✓ | ✓ | ✓ | Spec | Channel / AMM |
+| PaymentChannelFund | ✓ | ✓ | ✓ | Spec | Channel / AMM |
+| PaymentChannelClaim | ✓ | ✓ | ✓ | Spec | Channel / AMM |
+| AMMCreate | ✓ | ✓ | ✓ | Spec | Channel / AMM |
+| AMMVote | ✓ | ✓ | ✓ | Spec | Channel / AMM |
+| AMMBid | ✓ | ✓ | ✓ | Spec | Channel / AMM |
+| AMMDelete | ✓ | ✓ | ✓ | Spec | Channel / AMM |
+| MPTokenIssuanceCreate | ✓ | ✓ | ✓ | Spec | MPT |
+| MPTokenIssuanceDestroy | ✓ | ✓ | ✓ | Spec | MPT |
+| MPTokenIssuanceSet | ✓ | ✓ | ✓ | Spec | MPT |
+| MPTokenAuthorize | ✓ | ✓ | ✓ | Spec | MPT |
+| CredentialCreate | ✓ | ✓ | ✓ | Spec | Identity |
+| CredentialAccept | ✓ | ✓ | ✓ | Spec | Identity |
+| CredentialDelete | ✓ | ✓ | ✓ | Spec | Identity |
+| DIDSet | ✓ | ✓ | ✓ | Spec | Identity |
+| DIDDelete | ✓ | ✓ | ✓ | Spec | Identity |
+| OracleSet | ✓ | ✓ | ✓ | Spec | Identity |
+| OracleDelete | ✓ | ✓ | ✓ | Spec | Identity |
+| PermissionedDomainSet | ✓ | ✓ | ✓ | Spec | Identity |
+| PermissionedDomainDelete | ✓ | ✓ | ✓ | Spec | Identity |
+| VaultCreate | – | – | – | Planned | Single-asset vault: Asset may be an MPT, which the flat Amount grammar cannot express |
+| VaultSet | – | – | – | Planned | Single-asset vault: deferred as a family with VaultCreate (MPT-capable assets) |
+| VaultDelete | – | – | – | Planned | Single-asset vault: deferred as a family with VaultCreate (MPT-capable assets) |
+| VaultDeposit | – | – | – | Planned | Single-asset vault: Amount may be an MPT, which the flat Amount grammar cannot express |
+| VaultWithdraw | – | – | – | Planned | Single-asset vault: Amount may be an MPT, which the flat Amount grammar cannot express |
+| VaultClawback | – | – | – | Planned | Single-asset vault: Amount may be an MPT, which the flat Amount grammar cannot express |
+| NFTokenModify | – | – | – | Unsupported | no typed model in xrpl-rust 1.3.0 (dynamic NFT) |
+| AMMClawback | – | – | – | Unsupported | no typed model in xrpl-rust 1.3.0 |
+| Batch | – | – | – | Unsupported | no typed model in xrpl-rust 1.3.0 |
+| DelegateSet | – | – | – | Unsupported | no typed model in xrpl-rust 1.3.0 |
+| LedgerStateFix | – | – | – | Unsupported | no typed model in xrpl-rust 1.3.0 |
+| XChainAddClaimAttestation | – | – | – | Unsupported | witness-server signed attestation; cannot be authored in a form |
+| XChainAddAccountCreateAttestation | – | – | – | Unsupported | witness-server signed attestation; cannot be authored in a form |
+| ConfidentialMPTConvert | – | – | – | Unsupported | needs zero-knowledge proofs; no typed model in xrpl-rust |
+| ConfidentialMPTConvertBack | – | – | – | Unsupported | needs zero-knowledge proofs; no typed model in xrpl-rust |
+| ConfidentialMPTSend | – | – | – | Unsupported | needs zero-knowledge proofs; no typed model in xrpl-rust |
+| ConfidentialMPTMergeInbox | – | – | – | Unsupported | needs zero-knowledge proofs; no typed model in xrpl-rust |
+| ConfidentialMPTClawback | – | – | – | Unsupported | needs zero-knowledge proofs; no typed model in xrpl-rust |
+<!-- xrpl-coverage:end -->
+
+書き込み可能 **50 / 68**（TUI または CLI で write 経路あり。残りの Planned（Vault 系）と Unsupported は表の Note 参照。新 family の追加 — 1 family = `txspec/` に 1 ファイル + `FAMILIES` に 1 行、手順は `docs/architecture.md` §2.1）。
 
 ## Mid-term (中期) — **0.4.0: write 基盤整理 + TX 拡張**
 
@@ -85,10 +166,7 @@ XRPL エコシステム（開発者・ユーザー双方）で人気の CLI/TUI 
 |---------|------|
 | Goal hierarchy + priorities + shipped history | This file |
 | Planning cautions + pivot log | `docs/roadmap-log.md` |
-| This week's implementation checkboxes | `openspec/changes/<name>/tasks.md` (when using OpenSpec) |
-| Completion history | `openspec/changes/archive/**` + git |
 | Human doc index | Root `README.md` § Documentation |
-| Agent contracts | `openspec/specs/` + `openspec/config.yaml` |
 
 ## How to add work
 
@@ -96,5 +174,4 @@ XRPL エコシステム（開発者・ユーザー双方）で人気の CLI/TUI 
 2. New requirement → `docs/requirements.md` (FR/NFR)
 3. Shipped behavior / network / config rules → `docs/architecture.md` (+ TC in `docs/test.md`)
 4. Keys, layout, colors, modals → root [`DESIGN.md`](DESIGN.md)
-5. Active implementation checkboxes (when using OpenSpec) → `openspec/changes/<name>/tasks.md`
-6. 進路変更・計画上の注意点 → [`docs/roadmap-log.md`](docs/roadmap-log.md)
+5. 進路変更・計画上の注意点 → [`docs/roadmap-log.md`](docs/roadmap-log.md)

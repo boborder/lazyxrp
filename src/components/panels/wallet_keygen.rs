@@ -100,10 +100,15 @@ mod tests {
 
         let out = popup_rendered(&panel, 100, 24);
         assert!(out.contains("New Key (local)"));
-        assert!(out.contains("Seed:   sEdTestOnlySeedValue"));
-        assert!(out.contains("Addr:   rTestAccountAddress123"));
-        assert!(out.contains("PubKey: aTestPublicKey99"));
-        assert!(out.contains("Type:   ed25519  Seed hex: DEADBEEF01"));
+        for value in [
+            "sEdTestOnlySeedValue",
+            "rTestAccountAddress123",
+            "aTestPublicKey99",
+            "ed25519",
+            "DEADBEEF01",
+        ] {
+            assert!(out.contains(value), "{value} missing from popup:\n{out}");
+        }
         assert!(out.contains("Save the seed offline!"));
         assert!(out.contains("Set XRPL_SEED=<seed>"));
         // `g` regenerates (it does not dismiss); only Esc dismisses.

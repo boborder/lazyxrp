@@ -438,6 +438,58 @@ pub(crate) fn ticket_create_detail_lines<'a>(_tx: &'a Value) -> Option<Vec<Line<
     })
 }
 
+/// Issue object (`{"currency": "XRP"}` / `{"currency", "issuer"}`) as `XRP` / `CUR:issuer`.
+fn fmt_issue(issue: &Value) -> String {
+    let cur = issue.get("currency").and_then(Value::as_str).unwrap_or("?");
+    match issue.get("issuer").and_then(Value::as_str) {
+        Some(issuer) => format!("{cur}:{issuer}"),
+        None => cur.to_string(),
+    }
+}
+
+/// Cross-chain bridge types share one parser (bridge as the flat `lockDoor,lockIssue,issueDoor,issueIssue`).
+fn xchain_detail_lines(tx: &Value) -> Option<Vec<Line<'_>>> {
+    let tx_type = tx.get("TransactionType")?.as_str()?;
+    if !tx_type.starts_with("XChain") {
+        return None;
+    }
+    let mut lines = Vec::new();
+    push_common_lines_from_value(&mut lines, tx);
+    if let Some(b) = tx.get("XChainBridge") {
+        let part = |k: &str| b.get(k).and_then(Value::as_str).unwrap_or("?").to_string();
+        let issue = |k: &str| b.get(k).map_or_else(|| "?".into(), fmt_issue);
+        lines.push(detail_line(
+            "XChainBridge",
+            format!(
+                "{},{},{},{}",
+                part("LockingChainDoor"),
+                issue("LockingChainIssue"),
+                part("IssuingChainDoor"),
+                issue("IssuingChainIssue")
+            ),
+        ));
+    }
+    for field in [
+        "XChainClaimID",
+        "Destination",
+        "OtherChainSource",
+        "OtherChainDestination",
+    ] {
+        if let Some(v) = tx.get(field).and_then(Value::as_str) {
+            lines.push(detail_line(field, v.to_string()));
+        }
+    }
+    if let Some(tag) = tx.get("DestinationTag").and_then(Value::as_u64) {
+        lines.push(detail_line("DestinationTag", tag.to_string()));
+    }
+    for field in ["Amount", "SignatureReward", "MinAccountCreateAmount"] {
+        if let Some(v) = tx.get(field) {
+            lines.push(detail_line(field, fmt_xrpl_amount_from_value(v)));
+        }
+    }
+    Some(lines)
+}
+
 /// AMM detail fields in display order; absent fields remain omitted.
 fn amm_detail_lines(tx: &Value) -> Option<Vec<Line<'_>>> {
     let tx_type = tx.get("TransactionType")?.as_str()?;
@@ -481,6 +533,52 @@ fn amm_detail_lines(tx: &Value) -> Option<Vec<Line<'_>>> {
     Some(lines)
 }
 
+/// Clawback, MPT, Credential, DID, Oracle and PermissionedDomain share one field-list parser:
+/// the fields below, in display order, formatted as amounts (`Amount`) or plain values.
+fn misc_detail_lines(tx: &Value) -> Option<Vec<Line<'_>>> {
+    let fields: &[&str] = match tx.get("TransactionType")?.as_str()? {
+        "Clawback" => &["Amount", "Holder"],
+        "MPTokenIssuanceCreate" => &[
+            "AssetScale",
+            "MaximumAmount",
+            "TransferFee",
+            "MPTokenMetadata",
+        ],
+        "MPTokenIssuanceDestroy" | "MPTokenIssuanceSet" | "MPTokenAuthorize" => {
+            &["MPTokenIssuanceID", "Holder"]
+        }
+        "CredentialCreate" => &["Subject", "CredentialType", "Expiration", "URI"],
+        "CredentialAccept" | "CredentialDelete" => &["Issuer", "Subject", "CredentialType"],
+        "DIDSet" => &["DIDDocument", "URI", "Data"],
+        "DIDDelete" => &[],
+        "OracleSet" => &[
+            "OracleDocumentID",
+            "Provider",
+            "URI",
+            "AssetClass",
+            "LastUpdateTime",
+            "PriceDataSeries",
+        ],
+        "OracleDelete" => &["OracleDocumentID"],
+        "PermissionedDomainSet" => &["DomainID", "AcceptedCredentials"],
+        "PermissionedDomainDelete" => &["DomainID"],
+        _ => return None,
+    };
+    let mut lines = Vec::new();
+    push_common_lines_from_value(&mut lines, tx);
+    for &field in fields {
+        let Some(value) = tx.get(field) else { continue };
+        let text = match value {
+            Value::String(s) => s.clone(),
+            Value::Number(n) => n.to_string(),
+            _ if field == "Amount" => fmt_xrpl_amount_from_value(value),
+            other => other.to_string(),
+        };
+        lines.push(detail_line(field, text));
+    }
+    Some(lines)
+}
+
 /// Parser for one `TransactionType` (see [`TX_DETAIL_PARSERS`]).
 pub(crate) type TxDetailParserFn = for<'a> fn(&'a Value) -> Option<Vec<Line<'a>>>;
 
@@ -518,6 +616,26 @@ pub(crate) const TX_DETAIL_PARSERS: &[(&str, TxDetailParserFn)] = &[
     ("AMMVote", amm_detail_lines),
     ("AMMBid", amm_detail_lines),
     ("AMMDelete", amm_detail_lines),
+    ("XChainCreateBridge", xchain_detail_lines),
+    ("XChainModifyBridge", xchain_detail_lines),
+    ("XChainCreateClaimID", xchain_detail_lines),
+    ("XChainCommit", xchain_detail_lines),
+    ("XChainClaim", xchain_detail_lines),
+    ("XChainAccountCreateCommit", xchain_detail_lines),
+    ("Clawback", misc_detail_lines),
+    ("MPTokenIssuanceCreate", misc_detail_lines),
+    ("MPTokenIssuanceDestroy", misc_detail_lines),
+    ("MPTokenIssuanceSet", misc_detail_lines),
+    ("MPTokenAuthorize", misc_detail_lines),
+    ("CredentialCreate", misc_detail_lines),
+    ("CredentialAccept", misc_detail_lines),
+    ("CredentialDelete", misc_detail_lines),
+    ("DIDSet", misc_detail_lines),
+    ("DIDDelete", misc_detail_lines),
+    ("OracleSet", misc_detail_lines),
+    ("OracleDelete", misc_detail_lines),
+    ("PermissionedDomainSet", misc_detail_lines),
+    ("PermissionedDomainDelete", misc_detail_lines),
     ("TicketCreate", ticket_create_detail_lines),
 ];
 
@@ -541,14 +659,35 @@ mod registry_tests {
     /// TC-094: registry covers required types without duplicates
     #[test]
     fn registry_covers_required_types_without_duplicates() {
-        const REQUIRED: &[&str] = &[
-            "Payment",
-            "AccountSet",
-            "OfferCreate",
-            "TrustSet",
-            "EscrowCreate",
-            "NFTokenMint",
-            "AMMCreate",
+        // (type, extra tx fields, label + value only that type's parser emits)
+        let required = [
+            (
+                "Payment",
+                json!({"Destination": "rDest"}),
+                ("Destination", "rDest"),
+            ),
+            ("AccountSet", json!({"TickSize": 5}), ("TickSize", "5")),
+            (
+                "OfferCreate",
+                json!({"TakerGets": "1000000"}),
+                ("TakerGets", "1.000000"),
+            ),
+            ("TrustSet", json!({"QualityIn": 9}), ("QualityIn", "9")),
+            (
+                "EscrowCreate",
+                json!({"Condition": "A0B1"}),
+                ("Condition", "A0B1"),
+            ),
+            (
+                "NFTokenMint",
+                json!({"NFTokenTaxon": 7}),
+                ("NFTokenTaxon", "7"),
+            ),
+            (
+                "AMMCreate",
+                json!({"TradingFee": 500}),
+                ("TradingFee", "0.500%"),
+            ),
         ];
         let names: Vec<&str> = TX_DETAIL_PARSERS.iter().map(|(n, _)| *n).collect();
         let mut sorted = names.clone();
@@ -560,17 +699,46 @@ mod registry_tests {
             uniq.len(),
             "duplicate TransactionType in TX_DETAIL_PARSERS"
         );
-        for req in REQUIRED {
+        for (req, extra, (label, value)) in required {
             assert!(
-                names.contains(req),
+                names.contains(&req),
                 "missing required TransactionType parser: {req}"
             );
-            let tx = json!({"TransactionType": req, "Account": "rTest"});
+            let mut tx = json!({"TransactionType": req, "Account": "rTest"});
+            tx.as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            let lines = typed_detail_lines(&tx).unwrap_or_else(|| panic!("no dispatch for {req}"));
             assert!(
-                typed_detail_lines(&tx).is_some(),
-                "typed_detail_lines should dispatch for {req}"
+                lines.iter().any(|l| {
+                    let s = l.to_string();
+                    s.contains(label) && s.contains(value)
+                }),
+                "{req} missing {label}={value}: {lines:?}"
             );
         }
+    }
+
+    /// TC-329: XChain types show the bridge in the flat `lockDoor,lockIssue,issueDoor,issueIssue`
+    /// form plus claim id and amounts.
+    #[test]
+    fn xchain_detail_shows_flat_bridge() {
+        let tx = json!({
+            "TransactionType": "XChainCommit", "Account": "rTest",
+            "XChainBridge": {
+                "LockingChainDoor": "rA", "LockingChainIssue": {"currency": "XRP"},
+                "IssuingChainDoor": "rB",
+                "IssuingChainIssue": {"currency": "USD", "issuer": "rI"},
+            },
+            "XChainClaimID": "13f", "Amount": "5000000",
+        });
+        let text: String = typed_detail_lines(&tx)
+            .expect("registered")
+            .iter()
+            .map(|l| format!("{l}\n"))
+            .collect();
+        assert!(text.contains("rA,XRP,rB,USD:rI"), "{text}");
+        assert!(text.contains("13f"), "{text}");
     }
 
     /// TC-094: typed parsers reject a mismatched TransactionType.

@@ -185,8 +185,13 @@ pub fn prompt_production_confirmation(
         network.display_name()
     );
     let _ = io::stderr().flush();
+    read_confirmation(io::stdin().lock())
+}
+
+/// `true` only for a `y` / `yes` line (case-insensitive); EOF and read errors decline.
+fn read_confirmation(mut reader: impl std::io::BufRead) -> bool {
     let mut input = String::new();
-    if io::stdin().read_line(&mut input).is_err() {
+    if reader.read_line(&mut input).is_err() {
         return false;
     }
     matches!(input.trim().to_lowercase().as_str(), "y" | "yes")
@@ -218,6 +223,143 @@ pub fn normalize_eth_address_hex(addr: &str) -> color_eyre::Result<String> {
 pub fn build_direct_mint_memo_data(recipient_eth: &str) -> color_eyre::Result<String> {
     let recipient = normalize_eth_address_hex(recipient_eth)?;
     Ok(format!("{DIRECT_MINT_MEMO_PREFIX}00000000{recipient}"))
+}
+
+/// Smart Account instruction id of FXRP transfer (first byte of the payment reference).
+pub const SMART_ACCOUNT_FXRP_TRANSFER: u8 = 0x01;
+/// Smart Account instruction id of FXRP redeem.
+pub const SMART_ACCOUNT_FXRP_REDEEM: u8 = 0x02;
+/// The payment-reference value field is 10 bytes wide.
+pub const SMART_ACCOUNT_VALUE_MAX: u128 = (1_u128 << 80) - 1;
+/// An instruction fee above this (10 XRP) is treated as a hostile / broken RPC answer.
+pub const MAX_SMART_ACCOUNT_FEE_DROPS: u64 = 10_000_000;
+
+/// Reject a zero or absurd `getInstructionFee` before it becomes a Payment `Amount`.
+pub fn check_smart_account_fee(fee_drops: u64) -> color_eyre::Result<()> {
+    if fee_drops == 0 || fee_drops > MAX_SMART_ACCOUNT_FEE_DROPS {
+        color_eyre::eyre::bail!(
+            "instruction fee {fee_drops} drops is outside 1..={MAX_SMART_ACCOUNT_FEE_DROPS}; refusing to pay it"
+        );
+    }
+    Ok(())
+}
+
+/// Smart Account recipient: a 20-byte EVM address that is not the zero address.
+pub fn parse_smart_account_recipient(addr: &str) -> color_eyre::Result<[u8; 20]> {
+    let mut out = [0_u8; 20];
+    hex::decode_to_slice(normalize_eth_address_hex(addr)?, &mut out)?;
+    if out == [0_u8; 20] {
+        color_eyre::eyre::bail!("Flare recipient must not be the zero address");
+    }
+    Ok(out)
+}
+
+/// Layout (32 bytes): `[id | walletId | value (10 B big-endian) | tail (20 B)]`.
+fn encode_smart_account_instruction(
+    id: u8,
+    wallet_id: u8,
+    value: u128,
+    tail: [u8; 20],
+) -> color_eyre::Result<[u8; 32]> {
+    if value == 0 {
+        color_eyre::eyre::bail!("value must be greater than zero");
+    }
+    if value > SMART_ACCOUNT_VALUE_MAX {
+        color_eyre::eyre::bail!("value exceeds the 10-byte instruction field (2^80 - 1)");
+    }
+    let mut out = [0_u8; 32];
+    out[0] = id;
+    out[1] = wallet_id;
+    out[2..12].copy_from_slice(&value.to_be_bytes()[6..]);
+    out[12..].copy_from_slice(&tail);
+    Ok(out)
+}
+
+/// `0x01` FXRP transfer: `value_units` (raw FXRP base units, what the contract passes to
+/// `transfer`) from the personal account to `recipient`.
+pub fn encode_fxrp_transfer_instruction(
+    wallet_id: u8,
+    value_units: u128,
+    recipient: &str,
+) -> color_eyre::Result<[u8; 32]> {
+    encode_smart_account_instruction(
+        SMART_ACCOUNT_FXRP_TRANSFER,
+        wallet_id,
+        value_units,
+        parse_smart_account_recipient(recipient)?,
+    )
+}
+
+/// `0x02` FXRP redeem: `lots` of FXRP back to XRP on XRPL (bytes 12..32 are ignored → zero).
+pub fn encode_fxrp_redeem_instruction(wallet_id: u8, lots: u128) -> color_eyre::Result<[u8; 32]> {
+    encode_smart_account_instruction(SMART_ACCOUNT_FXRP_REDEEM, wallet_id, lots, [0_u8; 20])
+}
+
+/// Highest ERC-20 `decimals()` accepted (10^18 · values stay inside u128 arithmetic).
+pub const MAX_TOKEN_DECIMALS: u8 = 18;
+
+/// Decimal token amount → base units with exact integer math: more fraction digits than
+/// `decimals`, `decimals > 18`, signs, exponents, empty parts and overflow are errors.
+pub fn parse_token_amount(amount: &str, decimals: u8) -> color_eyre::Result<u128> {
+    use color_eyre::eyre::{bail, eyre};
+    if decimals > MAX_TOKEN_DECIMALS {
+        bail!("token decimals {decimals} exceeds {MAX_TOKEN_DECIMALS}");
+    }
+    let amount = amount.trim();
+    let (whole, frac) = amount.split_once('.').unwrap_or((amount, ""));
+    let digits = |s: &str| s.bytes().all(|b| b.is_ascii_digit());
+    if whole.is_empty()
+        || !digits(whole)
+        || !digits(frac)
+        || (amount.contains('.') && frac.is_empty())
+    {
+        bail!("amount must be a plain decimal number");
+    }
+    if frac.len() > usize::from(decimals) {
+        bail!("amount has more than {decimals} decimal places");
+    }
+    let scale = 10_u128.pow(u32::from(decimals));
+    let frac_units = if frac.is_empty() {
+        0
+    } else {
+        let pad = u32::from(decimals) - frac.len() as u32;
+        frac.parse::<u128>()? * 10_u128.pow(pad)
+    };
+    whole
+        .parse::<u128>()?
+        .checked_mul(scale)
+        .and_then(|w| w.checked_add(frac_units))
+        .ok_or_else(|| eyre!("amount overflow"))
+}
+
+/// Fields of a 32-byte Smart Account payment reference (inverse of the encoders; tests only).
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SmartAccountInstruction {
+    pub id: u8,
+    pub wallet_id: u8,
+    pub value: u128,
+    pub tail: [u8; 20],
+}
+
+#[cfg(test)]
+pub(crate) fn decode_smart_account_instruction(reference: &[u8; 32]) -> SmartAccountInstruction {
+    let mut value = [0_u8; 16];
+    value[6..].copy_from_slice(&reference[2..12]);
+    let mut tail = [0_u8; 20];
+    tail.copy_from_slice(&reference[12..]);
+    SmartAccountInstruction {
+        id: reference[0],
+        wallet_id: reference[1],
+        value: u128::from_be_bytes(value),
+        tail,
+    }
+}
+
+/// 32-byte instruction as XRPL `MemoData` hex (no `0x`).
+#[must_use]
+pub fn smart_account_memo_data(reference: &[u8; 32]) -> String {
+    hex::encode(reference)
 }
 
 fn payment_memos_from_memo_data(
@@ -332,6 +474,7 @@ macro_rules! sign_blob {
             .map_err(|e| color_eyre::eyre::eyre!("encode error: {:?}", e))
     }};
 }
+pub(crate) use sign_blob;
 
 /// Create, sign, and encode a Payment transaction as a submit-ready blob.
 ///
@@ -630,7 +773,7 @@ pub fn validate_offer_specs(taker_gets: &str, taker_pays: &str) -> color_eyre::R
 /// Build an `Amount` from a compact spec string.
 /// `"XRP:100000000"` → XRP amount in drops.
 /// `"USD:rIssuer:100.5"` → issued currency amount.
-fn parse_offer_amount(spec: &str) -> color_eyre::Result<xrpl::models::Amount<'static>> {
+pub(crate) fn parse_offer_amount(spec: &str) -> color_eyre::Result<xrpl::models::Amount<'static>> {
     use xrpl::models::{Amount, IssuedCurrencyAmount, XRPAmount};
 
     match parse_offer_amount_spec(spec)? {
@@ -988,7 +1131,7 @@ pub fn parse_amm_asset(spec: &str) -> color_eyre::Result<(String, Option<String>
     Ok((currency.to_string(), Some(issuer.to_string())))
 }
 
-fn amm_currency(asset: (String, Option<String>)) -> xrpl::models::Currency<'static> {
+pub(crate) fn amm_currency(asset: (String, Option<String>)) -> xrpl::models::Currency<'static> {
     use xrpl::models::{Currency, IssuedCurrency, XRP};
     match asset {
         (_, None) => Currency::XRP(XRP::new()),
@@ -1408,6 +1551,13 @@ mod tests {
         "sEdSkooMk31MeTjbHVE7vLvgCpEMAdB".to_string()
     }
 
+    /// Signed helpers are called with (seq, fee, lls) = (5, 12, 100); a swapped positional arg fails.
+    fn assert_seq_fee_lls(d: &serde_json::Value) {
+        assert_eq!(d["Sequence"], 5);
+        assert_eq!(d["Fee"], "12");
+        assert_eq!(d["LastLedgerSequence"], 100);
+    }
+
     /// TC-045/TC-046: credential source selection — none, seed, mnemonic, both-rejected
     #[test]
     fn credential_from_secrets_selects_source() {
@@ -1442,19 +1592,68 @@ mod tests {
         let err =
             credential_from_secrets(Some(&seed), Some(&mnemonic)).expect_err("both configured");
         assert!(format!("{err}").contains("only one"));
+
+        let bad = SecretString::from("abandon abandon not a real mnemonic".to_string());
+        let err = credential_from_secrets(None, Some(&bad)).expect_err("invalid mnemonic");
+        assert!(err.to_string().contains("invalid BIP39 mnemonic"), "{err}");
+    }
+
+    /// A family seed is not validated at credential creation; garbage / bad checksum fails at `wallet()`.
+    #[test]
+    fn bad_family_seed_is_rejected_when_building_wallet() {
+        let mut corrupted = sample_family_seed();
+        corrupted.pop();
+        corrupted.push('1'); // checksum no longer matches
+        for bad in [corrupted.as_str(), "sEdgarbage", "garbage", ""] {
+            assert!(wallet_from_family_seed(bad, 0).is_err(), "{bad:?}");
+            let cred = credential_from_secrets(Some(&SecretString::from(bad.to_string())), None)
+                .expect("seed accepted lazily")
+                .expect("credential");
+            assert!(cred.wallet().is_err(), "{bad:?}");
+        }
     }
 
     #[test]
     fn sequence_fee_ledger_from_simulate_extracts_fields() {
+        // Distinct values: a swapped field in the tuple would be caught. Numbers and strings both parse.
         let tx = serde_json::json!({
             "Sequence": 42,
             "Fee": "12",
             "LastLedgerSequence": 9_999_999
         });
-        let (seq, fee, lls) = sequence_fee_ledger_from_simulate(&tx).expect("fields should parse");
-        assert_eq!(seq, 42);
-        assert_eq!(fee, 12);
-        assert_eq!(lls, 9_999_999);
+        assert_eq!(
+            sequence_fee_ledger_from_simulate(&tx).unwrap(),
+            (42, 12, 9_999_999)
+        );
+        let tx = serde_json::json!({"Sequence": "7", "Fee": 13, "LastLedgerSequence": "8"});
+        assert_eq!(sequence_fee_ledger_from_simulate(&tx).unwrap(), (7, 13, 8));
+    }
+
+    /// Missing, non-numeric or out-of-u32 fields decide what gets signed → all refused.
+    #[test]
+    fn sequence_fee_ledger_from_simulate_rejects_bad_fields() {
+        let good = serde_json::json!({"Sequence": 1, "Fee": "12", "LastLedgerSequence": 10});
+        for key in ["Sequence", "Fee", "LastLedgerSequence"] {
+            let mut missing = good.clone();
+            missing.as_object_mut().unwrap().remove(key);
+            let err = sequence_fee_ledger_from_simulate(&missing).expect_err("missing");
+            assert!(err.to_string().contains(key), "{key}: {err}");
+
+            for bad in [
+                serde_json::json!("abc"),
+                serde_json::json!(-1),
+                serde_json::json!(1.5),
+                serde_json::json!(null),
+                serde_json::json!(u64::from(u32::MAX) + 1),
+            ] {
+                let mut tx = good.clone();
+                tx[key] = bad.clone();
+                assert!(
+                    sequence_fee_ledger_from_simulate(&tx).is_err(),
+                    "{key}={bad}"
+                );
+            }
+        }
     }
 
     /// A node-chosen Fee above the cap is refused before anything is signed.
@@ -1587,6 +1786,148 @@ mod tests {
         assert!(build_direct_mint_memo_data("not-hex-zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz").is_err());
     }
 
+    /// TC-239: Smart Account payment reference layout — id at byte 0, walletId at 1, value
+    /// (10 bytes big-endian) at 2..12, recipient at 12..32 — pinned against the worked example
+    /// of the Flare docs (the doc prose shows `000000000000000000000a`, which is 11 bytes; the
+    /// 64-hex-char example itself and the byte table agree on a 10-byte value).
+    #[test]
+    fn smart_account_instruction_layout_matches_flare_example() {
+        let example = "01000000000000000000000af5488132432118596fa13800b68df4c0ff25131d";
+        assert_eq!(example.len(), 64);
+        let recipient = "0xf5488132432118596fa13800b68df4c0ff25131d";
+        let encoded = encode_fxrp_transfer_instruction(0, 10, recipient).unwrap();
+        assert_eq!(hex::encode(encoded), example);
+        assert_eq!(smart_account_memo_data(&encoded), example);
+
+        // Distinct bytes prove the field offsets, not just the example.
+        let value = 0x0102_0304_0506_0708_090a_u128;
+        let encoded = encode_fxrp_transfer_instruction(7, value, recipient).unwrap();
+        assert_eq!(encoded[0], 0x01);
+        assert_eq!(encoded[1], 7);
+        assert_eq!(encoded[2..12], [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+        assert_eq!(hex::encode(&encoded[12..]), &recipient[2..]);
+        let decoded = decode_smart_account_instruction(&encoded);
+        assert_eq!(
+            (decoded.id, decoded.wallet_id, decoded.value),
+            (0x01, 7, value)
+        );
+        assert_eq!(hex::encode(decoded.tail), &recipient[2..]);
+
+        // Redeem: id 0x02, value = lots, remaining 20 bytes zero.
+        let encoded = encode_fxrp_redeem_instruction(0, 3).unwrap();
+        assert_eq!(
+            hex::encode(encoded),
+            format!("0200{:020x}{}", 3, "00".repeat(20))
+        );
+        let decoded = decode_smart_account_instruction(&encoded);
+        assert_eq!(
+            (decoded.id, decoded.wallet_id, decoded.value, decoded.tail),
+            (0x02, 0, 3, [0; 20])
+        );
+    }
+
+    /// TC-239: the value field is 10 bytes — 2^80 − 1 fits, 2^80 and zero are refused — and the
+    /// recipient must be a well-formed, non-zero 20-byte address.
+    #[test]
+    fn smart_account_instruction_rejects_bad_value_and_recipient() {
+        let to = "0xf5488132432118596fa13800b68df4c0ff25131d";
+        let max = encode_fxrp_transfer_instruction(0, SMART_ACCOUNT_VALUE_MAX, to).unwrap();
+        assert_eq!(max[2..12], [0xff; 10]);
+        assert_eq!(
+            decode_smart_account_instruction(&max).value,
+            SMART_ACCOUNT_VALUE_MAX
+        );
+        assert!(encode_fxrp_transfer_instruction(0, SMART_ACCOUNT_VALUE_MAX + 1, to).is_err());
+        assert!(encode_fxrp_transfer_instruction(0, u128::MAX, to).is_err());
+        assert!(encode_fxrp_transfer_instruction(0, 0, to).is_err());
+        assert!(encode_fxrp_redeem_instruction(0, SMART_ACCOUNT_VALUE_MAX + 1).is_err());
+        assert!(encode_fxrp_redeem_instruction(0, 0).is_err());
+
+        for bad in [
+            "",
+            "0xabc",
+            "0x0000000000000000000000000000000000000000",
+            "0xzz88132432118596fa13800b68df4c0ff25131d",
+            "0xf5488132432118596fa13800b68df4c0ff25131d00",
+        ] {
+            assert!(
+                encode_fxrp_transfer_instruction(0, 1, bad).is_err(),
+                "{bad:?} must be refused"
+            );
+        }
+        // Case and surrounding whitespace are normalized.
+        let upper = "  0XF5488132432118596FA13800B68DF4C0FF25131D ";
+        assert_eq!(
+            encode_fxrp_transfer_instruction(0, 1, upper).unwrap(),
+            encode_fxrp_transfer_instruction(0, 1, to).unwrap()
+        );
+    }
+
+    /// TC-239: a zero or absurd `getInstructionFee` never becomes a Payment amount.
+    #[test]
+    fn smart_account_fee_bounds() {
+        assert!(check_smart_account_fee(0).is_err());
+        assert!(check_smart_account_fee(1).is_ok());
+        assert!(check_smart_account_fee(MAX_SMART_ACCOUNT_FEE_DROPS).is_ok());
+        assert!(check_smart_account_fee(MAX_SMART_ACCOUNT_FEE_DROPS + 1).is_err());
+        assert!(check_smart_account_fee(u64::MAX).is_err());
+    }
+
+    /// TC-239: vectors from the reference encoder (py_flare_common.smart_accounts, used by
+    /// smart-accounts-cli; no unit conversion — the value is raw FXRP base units / lots).
+    #[test]
+    fn smart_account_instruction_matches_reference_encoder_vectors() {
+        let to = "0xf5488132432118596fa13800b68df4c0ff25131d";
+        assert_eq!(
+            hex::encode(encode_fxrp_transfer_instruction(0, 10, to).unwrap()),
+            "01000000000000000000000af5488132432118596fa13800b68df4c0ff25131d"
+        );
+        assert_eq!(
+            hex::encode(encode_fxrp_transfer_instruction(0, 1_234_567, to).unwrap()),
+            "01000000000000000012d687f5488132432118596fa13800b68df4c0ff25131d"
+        );
+        assert_eq!(
+            hex::encode(encode_fxrp_redeem_instruction(0, 3).unwrap()),
+            "0200000000000000000000030000000000000000000000000000000000000000"
+        );
+    }
+
+    /// TC-239: decimal amount → base units uses exact integer math with the given `decimals`
+    /// (not a hard-coded 6): too many fraction digits, decimals > 18, signs / exponents / empty
+    /// parts and overflow are refused.
+    #[test]
+    fn parse_token_amount_follows_decimals_with_exact_math() {
+        assert_eq!(parse_token_amount("12.5", 6).unwrap(), 12_500_000);
+        assert_eq!(parse_token_amount("12.5", 8).unwrap(), 1_250_000_000);
+        assert_eq!(parse_token_amount("7", 0).unwrap(), 7);
+        assert_eq!(parse_token_amount(" 0.000001 ", 6).unwrap(), 1);
+        assert_eq!(parse_token_amount("1", 18).unwrap(), 10_u128.pow(18));
+        assert_eq!(
+            parse_token_amount("0.123456789012345678", 18).unwrap(),
+            123_456_789_012_345_678
+        );
+        for (bad, decimals) in [
+            ("0.0000001", 6), // one digit more than decimals
+            ("1.5", 0),
+            ("1", 19),
+            ("", 6),
+            (".", 6),
+            (".5", 6),
+            ("1.", 6),
+            ("-1", 6),
+            ("+1", 6),
+            ("1e3", 6),
+            ("1,5", 6),
+            ("1.2.3", 6),
+            ("340282366920938463464", 18), // × 10^18 > u128::MAX
+        ] {
+            assert!(
+                parse_token_amount(bad, decimals).is_err(),
+                "{bad:?} @ {decimals} must be refused"
+            );
+        }
+    }
+
     /// TC: prompt skipped for non-mainnet networks and when skip_prompt is set
     #[test]
     fn prompt_production_confirmation_skips_when_safe() {
@@ -1607,6 +1948,33 @@ mod tests {
         ));
     }
 
+    /// Mainnet gate: only an explicit `y`/`yes` proceeds; anything else, including EOF, declines.
+    #[test]
+    fn read_confirmation_accepts_only_explicit_yes() {
+        for yes in ["y\n", "YES\n", "  Yes \n"] {
+            assert!(read_confirmation(yes.as_bytes()), "{yes:?}");
+        }
+        for no in ["", "\n", "n\n", "no\n", "yep\n", "ye\n"] {
+            assert!(!read_confirmation(no.as_bytes()), "{no:?}");
+        }
+    }
+
+    #[test]
+    fn signing_credential_debug_never_prints_secrets() {
+        let seed = "sEdSkooMk31MeTjbHVE7vLvgCpEMAdB";
+        let mnemonic = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+        for credential in [
+            SigningCredential::FamilySeed(secrecy::SecretString::from(seed)),
+            SigningCredential::Bip39Mnemonic(secrecy::SecretString::from(mnemonic)),
+        ] {
+            let shown = format!("{credential:?}");
+            assert!(
+                !shown.contains(seed) && !shown.contains("abandon"),
+                "{shown}"
+            );
+        }
+    }
+
     #[test]
     fn domain_ascii_to_hex_lowercase() {
         assert_eq!(domain_ascii_to_hex("Example.COM"), "6578616d706c652e636f6d");
@@ -1614,7 +1982,7 @@ mod tests {
 
     /// TC: AccountSet flag label parsing
     #[test]
-    fn parse_require_dest() {
+    fn parse_account_set_flag_choice_table() {
         use xrpl::models::transactions::account_set::AccountSetFlag;
         assert_eq!(
             parse_account_set_flag_choice(Some("RequireDest")),
@@ -1652,7 +2020,6 @@ mod tests {
         // Actual deterministic derivation for this mnemonic (index 0). The
         // often-quoted rG1QQv2... address belongs to a different test vector.
         assert_eq!(wallet.classic_address, "rHsMGQEkVNJmpGWs8XUBoTBiAAbwxZN5v3");
-        assert!(xrpl::core::keypairs::sign(b"test", &wallet.private_key).is_ok());
     }
     #[test]
     fn bip39_secp256k1_can_sign_payment() {
@@ -1689,6 +2056,17 @@ mod tests {
         assert_eq!(decoded["Amount"], serde_json::json!("1000000"));
         assert_eq!(decoded["Sequence"], serde_json::json!(1));
         assert_eq!(decoded["Fee"], serde_json::json!("12"));
+        assert_eq!(decoded["LastLedgerSequence"], serde_json::json!(100));
+        assert_eq!(
+            decoded["SigningPubKey"],
+            serde_json::json!(wallet.public_key)
+        );
+        assert!(
+            decoded["TxnSignature"]
+                .as_str()
+                .is_some_and(|s| !s.is_empty()),
+            "signed blob carries TxnSignature"
+        );
         assert_eq!(decoded["Account"], serde_json::json!(account));
     }
 
@@ -1710,6 +2088,9 @@ mod tests {
         let decoded = decode(&blob).expect("decodes");
         assert_eq!(decoded["TransactionType"], "OfferCancel");
         assert_eq!(decoded["OfferSequence"], 42);
+        assert_eq!(decoded["Sequence"], 5);
+        assert_eq!(decoded["Fee"], "12");
+        assert_eq!(decoded["LastLedgerSequence"], 100);
     }
 
     /// TC-215: escrow durations — `s`/`m`/`h`/`d` suffix, positive, u32 seconds; anything else rejected.
@@ -1777,6 +2158,7 @@ mod tests {
         )
         .expect("signed");
         let d = decode(&blob).expect("decodes");
+        assert_seq_fee_lls(&d);
         assert_eq!(
             (&d["Destination"], &d["FinishAfter"], &d["CancelAfter"]),
             (
@@ -1797,6 +2179,7 @@ mod tests {
             let blob = create_and_sign_escrow_close(&wallet, &acct, DEST, 42, cancel, 5, 12, 100)
                 .expect("signed");
             let d = decode(&blob).expect("decodes");
+            assert_seq_fee_lls(&d);
             assert_eq!(
                 (&d["TransactionType"], &d["OfferSequence"]),
                 (&serde_json::json!(ty), &serde_json::json!(42))
@@ -1858,7 +2241,9 @@ mod tests {
         assert_eq!(dep["Amount2"]["value"], "10");
         let blob = create_and_sign_amm_deposit(&wallet, &acct, "XRP:1000000", &usd10, 5, 12, 100)
             .expect("signed deposit");
-        assert_eq!(decode(&blob).expect("decode")["Flags"], 0x0010_0000);
+        let d = decode(&blob).expect("decode");
+        assert_eq!(d["Flags"], 0x0010_0000);
+        assert_seq_fee_lls(&d);
 
         let usd = format!("USD:{ISS}");
         let all = build_amm_withdraw_tx_json_for_simulate(&acct, "XRP", &usd, None, 5)
@@ -1877,6 +2262,7 @@ mod tests {
             create_and_sign_amm_withdraw(&wallet, &acct, "XRP", &usd, Some(lp_in), 5, 12, 100)
                 .expect("signed withdraw");
         let d = decode(&blob).expect("decode");
+        assert_seq_fee_lls(&d);
         assert_eq!(
             (&d["TransactionType"], &d["Flags"]),
             (&json!("AMMWithdraw"), &json!(0x0001_0000))
@@ -1984,7 +2370,7 @@ mod tests {
             build_set_regular_key_tx_json_for_simulate("rSenderxxxxxxxxxxxxxxxxxxxxxxxXX", None, 2)
                 .expect("clear regular key");
         assert_eq!(v["TransactionType"], "SetRegularKey");
-        assert!(v.get("RegularKey").is_none() || v["RegularKey"].is_null());
+        assert!(v.get("RegularKey").is_none(), "clear omits RegularKey: {v}");
     }
 
     /// TC-197: shared Payment input validation (composer preview/submit/quote + poll):
@@ -2095,10 +2481,18 @@ mod tests {
     }
 
     #[test]
-    fn require_classic_address_shape_accepts_valid_classic_address() {
-        let a = require_classic_address_shape("acct", "rN7n7otQDd6FczFgLdSqtcsAUxDkw6fzRH")
-            .expect("ok");
-        assert_eq!(a, "rN7n7otQDd6FczFgLdSqtcsAUxDkw6fzRH");
+    fn require_classic_address_shape_validates_checksum() {
+        const OK: &str = "rN7n7otQDd6FczFgLdSqtcsAUxDkw6fzRH";
+        assert_eq!(require_classic_address_shape("acct", OK).unwrap(), OK);
+        // Corrupted checksum, wrong alphabet, empty, X-address-ish junk.
+        for bad in [
+            "rN7n7otQDd6FczFgLdSqtcsAUxDkw6fzRX",
+            "r0Il",
+            "",
+            "not-an-address",
+        ] {
+            assert!(require_classic_address_shape("acct", bad).is_err(), "{bad}");
+        }
     }
 
     /// TC-098: IOU issuer checksum and finite positive value validation

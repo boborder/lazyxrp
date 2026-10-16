@@ -129,7 +129,26 @@ mod tests {
         assert!(!Network::XahauTest.is_production());
     }
 
-    /// TC-111: Xahau networks parse, resolve endpoints, and guard writes
+    /// TC-111: every network resolves distinct secure endpoints (xahau included).
+    #[test]
+    fn endpoints_are_secure_and_distinct() {
+        let all = [
+            Network::Mainnet,
+            Network::Testnet,
+            Network::Devnet,
+            Network::Xahau,
+            Network::XahauTest,
+        ];
+        for (i, a) in all.iter().enumerate() {
+            assert!(a.rpc_url().starts_with("https://"), "{a:?}");
+            assert!(a.ws_url().starts_with("wss://"), "{a:?}");
+            for b in &all[i + 1..] {
+                assert_ne!(a.rpc_url(), b.rpc_url(), "{a:?} vs {b:?}");
+                assert_ne!(a.ws_url(), b.ws_url(), "{a:?} vs {b:?}");
+            }
+        }
+    }
+
     /// next_network cycles through all variants and wraps to mainnet.
     #[test]
     fn next_network_wraps_all_variants() {

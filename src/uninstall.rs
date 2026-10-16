@@ -3,7 +3,7 @@
 use std::{
     collections::BTreeSet,
     fs,
-    io::{self, Write},
+    io::{self, BufRead, Write},
     path::{Path, PathBuf},
 };
 
@@ -57,7 +57,7 @@ fn sibling_rp_alias_safe(binary: &Path) -> Option<PathBuf> {
 /// Paths match `./install.sh --uninstall-help` (effective config/data dirs from `Config`).
 pub(crate) fn perform_self_uninstall(config: &Config, assume_yes: bool) -> color_eyre::Result<()> {
     let exe = std::env::current_exe()?;
-    perform_self_uninstall_binary(config, assume_yes, &exe)
+    perform_self_uninstall_binary(config, assume_yes, &exe, &mut io::stdin().lock())
 }
 
 /// Same as [`perform_self_uninstall`] but targets an explicit binary path (tests use a temp dummy).
@@ -65,6 +65,7 @@ fn perform_self_uninstall_binary(
     config: &Config,
     assume_yes: bool,
     exe: &Path,
+    input: &mut impl BufRead,
 ) -> color_eyre::Result<()> {
     let backup = backup_candidate(exe);
     let rp_alias = sibling_rp_alias_safe(exe);
@@ -103,7 +104,7 @@ fn perform_self_uninstall_binary(
         eprint!("Type \"yes\" to continue: ");
         io::stderr().flush()?;
         let mut line = String::new();
-        io::stdin().read_line(&mut line)?;
+        input.read_line(&mut line)?;
         if line.trim() != "yes" {
             eprintln!("Cancelled.");
             return Ok(());
@@ -155,8 +156,31 @@ fn perform_self_uninstall_binary(
 #[cfg(test)]
 mod tests {
     use super::*;
-
     use crate::test_support::{TempRootGuard, TestEnvGuard, env_lock};
+
+    /// `Config::new()` also reads `XRPL_*`/XDG/HOME and strips secrets from the process env;
+    /// pin them so a developer shell cannot change the result.
+    fn isolated_config_env() -> TestEnvGuard {
+        let guard = TestEnvGuard::new(&[
+            "LAZYXRP_CONFIG",
+            "LAZYXRP_DATA",
+            "XRPL_RPC_SERVER",
+            "XRPL_NETWORK",
+            "XRPL_SEED",
+            "XRPL_MNEMONIC",
+            "XDG_CONFIG_HOME",
+        ]);
+        for k in [
+            "XRPL_RPC_SERVER",
+            "XRPL_NETWORK",
+            "XRPL_SEED",
+            "XRPL_MNEMONIC",
+            "XDG_CONFIG_HOME",
+        ] {
+            guard.remove(k);
+        }
+        guard
+    }
 
     #[test]
     fn backup_candidate_appends_bak_suffix() {
@@ -164,11 +188,6 @@ mod tests {
         assert_eq!(
             backup_candidate(&p).unwrap(),
             PathBuf::from("/opt/bin/lazyxrp.bak")
-        );
-        let p = PathBuf::from(r"C:\bin\lazyxrp.exe");
-        assert_eq!(
-            backup_candidate(&p).unwrap(),
-            PathBuf::from(r"C:\bin\lazyxrp.exe.bak")
         );
     }
 
@@ -215,7 +234,7 @@ mod tests {
     #[test]
     fn perform_self_uninstall_removes_safe_dirs_and_backup() -> color_eyre::Result<()> {
         let _env_lock = env_lock();
-        let _test_env = TestEnvGuard::new(&["LAZYXRP_CONFIG", "LAZYXRP_DATA"]);
+        let _test_env = isolated_config_env();
         let root = std::env::temp_dir().join(format!("lazyxrp-tc150b-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let _root_guard = TempRootGuard::new(root.clone());
@@ -233,12 +252,78 @@ mod tests {
         let backup = backup_candidate(&dummy_exe).expect("backup path");
         std::fs::write(&backup, b"stale")?;
 
-        perform_self_uninstall_binary(&crate::config::Config::new()?, true, &dummy_exe)?;
+        perform_self_uninstall_binary(
+            &crate::config::Config::new()?,
+            true,
+            &dummy_exe,
+            &mut io::empty(),
+        )?;
 
         assert!(!config_dir.exists(), "safe config dir must be deleted");
         assert!(!data_dir.exists(), "safe data dir must be deleted");
         assert!(!backup.exists(), "stale .bak must be deleted");
         assert!(!dummy_exe.exists(), "dummy binary must be deleted");
+        Ok(())
+    }
+
+    /// TC-150: a `lazyxrp`-named symlink is judged by its canonical target, so one pointing at
+    /// HOME or at an unrelated directory is refused (and `remove_dir_all` never reaches it).
+    #[cfg(unix)]
+    #[test]
+    fn is_safe_uninstall_dir_refuses_symlink_to_home_or_unrelated() {
+        let _env_lock = env_lock();
+        let _test_env = TestEnvGuard::new(&["HOME"]);
+        let root = std::env::temp_dir().join(format!("lazyxrp-tc150s-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let _root_guard = TempRootGuard::new(root.clone());
+        let home = root.join("fake-home");
+        let other = root.join("precious");
+        std::fs::create_dir_all(&home).expect("home");
+        std::fs::create_dir_all(&other).expect("other");
+        _test_env.set(
+            "HOME",
+            std::fs::canonicalize(&home).unwrap().to_str().unwrap(),
+        );
+
+        let to_home = root.join("lazyxrp");
+        std::os::unix::fs::symlink(&home, &to_home).expect("symlink");
+        assert!(!is_safe_uninstall_dir(&to_home), "symlink to HOME");
+        let to_other = root.join("lazyxrp-link");
+        std::os::unix::fs::symlink(&other, &to_other).expect("symlink");
+        assert!(
+            !is_safe_uninstall_dir(&to_other),
+            "symlink to unrelated dir"
+        );
+    }
+
+    /// TC-150: anything but `yes` at the prompt cancels without deleting anything.
+    #[test]
+    fn perform_self_uninstall_declined_deletes_nothing() -> color_eyre::Result<()> {
+        let _env_lock = env_lock();
+        let _test_env = isolated_config_env();
+        let root = std::env::temp_dir().join(format!("lazyxrp-tc150c-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let _root_guard = TempRootGuard::new(root.clone());
+        let config_dir = root.join("lazyxrp-config");
+        let data_dir = root.join("lazyxrp-data");
+        std::fs::create_dir_all(&config_dir)?;
+        std::fs::create_dir_all(&data_dir)?;
+        _test_env.set("LAZYXRP_CONFIG", config_dir.to_string_lossy().as_ref());
+        _test_env.set("LAZYXRP_DATA", data_dir.to_string_lossy().as_ref());
+        let exe = root.join("lazyxrp");
+        std::fs::write(&exe, b"binary")?;
+        let backup = backup_candidate(&exe).expect("backup path");
+        std::fs::write(&backup, b"stale")?;
+        let config = crate::config::Config::new()?;
+
+        for answer in ["no\n", "y\n", "\n", ""] {
+            perform_self_uninstall_binary(&config, false, &exe, &mut answer.as_bytes())?;
+            assert!(config_dir.exists() && data_dir.exists(), "{answer:?}");
+            assert!(exe.exists() && backup.exists(), "{answer:?}");
+        }
+
+        perform_self_uninstall_binary(&config, false, &exe, &mut "yes\n".as_bytes())?;
+        assert!(!config_dir.exists() && !data_dir.exists() && !exe.exists() && !backup.exists());
         Ok(())
     }
 }

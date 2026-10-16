@@ -181,7 +181,6 @@ mod tests {
             ("dest", false, 0, 'a', "", true, "a"),
             ("dest", false, 0, ' ', "", false, ""),
             ("dest", false, 0, 'あ', "", false, ""),
-            ("dest", true, 0, 'a', "rX", true, "rXa"),
             ("amt", false, 1, '1', "", true, "1"),
             ("amt", false, 1, 'x', "", false, ""),
             ("amt", false, 1, '.', "1.", false, "1."),

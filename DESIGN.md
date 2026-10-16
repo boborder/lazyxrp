@@ -117,7 +117,7 @@ Guard: `TAB_TITLES.len() == panels.len() == 4` (`app.rs`, TC-060).
 | Table | `render_selectable_table` | Header accent underline. Focused selection: white on royal. Unfocused selection: muted reversed |
 | TX row | `tx_table_row` | Hash `SECONDARY` (16-char + `…`); ▼ `ERROR` / ▲ `SUCCESS` / · `MUTED`; type `ACCENT`; ledger muted; result success/error |
 | Status bar | `status_bar.rs` | Left: connection chip reversed (`● ONLINE` green / `✖ OFFLINE` red / `○ CONNECTING` orange / `● STALE` orange — XRPL turns STALE after 30 s without `server_info`; a `server_info`-labeled error is OFFLINE even with success history) + `acct:` / `srv:` / `acc:` / `bk:` freshness + `flr:` (flare dot + freshness when flare enabled; red on `FlareFetchFailed`, orange after 30 s without a success) + `dunl:` (manifest **data** age; orange `!` once older than the 10 min `DUNL_CACHE_TTL`) + optional mid price + spinner while refresh. Right: `format!(" {} ", display_name())` reversed bold — `ERROR` if `is_production()` (mainnet **or** xahau), else `WARNING` |
-| Footer hints | `footer_line` | Keys bold, labels dim. Always `?` `Tab` `1-4` `jk` `hl` `^Z` `q`. Tab extras: Overview `t` `g` `r` `Enter`; Account `t` `f` `r`; Market `b`; Assets `o` |
+| Footer hints | `footer_line` | Keys bold, labels dim. Always `?` `Tab` `1-4` `jk` `hl` `^Z` `q`. Tab extras: Overview `t` `g` `r` `Enter`; Account `t` `f` `r`; Market `b`; Assets `o` `x` |
 | Loading | `render_loading` | Accent braille spinner (`⠋…`) + muted message |
 | Empty | `render_empty` | Muted paragraph in titled block |
 | Error | `render_error` | `error: ` in `ERROR` + message |
@@ -161,8 +161,11 @@ Defaults: [`config.json5`](config.json5) `keybindings.Splash`. User merge: `~/.c
 |---------|-----|--------|
 | Table, modal closed | `j`/`k`, arrows | Row + scrollbar |
 | Table | `Enter` | TX detail |
-| Wallet | `t` | Composer picker: Payment, AccountSet, SetRegularKey, OfferCreate, TrustSet, FXRP Mint, Execute, OfferCancel, EscrowCreate, Escrows, AMMDeposit, AMMWithdraw, AccountDelete. Under `--watch` the Wallet panel is replaced by the read-only Account panel (no `t` / `g`) |
-| Picker | `Tab`, `j`/`k`, arrows, `1`–`9`, `0`, `d`, `w`, `x` | Phase select; the list scrolls to keep the selection visible when the wallet panel is short |
+| Wallet | `t` | Composer picker: Payment, AccountSet, SetRegularKey, OfferCreate, TrustSet, FXRP Mint, Execute, OfferCancel, EscrowCreate, Escrows, AMMDeposit, AMMWithdraw, AccountDelete, Smart Account. Under `--watch` the Wallet panel is replaced by the read-only Account panel (no `t` / `g`) |
+| Picker | `m` | **Transaction** (row 14): second list of spec'd types (`NFTokenMint`, `NFTokenBurn`, …; `j`/`k`/arrows, `Enter`; Esc → picker). Form is generated from the type's field specs |
+| Transaction | `j`/`k`, `Tab`, `[` `]`, `e`, `Enter` | Field nav / edit like other forms; the focused row shows its help text and inline validation error; preview `▸ <summary>` green when valid, orange with the error otherwise. `s` / `Ctrl-s` queue; Esc → type list. Burn / AcceptOffer: `s` opens a type-to-confirm (`BURN` / `ACCEPT`, Esc restores the form) |
+| Smart Account | `a` (picker), `i`, `e`, `Tab`, `s` | Needs the Overview Flare read (incl. FXRP `decimals()`; no read → no composer). `i` flips `0x01` FXRP transfer ↔ `0x02` redeem; rows: Flare recipient (transfer only) + Amount FXRP (decimal, converted to base units with the read `decimals()`; extra fraction digits refused) / Lots; header shows operator + pin status, fee (XRP) and personal-account FXRP balance. Overview FXRP panel gains rows: `Smart acct`, `SA FXRP`, `Nonce · deployed`, `Operator`, `SA fee` |
+| Picker | `Tab`, `j`/`k`, arrows, `1`–`9`, `0`, `d`, `w`, `x`, `a` | Phase select; the list scrolls to keep the selection visible when the wallet panel is short |
 | Forms | `Tab`, `[` `]`, `Enter` | Field nav; AccountSet `e` edits |
 | Payment | `i` | XRP ↔ IOU (resets row); last row **Send max** (`XRP:drops` / `CUR:issuer:value`, empty = same currency) → cross-currency via default paths, preview adds `spend ≤ …` |
 | Payment | `p` | Quote Send max via `ripple_path_find` in the Send max field's currency (`XRP` or `CUR:issuer`; empty + IOU Amount → XRP), + `slippage_bps`; fills the field |
@@ -176,7 +179,7 @@ Defaults: [`config.json5`](config.json5) `keybindings.Splash`. User merge: `~/.c
 
 **Tx history:** `f` filter (`Enter` confirm, `Esc` cancel); `m` next page when marker.
 
-**NFT:** `j`/`k` select (URI → image fetch).
+**NFT:** `j`/`k` select (URI → image fetch); `x` (Assets tab) opens the Account-tab Transaction composer on NFTokenBurn with the selected NFTokenID prefilled (needs a signing credential; still goes through the `BURN` confirm and simulate).
 
 **Tables** (book, lines, objects, path find): `j`/`k` + `Enter` → overlay.
 

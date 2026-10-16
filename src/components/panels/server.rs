@@ -414,6 +414,10 @@ mod tests {
         assert!(out.contains("2.5.0"));
         assert!(out.contains("80,000,000"));
         assert!(out.contains("15 drops"));
-        assert!(out.contains("Quorum:"));
+        let quorum = out
+            .lines()
+            .find(|l| l.contains("Quorum:"))
+            .expect("quorum line");
+        assert!(quorum.contains("28"), "{quorum}");
     }
 }

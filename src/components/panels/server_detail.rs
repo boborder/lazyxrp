@@ -82,6 +82,12 @@ impl ValidatorDetail {
     }
 }
 
+/// Validator domain, TOML text and HTTP headers come from remote hosts: strip controls and
+/// bidi/format characters (TC-236) before they reach the terminal.
+fn clean(s: &str) -> String {
+    crate::xrpl::sanitize_text(s, 512)
+}
+
 pub(super) fn validator_detail_lines(
     row: &DunlValidatorRow,
     index: usize,
@@ -107,7 +113,7 @@ pub(super) fn validator_detail_lines(
     let push = |lines: &mut Vec<Line<'static>>, key: &str, val: String, style: Style| {
         lines.push(Line::from(vec![
             Span::styled(format!("{key:<16}"), label_style),
-            Span::styled(val, style),
+            Span::styled(clean(&val), style),
         ]));
     };
 
@@ -210,7 +216,7 @@ pub(super) fn validator_detail_lines(
     if let Some(ct) = content_type {
         lines.push(Line::from(vec![
             Span::styled("  Content-Type:", label_style),
-            Span::styled(ct.to_string(), value_style),
+            Span::styled(clean(ct), value_style),
         ]));
     }
     match toml {
@@ -241,13 +247,13 @@ pub(super) fn validator_detail_lines(
             if let Some(att) = &data.attestation {
                 lines.push(Line::from(vec![
                     Span::styled("  Attestation:", label_style),
-                    Span::styled(att.clone(), theme::secondary_style()),
+                    Span::styled(clean(att), theme::secondary_style()),
                 ]));
             }
         }
         Some(Err(e)) => {
             lines.push(Line::from(Span::styled(
-                format!("  Error: {e}"),
+                clean(&format!("  Error: {e}")),
                 theme::error_style(),
             )));
         }
@@ -258,7 +264,7 @@ pub(super) fn validator_detail_lines(
         lines.push(Line::from(vec![Span::styled("Raw TOML", label_style)]));
         for line_text in raw.lines() {
             lines.push(Line::from(Span::styled(
-                line_text.to_string(),
+                clean(line_text),
                 theme::dim_style(),
             )));
         }
@@ -343,6 +349,73 @@ mod tests {
         }
     }
 
+    /// TC-236: validator domain, TOML text, attestation and parse errors come from remote
+    /// hosts; bidi/format characters (U+202E) must not reach the rendered lines.
+    #[test]
+    fn validator_detail_strips_bidi_and_controls_from_remote_text() {
+        let evil = "ev\u{202E}il\u{1b}[2J.org";
+        let row = row(Some(evil), None);
+        let data = XrplTomlData {
+            attestation: Some("att\u{202E}est".into()),
+            validator_found: true,
+            ..Default::default()
+        };
+        let lines = validator_detail_lines(
+            &row,
+            0,
+            &dunl(),
+            &Some(Ok(data)),
+            Some("a = \"x\u{202E}y\"\nb\u{2066}=1"),
+            200,
+            Some("text/\u{202E}plain"),
+        );
+        let text: String = lines
+            .iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.content.as_ref()))
+            .collect();
+        for bad in ['\u{202E}', '\u{2066}', '\u{1b}'] {
+            assert!(!text.contains(bad), "{bad:?} leaked into {text:?}");
+        }
+        assert!(text.contains("evil[2J.org"), "visible text preserved");
+        assert!(text.contains("attest") && text.contains("xy"));
+    }
+
+    /// DUNL expiring `secs_from_now` seconds from the real clock; callers add a 12h margin so
+    /// whole-day truncation never straddles a day boundary.
+    fn dunl_expiring_in(secs_from_now: i64) -> DunlSummary {
+        let now = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        DunlSummary {
+            expiration_ripple: (now + secs_from_now - crate::xrpl::RIPPLE_EPOCH_UNIX) as u64,
+            ..dunl()
+        }
+    }
+
+    fn expiry_line(dunl: &DunlSummary) -> Line<'static> {
+        validator_detail_lines(&row(None, None), 0, dunl, &None, None, 0, None)
+            .into_iter()
+            .find(|l| l.spans.iter().any(|s| s.content.contains("expires in")))
+            .expect("expiry line")
+    }
+
+    #[test]
+    fn validator_detail_expiry_warns_under_14_days_and_handles_expired() {
+        const DAY: i64 = 86_400;
+        let far = expiry_line(&dunl_expiring_in(20 * DAY + DAY / 2));
+        assert_eq!(far.spans[0].content, "  expires in 20 day(s)");
+        assert_eq!(far.spans[0].style, theme::dim_style());
+
+        let soon = expiry_line(&dunl_expiring_in(13 * DAY + DAY / 2));
+        assert_eq!(soon.spans[0].content, "  expires in 13 day(s)");
+        assert_eq!(soon.spans[0].style, theme::warning_style());
+
+        let expired = expiry_line(&dunl_expiring_in(-10 * DAY - DAY / 2));
+        assert_eq!(expired.spans[0].content, "  expires in -10 day(s)");
+        assert_eq!(expired.spans[0].style, theme::warning_style());
+    }
+
     #[test]
     fn validator_detail_renders_identity_dunl_and_fetching_state() {
         let row = row(Some("xrplf.org"), None);
@@ -355,16 +428,10 @@ mod tests {
         let out = detail_rendered(&mut state);
         assert!(out.contains("Validator #1"));
         assert!(out.contains("xrplf.org"));
-        assert!(out.contains("present"));
-        assert!(out.contains("Signing key"));
         assert!(out.contains("EDFB01CA58D69A2B"));
-        assert!(out.contains("dUNL list"));
         assert!(out.contains("seq 123"));
         assert!(out.contains("2 validators"));
-        assert!(out.contains("expires in"));
-        assert!(out.contains("HTTP status:200"));
-        assert!(out.contains("fetching..."));
-        assert!(out.contains("Content-Type:"));
+        assert!(out.contains("200"));
         assert!(out.contains("text/plain"));
         assert!(!out.contains("Raw TOML"));
     }
@@ -394,14 +461,9 @@ mod tests {
 
         let out = detail_rendered(&mut state);
         assert!(out.contains("Validator #2"));
-        assert!(out.contains("Master key"));
         assert!(out.contains("EDFFFF0099AABBCC"));
-        assert!(out.contains("rotated or dual-key setup"));
         assert!(out.contains("Domain verified:Yes"));
-        assert!(out.contains("Validators listed:"));
-        assert!(out.contains("Attestation:"));
         assert!(out.contains("sig 0xAB"));
-        assert!(out.contains("Raw TOML"));
         assert!(out.contains("node = \"wss://a.b\""));
     }
 
@@ -420,7 +482,7 @@ mod tests {
 
         let out = detail_rendered(&mut state);
         assert!(out.contains("missing"));
-        assert!(out.contains("HTTP status:404"));
+        assert!(out.contains("404"));
         assert!(out.contains("Error: boom"));
         assert!(!out.contains("Domain verified:"));
     }

@@ -95,6 +95,16 @@ impl Default for FlareFassetsConfig {
     }
 }
 
+/// `[flare.smart_accounts]` — Smart Account instruction Payments (XRPL → operator → Flare).
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
+pub struct FlareSmartAccountsConfig {
+    /// Operator XRPL address verified out of band. Smart Account instruction Payments are
+    /// refused unless `getXrplProviderWallets()[0]` from the Flare RPC equals it (the RPC alone
+    /// is not trusted for funds).
+    #[serde(default)]
+    pub expected_operator: Option<String>,
+}
+
 /// `[flare.wallet]` — read-only Flare EVM wallet panel on Overview.
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
 pub struct FlareWalletConfig {
@@ -137,6 +147,8 @@ pub struct FlareConfig {
     pub fassets: FlareFassetsConfig,
     #[serde(default)]
     pub wallet: FlareWalletConfig,
+    #[serde(default)]
+    pub smart_accounts: FlareSmartAccountsConfig,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -711,7 +723,7 @@ fn parse_color(s: &str) -> Option<Color> {
             .trim_start_matches("color")
             .parse::<u8>()
             .unwrap_or_default();
-        Some(Color::Indexed(c + 8))
+        Some(Color::Indexed(c.checked_add(8)?))
     } else if s.contains("color") {
         let c = s
             .trim_start_matches("color")
@@ -719,17 +731,21 @@ fn parse_color(s: &str) -> Option<Color> {
             .unwrap_or_default();
         Some(Color::Indexed(c))
     } else if s.contains("gray") {
-        let c = 232
-            + s.trim_start_matches("gray")
+        let c = 232u8.checked_add(
+            s.trim_start_matches("gray")
                 .parse::<u8>()
-                .unwrap_or_default();
+                .unwrap_or_default(),
+        )?;
         Some(Color::Indexed(c))
     } else if let Some(rgb_str) = s.strip_prefix("rgb") {
         if rgb_str.len() >= 3 {
             let bytes = rgb_str.as_bytes();
-            let red = (bytes[0] as char).to_digit(10).unwrap_or_default() as u8;
-            let green = (bytes[1] as char).to_digit(10).unwrap_or_default() as u8;
-            let blue = (bytes[2] as char).to_digit(10).unwrap_or_default() as u8;
+            let digit = |i: usize| (bytes[i] as char).to_digit(10).unwrap_or_default() as u8;
+            let (red, green, blue) = (digit(0), digit(1), digit(2));
+            // xterm 6x6x6 cube: each channel is 0..=5
+            if red > 5 || green > 5 || blue > 5 {
+                return None;
+            }
             let c = 16 + red * 36 + green * 6 + blue;
             Some(Color::Indexed(c))
         } else {
@@ -795,27 +811,32 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
-    /// TC-113: FlareNetwork parses case-insensitively, defaults to Flare
+    /// TC-113/TC-114: Flare config presets load from a config file and default sensibly
     #[test]
-    fn flare_network_parse() {
-        let parse = |s: &str| serde_json::from_str::<FlareNetwork>(&format!("\"{s}\"")).unwrap();
-        assert_eq!(parse("flare"), FlareNetwork::Flare);
-        assert_eq!(parse("coston2"), FlareNetwork::Coston2);
-        assert_eq!(parse("songbird"), FlareNetwork::Songbird);
-        assert_eq!(FlareNetwork::default(), FlareNetwork::Flare);
+    fn flare_config_file_presets() {
+        let cfg: FlareConfig =
+            toml::from_str("network = \"coston2\"\ndisplay = \"compact\"").unwrap();
         assert_eq!(
-            FlareNetwork::Coston2.rpc_url(),
+            cfg.network.rpc_url(),
             "https://coston2-api.flare.network/ext/C/rpc"
         );
+        assert_eq!(cfg.display, FlareDisplay::Compact);
+        let cfg: FlareConfig = toml::from_str("").unwrap();
+        assert_eq!(cfg.network, FlareNetwork::Flare);
+        assert_eq!(cfg.display, FlareDisplay::Full);
     }
 
-    /// TC-114: FlareDisplay parses and defaults to full
+    /// TC-246: `[flare.smart_accounts] expected_operator` parses; unset by default (writes refused).
     #[test]
-    fn flare_display_parse() {
-        let parse = |s: &str| serde_json::from_str::<FlareDisplay>(&format!("\"{s}\"")).unwrap();
-        assert_eq!(parse("off"), FlareDisplay::Off);
-        assert_eq!(parse("compact"), FlareDisplay::Compact);
-        assert_eq!(FlareDisplay::default(), FlareDisplay::Full);
+    fn flare_smart_accounts_expected_operator_parses() {
+        let cfg: FlareConfig =
+            toml::from_str("[smart_accounts]\nexpected_operator = \"rOperator\"").unwrap();
+        assert_eq!(
+            cfg.smart_accounts.expected_operator.as_deref(),
+            Some("rOperator")
+        );
+        let cfg: FlareConfig = toml::from_str("").unwrap();
+        assert_eq!(cfg.smart_accounts.expected_operator, None);
     }
 
     /// TC-120: `[flare.wallet] address` validates EVM hex and normalizes to `0x…`
@@ -851,6 +872,11 @@ mod tests {
         let cases = [
             ("red", Some(Color::Indexed(1)), None),
             ("on blue", None, Some(Color::Indexed(4))),
+            (
+                "red on blue",
+                Some(Color::Indexed(1)),
+                Some(Color::Indexed(4)),
+            ),
         ];
         for (input, fg, bg) in cases {
             let style = parse_style(input);
@@ -876,6 +902,14 @@ mod tests {
         let expected = 16 + 36 + 2 * 6 + 3;
         assert_eq!(color, Some(Color::Indexed(expected)));
         assert_eq!(parse_color("unknown"), None);
+        // Out-of-range user values must not overflow u8 (panic in debug, wrap in release).
+        assert_eq!(parse_color("rgb555"), Some(Color::Indexed(231)));
+        assert_eq!(parse_color("rgb999"), None);
+        assert_eq!(parse_color("gray0"), Some(Color::Indexed(232)));
+        assert_eq!(parse_color("gray23"), Some(Color::Indexed(255)));
+        assert_eq!(parse_color("gray24"), None);
+        assert_eq!(parse_color("bright color7"), Some(Color::Indexed(15)));
+        assert_eq!(parse_color("bright color250"), None);
     }
 
     #[test]
@@ -926,6 +960,12 @@ mod tests {
                 "ctrl-shift-enter",
                 Some((KeyCode::Enter, KeyModifiers::CONTROL | KeyModifiers::SHIFT)),
             ),
+            ("shift-a", Some((KeyCode::Char('A'), KeyModifiers::SHIFT))),
+            ("backtab", Some((KeyCode::BackTab, KeyModifiers::SHIFT))),
+            ("f1", Some((KeyCode::F(1), KeyModifiers::empty()))),
+            ("f12", Some((KeyCode::F(12), KeyModifiers::empty()))),
+            ("space", Some((KeyCode::Char(' '), KeyModifiers::empty()))),
+            ("f13", None),
             ("invalid-key", None),
             ("ctrl-invalid-key", None),
         ];
@@ -1028,6 +1068,11 @@ rpc_server = "https://from-file.example"
         _test_env.remove("XDG_CONFIG_HOME");
         _test_env.set("HOME", home.to_str().unwrap());
         let dir = config_dir();
+        assert!(
+            dir.starts_with(&home),
+            "{dir:?} must live under HOME {home:?}"
+        );
+        assert!(dir.ends_with("lazyxrp"), "{dir:?}");
         std::fs::create_dir_all(&dir)?;
         std::fs::write(dir.join("config.toml"), sample_xrpl_config_toml(66_666))?;
         let c = Config::new()?;
@@ -1126,25 +1171,85 @@ network = "mainnet"
         assert!(parse_key_sequence("<<q>").is_err());
     }
 
-    /// TC-127: config.toml `network = "xahau-test"` loads as XahauTest
+    /// TC-127/TC-042: file `network = "xahau-test"` loads; `XRPL_NETWORK` overrides it; an
+    /// unparsable value (garbage or a leading-space typo) is ignored, keeping the file value.
     #[test]
-    fn config_file_network_xahau_test_loads() -> color_eyre::Result<()> {
+    fn xrpl_network_file_and_env_merge() -> color_eyre::Result<()> {
         let _env_lock = env_lock();
-        let _test_env = TestEnvGuard::new(&["LAZYXRP_CONFIG", "XDG_CONFIG_HOME"]);
-        let toml = r#"[xrpl]
-account = "r3kmLJN5D28dHuH8vZNUZpMC43pEHpaocV"
-issuer = "rMxCKbEDwqr76QuheSUMdEGf4B9xJ8m5De"
-currency = "RLUSD"
-currency_code = "524C555344000000000000000000000000000000"
-offer_limit = 5
-poll_interval_ms = 5000
-network = "xahau-test"
-"#;
-        let (root, _root_guard) = write_config_dir("tc127", toml)?;
+        let _test_env = TestEnvGuard::new(&["LAZYXRP_CONFIG", "XDG_CONFIG_HOME", XRPL_NETWORK_ENV]);
+        let toml = sample_xrpl_config_toml(5_000).replace("mainnet", "xahau-test");
+        let (root, _root_guard) = write_config_dir("tc042", &toml)?;
         _test_env.remove("XDG_CONFIG_HOME");
         _test_env.set("LAZYXRP_CONFIG", root.to_str().unwrap());
-        let c = Config::new()?;
-        assert_eq!(c.xrpl.network, Network::XahauTest);
+        _test_env.remove(XRPL_NETWORK_ENV);
+        assert_eq!(Config::new()?.xrpl.network, Network::XahauTest);
+        _test_env.set(XRPL_NETWORK_ENV, "testnet");
+        assert_eq!(Config::new()?.xrpl.network, Network::Testnet);
+        for bad in ["not-a-network", " testnet"] {
+            _test_env.set(XRPL_NETWORK_ENV, bad);
+            assert_eq!(Config::new()?.xrpl.network, Network::XahauTest, "{bad:?}");
+        }
         Ok(())
+    }
+
+    /// `XRPL_WS_SERVER` / `XRPL_RPC_SERVER` override the file (trimmed); blank values do not.
+    #[test]
+    fn xrpl_server_env_merge() -> color_eyre::Result<()> {
+        let _env_lock = env_lock();
+        let _test_env = TestEnvGuard::new(&[
+            "LAZYXRP_CONFIG",
+            "XDG_CONFIG_HOME",
+            XRPL_RPC_SERVER_ENV,
+            XRPL_WS_SERVER_ENV,
+        ]);
+        let (root, _guard) = write_config_dir("xrpl-servers", TOML_WITH_RPC_SERVER)?;
+        _test_env.remove("XDG_CONFIG_HOME");
+        _test_env.set("LAZYXRP_CONFIG", root.to_str().unwrap());
+        _test_env.set(XRPL_RPC_SERVER_ENV, "   ");
+        _test_env.set(XRPL_WS_SERVER_ENV, " wss://ws-env.example ");
+        let c = Config::new()?;
+        assert_eq!(
+            c.xrpl.rpc_server.as_deref(),
+            Some("https://from-file.example")
+        );
+        assert_eq!(c.xrpl.ws_server.as_deref(), Some("wss://ws-env.example"));
+        Ok(())
+    }
+
+    /// A malformed config.toml is a hard error, not a silent fallback to defaults.
+    #[test]
+    fn malformed_config_toml_is_error() -> color_eyre::Result<()> {
+        let _env_lock = env_lock();
+        let _test_env = TestEnvGuard::new(&["LAZYXRP_CONFIG", "XDG_CONFIG_HOME"]);
+        let (root, _guard) = write_config_dir("malformed", "[xrpl\nnetwork = ")?;
+        _test_env.remove("XDG_CONFIG_HOME");
+        _test_env.set("LAZYXRP_CONFIG", root.to_str().unwrap());
+        let err = Config::new().expect_err("malformed toml must fail");
+        assert!(format!("{err:#}").contains("config.toml"), "{err:#}");
+        Ok(())
+    }
+
+    /// S-004: `..` in `LAZYXRP_CONFIG` / `LAZYXRP_DATA` is rejected (falls through to defaults).
+    #[test]
+    fn env_paths_with_parent_dir_are_rejected() {
+        let _env_lock = env_lock();
+        let _test_env = TestEnvGuard::new(&["LAZYXRP_CONFIG", "LAZYXRP_DATA", "XDG_CONFIG_HOME"]);
+        _test_env.remove("XDG_CONFIG_HOME");
+        _test_env.set("LAZYXRP_CONFIG", "/tmp/lazyxrp-evil/../etc");
+        _test_env.set("LAZYXRP_DATA", "../../etc");
+        assert_ne!(config_dir(), PathBuf::from("/tmp/lazyxrp-evil/../etc"));
+        assert_ne!(data_dir(), PathBuf::from("../../etc"));
+        assert!(
+            !config_dir()
+                .components()
+                .any(|c| c == std::path::Component::ParentDir)
+        );
+        assert!(
+            !data_dir()
+                .components()
+                .any(|c| c == std::path::Component::ParentDir)
+        );
+        _test_env.set("LAZYXRP_CONFIG", "/tmp/lazyxrp-ok/cfg");
+        assert_eq!(config_dir(), PathBuf::from("/tmp/lazyxrp-ok/cfg"));
     }
 }

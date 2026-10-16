@@ -27,6 +27,11 @@ mod parsers;
 use format::format_value;
 use parsers::typed_detail_lines;
 
+/// `TransactionType`s with a registered detail parser (coverage "read" column).
+pub(crate) fn registered_tx_types() -> impl Iterator<Item = &'static str> {
+    parsers::TX_DETAIL_PARSERS.iter().map(|(name, _)| *name)
+}
+
 /// Scrollable transaction-detail overlay state.
 #[derive(Default)]
 pub struct TxDetailState {
@@ -400,13 +405,15 @@ mod tests {
     fn tx_detail_state_open_close() {
         let mut state = TxDetailState::default();
         assert!(!state.visible);
+        state.scroll = 5;
         state.open(arc(json!({"hash":"abc"})), arc(json!({})));
         assert!(state.visible);
-        assert_eq!(state.scroll, 0);
+        assert_eq!(state.scroll, 0, "open resets scroll");
         assert_eq!(state.tx_json.0["hash"], "abc");
+        state.scroll = 5;
         state.close();
         assert!(!state.visible);
-        assert_eq!(state.scroll, 0);
+        assert_eq!(state.scroll, 0, "close resets scroll");
     }
 
     #[test]
@@ -491,10 +498,7 @@ mod tests {
         );
 
         // Sequence and Fee also come from typed parser via push_common_lines
-        assert!(
-            text.iter()
-                .any(|s| s.contains("Sequence") && s.contains("1"))
-        );
+        assert!(text.iter().any(|s| s.contains("Sequence: 1")));
         assert!(
             text.iter()
                 .any(|s| s.contains("Fee") && s.contains("0.000012"))
@@ -584,6 +588,34 @@ mod tests {
 
         state.close();
         assert!(!state.handle_action(&Action::SelectNext));
+    }
+
+    /// Open overlay swallows every action; Toggle closes, Focus* scroll, Quit/Tick are inert,
+    /// and scrolling far past the content end saturates and still renders.
+    #[test]
+    fn tx_detail_open_handles_toggle_focus_and_other_actions() {
+        let mut state = TxDetailState::default();
+        state.open(arc(json!({"hash": "a"})), arc(json!({})));
+        for a in [Action::Quit, Action::Tick] {
+            assert!(state.handle_action(&a), "{a:?} consumed while open");
+            assert!(state.visible && state.scroll == 0);
+        }
+        assert!(state.handle_action(&Action::FocusNext));
+        assert_eq!(state.scroll, 1);
+        assert!(state.handle_action(&Action::FocusPrev));
+        assert_eq!(state.scroll, 0);
+
+        state.scroll = u16::MAX;
+        assert!(state.handle_action(&Action::SelectNext));
+        assert_eq!(state.scroll, u16::MAX, "scroll saturates");
+        let _ = crate::test_support::render_to_string(80, 24, |frame| {
+            render_tx_detail(frame, frame.area(), &mut state)
+        });
+
+        state.scroll = 5;
+        assert!(state.handle_action(&Action::TxDetailToggle));
+        assert!(!state.visible);
+        assert_eq!(state.scroll, 0);
     }
 
     /// TC-135: TxDetailToggle opens the overlay when a row can supply detail

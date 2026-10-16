@@ -244,6 +244,7 @@ impl Component for StatusBar {
             }
             Action::FlareOraclePrices(_)
             | Action::FxrpDirectMintInfo(_)
+            | Action::SmartAccountInfo(_)
             | Action::FlareWalletBalance(_) => {
                 self.last_flare_update = Some(Instant::now());
                 self.flare_down = false;
@@ -479,6 +480,10 @@ mod tests {
         assert!(rendered.contains("ONLINE"), "chip: {rendered}");
         assert!(rendered.contains("flr:"), "flare track: {rendered}");
         assert!(rendered.contains("dunl:"), "dUNL track: {rendered}");
+        assert!(
+            !rendered.contains('!'),
+            "fresh dUNL has no marker: {rendered}"
+        );
 
         // Characterization (TC-174): a manifest older than DUNL_CACHE_TTL
         // renders the WARNING-colored `!` marker from its preserved data age.

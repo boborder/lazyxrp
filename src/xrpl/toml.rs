@@ -156,6 +156,7 @@ mod tests {
             "10.0.0.1",
             "100.100.100.200",
             "x@127.0.0.1",
+            "localhost",
         ] {
             let r = fetch_xrpl_toml_with_meta(domain, "ED00", Duration::from_secs(2)).await;
             assert_eq!(r.status, 0, "{domain}");

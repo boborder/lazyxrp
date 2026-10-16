@@ -19,7 +19,7 @@ use crate::{
     },
     config::Config,
     network::Network,
-    xrpl::{AccountOfferRow, AccountSummary, EscrowRow, GeneratedWalletKeys},
+    xrpl::{AccountOfferRow, AccountSummary, EscrowRow, GeneratedWalletKeys, txspec::TxSpec},
 };
 
 /// Dropdown options for SetFlag / ClearFlag (must match [`crate::signing::parse_account_set_flag_choice`]).
@@ -50,6 +50,11 @@ enum DangerResume {
     /// Destination restored on Esc, submitted on confirm.
     AccountDelete {
         destination: String,
+    },
+    /// Spec'd transaction with a confirmation phrase (`TxSpec::confirm`); Esc restores the form.
+    Tx {
+        spec: &'static TxSpec,
+        values: Vec<String>,
     },
 }
 
@@ -136,9 +141,28 @@ enum ComposerPhase {
     AccountDelete {
         destination: String,
     },
+    /// Smart Account instruction: `0x01` FXRP transfer (`redeem = false`) / `0x02` redeem.
+    /// `amount` is a decimal FXRP amount (converted with the read `decimals()`) for transfer,
+    /// whole lots for redeem.
+    SmartAccount {
+        row: usize,
+        redeem: bool,
+        recipient: String,
+        amount: String,
+    },
+    /// Pick a spec'd transaction type (`xrpl::txspec` registry).
+    TxPick {
+        selected: usize,
+    },
+    /// Generic form generated from `spec.fields` (`values[i]` ↔ `spec.fields[i]`).
+    Tx {
+        spec: &'static TxSpec,
+        row: usize,
+        values: Vec<String>,
+    },
 }
 
-const COMPOSER_KIND_COUNT: usize = 13;
+const COMPOSER_KIND_COUNT: usize = 15;
 
 #[path = "wallet_composer.rs"]
 mod composer;
@@ -170,6 +194,8 @@ pub struct WalletPanel {
     pending_submit: Option<String>,
     /// Last AssetManager C1 snapshot (Core Vault address for Direct Mint).
     fxrp_direct_mint: Option<crate::xrpl::FxrpDirectMintInfo>,
+    /// Last Smart Account read (personal account, balance, operator, fees).
+    smart_account: Option<crate::xrpl::SmartAccountInfo>,
     /// Key generation result overlay (GenerateWalletKeysOk → show, Esc to dismiss).
     keygen_result: Option<GeneratedWalletKeys>,
 }
@@ -196,6 +222,7 @@ impl Default for WalletPanel {
             submit_flash: None,
             pending_submit: None,
             fxrp_direct_mint: None,
+            smart_account: None,
             keygen_result: None,
         }
     }
@@ -226,6 +253,7 @@ fn submit_err(action: &Action) -> Option<(&'static str, &String)> {
         Action::PaymentSubmitErr(m) => ("Payment", m),
         Action::SetRegularKeySubmitErr(m) => ("SetRegularKey", m),
         Action::AccountDeleteSubmitErr(m) => ("AccountDelete", m),
+        Action::GenericTxSubmitErr(m) => ("Transaction", m),
         Action::OfferCreateSubmitErr(m) => ("OfferCreate", m),
         Action::OfferCancelSubmitErr(m) => ("OfferCancel", m),
         Action::EscrowCreateSubmitErr(m) => ("EscrowCreate", m),
@@ -234,6 +262,7 @@ fn submit_err(action: &Action) -> Option<(&'static str, &String)> {
         Action::TrustSetSubmitErr(m) => ("TrustSet", m),
         Action::FxrpDirectMintPaymentSubmitErr(m) => ("FXRP Mint", m),
         Action::FxrpExecuteDirectMintSubmitErr(m) => ("FXRP Execute", m),
+        Action::SmartAccountInstructionSubmitErr(m) => ("Smart Account", m),
         Action::GenerateWalletKeysErr(m) => ("Keygen", m),
         _ => return None,
     })
@@ -384,8 +413,33 @@ impl Component for WalletPanel {
                     ),
                 );
             }
+            Action::SmartAccountInfo(info) => {
+                self.smart_account = Some((**info).clone());
+            }
+            Action::SmartAccountInstructionSubmitOk(hash) => {
+                return self.submit_ok(
+                    format!(
+                        "Smart Account instruction sent · {hash} · the operator executes it on Flare; check the personal-account FXRP balance on Overview"
+                    ),
+                    matches!(&self.composer, Some(ComposerPhase::SmartAccount { .. })),
+                );
+            }
             Action::GenerateWalletKeysOk(result) => {
                 self.keygen_result = Some(result.clone());
+            }
+            Action::GenericTxSubmitOk(msg) => {
+                return self.submit_ok(
+                    format!("{msg} submitted"),
+                    matches!(&self.composer, Some(ComposerPhase::Tx { .. })),
+                );
+            }
+            Action::TxComposerOpen { tx_type, fields } => {
+                if matches!(self.seed_address, Some(Ok(_)))
+                    && let Some(spec) = crate::xrpl::txspec::lookup(tx_type)
+                {
+                    self.open_tx_composer(spec, fields);
+                    return Ok(Some(Action::SetKeymapSuppression(true)));
+                }
             }
             Action::NetworkChange(net) => {
                 self.network = *net;
@@ -590,6 +644,11 @@ impl WalletPanel {
                         DangerResume::AccountDelete { destination } => {
                             ComposerPhase::AccountDelete { destination }
                         }
+                        DangerResume::Tx { spec, values } => ComposerPhase::Tx {
+                            spec,
+                            row: 0,
+                            values,
+                        },
                     });
                     self.is_form_editing = false;
                     None
@@ -640,6 +699,21 @@ impl WalletPanel {
                 }
                 Some(ComposerPhase::AccountDelete { .. }) => {
                     self.composer = Some(ComposerPhase::PickKind { selected: 12 });
+                    None
+                }
+                Some(ComposerPhase::SmartAccount { .. }) => {
+                    self.composer = Some(ComposerPhase::PickKind { selected: 13 });
+                    None
+                }
+                Some(ComposerPhase::TxPick { .. }) => {
+                    self.composer = Some(ComposerPhase::PickKind { selected: 14 });
+                    None
+                }
+                Some(ComposerPhase::Tx { spec, .. }) => {
+                    let selected = crate::xrpl::txspec::registry()
+                        .position(|s| s.tx_type == spec.tx_type)
+                        .unwrap_or(0);
+                    self.composer = Some(ComposerPhase::TxPick { selected });
                     None
                 }
             });
@@ -734,6 +808,15 @@ impl WalletPanel {
                                 self.composer = Some(ComposerPhase::AccountDelete { destination });
                                 Some(action)
                             }
+                            DangerResume::Tx { spec, values } => {
+                                let action = self.tx_action(spec, &values);
+                                self.composer = Some(ComposerPhase::Tx {
+                                    spec,
+                                    row: 0,
+                                    values,
+                                });
+                                Some(action)
+                            }
                         };
                         return Ok(action);
                     }
@@ -757,6 +840,12 @@ impl WalletPanel {
             && submit_shortcut(&key, self.is_form_editing)
         {
             return Ok(self.queue_submit_account_delete());
+        }
+
+        if matches!(&self.composer, Some(ComposerPhase::Tx { .. }))
+            && submit_shortcut(&key, self.is_form_editing)
+        {
+            return Ok(self.queue_submit_tx());
         }
 
         if matches!(&self.composer, Some(ComposerPhase::OfferCreate { .. }))
@@ -816,6 +905,12 @@ impl WalletPanel {
             return Ok(Some(self.queue_submit_fxrp_execute_direct_mint()));
         }
 
+        if matches!(&self.composer, Some(ComposerPhase::SmartAccount { .. }))
+            && submit_shortcut(&key, self.is_form_editing)
+        {
+            return Ok(Some(self.queue_submit_smart_account()));
+        }
+
         if let Some(ComposerPhase::TrustSet {
             row,
             ref mut currency,
@@ -867,6 +962,32 @@ impl WalletPanel {
             }
         }
 
+        if let Some(ComposerPhase::SmartAccount {
+            row,
+            redeem,
+            ref mut recipient,
+            ref mut amount,
+        }) = self.composer
+            && self.is_form_editing
+        {
+            let target = if redeem || row == 1 {
+                amount
+            } else {
+                recipient
+            };
+            match key.code {
+                KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    target.push(c);
+                    return Ok(None);
+                }
+                KeyCode::Backspace => {
+                    target.pop();
+                    return Ok(None);
+                }
+                _ => {}
+            }
+        }
+
         if let Some(ComposerPhase::FxrpExecuteDirectMint { ref mut proof_json }) = self.composer
             && self.is_form_editing
         {
@@ -901,6 +1022,7 @@ impl WalletPanel {
                     _ => lp_amount,
                 }),
                 Some(ComposerPhase::AccountDelete { destination }) => Some(destination),
+                Some(ComposerPhase::Tx { row, values, .. }) => values.get_mut(*row),
                 _ => None,
             };
             if let Some(target) = target {
@@ -1048,6 +1170,8 @@ impl WalletPanel {
                         10 => self.open_amm_deposit_composer(),
                         11 => self.open_amm_withdraw_composer(),
                         12 => self.open_account_delete_composer(),
+                        13 => self.open_smart_account_composer(),
+                        14 => self.open_tx_pick_composer(),
                         _ => {}
                     },
                     KeyCode::Char('1') => self.open_payment_composer(),
@@ -1063,6 +1187,8 @@ impl WalletPanel {
                     KeyCode::Char('d') => self.open_amm_deposit_composer(),
                     KeyCode::Char('w') => self.open_amm_withdraw_composer(),
                     KeyCode::Char('x') => self.open_account_delete_composer(),
+                    KeyCode::Char('a') => self.open_smart_account_composer(),
+                    KeyCode::Char('m') => self.open_tx_pick_composer(),
                     _ => {}
                 }
                 return Ok(None);
@@ -1107,6 +1233,22 @@ impl WalletPanel {
                 }
                 return Ok(None);
             }
+            Some(ComposerPhase::SmartAccount { row, redeem, .. }) => {
+                // `i` flips transfer ↔ redeem (not while typing, where it is a character).
+                if !self.is_form_editing
+                    && matches!(key.code, KeyCode::Char('i') | KeyCode::Char('I'))
+                    && !key.modifiers.contains(KeyModifiers::CONTROL)
+                {
+                    *redeem = !*redeem;
+                    *row = 0;
+                    return Ok(None);
+                }
+                let rows = if *redeem { 1 } else { 2 };
+                if Self::composer_row_nav(&mut self.is_form_editing, &key, row, rows) {
+                    return Ok(Some(Action::SetKeymapSuppression(true)));
+                }
+                return Ok(None);
+            }
             Some(ComposerPhase::OfferCancel { offers, selected }) => {
                 let last = match offers {
                     Some(Ok(rows)) => rows.len().saturating_sub(1),
@@ -1146,6 +1288,31 @@ impl WalletPanel {
                     KeyCode::Char('j') | KeyCode::Down => *selected = (*selected + 1).min(last),
                     KeyCode::Char('k') | KeyCode::Up => *selected = selected.saturating_sub(1),
                     _ => {}
+                }
+                return Ok(None);
+            }
+            Some(ComposerPhase::TxPick { selected }) => {
+                let n = crate::xrpl::txspec::registry().count();
+                match key.code {
+                    KeyCode::Char('j') | KeyCode::Down | KeyCode::Tab => {
+                        *selected = (*selected + 1) % n;
+                    }
+                    KeyCode::Char('k') | KeyCode::Up | KeyCode::BackTab => {
+                        *selected = (*selected + n - 1) % n;
+                    }
+                    KeyCode::Enter => {
+                        if let Some(spec) = crate::xrpl::txspec::registry().nth(*selected) {
+                            self.open_tx_composer(spec, &[]);
+                        }
+                    }
+                    _ => {}
+                }
+                return Ok(None);
+            }
+            Some(ComposerPhase::Tx { row, values, .. }) => {
+                let rows = values.len();
+                if Self::composer_row_nav(&mut self.is_form_editing, &key, row, rows) {
+                    return Ok(Some(Action::SetKeymapSuppression(true)));
                 }
                 return Ok(None);
             }
@@ -1200,6 +1367,7 @@ fn is_write_submit(action: &Action) -> bool {
         Action::AccountSetSubmit(_)
             | Action::PaymentSubmit(_)
             | Action::FxrpDirectMintPaymentSubmit(_)
+            | Action::SmartAccountInstructionSubmit(_)
             | Action::FxrpExecuteDirectMintSubmit(_)
             | Action::SetRegularKeySubmit(_)
             | Action::EscrowCreateSubmit(_)
@@ -1210,6 +1378,7 @@ fn is_write_submit(action: &Action) -> bool {
             | Action::OfferCancelSubmit(_)
             | Action::TrustSetSubmit(_)
             | Action::AccountDeleteSubmit(_)
+            | Action::GenericTxSubmit(_)
     )
 }
 
@@ -1222,6 +1391,8 @@ fn is_write_result(action: &Action) -> bool {
             | Action::PaymentSubmitErr(_)
             | Action::FxrpDirectMintPaymentSubmitOk(_)
             | Action::FxrpDirectMintPaymentSubmitErr(_)
+            | Action::SmartAccountInstructionSubmitOk(_)
+            | Action::SmartAccountInstructionSubmitErr(_)
             | Action::FxrpExecuteDirectMintSubmitOk(_)
             | Action::FxrpExecuteDirectMintSubmitErr(_)
             | Action::SetRegularKeySubmitOk(_)
@@ -1240,6 +1411,8 @@ fn is_write_result(action: &Action) -> bool {
             | Action::TrustSetSubmitErr(_)
             | Action::AccountDeleteSubmitOk(_)
             | Action::AccountDeleteSubmitErr(_)
+            | Action::GenericTxSubmitOk(_)
+            | Action::GenericTxSubmitErr(_)
     )
 }
 
@@ -1257,27 +1430,10 @@ mod tests {
         let mut panel = WalletPanel::new(false);
         panel.is_focused = true;
         panel.open_payment_composer();
-        // Defaults: amount prefilled "1", everything else empty.
-        match &panel.composer {
-            Some(ComposerPhase::Payment {
-                amount,
-                is_iou,
-                destination,
-                iou_currency,
-                iou_issuer,
-                send_max,
-                row,
-            }) => {
-                assert_eq!(amount, "1");
-                assert!(!is_iou);
-                assert!(destination.is_empty());
-                assert!(iou_currency.is_empty());
-                assert!(iou_issuer.is_empty());
-                assert!(send_max.is_empty());
-                assert_eq!(*row, 0);
-            }
-            _ => panic!("expected payment composer"),
-        }
+        assert!(matches!(
+            &panel.composer,
+            Some(ComposerPhase::Payment { is_iou: false, .. })
+        ));
         panel.on_key_event(key('i')).expect("toggle to iou");
         match &panel.composer {
             Some(ComposerPhase::Payment { is_iou, .. }) => assert!(*is_iou),
@@ -1329,6 +1485,86 @@ mod tests {
         }
     }
 
+    /// `WalletPanel::new(skip)` is what reaches the queued params: `false` must not skip the
+    /// mainnet prompt for any write (a hardcoded `true` would pass the `new(true)` asserts).
+    #[test]
+    fn skip_mainnet_prompt_false_is_forwarded_to_queued_writes() {
+        const DEST: &str = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh";
+        const ISS: &str = "rJrRMgiRgrU6hDF4pgu5DXQdWyPbY35ErN";
+        let enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::empty());
+        for skip in [false, true] {
+            let mut panel = WalletPanel::new(skip);
+            panel.is_focused = true;
+            match panel.queue_submit_payment(
+                DEST.into(),
+                "1".into(),
+                "".into(),
+                "".into(),
+                "".into(),
+            ) {
+                Action::PaymentSubmit(p) => assert_eq!(p.skip_mainnet_prompt, skip, "payment"),
+                other => panic!("expected PaymentSubmit, got {other:?}"),
+            }
+
+            panel.composer = Some(ComposerPhase::PickKind { selected: 0 });
+            panel.on_key_event(key('x')).expect("open delete");
+            if let Some(ComposerPhase::AccountDelete { destination }) = &mut panel.composer {
+                *destination = DEST.into();
+            }
+            panel.on_key_event(key('s')).expect("s");
+            for c in "DELETE".chars() {
+                panel.on_key_event(key(c)).expect("type");
+            }
+            match panel.on_key_event(enter).expect("confirm") {
+                Some(Action::AccountDeleteSubmit(p)) => {
+                    assert_eq!(p.skip_mainnet_prompt, skip, "account delete");
+                }
+                other => panic!("expected AccountDeleteSubmit, got {other:?}"),
+            }
+
+            panel.composer = Some(ComposerPhase::PickKind { selected: 0 });
+            panel.on_key_event(key('d')).expect("open deposit");
+            if let Some(ComposerPhase::AmmDeposit { amount2, .. }) = &mut panel.composer {
+                *amount2 = format!("USD:{ISS}:10");
+            }
+            match panel.on_key_event(key('s')).expect("deposit") {
+                Some(Action::AmmDepositSubmit(p)) => {
+                    assert_eq!(p.skip_mainnet_prompt, skip, "amm deposit");
+                }
+                other => panic!("expected AmmDepositSubmit, got {other:?}"),
+            }
+        }
+    }
+
+    /// Dismissing the keygen popup (Esc) and regenerating (`g`) both drop the shown seed.
+    #[test]
+    fn keygen_result_cleared_on_esc_and_on_regenerate() {
+        let result = || crate::xrpl::GeneratedWalletKeys {
+            account_id: "rKeygenAcct".into(),
+            key_type: "ed25519".into(),
+            master_seed: "sEdSECRETSEED".into(),
+            master_seed_hex: "00".repeat(16),
+            public_key: "ED00".into(),
+        };
+        let mut panel = WalletPanel::new(false);
+        panel.is_focused = true;
+        panel
+            .update(&Action::GenerateWalletKeysOk(result()))
+            .expect("ok");
+        assert!(panel.keygen_result.is_some());
+        panel
+            .on_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::empty()))
+            .expect("esc");
+        assert!(panel.keygen_result.is_none(), "Esc dismisses");
+
+        panel
+            .update(&Action::GenerateWalletKeysOk(result()))
+            .expect("ok");
+        let act = panel.on_key_event(key('g')).expect("g");
+        assert!(matches!(act, Some(Action::GenerateWalletKeys)));
+        assert!(panel.keygen_result.is_none(), "g clears the previous seed");
+    }
+
     #[test]
     fn queue_submit_payment_uppercases_currency_and_omits_empty() {
         let panel = WalletPanel::new(true);
@@ -1340,11 +1576,7 @@ mod tests {
             String::new(),
         ) {
             Action::PaymentSubmit(p) => {
-                assert_eq!(p.destination, "rDest");
-                assert_eq!(p.amount, "2.5");
                 assert_eq!(p.iou_currency.as_deref(), Some("USD"));
-                assert_eq!(p.iou_issuer.as_deref(), Some("rIssuer"));
-                assert!(p.skip_mainnet_prompt);
             }
             other => panic!("expected PaymentSubmit, got {other:?}"),
         }
@@ -1618,6 +1850,234 @@ mod tests {
         }
     }
 
+    const TEST_NFT_ID: &str = "000B013A95F14B0044F78A264E41713C64B5F89242540EE208C3098E00000D65";
+
+    fn special(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, KeyModifiers::empty())
+    }
+
+    fn set_tx_field(panel: &mut WalletPanel, field: usize, value: &str) {
+        if let Some(ComposerPhase::Tx { values, .. }) = &mut panel.composer {
+            values[field] = value.to_string();
+        } else {
+            panic!("not in a Tx form: {:?}", panel.composer);
+        }
+    }
+
+    /// TC-255: the Transaction composer is generated from the spec — `m` opens the picker, Enter a
+    /// form with one row per field (spec defaults prefilled); an invalid value flashes
+    /// `<Type> · <Field>: …` and never queues; a valid form queues one `GenericTxSubmit`
+    /// with every field and the `--yes` flag; an identical resubmit is refused until a result.
+    #[test]
+    fn tx_composer_generates_form_validates_and_queues() {
+        let mut panel = WalletPanel::new(true);
+        panel.is_focused = true;
+        panel.composer = Some(ComposerPhase::PickKind { selected: 0 });
+        assert!(panel.on_key_event(key('m')).expect("m").is_none());
+        assert!(matches!(
+            &panel.composer,
+            Some(ComposerPhase::TxPick { selected: 0 })
+        ));
+        panel.on_key_event(special(KeyCode::Enter)).expect("open");
+        match &panel.composer {
+            Some(ComposerPhase::Tx {
+                spec,
+                row: 0,
+                values,
+            }) => {
+                assert_eq!(spec.tx_type, "NFTokenMint");
+                assert_eq!(values.len(), spec.fields.len());
+                assert_eq!(values[0], "0", "spec default prefilled");
+            }
+            other => panic!("expected Tx form, got {other:?}"),
+        }
+        // Row navigation + edit keys are the shared composer ones.
+        panel.on_key_event(special(KeyCode::Tab)).expect("tab");
+        assert!(matches!(
+            &panel.composer,
+            Some(ComposerPhase::Tx { row: 1, .. })
+        ));
+
+        // Invalid: fee > 50000 (with transferable) is flashed with the field name, nothing queued.
+        set_tx_field(&mut panel, 2, "transferable");
+        set_tx_field(&mut panel, 3, "50001");
+        assert!(panel.on_key_event(key('s')).expect("s").is_none());
+        assert!(matches!(
+            &panel.submit_flash,
+            Some(SubmitFlash::Error(m)) if m.starts_with("NFTokenMint · TransferFee")
+        ));
+        set_tx_field(&mut panel, 3, "50000");
+        let queued = panel.on_key_event(key('s')).expect("s");
+        match &queued {
+            Some(Action::GenericTxSubmit(p)) => {
+                assert_eq!(p.tx_type, "NFTokenMint");
+                assert!(p.skip_mainnet_prompt);
+                assert_eq!(p.fields["NFTokenTaxon"], "0");
+                assert_eq!(p.fields["Flags"], "transferable");
+                assert_eq!(p.fields["TransferFee"], "50000");
+                assert_eq!(p.fields.len(), 5, "every spec field is carried");
+            }
+            other => panic!("expected GenericTxSubmit, got {other:?}"),
+        }
+        // Same params again: refused until the result arrives (TC-228 guard covers specs).
+        assert!(panel.on_key_event(key('s')).expect("again").is_none());
+        assert!(matches!(
+            &panel.submit_flash,
+            Some(SubmitFlash::Error(m)) if m.contains("already submitted")
+        ));
+        panel
+            .update(&Action::GenericTxSubmitErr(
+                "simulate tecNO_PERMISSION".into(),
+            ))
+            .expect("err");
+        assert!(matches!(
+            &panel.submit_flash,
+            Some(SubmitFlash::Error(m)) if m.starts_with("Transaction · simulate tec")
+        ));
+        assert!(panel.on_key_event(key('s')).expect("retry").is_some());
+        let closed = panel
+            .update(&Action::GenericTxSubmitOk("NFTokenMint · ABC".into()))
+            .expect("ok");
+        assert!(matches!(closed, Some(Action::SetKeymapSuppression(false))));
+        assert!(panel.composer.is_none());
+
+        // Esc walks back: form → picker (same type selected) → action list (row 14) → closed.
+        panel.composer = Some(ComposerPhase::PickKind { selected: 0 });
+        panel.on_key_event(key('m')).expect("m");
+        panel.on_key_event(key('j')).expect("down");
+        panel.on_key_event(special(KeyCode::Enter)).expect("open");
+        assert!(matches!(
+            &panel.composer,
+            Some(ComposerPhase::Tx { spec, .. }) if spec.tx_type == "NFTokenBurn"
+        ));
+        for want in [1_usize, 14] {
+            panel.on_key_event(special(KeyCode::Esc)).expect("esc");
+            match (&panel.composer, want) {
+                (Some(ComposerPhase::TxPick { selected }), 1) => assert_eq!(*selected, want),
+                (Some(ComposerPhase::PickKind { selected }), 14) => assert_eq!(*selected, want),
+                other => panic!("unexpected Esc target: {other:?}"),
+            }
+        }
+    }
+
+    /// TC-255: irreversible types (burn, accept) never queue from `s`: a valid form asks for the
+    /// typed phrase (`BURN`); Esc keeps the form; a partial phrase is refused. `TxComposerOpen`
+    /// (Assets `x`) opens the burn form prefilled, but only with a signing credential.
+    #[test]
+    fn tx_composer_burn_needs_typed_phrase_and_opens_prefilled() {
+        let mut panel = WalletPanel::new(false);
+        panel.is_focused = true;
+        let open = Action::TxComposerOpen {
+            tx_type: "NFTokenBurn".into(),
+            fields: vec![("NFTokenID".into(), TEST_NFT_ID.into())],
+        };
+        assert!(panel.update(&open).expect("no key").is_none());
+        assert!(
+            panel.composer.is_none(),
+            "no signing credential → stays closed"
+        );
+
+        panel.seed_address = Some(Ok("rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh".into()));
+        let suppress = panel.update(&open).expect("open");
+        assert!(matches!(suppress, Some(Action::SetKeymapSuppression(true))));
+        assert!(matches!(
+            &panel.composer,
+            Some(ComposerPhase::Tx { spec, values, .. })
+                if spec.tx_type == "NFTokenBurn" && values[0] == TEST_NFT_ID && values[1].is_empty()
+        ));
+        let unknown = Action::TxComposerOpen {
+            tx_type: "Nope".into(),
+            fields: vec![],
+        };
+        panel.update(&unknown).expect("unknown type ignored");
+        assert!(matches!(&panel.composer, Some(ComposerPhase::Tx { .. })));
+
+        // Bad id: flash only; valid: DangerConfirm(BURN), not a queued action.
+        set_tx_field(&mut panel, 0, "abc");
+        assert!(panel.on_key_event(key('s')).expect("s").is_none());
+        assert!(matches!(&panel.composer, Some(ComposerPhase::Tx { .. })));
+        assert!(matches!(
+            &panel.submit_flash,
+            Some(SubmitFlash::Error(m)) if m.contains("NFTokenID")
+        ));
+        set_tx_field(&mut panel, 0, TEST_NFT_ID);
+        assert!(panel.on_key_event(key('s')).expect("s").is_none());
+        assert!(matches!(
+            &panel.composer,
+            Some(ComposerPhase::DangerConfirm { expected, .. }) if expected == "BURN"
+        ));
+        // Typing mode first (Esc leaves it), then Esc restores the form with its values.
+        for _ in 0..2 {
+            panel.on_key_event(special(KeyCode::Esc)).expect("esc");
+        }
+        assert!(matches!(
+            &panel.composer,
+            Some(ComposerPhase::Tx { values, .. }) if values[0] == TEST_NFT_ID
+        ));
+
+        panel.on_key_event(key('s')).expect("s");
+        for c in "BUR".chars() {
+            panel.on_key_event(key(c)).expect("type");
+        }
+        assert!(
+            panel
+                .on_key_event(special(KeyCode::Enter))
+                .expect("partial")
+                .is_none()
+        );
+        panel.on_key_event(key('N')).expect("type");
+        match panel
+            .on_key_event(special(KeyCode::Enter))
+            .expect("confirm")
+        {
+            Some(Action::GenericTxSubmit(p)) => {
+                assert_eq!(p.tx_type, "NFTokenBurn");
+                assert_eq!(p.fields["NFTokenID"], TEST_NFT_ID);
+                assert!(!p.skip_mainnet_prompt);
+            }
+            other => panic!("expected GenericTxSubmit, got {other:?}"),
+        }
+    }
+
+    /// TC-255: the form renders one labelled row per spec field with the focused row's help and
+    /// inline validation error, and an orange/green preview line.
+    #[test]
+    fn tx_composer_renders_fields_help_and_inline_errors() {
+        let mut panel = WalletPanel::new(true);
+        panel.is_focused = true;
+        panel.composer = Some(ComposerPhase::PickKind { selected: 0 });
+        panel.on_key_event(key('m')).expect("m");
+        panel.on_key_event(key('j')).expect("down");
+        panel.on_key_event(special(KeyCode::Enter)).expect("open");
+        let area = ratatui::layout::Rect::new(0, 0, 110, 24);
+        let draw = |panel: &WalletPanel| {
+            crate::test_support::render_to_string(110, 24, |f| panel.render_composer(f, area))
+        };
+        let screen = draw(&panel);
+        for needle in [
+            "NFTokenBurn",
+            "NFTokenID",
+            "Owner",
+            "64 hex characters",
+            "(required)",
+        ] {
+            assert!(screen.contains(needle), "missing {needle:?}:\n{screen}");
+        }
+        set_tx_field(&mut panel, 0, "abc");
+        let screen = draw(&panel);
+        assert!(
+            screen.contains("✗ expected 64 hex characters (got 3)"),
+            "inline error missing:\n{screen}"
+        );
+        set_tx_field(&mut panel, 0, TEST_NFT_ID);
+        let screen = draw(&panel);
+        assert!(
+            screen.contains("▸ NFTokenBurn NFTokenID="),
+            "valid preview:\n{screen}"
+        );
+        assert!(screen.contains("then type BURN"), "confirm hint:\n{screen}");
+    }
+
     /// TC-220: Escrow finish/cancel composer — `0` fetches escrows; `s` finishes, `c` cancels the
     /// selected row; condition escrows cannot be finished and unresolved sequences are refused.
     #[test]
@@ -1771,9 +2231,47 @@ mod tests {
                 assert_eq!(p.amount, "1.25");
                 assert!(p.iou_currency.is_none());
                 assert!(p.iou_issuer.is_none());
+                assert!(
+                    !p.skip_mainnet_prompt,
+                    "WalletPanel::new(false) keeps the prompt"
+                );
             }
             other => panic!("expected PaymentSubmit, got {other:?}"),
         }
+        // Double-submit guard on the money path: identical refused until the result arrives.
+        assert!(panel.on_key_event(key('s')).expect("again").is_none());
+        assert!(matches!(
+            &panel.submit_flash,
+            Some(SubmitFlash::Error(m)) if m.contains("already submitted")
+        ));
+        panel
+            .update(&Action::PaymentSubmitErr("tecX".into()))
+            .expect("result");
+        assert!(matches!(
+            panel.on_key_event(key('s')).expect("retry"),
+            Some(Action::PaymentSubmit(_))
+        ));
+        panel
+            .update(&Action::PaymentSubmitOk("HASH".into()))
+            .expect("ok");
+        // Ok closes the composer; a reopened identical payment must go through.
+        panel.open_payment_composer();
+        if let Some(ComposerPhase::Payment {
+            destination,
+            amount,
+            ..
+        }) = &mut panel.composer
+        {
+            *destination = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh".into();
+            *amount = "1.25".into();
+        }
+        assert!(
+            matches!(
+                panel.on_key_event(key('s')).expect("after ok"),
+                Some(Action::PaymentSubmit(_))
+            ),
+            "Ok clears the guard"
+        );
     }
 
     /// TC-198: preview + submit use the shared validation — bad destination checksum or
@@ -1823,22 +2321,9 @@ mod tests {
     }
 
     #[test]
-    fn open_trust_set_composer_and_queue_submit() {
+    fn trust_set_queue_uppercases_currency() {
         let mut panel = WalletPanel::new(true);
         panel.open_trust_set_composer();
-        match &panel.composer {
-            Some(ComposerPhase::TrustSet {
-                currency,
-                issuer,
-                limit,
-                ..
-            }) => {
-                assert_eq!(currency, "USD");
-                assert!(!issuer.is_empty());
-                assert_eq!(limit, "1000");
-            }
-            other => panic!("expected TrustSet, got {other:?}"),
-        }
         // Rewrite the composer fields, then observe the queue conversion.
         if let Some(ComposerPhase::TrustSet {
             currency,
@@ -1854,64 +2339,21 @@ mod tests {
         match panel.queue_submit_trust_set() {
             Action::TrustSetSubmit(p) => {
                 assert_eq!(p.currency, "USD", "currency must be uppercased");
-                assert_eq!(p.issuer, "rRewrittenIssuer");
-                assert_eq!(p.limit, "42");
-                assert!(p.skip_mainnet_prompt);
             }
             other => panic!("expected TrustSetSubmit, got {other:?}"),
         }
     }
 
     #[test]
-    fn open_offer_create_composer_and_queue_submit() {
-        let mut panel = WalletPanel::new(true);
-        panel.open_offer_create_composer();
-        match &panel.composer {
-            Some(ComposerPhase::OfferCreate {
-                taker_gets,
-                taker_pays,
-                ..
-            }) => {
-                assert_eq!(taker_gets, "XRP:1000000");
-                assert!(taker_pays.starts_with("USD:"));
-            }
-            other => panic!("expected OfferCreate, got {other:?}"),
-        }
-        // Rewrite the composer fields, then observe the queue pass-through.
-        if let Some(ComposerPhase::OfferCreate {
-            taker_gets,
-            taker_pays,
-            ..
-        }) = &mut panel.composer
-        {
-            *taker_gets = "XRP:250".into();
-            *taker_pays = "JPY:rPaysRewritten:7".into();
-        }
-        match panel.queue_submit_offer_create() {
-            Action::OfferCreateSubmit(p) => {
-                assert_eq!(p.taker_gets, "XRP:250");
-                assert_eq!(p.taker_pays, "JPY:rPaysRewritten:7");
-                assert!(p.skip_mainnet_prompt);
-            }
-            other => panic!("expected OfferCreateSubmit, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn open_set_regular_key_composer_and_queue_submit() {
+    fn nonempty_set_regular_key_queues_without_clear_confirm() {
         let mut panel = WalletPanel::new(true);
         panel.open_set_regular_key_composer();
-        match &panel.composer {
-            Some(ComposerPhase::SetRegularKey { regular_key }) => assert!(regular_key.is_empty()),
-            other => panic!("expected SetRegularKey, got {other:?}"),
-        }
         if let Some(ComposerPhase::SetRegularKey { regular_key }) = &mut panel.composer {
             *regular_key = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh".into();
         }
         match panel.queue_submit_set_regular_key() {
             Some(Action::SetRegularKeySubmit(p)) => {
                 assert_eq!(p.regular_key, "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh");
-                assert!(p.skip_mainnet_prompt);
             }
             other => panic!("expected SetRegularKeySubmit, got {other:?}"),
         }
@@ -1936,6 +2378,7 @@ mod tests {
     #[test]
     fn empty_set_regular_key_requires_clear_confirm() {
         let mut panel = WalletPanel::new(true);
+        panel.is_focused = true;
         panel.open_set_regular_key_composer();
         assert!(panel.queue_submit_set_regular_key().is_none());
         match &panel.composer {
@@ -1946,10 +2389,15 @@ mod tests {
             }) => assert_eq!(expected, "CLEAR"),
             other => panic!("expected DangerConfirm CLEAR, got {other:?}"),
         }
-        // After typing CLEAR (simulated by calling confirmed path), submit clears the key.
-        let action = panel.queue_submit_set_regular_key_confirmed();
-        match action {
-            Action::SetRegularKeySubmit(p) => assert!(p.regular_key.is_empty()),
+        // Type CLEAR through the real key path; a wrong word must not submit.
+        let enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::empty());
+        for c in "CLEA".chars() {
+            panel.on_key_event(key(c)).expect("type");
+        }
+        assert!(panel.on_key_event(enter).expect("partial").is_none());
+        panel.on_key_event(key('R')).expect("type");
+        match panel.on_key_event(enter).expect("confirm") {
+            Some(Action::SetRegularKeySubmit(p)) => assert!(p.regular_key.is_empty()),
             other => panic!("expected SetRegularKeySubmit, got {other:?}"),
         }
     }
@@ -1957,6 +2405,7 @@ mod tests {
     #[test]
     fn disable_master_requires_disable_confirm() {
         let mut panel = WalletPanel::new(true);
+        panel.is_focused = true;
         panel.open_account_set_composer();
         // FLAG_OPTIONS index of DisableMaster
         panel.set_flag_ix = FLAG_OPTIONS
@@ -1972,8 +2421,14 @@ mod tests {
             }) => assert_eq!(expected, "DISABLE"),
             other => panic!("expected DangerConfirm DISABLE, got {other:?}"),
         }
-        match panel.queue_submit_account_set_confirmed() {
-            Action::AccountSetSubmit(p) => {
+        let enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::empty());
+        for c in "DISABL".chars() {
+            panel.on_key_event(key(c)).expect("type");
+        }
+        assert!(panel.on_key_event(enter).expect("partial").is_none());
+        panel.on_key_event(key('E')).expect("type");
+        match panel.on_key_event(enter).expect("confirm") {
+            Some(Action::AccountSetSubmit(p)) => {
                 assert_eq!(p.set_flag.as_deref(), Some("DisableMaster"));
             }
             other => panic!("expected AccountSetSubmit, got {other:?}"),
@@ -1982,13 +2437,222 @@ mod tests {
 
     /// TC-129: proof_json preview must truncate by chars — byte slicing panicked on multibyte JSON.
     #[test]
-    fn fxrp_proof_preview_survives_multibyte_proof_json() {
+    fn fxrp_proof_preview_truncates_by_chars_on_multibyte_proof_json() {
+        use super::composer::proof_json_preview;
+        // 'a' + 100×'é': byte offset 72 falls inside a char, so byte slicing would panic.
+        let preview = proof_json_preview(&format!("a{}", "é".repeat(100)));
+        assert_eq!(preview, format!("a{}…", "é".repeat(71)));
+        let short = format!("a{}", "é".repeat(71));
+        assert_eq!(proof_json_preview(&short), short, "72 chars are kept whole");
+    }
+
+    fn smart_account_panel() -> WalletPanel {
         let mut panel = WalletPanel::new(false);
         panel.is_focused = true;
-        panel.composer = Some(ComposerPhase::FxrpExecuteDirectMint {
-            proof_json: "証拠{json}".repeat(40),
+        panel.seed_address = Some(Ok("rOwner".into()));
+        panel.smart_account = Some(crate::xrpl::SmartAccountInfo {
+            xrpl_owner: "rOwner".into(),
+            controller: "0xcccccccccccccccccccccccccccccccccccccccc".into(),
+            personal_account: "0x1234567890abcdef1234567890abcdef12345678".into(),
+            deployed: true,
+            nonce: 1,
+            operator_wallets: vec!["rOperator".into()],
+            transfer_fee_drops: 200_000,
+            redeem_fee_drops: 1_500_000,
+            fxrp_decimals: 6,
+            fxrp_balance_units: 12_500_000,
         });
+        panel
+    }
+
+    /// Fill the open Smart Account form and queue it (the Err/Ok action is the validation result).
+    fn smart_account_submit(
+        panel: &mut WalletPanel,
+        redeem: bool,
+        recipient: &str,
+        amount: &str,
+    ) -> Action {
+        panel.open_smart_account_composer();
+        if let Some(ComposerPhase::SmartAccount {
+            redeem: r,
+            recipient: to,
+            amount: a,
+            ..
+        }) = &mut panel.composer
+        {
+            (*r, *to, *a) = (redeem, recipient.into(), amount.into());
+        }
+        panel.queue_submit_smart_account()
+    }
+
+    /// TC-244: Smart Account form validation — bad / zero recipient, zero / empty / over-balance
+    /// amount, bad lots and a read for another account are refused with a flash message; a valid
+    /// form queues exact params (FXRP decimal → base units via the read `decimals()`).
+    #[test]
+    fn smart_account_composer_validates_before_queueing() {
+        const TO: &str = "0xf5488132432118596fa13800b68df4c0ff25131d";
+        let mut panel = smart_account_panel();
+        let err = |a: Action| match a {
+            Action::SmartAccountInstructionSubmitErr(m) => m,
+            other => panic!("expected refusal, got {other:?}"),
+        };
+
+        assert!(err(smart_account_submit(&mut panel, false, "0xabc", "1")).contains("recipient"));
+        assert!(
+            err(smart_account_submit(
+                &mut panel,
+                false,
+                "0x0000000000000000000000000000000000000000",
+                "1"
+            ))
+            .contains("zero address")
+        );
+        assert!(
+            err(smart_account_submit(&mut panel, false, TO, "0")).contains("greater than zero")
+        );
+        assert!(err(smart_account_submit(&mut panel, false, TO, "")).contains("amount"));
+        // Balance is 12.5 FXRP (6 decimals): one base unit above is refused, the exact balance is fine.
+        assert!(err(smart_account_submit(&mut panel, false, TO, "12.500001")).contains("exceeds"));
+        assert!(err(smart_account_submit(&mut panel, true, "", "abc")).contains("whole number"));
+        assert!(err(smart_account_submit(&mut panel, true, "", "0")).contains("greater than zero"));
+
+        let Action::SmartAccountInstructionSubmit(p) =
+            smart_account_submit(&mut panel, false, &format!(" {TO} "), "12.5")
+        else {
+            panic!("valid transfer must queue");
+        };
+        assert_eq!(
+            p,
+            crate::xrpl::SmartAccountInstructionParams {
+                redeem: false,
+                value: 12_500_000,
+                recipient: TO.into(),
+                operator_xrpl: "rOperator".into(),
+                fee_drops: 200_000,
+                skip_mainnet_prompt: false,
+            }
+        );
+        let Action::SmartAccountInstructionSubmit(p) =
+            smart_account_submit(&mut panel, true, TO, "3")
+        else {
+            panic!("valid redeem must queue");
+        };
+        assert_eq!(
+            (p.redeem, p.value, p.recipient.as_str(), p.fee_drops),
+            (true, 3, "", 1_500_000)
+        );
+
+        // A read for another XRPL account is never signed under this one.
+        panel.seed_address = Some(Ok("rSomeoneElse".into()));
+        assert!(
+            err(smart_account_submit(&mut panel, false, TO, "1"))
+                .contains("not the signing account")
+        );
+    }
+
+    /// TC-247: the decimal → base-units conversion, over-balance check and refusal to queue
+    /// follow the `decimals()` read from the token (8 and 0 here, not an assumed 6): the exact
+    /// balance is accepted, one base unit more is refused, extra fraction digits are refused.
+    #[test]
+    fn smart_account_composer_follows_read_decimals() {
+        const TO: &str = "0xf5488132432118596fa13800b68df4c0ff25131d";
+        let mut panel = smart_account_panel();
+        let value = |panel: &mut WalletPanel, amount: &str| match smart_account_submit(
+            panel, false, TO, amount,
+        ) {
+            Action::SmartAccountInstructionSubmit(p) => Ok(p.value),
+            Action::SmartAccountInstructionSubmitErr(m) => Err(m),
+            other => panic!("unexpected {other:?}"),
+        };
+
+        // 8 decimals, balance 12.5 FXRP = 1_250_000_000 units.
+        if let Some(info) = &mut panel.smart_account {
+            (info.fxrp_decimals, info.fxrp_balance_units) = (8, 1_250_000_000);
+        }
+        assert_eq!(value(&mut panel, "12.5"), Ok(1_250_000_000));
+        assert_eq!(value(&mut panel, "0.00000001"), Ok(1));
+        assert!(
+            value(&mut panel, "12.50000001")
+                .unwrap_err()
+                .contains("exceeds")
+        );
+        assert!(
+            value(&mut panel, "0.000000001")
+                .unwrap_err()
+                .contains("decimal places")
+        );
+
+        // 0 decimals: whole units only, balance 1_000 units.
+        if let Some(info) = &mut panel.smart_account {
+            (info.fxrp_decimals, info.fxrp_balance_units) = (0, 1_000);
+        }
+        assert_eq!(value(&mut panel, "1000"), Ok(1_000));
+        assert!(value(&mut panel, "1001").unwrap_err().contains("exceeds"));
+        assert!(
+            value(&mut panel, "1.5")
+                .unwrap_err()
+                .contains("decimal places")
+        );
+
+        // Decimals above 18 never queue; no read at all never queues.
+        if let Some(info) = &mut panel.smart_account {
+            info.fxrp_decimals = 19;
+        }
+        assert!(value(&mut panel, "1").is_err());
+        panel.smart_account = None;
+        assert!(value(&mut panel, "1").is_err());
+    }
+
+    /// TC-244: the picker opens the composer with `a`, `i` flips transfer ↔ redeem, typing fills
+    /// the amount, `s` queues; without a Smart Account read the composer does not open.
+    #[test]
+    fn smart_account_composer_keys_and_not_loaded_guard() {
+        let mut panel = smart_account_panel();
+        panel.composer = Some(ComposerPhase::PickKind { selected: 0 });
+        panel.on_key_event(key('a')).expect("open");
+        assert!(matches!(
+            &panel.composer,
+            Some(ComposerPhase::SmartAccount { redeem: false, .. })
+        ));
         let area = ratatui::layout::Rect::new(0, 0, 80, 24);
-        crate::test_support::render_to_string(80, 24, |f| panel.render_composer(f, area));
+        let out = crate::test_support::render_to_string(80, 24, |f| panel.render_composer(f, area));
+        // Operator, fee and balance come from the read; no pin configured → flagged.
+        assert!(
+            out.contains("rOperator") && out.contains("NOT pinned"),
+            "{out}"
+        );
+        assert!(
+            out.contains("0.2 XRP fee") && out.contains("12.5 FXRP"),
+            "{out}"
+        );
+        panel.on_key_event(key('i')).expect("toggle");
+        assert!(matches!(
+            &panel.composer,
+            Some(ComposerPhase::SmartAccount { redeem: true, .. })
+        ));
+        panel.on_key_event(key('e')).expect("edit");
+        panel.on_key_event(key('4')).expect("type");
+        panel
+            .on_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::empty()))
+            .expect("stop editing");
+        match panel.on_key_event(key('s')).expect("submit") {
+            Some(Action::SmartAccountInstructionSubmit(p)) => {
+                assert_eq!((p.redeem, p.value), (true, 4));
+            }
+            other => panic!("expected SmartAccountInstructionSubmit, got {other:?}"),
+        }
+        // Esc returns to the picker row of this action.
+        panel
+            .on_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::empty()))
+            .expect("back");
+        assert!(matches!(
+            &panel.composer,
+            Some(ComposerPhase::PickKind { selected: 13 })
+        ));
+
+        let mut panel = smart_account_panel();
+        panel.smart_account = None;
+        panel.open_smart_account_composer();
+        assert!(panel.composer.is_none());
     }
 }

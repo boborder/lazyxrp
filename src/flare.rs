@@ -10,7 +10,7 @@ use alloy::{
 };
 use serde_json::Value;
 
-use crate::xrpl::{FlareFeedPrice, FlareWalletSummary, FxrpDirectMintInfo};
+use crate::xrpl::{FlareFeedPrice, FlareWalletSummary, FxrpDirectMintInfo, SmartAccountInfo};
 
 pub const DEFAULT_FLARE_RPC: &str = "https://flare-api.flare.network/ext/C/rpc";
 pub const DEFAULT_FLARE_FEED: &str = "FXRP/USD";
@@ -18,11 +18,15 @@ pub const DEFAULT_FLARE_FEEDS: &[&str] = &["FXRP/USD", "FLR/USD", "BTC/USD", "ET
 const FLARE_CONTRACT_REGISTRY: Address = address!("aD67FE66660Fb8dFE9d6b1b4240d8650e30F6019");
 const ASSET_MANAGER_FXRP_NAME: &str = "AssetManagerFXRP";
 const FTSO_V2_REGISTRY_NAME: &str = "FtsoV2";
+const MASTER_ACCOUNT_CONTROLLER_NAME: &str = "MasterAccountController";
+/// Cap on operator wallets kept from `getXrplProviderWallets()` (display only; `[0]` is used).
+const OPERATOR_WALLET_DISPLAY_MAX: usize = 16;
 
 #[derive(Default)]
 struct FlareRegistryAddresses {
     ftso_v2: Option<Address>,
     asset_manager_fxrp: Option<Address>,
+    master_account_controller: Option<Address>,
 }
 
 fn flare_registry_cache() -> &'static Mutex<HashMap<String, FlareRegistryAddresses>> {
@@ -41,6 +45,7 @@ async fn resolve_registry_contract<P: Provider + Clone>(
         let cached = match contract_name {
             FTSO_V2_REGISTRY_NAME => entry.ftso_v2,
             ASSET_MANAGER_FXRP_NAME => entry.asset_manager_fxrp,
+            MASTER_ACCOUNT_CONTROLLER_NAME => entry.master_account_controller,
             _ => None,
         };
         if let Some(addr) = cached {
@@ -53,12 +58,16 @@ async fn resolve_registry_contract<P: Provider + Clone>(
         .getContractAddressByName(contract_name.to_string())
         .call()
         .await?;
+    if addr == Address::ZERO {
+        color_eyre::eyre::bail!("{contract_name} is not registered in the Flare contract registry");
+    }
 
     if let Ok(mut guard) = flare_registry_cache().lock() {
         let entry = guard.entry(rpc_url.to_string()).or_default();
         match contract_name {
             FTSO_V2_REGISTRY_NAME => entry.ftso_v2 = Some(addr),
             ASSET_MANAGER_FXRP_NAME => entry.asset_manager_fxrp = Some(addr),
+            MASTER_ACCOUNT_CONTROLLER_NAME => entry.master_account_controller = Some(addr),
             _ => {}
         }
     }
@@ -140,6 +149,15 @@ sol! {
         function executeDirectMinting(XrpPaymentProof _payment) external payable;
     }
 
+    /// Minimal `IMasterAccountController` surface for Smart Account reads (Flare Smart Accounts).
+    #[sol(rpc)]
+    interface IMasterAccountController {
+        function getPersonalAccount(string _xrplOwner) external view returns (address);
+        function getNonce(address _personalAccount) external view returns (uint256);
+        function getXrplProviderWallets() external view returns (string[] memory);
+        function getInstructionFee(uint256 _instructionId) external view returns (uint256);
+    }
+
     #[sol(rpc)]
     interface IERC20 {
         function balanceOf(address account) external view returns (uint256);
@@ -211,6 +229,23 @@ pub fn uba_to_xrp_display(uba: u128) -> String {
         let s = format!("{whole}.{frac:06}");
         s.trim_end_matches('0').to_string()
     }
+}
+
+/// Exact base units → decimal string (`decimals` places, trailing zeros trimmed; no floats).
+#[must_use]
+pub fn format_token_units(units: u128, decimals: u8) -> String {
+    if decimals == 0 {
+        return units.to_string();
+    }
+    let Some(scale) = 10_u128.checked_pow(u32::from(decimals)) else {
+        return units.to_string();
+    };
+    let (whole, frac) = (units / scale, units % scale);
+    if frac == 0 {
+        return whole.to_string();
+    }
+    let frac = format!("{frac:0width$}", width = usize::from(decimals));
+    format!("{whole}.{}", frac.trim_end_matches('0'))
 }
 
 /// BIPS → percent string (`10` → `"0.10%"`, `100` → `"1.00%"`).
@@ -352,6 +387,78 @@ pub async fn fetch_fxrp_direct_mint_info(rpc_url: &str) -> color_eyre::Result<Fx
     })
 }
 
+/// Resolve `MasterAccountController` and read one XRPL owner's Smart Account state (read-only):
+/// personal account (+ deployed?), nonce, operator wallets, FXRP transfer / redeem instruction
+/// fees and the personal account's FXRP balance.
+pub async fn fetch_smart_account_info(
+    rpc_url: &str,
+    xrpl_address: &str,
+) -> color_eyre::Result<SmartAccountInfo> {
+    let xrpl_owner = crate::signing::require_classic_address_shape("XRPL owner", xrpl_address)?;
+    let provider = ProviderBuilder::new().connect_http(rpc_url.parse()?);
+    let (controller_addr, asset_manager_addr) = tokio::try_join!(
+        resolve_registry_contract(provider.clone(), rpc_url, MASTER_ACCOUNT_CONTROLLER_NAME),
+        resolve_asset_manager_fxrp_address(provider.clone(), rpc_url),
+    )?;
+    let controller = IMasterAccountController::new(controller_addr, provider.clone());
+    let personal = controller
+        .getPersonalAccount(xrpl_owner.to_string())
+        .call()
+        .await?;
+    let fxrp = IERC20::new(
+        IAssetManager::new(asset_manager_addr, provider.clone())
+            .fAsset()
+            .call()
+            .await?,
+        provider.clone(),
+    );
+
+    let (nonce, wallets, transfer_fee, redeem_fee, balance, decimals, code) = tokio::try_join!(
+        async { controller.getNonce(personal).call().await },
+        async { controller.getXrplProviderWallets().call().await },
+        async {
+            controller
+                .getInstructionFee(U256::from(crate::signing::SMART_ACCOUNT_FXRP_TRANSFER))
+                .call()
+                .await
+        },
+        async {
+            controller
+                .getInstructionFee(U256::from(crate::signing::SMART_ACCOUNT_FXRP_REDEEM))
+                .call()
+                .await
+        },
+        async { fxrp.balanceOf(personal).call().await },
+        async { fxrp.decimals().call().await },
+        async { Ok(provider.get_code_at(personal).await?) },
+    )?;
+    if decimals > crate::signing::MAX_TOKEN_DECIMALS {
+        color_eyre::eyre::bail!("Flare RPC returned out-of-range FXRP decimals {decimals}");
+    }
+
+    // Remote values: checked conversions, never panicking (the panic hook exits the TUI).
+    let too_big = |what: &str| color_eyre::eyre::eyre!("Flare RPC returned out-of-range {what}");
+    Ok(SmartAccountInfo {
+        xrpl_owner: xrpl_owner.to_string(),
+        controller: format!("{controller_addr:#x}"),
+        personal_account: format!("{personal:#x}"),
+        deployed: !code.is_empty(),
+        nonce: nonce.try_into().map_err(|_| too_big("nonce"))?,
+        operator_wallets: wallets
+            .into_iter()
+            .take(OPERATOR_WALLET_DISPLAY_MAX)
+            .collect(),
+        transfer_fee_drops: transfer_fee
+            .try_into()
+            .map_err(|_| too_big("transfer instruction fee"))?,
+        redeem_fee_drops: redeem_fee
+            .try_into()
+            .map_err(|_| too_big("redeem instruction fee"))?,
+        fxrp_decimals: decimals,
+        fxrp_balance_units: balance.try_into().map_err(|_| too_big("FXRP balance"))?,
+    })
+}
+
 /// The Core Vault comes from one Flare RPC answer; sign a Payment to it only when it equals the
 /// operator-pinned `[flare.fassets] expected_core_vault` (verified out of band).
 pub fn check_core_vault(fetched: &str, expected: Option<&str>) -> Result<(), String> {
@@ -362,6 +469,20 @@ pub fn check_core_vault(fetched: &str, expected: Option<&str>) -> Result<(), Str
         )),
         None => Err(format!(
             "refusing to sign: verify Core Vault {fetched} out of band, then set [flare.fassets] expected_core_vault"
+        )),
+    }
+}
+
+/// The operator comes from one Flare RPC answer; sign an instruction Payment to it only when it
+/// equals the operator-pinned `[flare.smart_accounts] expected_operator` (verified out of band).
+pub fn check_operator(fetched: &str, expected: Option<&str>) -> Result<(), String> {
+    match expected.map(str::trim).filter(|e| !e.is_empty()) {
+        Some(e) if e == fetched.trim() => Ok(()),
+        Some(e) => Err(format!(
+            "refusing to sign: Flare RPC operator {fetched} differs from expected_operator {e}"
+        )),
+        None => Err(format!(
+            "refusing to sign: verify operator {fetched} out of band, then set [flare.smart_accounts] expected_operator"
         )),
     }
 }
@@ -533,7 +654,7 @@ pub async fn execute_direct_minting(
 mod tests {
     use super::*;
 
-    /// Lead 1: the RPC-supplied Core Vault is signed only when it equals the pinned value.
+    /// TC-205: the RPC-supplied Core Vault is signed only when it equals the pinned value.
     #[test]
     fn check_core_vault_requires_pinned_match() {
         assert!(check_core_vault("rVault", Some(" rVault ")).is_ok());
@@ -550,12 +671,209 @@ mod tests {
         assert!(check_core_vault("rVault", Some("")).is_err());
     }
 
+    /// TC-240: the RPC-supplied Smart Account operator is paid only when it equals the pinned
+    /// `[flare.smart_accounts] expected_operator`; mismatch, unset and empty pins are refused.
+    #[test]
+    fn check_operator_requires_pinned_match() {
+        assert!(check_operator("rOperator", Some(" rOperator ")).is_ok());
+        assert!(
+            check_operator("rEvil", Some("rOperator"))
+                .unwrap_err()
+                .contains("differs")
+        );
+        assert!(
+            check_operator("rOperator", None)
+                .unwrap_err()
+                .contains("expected_operator")
+        );
+        assert!(check_operator("rOperator", Some("  ")).is_err());
+    }
+
+    /// Serve the Flare views `fetch_smart_account_info` reads (registry → controller / AssetManager,
+    /// personal account, nonce, operators, fees, FXRP) from a local JSON-RPC mock.
+    async fn smart_account_fetch_against_mock(
+        balance: U256,
+        decimals: u8,
+        code: &'static str,
+    ) -> (
+        color_eyre::Result<SmartAccountInfo>,
+        color_eyre::Result<Vec<serde_json::Value>>,
+    ) {
+        use alloy::sol_types::SolCall;
+        use serde_json::json;
+
+        let controller = address!("00000000000000000000000000000000000000c1");
+        let asset_manager = address!("00000000000000000000000000000000000000a1");
+        let fxrp = address!("00000000000000000000000000000000000000f1");
+        let personal = address!("00000000000000000000000000000000000000e1");
+        let respond = move |req: &serde_json::Value| {
+            let result = match req["method"].as_str().unwrap_or_default() {
+                "eth_getCode" => json!(code),
+                "eth_call" => {
+                    let call = &req["params"][0];
+                    let to: Address = call["to"].as_str().unwrap().parse().unwrap();
+                    let input = call["input"].as_str().or(call["data"].as_str()).unwrap();
+                    let input = hex::decode(input.trim_start_matches("0x")).unwrap();
+                    let out = if to == FLARE_CONTRACT_REGISTRY {
+                        let name =
+                            FlareContractRegistry::getContractAddressByNameCall::abi_decode(&input)
+                                .unwrap()
+                                ._name;
+                        let addr = match name.as_str() {
+                            MASTER_ACCOUNT_CONTROLLER_NAME => controller,
+                            ASSET_MANAGER_FXRP_NAME => asset_manager,
+                            other => panic!("unexpected registry name {other}"),
+                        };
+                        FlareContractRegistry::getContractAddressByNameCall::abi_encode_returns(
+                            &addr,
+                        )
+                    } else if to == asset_manager {
+                        IAssetManager::fAssetCall::abi_encode_returns(&fxrp)
+                    } else if to == fxrp {
+                        if input[..4] == IERC20::decimalsCall::SELECTOR {
+                            IERC20::decimalsCall::abi_encode_returns(&decimals)
+                        } else {
+                            IERC20::balanceOfCall::abi_encode_returns(&balance)
+                        }
+                    } else {
+                        assert_eq!(to, controller);
+                        let selector: [u8; 4] = input[..4].try_into().unwrap();
+                        match selector {
+                            IMasterAccountController::getPersonalAccountCall::SELECTOR => {
+                                IMasterAccountController::getPersonalAccountCall::abi_encode_returns(
+                                    &personal,
+                                )
+                            }
+                            IMasterAccountController::getNonceCall::SELECTOR => {
+                                IMasterAccountController::getNonceCall::abi_encode_returns(
+                                    &U256::from(5),
+                                )
+                            }
+                            IMasterAccountController::getXrplProviderWalletsCall::SELECTOR => {
+                                IMasterAccountController::getXrplProviderWalletsCall::abi_encode_returns(
+                                    &vec!["rOperator".to_string(), "rSecond".to_string()],
+                                )
+                            }
+                            IMasterAccountController::getInstructionFeeCall::SELECTOR => {
+                                let id = IMasterAccountController::getInstructionFeeCall::abi_decode(&input)
+                                    .unwrap()
+                                    ._instructionId;
+                                let fee = if id == U256::from(1) { 200_000_u64 } else { 1_500_000 };
+                                IMasterAccountController::getInstructionFeeCall::abi_encode_returns(
+                                    &U256::from(fee),
+                                )
+                            }
+                            other => panic!("unexpected controller selector {other:?}"),
+                        }
+                    };
+                    json!(format!("0x{}", hex::encode(out)))
+                }
+                other => panic!("unexpected local RPC method: {other}"),
+            };
+            json!({"jsonrpc": "2.0", "id": req["id"].clone(), "result": result})
+        };
+
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .expect("bind");
+        let url = format!("http://{}", listener.local_addr().expect("addr"));
+        // 2 registry + getPersonalAccount + fAsset + nonce/wallets/2 fees/balance/decimals/code.
+        let server = tokio::spawn(crate::test_support::rpc_mock::serve_raw(
+            listener, 11, respond,
+        ));
+        let info = fetch_smart_account_info(&url, "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh").await;
+        let requests = if info.is_ok() {
+            server.await.expect("join")
+        } else {
+            server.abort();
+            Ok(Vec::new())
+        };
+        (info, requests)
+    }
+
+    /// TC-241: `fetch_smart_account_info` decodes the controller views (personal account,
+    /// deployed flag from `eth_getCode`, nonce, operators, both instruction fees, FXRP balance)
+    /// and rejects an out-of-range remote value with an error instead of a panic.
+    #[tokio::test]
+    async fn fetch_smart_account_info_decodes_views_against_local_rpc() {
+        let (info, requests) =
+            smart_account_fetch_against_mock(U256::from(12_500_000), 6, "0x6080").await;
+        let info = info.expect("fetch");
+        assert_eq!(
+            info,
+            SmartAccountInfo {
+                xrpl_owner: "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh".into(),
+                controller: "0x00000000000000000000000000000000000000c1".into(),
+                personal_account: "0x00000000000000000000000000000000000000e1".into(),
+                deployed: true,
+                nonce: 5,
+                operator_wallets: vec!["rOperator".into(), "rSecond".into()],
+                transfer_fee_drops: 200_000,
+                redeem_fee_drops: 1_500_000,
+                fxrp_decimals: 6,
+                fxrp_balance_units: 12_500_000,
+            }
+        );
+        let requests = requests.expect("serve");
+        assert_eq!(requests.len(), 11);
+        assert!(requests.iter().any(|r| r["method"] == "eth_getCode"));
+
+        // Undeployed account: empty code.
+        let (info, _) = smart_account_fetch_against_mock(U256::ZERO, 6, "0x").await;
+        assert!(!info.expect("fetch").deployed);
+
+        // A uint256 that does not fit u128 is an error, not a panic or a wrapped value.
+        let (info, _) = smart_account_fetch_against_mock(U256::MAX, 6, "0x6080").await;
+        let err = info.unwrap_err().to_string();
+        assert!(err.contains("out-of-range FXRP balance"), "{err}");
+
+        // `decimals()` comes from the token, not an assumption: 8 and 0 are carried through.
+        for decimals in [8_u8, 0] {
+            let (info, _) =
+                smart_account_fetch_against_mock(U256::from(1_234), decimals, "0x6080").await;
+            let info = info.expect("fetch");
+            assert_eq!(
+                (info.fxrp_decimals, info.fxrp_balance_units),
+                (decimals, 1_234)
+            );
+        }
+        // decimals() above 18 is refused rather than overflowing later arithmetic.
+        let (info, _) = smart_account_fetch_against_mock(U256::from(1), 19, "0x6080").await;
+        let err = info.unwrap_err().to_string();
+        assert!(err.contains("out-of-range FXRP decimals"), "{err}");
+
+        // A malformed owner never reaches the RPC.
+        let err = fetch_smart_account_info("http://127.0.0.1:1", "not-an-address")
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("XRPL owner"), "{err}");
+    }
+
     /// An oversized uint256 from the RPC must not panic the display formatters.
     #[test]
     fn oversized_uint256_does_not_panic_formatters() {
-        assert!(format_price(U256::MAX, 6).parse::<f64>().is_ok());
-        assert!(format_token_balance(U256::MAX, 18).parse::<f64>().is_ok());
+        // Saturates to u128::MAX rather than panicking or wrapping.
+        assert_eq!(
+            format_price(U256::MAX, 6),
+            format_price(U256::from(u128::MAX), 6)
+        );
+        assert_eq!(
+            format_token_balance(U256::MAX, 18),
+            format_token_balance(U256::from(u128::MAX), 18)
+        );
         assert_eq!(format_price(U256::from(1_500_000_u64), 6), "1.500000");
+    }
+
+    #[test]
+    fn format_token_units_is_exact_for_any_decimals() {
+        assert_eq!(format_token_units(12_500_000, 6), "12.5");
+        assert_eq!(format_token_units(1_250_000_000, 8), "12.5");
+        assert_eq!(format_token_units(1, 6), "0.000001");
+        assert_eq!(format_token_units(1, 18), "0.000000000000000001");
+        assert_eq!(format_token_units(1_234, 0), "1234");
+        assert_eq!(format_token_units(3_000_000, 6), "3");
+        assert_eq!(format_token_units(u128::MAX, 18).len(), 40);
     }
 
     #[test]
@@ -574,12 +892,6 @@ mod tests {
         assert_eq!(bips_to_percent_display(10), "0.10%");
         assert_eq!(bips_to_percent_display(100), "1.00%");
         assert_eq!(bips_to_percent_display(12), "0.12%");
-    }
-
-    #[test]
-    fn ensure_fassets_execute_enabled_gate() {
-        assert!(ensure_fassets_execute_enabled(false).is_err());
-        assert!(ensure_fassets_execute_enabled(true).is_ok());
     }
 
     #[test]
@@ -643,8 +955,39 @@ mod tests {
         assert!(parse_fdc_payment_proof_json("not-json").is_err());
         let empty_proof = REAL_DA_PROOF.replace(r#""proof":["#, r#""proof":[],"x":["#);
         assert!(parse_fdc_payment_proof_json(&empty_proof).is_err());
-        // The response is a decoded struct, not ABI bytes (the old pasted shape).
-        assert!(parse_fdc_payment_proof_json(r#"{"proof":["0x00"],"response":"0xbb"}"#).is_err());
+        // Only the response is wrong (valid 32-byte proof entry): the old pasted ABI-bytes shape.
+        let mut old_shape: serde_json::Value = serde_json::from_str(REAL_DA_PROOF).unwrap();
+        old_shape["response"] = serde_json::json!("0xbb");
+        assert!(parse_fdc_payment_proof_json(&old_shape.to_string()).is_err());
+    }
+
+    /// TC-124: resolved registry addresses are cached per RPC URL — a hit never touches the
+    /// network, and another URL or another contract name is a miss (provider is unreachable).
+    #[tokio::test]
+    async fn registry_cache_is_keyed_by_rpc_url_and_contract() {
+        let provider = ProviderBuilder::new().connect_http("http://127.0.0.1:1".parse().unwrap());
+        let (url_a, url_b) = ("test://registry-cache-a", "test://registry-cache-b");
+        let addr = address!("00000000000000000000000000000000000000aa");
+        flare_registry_cache().lock().unwrap().insert(
+            url_a.to_string(),
+            FlareRegistryAddresses {
+                ftso_v2: Some(addr),
+                ..Default::default()
+            },
+        );
+        let hit = resolve_registry_contract(provider.clone(), url_a, FTSO_V2_REGISTRY_NAME).await;
+        assert_eq!(hit.expect("cache hit"), addr);
+        for (url, name) in [
+            (url_a, ASSET_MANAGER_FXRP_NAME),
+            (url_b, FTSO_V2_REGISTRY_NAME),
+        ] {
+            assert!(
+                resolve_registry_contract(provider.clone(), url, name)
+                    .await
+                    .is_err(),
+                "{url} {name} must miss the cache"
+            );
+        }
     }
 
     #[tokio::test]

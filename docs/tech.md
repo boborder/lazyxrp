@@ -24,7 +24,7 @@
 - `reqwest`（`Cargo.toml` `0.13`、`Cargo.lock` 直接依存 `0.13.5`; `default-features = false`, `features = ["json", "stream", "native-tls", "charset", "http2", "system-proxy"]` — JSON-RPC と bounded NFT metadata/image streaming）。TLS は既定の rustls/`aws-lc-rs` ではなく **native-tls**（`aws-lc-sys` の C ビルドだけでクリーンビルドの大半を占めたため。`xrpl-rust` 経路の `reqwest 0.12.x` も native-tls）。`xrpl-rust` 経路では **`reqwest 0.12.x` がロックに併存**しうる（解像は `Cargo.lock` を正とする）。
 - `xrpl-rust`（`Cargo.toml` `1.1`、`Cargo.lock` `1.3.0`）
 - `kobe-xrpl = 3.4` / `kobe-primitives = 3.4` — BIP39 secp256k1 mnemonic → BIP44 `m/44'/144'/0'/0/0` account derivation。
-- `tokio-tungstenite = (xrpl-rust 経由)`
+- `tokio-tungstenite` — dev-dependency のみ（`ws.rs` テスト用ローカル WS サーバ）。本体の WS は xrpl-rust 経由
 - URL 解析は `reqwest::Url`（`url` crate の再 export。直接依存は持たない）
 - `base64 = 0.23` — XRPLF dUNL blob / validator manifest decode（`base64::engine::general_purpose::STANDARD`）
 - `hex = 0.4` — seed / domain / validator key の hex encode/decode
@@ -113,6 +113,7 @@ FLARE_FEEDS env > FLARE_FEED env > DEFAULT_FLARE_FEEDS (`FXRP/USD`, `FLR/USD`, `
 | `[flare.wallet] address` | `0x…` EVM | Overview 読み取りパネル（invalid hex は起動失敗） |
 | `[flare.fassets] execute` | `true` / `false` | C3 `executeDirectMinting` ゲート（既定 `false`） |
 | `[flare.fassets] expected_core_vault` | XRPL `r…` | C2 Direct Mint の Core Vault 宛先ピン。Flare RPC が返す値と一致しなければ署名拒否（未設定も拒否）。別経路で確認した値を設定 |
+| `[flare.smart_accounts] expected_operator` | XRPL `r…` | Smart Account instruction Payment の operator 宛先ピン。Flare RPC の `getXrplProviderWallets()[0]` と一致しなければ署名拒否（未設定も拒否）。別経路で確認した値を設定 |
 
 TUI セッション内の `<Ctrl-n>` は `Network::next_network()` で XRPL ネットワークを循環（config へは永続化しない）。`xahau` は mainnet 同等の書き込みガード（`--yes`）対象。
 

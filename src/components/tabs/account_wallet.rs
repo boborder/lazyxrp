@@ -85,6 +85,10 @@ impl Component for AccountWalletTab {
                 self.focus_index = (self.focus_index + self.focus_len() - 1) % self.focus_len();
                 self.update_focus();
             }
+            Action::TxComposerOpen { .. } => {
+                self.focus_index = 0;
+                self.update_focus();
+            }
             _ => {}
         }
 

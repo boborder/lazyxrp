@@ -173,33 +173,22 @@ mod tests {
         }
     }
 
-    #[test]
-    fn format_value_long_object_truncated() {
-        let v = json!({"a":"x".repeat(100)});
-        let full = v.to_string();
-        assert!(
-            full.chars().count() > 80,
-            "fixture must exceed truncate threshold"
-        );
-        let result = format_value("Foo", &v);
-        assert!(result.ends_with('…'));
-        let prefix: String = full.chars().take(80).collect();
-        assert_eq!(result, format!("{prefix}…"));
-
-        // Short object passes through untouched.
-        let short = json!({"a":"accent"});
-        let result = format_value("Foo", &short);
-        assert!(!result.ends_with('…'));
-        assert_eq!(result, short.to_string());
-    }
-
+    /// TC-152: long objects truncate to 80 chars + `…` on a char boundary; short pass through.
     #[test]
     fn format_value_long_object_truncates_on_char_boundary() {
+        let v = json!({"a":"x".repeat(100)});
+        let full = v.to_string();
+        let prefix: String = full.chars().take(80).collect();
+        assert_eq!(format_value("Foo", &v), format!("{prefix}…"));
+
         // Multibyte field values must not panic when the 80-char cut lands mid-codepoint.
         let v = json!({"note":"あ".repeat(90)});
         let result = format_value("Foo", &v);
         assert!(result.ends_with('…'));
         assert_eq!(result.chars().count(), 81, "80 chars + ellipsis");
         assert!(result.contains('あ'));
+
+        let short = json!({"a":"accent"});
+        assert_eq!(format_value("Foo", &short), short.to_string());
     }
 }

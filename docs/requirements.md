@@ -122,6 +122,20 @@ Product **requirements** (what). Behavioral design: [`architecture.md`](architec
 - アドレス未設定時はセットアップガイダンスを表示すること（Flare への書き込みは行わない）。
 - ポーリングは Overview タブ表示中のみ行うこと。
 
+### FR-17: Flare Smart Account（proof-based instruction flow）
+
+- XRPL アドレス（署名アカウント、なければ watch アカウント）の Flare パーソナルアカウントを TUI のみで確認・操作できること。
+- 読み取り（Flare RPC、読み取り専用）: `MasterAccountController`（FlareContractRegistry 解決）の `getPersonalAccount` / `getNonce` / `getXrplProviderWallets` / `getInstructionFee(1)`（FXRP transfer）/ `getInstructionFee(2)`（FXRP redeem、いずれも XRP drops）、パーソナルアカウントの FXRP `balanceOf`（トークンの最小単位）、FXRP トークンの `decimals()`（18 超は拒否）、デプロイ済みか（code 有無）。FXRP / Flare パネル（FXRP Direct Mint）に表示し（残高は `decimals()` で整形）、`[flare] display = off` と Overview タブ限定は FTSO / FXRP と同じ扱いとすること。
+- 書き込み: Wallet composer `a` で `0x01` FXRP transfer（value = FXRP の最小単位。composer は 10 進の FXRP 額を、読み取った `decimals()` を使い整数演算のみで最小単位に変換する。小数桁数超過・`decimals` 未取得は拒否、受取先 = 0x EVM アドレス）と `0x02` FXRP redeem（value = lots）を XRPL `Payment`（operator 宛、`DestinationTag` なし、`Amount` = `getInstructionFee`（XRP drops）、32-byte Memo）で送れること。実行（FDC 証明 + `executeInstruction`）は operator が Flare 上で行う。
+- operator は Flare RPC の単一応答のため、`[flare.smart_accounts] expected_operator`（運用者が別経路で確認）と一致しない場合は署名を拒否すること（未設定も拒否）。mainnet は `--yes` 必須、simulate 前に署名・送信しないこと。
+- 対象外（ROADMAP）: カスタム instruction `0xFE` / `0xFF`、`executeDirectMintingWithData`、vault（Firelight / Upshift）instruction、FDC proof 取得。
+
+### FR-18: 宣言的 TX spec による書き込みと coverage 管理
+
+- XRPL トランザクション種別を `TxSpec`（フィールド仕様・検証・unsigned `tx_json`・型付き署名）として宣言的に追加でき、1 つの共通経路（TUI composer「Transaction」`m`・`-x tx <TYPE> Field=value…`・`-x nft-mint` / `-x nft-burn`）で書き込めること。共通経路は既存の書き込みガード（network 照合・mainnet `--yes`・simulate `tesSUCCESS` 必須かつ要求への束縛・Fee 上限・submit 直列化・`--watch` 拒否）を重複実装せず再利用すること。
+- NFT 5 種（NFTokenMint / Burn / CreateOffer / AcceptOffer / CancelOffer）を対象とする。URI は平文 ≤ 256 bytes を hex 化、TransferFee は 0..=50000（0 超は transferable 必須）、id は 64 hex、金額は `XRP:drops` / `CUR:issuer:value`。不可逆な操作（Burn・AcceptOffer）は composer で型付き確認（`BURN` / `ACCEPT`）を必須とすること。Assets タブ `x` で選択 NFT の Burn composer を NFTokenID 入力済みで開けること。
+- 対応状況は `src/coverage.rs` を SSOT として、種別ごとの read / TUI write / CLI write / status（Existing・Spec・Planned・Unsupported）を管理し、ROADMAP.md「XRPL coverage」表および README の件数と自動テストで一致を強制すること（`lazyxrp -x coverage` が表を出力）。
+
 ### FR-13: シークレット管理（Phase 3 準備基盤）
 
 - 署名用資格情報は以下の優先順位で読み込めること：
@@ -138,3 +152,4 @@ Product **requirements** (what). Behavioral design: [`architecture.md`](architec
 
 - Phase 1（読み取り拡張）+ Phase 2（ネットワーク抽象化 + Xahau / Flare multichain）: **実装完了**
 - Phase 3（書き込み系 TX）: **実装済み** — TUI コンポーザー + CLI で Payment / AccountSet / SetRegularKey / OfferCreate / OfferCancel / TrustSet / FXRP Mint / FXRP Execute / AMMDeposit（two-asset）/ AMMWithdraw（全額 or LP 量）/ AccountDelete（TUI は `DELETE` 入力の確認必須）に対応。EscrowCreate / EscrowFinish / EscrowCancel は TUI コンポーザーのみ（時間条件のみ、crypto-condition 非対応）。残りは本番動作確認とエッジケース対応。
+- Phase 3b（宣言的 TX spec、FR-18）: **NFT 5 種を実装** — 共通経路（composer `m` / `-x tx`）。以降の family（Check / Ticket / DepositPreauth / SignerList / PaymentChannel / AMM）は `txspec/` に 1 ファイル + `FAMILIES` に 1 行で追加（`architecture.md` §2.1）。

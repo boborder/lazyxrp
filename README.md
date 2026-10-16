@@ -15,10 +15,12 @@ Watch mode uses **four top-level tabs** (jump with `1`–`4`):
 
 | Tab | Content |
 |-----|---------|
-| **Overview** | Server summary (left) + XRPL oracle + Flare FTSOv2 + FXRP Direct Mint read (right) |
-| **Account** | Wallet composer + account summary + recent transaction history |
+| **Overview** | Server summary (left) + XRPL oracle + Flare FTSOv2 + FXRP Direct Mint read + Flare Smart Account read (right) |
+| **Account** | Wallet composer (incl. Flare Smart Account FXRP transfer / redeem) + account summary + recent transaction history |
 | **Market** | DEX book + Path-Find routes + AMM + trust lines + XRPL oracle + Flare FTSOv2 |
 | **Assets** | NFTs + selected-NFT image preview + account_objects (Objects / Pay channels / Escrows) |
+
+**Write coverage:** **50 / 68** XRPL transaction types can be signed from the TUI and/or `-x` (hand-written: Payment, AccountSet, TrustSet, OfferCreate / Cancel, SetRegularKey, Escrow ×3, AMMDeposit / Withdraw, AccountDelete; declarative specs: NFToken ×5, Check ×3, TicketCreate, DepositPreauth, SignerListSet, Clawback, PaymentChannel ×3, AMMCreate / Vote / Bid / Delete, MPToken ×4, Credential ×3, DID ×2, Oracle ×2, PermissionedDomain ×2, XChain ×6 via the Wallet composer **Transaction** (`m`) and `-x tx`). The full per-type matrix (read / TUI / CLI / planned / unsupported) is the "XRPL coverage" table in [`ROADMAP.md`](ROADMAP.md); `lazyxrp -x coverage` prints it.
 
 ## Requirements
 
@@ -123,9 +125,13 @@ rc book --base XRP --quote USD --issuer <r-issuer>
 | `amm-deposit <AMOUNT> <AMOUNT2>` | Two-asset AMM deposit; both specs are maxima and name the pool (requires signing key; simulate first; `--yes` on mainnet/xahau) |
 | `amm-withdraw <ASSET> <ASSET2> [--lp N]` | AMM withdraw; assets `XRP` / `CUR:issuer`; without `--lp` withdraws all (requires signing key; simulate first; `--yes` on mainnet/xahau) |
 | `account-delete <DEST>` | Delete the signing account and send the remaining XRP to `DEST` (X-address for a tag); irreversible, fee = owner reserve; the account must be ≥ 256 ledgers old and own no objects (requires signing key; simulate first; `--yes` on mainnet/xahau) |
+| `tx <TYPE> [Field=value …]` | Any spec'd transaction type (see `-x coverage`, Status `Spec`), e.g. `tx NFTokenBurn NFTokenID=<64 hex>`; field names are case-insensitive (requires signing key; simulate first; `--yes` on mainnet/xahau) |
+| `nft-mint [--uri TEXT] [--taxon N] [--flags burnable,onlyXRP,transferable] [--transfer-fee 0..50000] [--issuer ADDR]` | NFTokenMint; `--uri` is plain text (stored hex, ≤ 256 bytes); a non-zero fee needs `transferable` (requires signing key; simulate first; `--yes` on mainnet/xahau) |
+| `nft-burn <NFTOKENID> [--owner ADDR]` | NFTokenBurn; irreversible (requires signing key; simulate first; `--yes` on mainnet/xahau) |
+| `coverage` | Print the XRPL transaction coverage table (Markdown; offline) |
 | `faucet [ADDR]` | testnet/devnet only: fund `ADDR`, or generate a wallet locally and fund it (seed printed once; only the address is sent) |
 
-Writes (`send`, `offer-create`, `offer-cancel`, `amm-deposit`, `amm-withdraw`, `account-delete`) wait until the transaction is validated and exit non-zero unless the final result is `tes…` (`--no-wait` returns right after submit). Before signing, the endpoint's `network_id` must match `--network`: a mainnet `XRPL_RPC_SERVER` under `--network testnet` is refused.
+Writes (`send`, `offer-create`, `offer-cancel`, `amm-deposit`, `amm-withdraw`, `account-delete`, `tx`, `nft-mint`, `nft-burn`) wait until the transaction is validated and exit non-zero unless the final result is `tes…` (`--no-wait` returns right after submit). Before signing, the endpoint's `network_id` must match `--network`: a mainnet `XRPL_RPC_SERVER` under `--network testnet` is refused.
 
 **Migrating to 0.3.0:** bare `lazyxrp info` (without `-x`) and `lazyxrp watch` were removed; the bare form exits with an error pointing at `lazyxrp -x info` (use `lazyxrp` with no arguments for the TUI). `send` simulates before signing (same as the TUI), needs `--yes` on mainnet/xahau or an interactive confirmation, and exits non-zero when signing or submission fails.
 
@@ -163,6 +169,8 @@ TUI session: Ctrl-n cycles network (not persisted); custom --server / XRPL_RPC_S
 | xahau-test | `https://xahau-test.net` | `wss://xahau-test.net` |
 
 Flare panels: `[flare] display = full | compact | off` in config (see [`docs/architecture.md`](docs/architecture.md) §6.7).
+
+Flare Smart Accounts: the Overview FXRP panel shows your XRPL address's Flare personal account (FXRP balance, nonce, operator, instruction fees); Wallet composer `a` sends an FXRP transfer / redeem instruction as an XRPL Payment to the operator. Writes are signed only when `getXrplProviderWallets()[0]` equals the operator you pin out of band in `[flare.smart_accounts] expected_operator`.
 
 ## Configuration
 

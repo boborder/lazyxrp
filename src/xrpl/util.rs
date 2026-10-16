@@ -43,7 +43,8 @@ pub(crate) fn json_u32(value: &Value, path: &[&str]) -> u32 {
     let node = json_node_at(value, path);
     node.as_u64()
         .or_else(|| node.as_str().and_then(|s| s.parse().ok()))
-        .unwrap_or_default() as u32
+        .and_then(|n| u32::try_from(n).ok())
+        .unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -85,6 +86,10 @@ mod tests {
         let non_numeric = json!({"a": "foo"});
         assert_eq!(json_u32(&non_numeric, &["a"]), 0);
         assert_eq!(json_u32(&non_numeric, &["x"]), 0);
+        // Out of u32 range is "not a u32" (0), never a silently wrapped value (4294967297 → 1).
+        assert_eq!(json_u32(&json!({"a": 4_294_967_295u64}), &["a"]), u32::MAX);
+        assert_eq!(json_u32(&json!({"a": 4_294_967_297u64}), &["a"]), 0);
+        assert_eq!(json_u32(&json!({"a": "4294967297"}), &["a"]), 0);
     }
 
     /// TC-236: remote text loses controls, bidi overrides and zero-width format chars

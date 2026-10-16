@@ -449,6 +449,31 @@ pub struct FxrpDirectMintInfo {
     pub executor_fee_uba: u128,
 }
 
+/// Flare Smart Account read snapshot for one XRPL owner (`MasterAccountController` views).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SmartAccountInfo {
+    /// XRPL classic address the personal account belongs to.
+    pub xrpl_owner: String,
+    /// `MasterAccountController` address resolved via the Flare contract registry.
+    pub controller: String,
+    /// `getPersonalAccount(xrpl_owner)` (deterministic; valid before deployment).
+    pub personal_account: String,
+    /// Whether the personal account has code on Flare (deployed on its first instruction).
+    pub deployed: bool,
+    /// `getNonce(personal_account)`: memo-instruction nonce.
+    pub nonce: u128,
+    /// `getXrplProviderWallets()`: XRPL operator addresses; instructions go to `[0]`.
+    pub operator_wallets: Vec<String>,
+    /// `getInstructionFee(1)` in XRP drops (FXRP transfer).
+    pub transfer_fee_drops: u64,
+    /// `getInstructionFee(2)` in XRP drops (FXRP redeem).
+    pub redeem_fee_drops: u64,
+    /// FXRP `decimals()` as read from the token (never assumed).
+    pub fxrp_decimals: u8,
+    /// FXRP `balanceOf(personal_account)` in base units (`10^-fxrp_decimals` FXRP).
+    pub fxrp_balance_units: u128,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TxRow {
     pub hash: String,
@@ -615,6 +640,22 @@ pub struct FxrpExecuteDirectMintParams {
     pub skip_mainnet_prompt: bool,
 }
 
+/// Smart Account proof-based FXRP instruction: Payment to the operator with a 32-byte memo.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SmartAccountInstructionParams {
+    /// `false` = `0x01` FXRP transfer, `true` = `0x02` FXRP redeem.
+    pub redeem: bool,
+    /// FXRP base units (transfer; raw on-chain `transfer` amount) or lots (redeem); at most 80 bits.
+    pub value: u128,
+    /// Flare recipient `0x…` (transfer only; ignored for redeem).
+    pub recipient: String,
+    /// Operator XRPL address from `getXrplProviderWallets()[0]` (pinned before signing).
+    pub operator_xrpl: String,
+    /// `getInstructionFee(id)` in XRP drops: the exact Payment `Amount`.
+    pub fee_drops: u64,
+    pub skip_mainnet_prompt: bool,
+}
+
 /// SetRegularKey from the Wallet form.
 /// An empty `regular_key` means clear (remove) the existing regular key.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -719,6 +760,14 @@ pub struct TrustSetSubmitParams {
     pub skip_mainnet_prompt: bool,
 }
 
+/// Any spec'd transaction type (`xrpl::txspec`): canonical field name → raw value.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GenericTxSubmitParams {
+    pub tx_type: String,
+    pub fields: std::collections::BTreeMap<String, String>,
+    pub skip_mainnet_prompt: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PollCommand {
     Account,
@@ -737,6 +786,8 @@ pub enum PollCommand {
     FxrpDirectMintPayment(FxrpDirectMintPaymentParams),
     /// Flare `executeDirectMinting` with pasted FDC proof (C3; gated by config).
     FxrpExecuteDirectMint(FxrpExecuteDirectMintParams),
+    /// Smart Account FXRP transfer / redeem Payment to the operator.
+    SmartAccountInstruction(SmartAccountInstructionParams),
     /// Sign and submit SetRegularKey (wallet form).
     SetRegularKeySubmit(SetRegularKeySubmitParams),
     /// Sign and submit EscrowCreate (wallet form).
@@ -749,6 +800,8 @@ pub enum PollCommand {
     AmmWithdrawSubmit(AmmWithdrawSubmitParams),
     /// Sign and submit AccountDelete (wallet form, after typing DELETE).
     AccountDeleteSubmit(AccountDeleteSubmitParams),
+    /// Sign and submit any spec'd transaction type (wallet "Transaction" composer).
+    GenericTx(GenericTxSubmitParams),
     OfferCreateSubmit(OfferCreateSubmitParams),
     /// `account_offers` for the signing account (Wallet OfferCancel composer).
     AccountOffers,
@@ -788,6 +841,8 @@ pub struct PollContext {
     pub flare_expected_core_vault: Option<String>,
     /// `[flare.fassets] execute` — when false, C3 execute path is refused.
     pub flare_fassets_execute: bool,
+    /// `[flare.smart_accounts] expected_operator` — pinned operator for Smart Account instructions.
+    pub flare_expected_operator: Option<String>,
     /// `[flare] display` — Off skips FTSO/FXRP read fetches (C3 execute URL unaffected).
     pub flare_display: crate::config::FlareDisplay,
     /// Env var name for Flare executor key (`[flare.fassets] evm_key_env`).
@@ -828,6 +883,26 @@ mod tests {
             "524C555344000000000000000000000000000000"
         );
         assert_eq!(pair.pays_issuer(), Some("rIssuer"));
+
+        // XRP quote (any case): currency is the quote itself and there is no issuer,
+        // even though `quote_code`/`issuer` are populated.
+        let xrp = BookPair {
+            base: "rIssuer".into(),
+            quote: "xrp".into(),
+            quote_code: "524C555344000000000000000000000000000000".into(),
+            issuer: "rIssuer".into(),
+            limit: 5,
+        };
+        assert_eq!(xrp.pays_currency(), "xrp");
+        assert_eq!(xrp.pays_issuer(), None);
+
+        // Blank quote_code on an issued quote falls back to the fallback code.
+        let blank = BookPair {
+            quote_code: "  ".into(),
+            quote: "RLUSD".into(),
+            ..xrp
+        };
+        assert_eq!(blank.pays_currency(), FALLBACK_CURRENCY_CODE);
     }
 
     /// TC-085: asset_display_name maps known hex codes to readable names

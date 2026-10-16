@@ -141,6 +141,16 @@ mod tests {
         assert!(!out.contains("FTSO"));
     }
 
+    /// With Flare Off focus never leaves the server panel (combined panel is hidden).
+    #[test]
+    fn overview_off_focus_stays_on_server() {
+        let mut tab = OverviewTab::new("wss://example".into(), FlareDisplay::Off);
+        for action in [Action::FocusNext, Action::FocusPrev, Action::FocusNext] {
+            tab.update(&action).unwrap();
+            assert!(tab.server.is_focused && !tab.combined.is_focused);
+        }
+    }
+
     /// TC-117: Overview Compact keeps split but uses one-line FTSO/FXRP summaries.
     #[test]
     fn overview_compact_uses_one_line_flare_summaries() {

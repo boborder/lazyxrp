@@ -4,7 +4,22 @@
 
 Generated: 2026-05-01 | Scope: Full codebase (`src/`, `install.sh`, `docs/`)
 
-This file tracks **security review findings (S-xxx)** and **implementation risks (R-xxx)** (table below). Invariant IDs (I-1〜I-11) are referenced across `docs/` and defined by the code guards they name (simulate-first, mainnet `--yes`, …).
+This file tracks **security review findings (S-xxx)** and **implementation risks (R-xxx)** (table below). Invariant IDs (I-1〜I-11) are referenced across `docs/` and the code:
+
+| ID | Invariant | Enforced in |
+|----|-----------|-------------|
+| I-1 | 平文 `seed` / `mnemonic` は `Config::new()` で `None` に消し、`secret_seed` / `secret_mnemonic`（`SecretString`）のみ残す | `config.rs` |
+| I-2 | mainnet（`Network::is_production()`）の write は `--yes` または `skip_mainnet_prompt: true` が必須 | `poll.rs` / `submit.rs` の各 submit |
+| I-3 | write は必ず simulate → `tesSUCCESS` → `Sequence`/`Fee` 取得 → sign → submit。simulate なしで署名しない | `poll.rs` / `submit.rs` |
+| I-4 | `XRPL_SEED` / `XRPL_MNEMONIC` は tokio 起動前の単一スレッド `Config::new()` で env から除去 | `config.rs` |
+| I-5 | 設定優先順位: CLI > env > user `config.toml` > 組み込み `config.json5` | `lib.rs` resolve 関数 + `config.rs` |
+| I-6 | 定期 poll は `MIN_POLL_INTERVAL`（10 s）未満にしない | `poll.rs` `drive_poll_loop` |
+| I-7 | `account_tx` の not-found は空リスト（エラーにしない） | `poll.rs` |
+| I-8 | `Tui::drop` は端末を復元し、drop 中に panic しない | `tui.rs` |
+| I-9 | `TAB_TITLES` とパネルの数・順序が一致（TC-060）。パネル追加時は同じ変更で更新 | `app.rs` |
+| I-10 | `TxRow` の `ArcValue` JSON を `Arc::make_mut` しない | `xrpl/types.rs`（規約） |
+| I-11 | 全 RPC は `tokio::time::timeout(RPC_TIMEOUT, …)` で包む | `poll.rs` / `client.rs` |
+| — | 署名は family seed **または** BIP39 mnemonic（`credential_from_secrets`）。mnemonic を seed に変換しない | `signing.rs` |
 
 ## S-xxx ↔ R-xxx cross-reference
 
@@ -23,6 +38,7 @@ This file tracks **security review findings (S-xxx)** and **implementation risks
 | S-015 | R-014 | Plaintext RPC with signing seed |
 | S-016 | R-015 | Issuer and financial input validation |
 | S-017 | R-016 | Endpoint network ≠ selected network at signing time |
+| S-018 | R-017 | Smart Account operator (payment destination) and fee come from one Flare RPC answer |
 
 Risks without a matching S entry (e.g. R-006 mainnet guard bypass, R-008 RPC 429) are tracked in the R-xxx table below and [`test.md`](test.md).
 
@@ -46,6 +62,26 @@ Risks without a matching S entry (e.g. R-006 mainnet guard bypass, R-008 RPC 429
 | R-014 | S-015 | Insecure RPC with signing seed (**mitigated**) |
 | R-015 | S-016 | Unvalidated issuer and financial numeric inputs (**mitigated**) |
 | R-016 | S-017 | Custom endpoint on another network bypasses the `--yes` guard (**mitigated**, TC-203) |
+| R-017 | S-018 | Smart Account instruction Payment to an RPC-supplied operator / fee (**mitigated**, TC-240 / TC-243) |
+| R-018 | — | Spec'd (generic) write path: guards live only in shared helpers; irreversible types must set `confirm` (**mitigated**, TC-088 table / TC-252–255) |
+
+## 2026-10-16 宣言的 TX spec の書き込み面（NFT family、R-018）
+
+- **新しい書き込み面**: `Action::GenericTxSubmit` → `PollCommand::GenericTx` → `submit_generic_transaction`（`-x tx` / `nft-mint` / `nft-burn` は `cli_exec` 経由で同じ `simulate_confirm_submit`）。全 spec'd 種別がこの 1 経路を通るため、ガードは種別ごとに複製せず共有ヘルパだけに置く: `TxSpec::prepare`（フィールド検証・未知フィールド拒否・`Time` を絶対秒に 1 回だけ確定）→ mainnet `--yes`（`run_submit` / `resolve_submit_wallet`）→ `ensure_network` → `account_info` → simulate `tesSUCCESS` かつ要求への束縛（`check_simulate_bound_to_request`）→ Fee 上限 → 署名 → submit、すべて poll の `submit_lock` 下。`--watch` は `Cmd::signs` で拒否。
+- **不可逆操作の確認規則**: 不可逆（NFTokenBurn = NFT 破棄、NFTokenAcceptOffer = 資産移転と支払い）な種別は `TxSpec::confirm` に確認フレーズ（`BURN` / `ACCEPT`）を持ち、TUI composer は `s` で直接 queue せず AccountDelete と同じ type-to-confirm（`DangerConfirm`）を必ず挟む（部分入力は拒否、Esc でフォーム復帰）。CLI は mainnet の確認プロンプト / `--yes` と simulate 結果の表示。**今後の family で不可逆な種別を追加するときは `confirm` を必ず設定する**（設定しない種別は 1 キーで署名まで進む）。
+- **入力の信頼境界**: URI は平文を hex 化するため任意バイト列にならない（≤ 256 bytes）。id は 64 hex・アドレスは checksum・金額は既存の `parse_offer_amount`（0・非有限は拒否）で検証し、composer と poll で同じ `TxSpec::validate` を使う。Assets タブ `x` の prefill は表示中の NFT 行（ノード由来）の `nft_id` だが、フォームの確認と simulate を必ず通る。
+- **残余**: NFT 一覧は watch アカウントのもので署名アカウントとは限らない（所有者が違えば simulate が `tec*` で拒否）。`tfMutable` mint・0 価格オファーは未対応（crate / 共通パーサの制約）。
+- **Account objects family（Check / Ticket / DepositPreauth / SignerListSet / Clawback）**: 資産移転・不可逆・ロックアウトの恐れがある CheckCash（`CASH`）/ SignerListSet（`SIGNERS`：誤った list + master key 無効でアカウントがロック）/ Clawback（`CLAWBACK`）は型付き確認フレーズ必須。SignerEntries は `addr:weight` を検証（≤ 8 件・重み 1..65535・重複なし・quorum ≤ 重み合計）。DepositPreauth の credentials・Clawback の MPT は未対応。
+- **XChain family（XChainCreateBridge / Commit / Claim / AccountCreateCommit）**: ブリッジ新設（削除 tx なし）・資産ロック／バーンを伴う Commit・Claim・AccountCreateCommit は型付き確認（`BRIDGE` / `COMMIT` / `CLAIM`）必須。`XChainBridge` は 4 要素の flat 文字列を厳格検証（checksum・door 相違・XRP/IOU 混在拒否）し、Commit / Claim の Amount は bridge の issue と一致必須。witness attestation は署名を form で作れないため未対応。
+- **Channel / AMM family（PaymentChannelCreate / Fund / Claim、AMMCreate / Bid / Delete）**: XRP ロック・資産移転・LP トークン消費・不可逆な種別は型付き確認（`LOCK` / `FUND` / `CLAIM` / `CREATE` / `BID` / `DELETE`）必須、AMMVote のみ確認なし。Claim の `Signature` / `PublicKey` は貼り付け入力の hex 検証のみで、署名はローカルで生成しない（`CredentialIDs` は未対応）。drops は 1..=1e17 の整数、AuthAccounts は ≤ 4 件・重複なし・署名者自身は拒否。AMMCreate は owner reserve 相当の特別 Fee を burn するため Fee 上限ガード（共通経路）が効く。
+- **MPT / Identity family（MPTokenIssuanceDestroy、CredentialDelete、DIDDelete、OracleDelete、PermissionedDomainDelete）**: 不可逆な削除系は型付き確認（`DESTROY` / `DELETE`）必須。Credential / DID / Oracle の blob は平文を hex 化（任意バイト列を直接入れない）、価格は decimal u64 のみ、Domain ID はゼロハッシュ拒否。MPT の確認不要な Set（lock / unlock）・Authorize は可逆。Vault* と MPT mutation / confidential 系は未対応（`coverage.rs` に理由）。
+
+## 2026-10-16 Smart Account operator pin（S-018）
+
+- **新しい信頼境界**: Flare Smart Accounts の instruction Payment の宛先（`MasterAccountController.getXrplProviderWallets()[0]`）と `Amount`（`getInstructionFee(id)`）は Flare RPC の単一の応答で決まる。悪意ある / 侵害された RPC は自分の XRPL アドレスを operator として返し、ユーザーの XRP と FXRP 操作の意図（32-byte memo）を横取りできる。Core Vault（C2）と同じ構造。
+- **対応**: `[flare.smart_accounts] expected_operator`（運用者が別経路で確認した値）と `flare::check_operator` で完全一致したときのみ署名。未設定・不一致は署名前に拒否（RPC 前、TC-240 / TC-243）。fee は `signing::check_smart_account_fee` で `1..=10 XRP` に限定（0 や桁違いの応答を拒否）。Payment は classic 宛先・`DestinationTag` なし（tag があると direct minting 経路で tag 保有者に credit される）、operator ≠ 署名アカウント。mainnet は `--yes`（TC-088 表に追加）、simulate `tesSUCCESS` 後のみ署名。
+- **残余**: pin は運用者の責任（誤った値を設定すれば誤った宛先に送る）。operator の実行（FDC 証明 + `executeInstruction`）は XRPL 外で、lazyxrp は結果を検証しない（TUI は「personal account の FXRP 残高を確認」と案内）。`getPersonalAccount` / 残高は表示用で署名可否には使わない（残高超過の transfer だけ composer で拒否）。
+- **単位（FXRP の `decimals()`）**: transfer の value は FXRP の最小単位そのもの（コントラクトは換算せず `transfer(to, value)` に渡す）。composer は 10 進の額を、同じ Flare RPC から読んだ `decimals()` で整数演算のみで変換する（桁数超過・`decimals > 18`・未取得は拒否、TC-247）。**残余**: `decimals()` と残高は operator と同じ単一 RPC の応答なので、悪意ある RPC は桁をずらした額を送らせうる。ただし送金額はユーザー自身の personal account の FXRP に限られ、宛先はユーザーが入力した受取先で、operator だけが pin で固定される（RPC の `decimals()` / 残高は pin 対象外。信頼する RPC を選ぶ前提は S-015 と同じ）。
 
 ## 2026-10-11 endpoint network 照合（S-017）
 

@@ -10,6 +10,7 @@ mod parse;
 mod poll;
 mod submit;
 pub mod toml;
+pub mod txspec;
 mod types;
 mod util;
 mod ws;

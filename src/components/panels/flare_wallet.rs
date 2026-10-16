@@ -161,6 +161,19 @@ mod tests {
         let out = render_flare_wallet_panel(&mut panel);
         assert!(out.contains("12.5000"));
         assert!(out.contains("100.000000"));
-        assert!(out.contains("execute"));
+        assert!(out.contains("execute on  key unset"), "{out}");
+
+        // Flipped flags render flipped, so the two states are not conflated.
+        panel
+            .update(&Action::FlareWalletBalance(Box::new(FlareWalletSummary {
+                address: "0xabcdef0123456789abcdef0123456789abcdef01".into(),
+                native_balance_display: "12.5000".into(),
+                fxrp_balance_display: "100.000000".into(),
+                execute_enabled: false,
+                executor_key_configured: true,
+            })))
+            .unwrap();
+        let out = render_flare_wallet_panel(&mut panel);
+        assert!(out.contains("execute off  key set"), "{out}");
     }
 }

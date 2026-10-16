@@ -45,7 +45,7 @@ cargo deny check
 | TC-018 | P2 | `src/xrpl/parse.rs` | server_info/fee — parse response into summary structs |
 | TC-019-022 | P2 | `src/config.rs` | parse_style — empty yields default, foreground/background mapping, modifiers combined, gray==grey |
 | TC-023 | P2 | `src/config.rs` | extract_color_and_modifiers — extracts modifiers and color |
-| TC-024-025 | P2 | `src/config.rs` | parse_color — RGB shorthand; unknown returns None |
+| TC-024-025 | P2 | `src/config.rs` | parse_color — RGB shorthand; unknown returns None; out-of-range `rgb`/`grayNN`/`bright colorNN` return None (no u8 overflow) |
 | TC-026 | P0 | `src/config.rs` | Config::new — loads default keybindings |
 | TC-027-029,031-032 | P1 | `src/config.rs` | parse_key_event — modifier composition, case insensitivity, invalid keys error |
 | TC-033-035, TC-092 | P1 | `src/config.rs` | Config source precedence — file overrides default, `XRPL_RPC_SERVER` env overrides file, XDG resolution, `~/.config` fallback |
@@ -53,8 +53,8 @@ cargo deny check
 | TC-037 | P0 | `src/network.rs` | Network::default — is Mainnet |
 | TC-038-040 | P0 | `src/network.rs` | Network::from_str — roundtrip mainnet/testnet/devnet, case-insensitive, unknown errors |
 | TC-041 | P1 | `src/network.rs` | Network::is_production — correct boolean |
-| TC-042 | P0 | `src/lib.rs` | network resolution — `--network` overrides `XRPL_NETWORK` (merged by `Config::new`) |
-| TC-043 | P0 | `src/lib.rs` | resolve_rpc_url — mainnet default when no CLI/env/config override |
+| TC-042 | P0 | `src/config.rs` | `XRPL_NETWORK` overrides the file's network in `Config::new`; unparsable / `" testnet"` values are ignored |
+| TC-043 | P0 | `src/lib.rs` | resolve_rpc_url/resolve_ws_url — precedence CLI > env > config file > network default |
 | TC-044 | P1 | `src/lib.rs` | resolve_ws_url — CLI --ws-server is top priority |
 | TC-045-046 | P1 | `src/signing.rs` | credential_from_secrets — none / seed / mnemonic / both-rejected outcome matrix |
 | TC-047 | P1 | `src/signing.rs` | prompt_production_confirmation — testnet/devnet skips |
@@ -71,17 +71,15 @@ cargo deny check
 | TC-058 | P1 | `src/cli.rs` | CLI — invalid parameters error; removed `watch` subcommand no longer parses |
 | TC-059 | P2 | `src/xrpl/cli_exec.rs` | CLI — invalid classic account address fails before RPC connect |
 | TC-060 | P3 | `src/app.rs` | Watch mode — tab cycling/quit/refresh covered by TC-061–065 (former 4-tab construction test removed: asserted constructor defaults) |
-| TC-061 | P1 | `src/app.rs` | Watch mode — Quit action stops background tasks |
-| TC-062-063 | P2 | `src/app.rs` | Watch mode — RefreshAccount/RefreshBook send PollCommand |
+| TC-061 | P1 | `src/app.rs` | Watch mode — `q` key sets `should_quit` |
+| TC-062-063 | P2 | `src/app.rs` | Watch mode — `r`/`b` send Account/Book PollCommand; a second press within 500 ms is debounced |
 | TC-064 | P2 | `src/app.rs` | Watch mode — TabNext/TabPrev wrap around panels |
 | TC-065 | P3 | `src/app.rs` | Watch mode — HelpOverlay toggles on `?` and Esc |
 | TC-066 | P1 | `src/xrpl/cli_exec.rs` | CLI — `account-status` against local JSON-RPC |
-| TC-067 | P2 | `src/xrpl/cli_exec.rs` | CLI — `send` manual live-network check only (`cli_send_live_manual_only`; requires `XRPL_SEED`) |
 | TC-068 | P1 | `src/xrpl/client.rs` | XRPL RPC error — not found is not silently swallowed |
 | TC-069 | P1 | `src/xrpl/parse.rs` | XRPL submit response — requires `tesSUCCESS` and hash |
 | TC-070 | P1 | `src/xrpl/types.rs` | book_offers — issued quote uses `currency_code` |
 | TC-071-072 | P1 | `src/xrpl/parse.rs` | account_objects — empty array parses; mixed Check / Ticket / MPT / PayChannel / Escrow |
-| TC-073 | P1 | `src/xrpl/parse.rs` | ledger object filters — tab visibility helpers |
 | TC-076 | P1 | `src/cli.rs` | CLI — `--self-uninstall` flag parses; backup path helper |
 | TC-077-079 | P2 | `src/components/panels/tx_history.rs` | TxHistoryPanel — filter by tx_type / hash partial; empty filter shows all |
 | TC-080-082 | P2 | `src/xrpl/parse.rs` | ripple_path_find — alternatives, empty alternatives, `source_amount` as XRP drops string |
@@ -89,7 +87,7 @@ cargo deny check
 | TC-084 | P2 | `src/xrpl/format.rs` | path_find_rows_from — display rows; cheapest-first ordering |
 | TC-085-086 | P2 | `src/xrpl/types.rs` | asset_display_name — known hex codes; unknown passthrough |
 | TC-087 | P2 | `src/xrpl/poll.rs` | Poll trigger — coalesces rapid bursts |
-| TC-088 | P0 | `src/xrpl/submit.rs` | Mainnet guard: all submit paths reject without `--yes` (R-006) |
+| TC-088 | P0 | `src/xrpl/submit.rs` | Mainnet guard: all submit paths reject without `--yes` (R-006); table includes Smart Account instruction |
 | TC-089/TC-144 | P0 | `src/xrpl/parse.rs`, `src/xrpl/poll.rs` | account_tx result mapping — not-found → empty history (I-7); action follows append flag (Ok/Err × append matrix) |
 | TC-093 | P1 | `src/components/shared/tx_detail/mod.rs` | TxDetail render cache — invalidated on open |
 | TC-094 | P2 | `src/components/shared/tx_detail/parsers.rs` | TxDetail parser registry — required types, no duplicates |
@@ -109,20 +107,70 @@ cargo deny check
 | TC-233 | P1 | `src/components/panels/wallet.rs` | AccountDelete composer: `s` never queues directly — invalid destination flashes, valid one opens `DELETE` type-to-confirm; Esc keeps the destination; partial word refused; `DELETE` + Enter queues the trimmed destination |
 | TC-234 | P1 | `src/lib.rs` | `--watch -x <write>` (send / offer-cancel / offer-create / amm-deposit / amm-withdraw / account-delete) refused before any RPC; reads, faucet and the TUI path still resolve |
 | TC-235 | P1 | `src/lib.rs` | `enter_watch_mode` drops seed, mnemonic (plaintext + secret) and Flare EVM key from `Config`, returns the key's address (None without a key) |
-| TC-236 | P1 | `src/xrpl/util.rs` | `sanitize_text` (TUI server panel + `sanitize_remote` CLI/error text) strips controls, bidi overrides (`U+202A–202E`, `U+2066–2069`, `U+061C`) and zero-width format chars; ordinary Unicode kept, cap counts chars |
+| TC-236 | P1 | `src/xrpl/util.rs`, `src/components/panels/server_detail.rs` | `sanitize_text` (TUI server panel, validator detail popup — domain, TOML text, attestation, errors, Content-Type — and `sanitize_remote` CLI/error text) strips controls, bidi overrides (`U+202A–202E`, `U+2066–2069`, `U+061C`) and zero-width format chars; ordinary Unicode kept, cap counts chars |
 | TC-237 | P1 | `src/xrpl/nft_image.rs` | Redirect hop https → http refused (NFT image + `xrp-ledger.toml`); scheme-relative / relative hops stay https; http → https allowed. SSRF table adds `::a.b.c.d`, NAT64, 6to4, `fec0::/10`, `0.0.0.0/8` (public NAT64 / 6to4 still allowed) |
 | TC-238 | P2 | `src/components/shared/tx_detail/mod.rs` | Ripple-epoch time from a tx field saturates instead of overflowing; `u64::MAX` renders the `----` placeholder |
+| TC-239 | P0 | `src/signing.rs` | Smart Account payment reference (32 bytes): id at byte 0, walletId at 1, value at 2..12 (10 bytes big-endian), recipient at 12..32; pinned to the reference-encoder vectors (transfer value 10 `0x01 00 …0a f548…131d`, value 1234567 `…12d687 f548…131d`, redeem 3 `0x02 00 …03` + zero tail) and distinct-byte offsets; value 0 / ≥ 2^80 refused (2^80−1 fits), recipient malformed / zero address refused, case + whitespace normalized; `check_smart_account_fee` bounds 1..=10 XRP; `parse_token_amount`: exact integer decimal → base units for decimals 0 / 6 / 8 / 18, too many fraction digits / decimals > 18 / `.5` / `1.` / sign / exponent / u128 overflow refused |
+| TC-240 | P0 | `src/flare.rs` | `check_operator`: RPC operator signed only on exact match with `[flare.smart_accounts] expected_operator`; mismatch / unset / blank pin → refused (R-017) |
+| TC-241 | P1 | `src/flare.rs` | `fetch_smart_account_info` against a local JSON-RPC mock: registry → controller / AssetManager, personal account, nonce, operators, both fees, FXRP balance (base units) + `decimals()` (6 / 8 / 0 carried through; 19 → error), `eth_getCode` → deployed flag; undeployed (`0x`); out-of-range uint256 → error (no panic); malformed XRPL owner never reaches the RPC; `format_token_units` exact for any decimals |
+| TC-242 | P0 | `src/xrpl/submit.rs` | Smart Account transfer + redeem vs local JSON-RPC: `server_info → account_info → simulate → submit` order; simulate and signed blob = Payment to the pinned operator, `Amount` = instruction fee (exact), no `DestinationTag`, one Memo whose `MemoData` decodes to the 32-byte instruction (id, wallet 0, value, recipient / zero) |
+| TC-243 | P0 | `src/xrpl/submit.rs` | Smart Account refusals happen before any RPC: pin unset / blank / mismatched, fee 0 or > 10 XRP, zero / malformed recipient, value 0 / over 10 bytes, non-address operator, X-address operator (tag), operator = signer; exactly one error action each (R-017) |
+| TC-244 | P1 | `src/components/panels/wallet.rs` | Smart Account composer: bad / zero recipient, zero / empty / over-balance amount, non-numeric / zero lots, read for another account → flash only; valid transfer / redeem queue exact params (FXRP decimal → base units via the read `decimals()`, operator + fee from the read); picker `a`, `i` flips transfer ↔ redeem, typing + `s`, Esc → picker row 13; composer refuses to open without a read; render shows operator, pin status, fee, balance |
+| TC-245 | P1 | `src/components/panels/fxrp_direct_mint.rs` | FXRP panel renders `SmartAccountInfo` values (personal account, FXRP balance formatted with `fxrp_decimals`, nonce + deployed / not deployed, operator, both fees); control characters in remote strings are stripped; no rows before the first `SmartAccountInfo` |
+| TC-246 | P2 | `src/config.rs` | `[flare.smart_accounts] expected_operator` parses; unset by default |
+| TC-247 | P0 | `src/components/panels/wallet.rs` | Smart Account composer follows the read `decimals()` (8 and 0, not an assumed 6): `12.5` → 1_250_000_000 units at 8 decimals; exact balance accepted, balance + 1 unit refused; more fraction digits than decimals refused; decimals > 18 and no read → never queues |
 | TC-104 | P1 | `src/xrpl/parse.rs`, `src/components/shared/fps.rs` | account_tx marker survives parsing; tick-rate label refreshes after 1s |
 | TC-105 | P2 | `src/xrpl/client.rs` | Local HTTP 429 retried before success |
+| TC-248 | P0 | `src/coverage.rs` | XRPL coverage drift: the ROADMAP.md table between the `xrpl-coverage` markers equals `rows()` (type, family, read, TUI, CLI, status) and README states `**N / M**` writable / total; registry consistent (no type listed twice, every Spec type has a tx_detail parser, Existing rows are wired) |
+| TC-249 | P0 | `src/xrpl/txspec/{mod,nft}.rs` | Field validation tables per NFT type (accept / reject; TransferFee 50000 ok / 50001 reject and needs transferable; URI 256 / 257 bytes incl. multibyte; ids 63 / 64 / 65 hex; taxon u32 max; 500 / 501 offers; sell / buy Owner rules; BrokerFee needs both offers; unknown field / flag); registry well-formed; CLI `Field=value` parsing; relative `Time` resolved once in `prepare` |
+| TC-250 | P0 | `src/xrpl/txspec/nft.rs` | Unsigned `tx_json` shape per NFT type (hex URI, flags bits, Amount drops / IOU object, Account / Sequence) |
+| TC-251 | P0 | `src/xrpl/txspec/nft.rs` | Signed blob per NFT type decodes with distinct Sequence 41 / Fee 13 / LastLedgerSequence 987654 (swapped args fail); builder applies the crate's model rules |
+| TC-252 | P0 | `src/xrpl/submit.rs` | Generic submit vs local RPC mock: method order `server_info` → `account_info` → `simulate` → `submit`; signed Sequence 7 / Fee 15 / LLS 80,000,020 from simulate; relative Expiration fixed once |
+| TC-253 | P0 | `src/xrpl/submit.rs` | Generic submit stops at a `tec*` simulate: no `submit` call, Err action (fails when the `tesSUCCESS` guard is removed) |
+| TC-254 | P0 | `src/xrpl/cli_exec.rs` | `-x tx` / `nft-mint` / `nft-burn`: simulate → confirm → submit, `--no-wait`, refusals (bad field, unknown type, mainnet without `--yes`) never reach RPC, simulate stop |
+| TC-255 | P0 | `src/components/panels/wallet.rs` | Transaction composer: form generated from field specs, inline validation, single queued `GenericTxSubmit`; burn needs typed `BURN` (partial refused, Esc restores the form) and opens prefilled; help / inline errors rendered |
+| TC-256 | P1 | `src/app.rs`, `src/components/tabs/nft.rs` | Assets `x` opens the burn composer with the selected NFTokenID (not on other tabs; none selected → no-op) |
+| TC-260 | P0 | `src/xrpl/txspec/checks_misc.rs` | Field validation tables for CheckCreate / CheckCash / CheckCancel / TicketCreate / DepositPreauth / SignerListSet / Clawback: TicketCount 0 / 1 / 250 / 251, id 63 / 64 / 65, exactly-one rules, signers 8 / 9, weight 0 / 65535 / 65536, quorum vs total weight, delete form, XRP clawback; typed confirm phrases only on CheckCash / SignerListSet / Clawback |
+| TC-261 | P0 | `src/xrpl/txspec/checks_misc.rs` | Unsigned `tx_json` shape per type (ids upper-cased, nested `SignerEntry` objects, delete form omits `SignerEntries`, no `Fee` / `LastLedgerSequence`) |
+| TC-262 | P0 | `src/xrpl/txspec/checks_misc.rs` | Signed blob per type decodes with distinct Sequence 41 / Fee 13 / LastLedgerSequence 987654; builder applies model rules (signer list containing the signer, self-clawback) |
+| TC-263 | P0 | `src/xrpl/txspec/checks_misc.rs` | Generic submit of TicketCreate vs local RPC mock: invalid form never reaches RPC; `server_info` → `account_info` → `simulate` → `submit` with simulate-chosen Sequence / Fee / LLS in the blob |
+| TC-280 | P0 | `src/xrpl/txspec/channel_amm.rs` | PaymentChannelCreate / Fund validation: drops 1 / 1e17 / 1e17+1 / 0 / fractional / `XRP:` prefix, SettleDelay u32 max / +1, PublicKey shape (66 hex, `ED` / `02` / `03` only), channel id 63 / 64, `CancelAfter` Time, required fields, unknown field |
+| TC-281 | P0 | `src/xrpl/txspec/channel_amm.rs` | PaymentChannelClaim cross-field rules: Signature needs Amount / Balance / PublicKey, Balance ≤ Amount, renew + close exclusive, Balance required unless close / renew, signature length 144 / 146, odd / non-hex refused |
+| TC-282 | P0 | `src/xrpl/txspec/channel_amm.rs` | AMMCreate / Vote / Bid / Delete validation: TradingFee 1000 / 1001, identical amounts / assets refused, asset grammar (`XRP` / `CUR:issuer`), BidMin ≤ BidMax and same LP token, XRP bid refused, AuthAccounts 4 / 5 / duplicates / bad address |
+| TC-283 | P0 | `src/xrpl/txspec/channel_amm.rs` | Unsigned `tx_json` per type (drops strings, id / key / signature upper-cased, claim flag bits, `Asset` objects, nested `AuthAccounts`, optional fields omitted, no `Fee` / `LastLedgerSequence`) |
+| TC-284 | P0 | `src/xrpl/txspec/channel_amm.rs` | Signed blob per type decodes with distinct Sequence 41 / Fee 13 / LastLedgerSequence 987654 and the typed fields; sender as its own AuthAccount refused at build |
+| TC-285 | P0 | `src/xrpl/txspec/channel_amm.rs` | Typed confirm phrases `LOCK` / `FUND` / `CLAIM` / `CREATE` / `BID` / `DELETE`; none on AMMVote |
+| TC-286 | P0 | `src/xrpl/txspec/channel_amm.rs` | Generic submit of PaymentChannelCreate + AMMDelete vs local RPC mock: invalid form never reaches RPC; `server_info` → `account_info` → `simulate` → `submit`; relative `CancelAfter` fixed once (simulate = blob), simulate-chosen Sequence / Fee / LLS in the blob |
+| TC-320 | P0 | `src/xrpl/txspec/xchain.rs` | Flat `XChainBridge` grammar (`lockDoor,lockIssue,issueDoor,issueIssue`): 4 parts, checksummed distinct doors, `XRP` / `CUR:issuer` issues, cross-currency pairing refused |
+| TC-321 | P0 | `src/xrpl/txspec/xchain.rs` | Field validation tables for the 6 XChain types: drops 0 / max / max+1, claim id hex 1..=16 digits and non-zero, required fields, XRP-only minimum, modify needs a change, Amount must be a bridge issue, account-create needs XRP-XRP |
+| TC-322 | P0 | `src/xrpl/txspec/xchain.rs` | Unsigned `tx_json` per XChain type (bridge object, drops strings, modify flag `0x10000`, claim id upper-cased, no `Fee` / `LastLedgerSequence`; IOU bridge issues as `{currency, issuer}`) |
+| TC-323 | P0 | `src/xrpl/txspec/xchain.rs` | Signed blob per XChain type decodes with distinct Sequence 41 / Fee 13 / LastLedgerSequence 987654 and the bridge object |
+| TC-324 | P1 | `src/xrpl/txspec/xchain.rs` | Builder applies the crate model rules: CreateBridge / ModifyBridge signer must be a door account |
+| TC-325 | P0 | `src/xrpl/txspec/xchain.rs` | Typed confirm phrases: `BRIDGE` (CreateBridge), `COMMIT` (XChainCommit / AccountCreateCommit), `CLAIM` (XChainClaim); none on Modify / CreateClaimID |
+| TC-329 | P1 | `src/components/shared/tx_detail/parsers.rs`, `src/xrpl/txspec/xchain.rs` | Tx History detail parser for all 6 XChain types (coverage "read"); bridge rendered in the flat `lockDoor,lockIssue,issueDoor,issueIssue` form with claim id |
+| TC-326 | P2 | `src/xrpl/txspec/xchain.rs` | `-x tx` `Field=value` parsing resolves `XChainBridge` / `XChainClaimID` case-insensitively |
+| TC-327 | P0 | `src/xrpl/txspec/xchain.rs` | Generic submit of XChainCommit vs local RPC mock: invalid bridge never reaches RPC; `server_info` → `account_info` → `simulate` → `submit`, bridge + normalised claim id in simulate request and signed blob |
+| TC-328 | P1 | `src/xrpl/txspec/xchain.rs` | IOU bridge (issued-currency issues) signs and decodes |
+| TC-300 | P0 | `src/xrpl/txspec/identity.rs` | Identity family field validation tables: CredentialType 64/65 bytes, URI 128/129, DID fields 256/257, at-least-one rules, Oracle id / provider / asset class / series 10/11, domain id (length, hex, zero hash), AcceptedCredentials 10/11 |
+| TC-301 | P0 | `src/xrpl/txspec/mpt.rs` | MPT family field validation tables: TransferFee 50000/50001, AssetScale 255/256, MaximumAmount 0 / 1 / i64::MAX / +1, metadata 1024/1025, id 47/48/49, transfer-fee / domain / lock-unlock combinations |
+| TC-302 | P0 | `src/xrpl/txspec/identity.rs` | Unsigned `tx_json` per identity type: text fields hex-encoded, `PriceDataSeries` → `PriceData` entries (decimal price → hex, scale), `AcceptedCredentials` → `Credential` entries, ids upper-cased, no Fee / LastLedgerSequence |
+| TC-303 | P0 | `src/xrpl/txspec/mpt.rs` | Unsigned `tx_json` per MPT type: flag bits, metadata hex, ids upper-cased, unsupported optional fields absent |
+| TC-304 | P0 | `src/xrpl/txspec/identity.rs` | Signed blobs of all 9 identity types decode with distinct Sequence / Fee / LastLedgerSequence and a signature |
+| TC-305 | P0 | `src/xrpl/txspec/mpt.rs` | Signed blobs of all 4 MPT types decode with distinct Sequence / Fee / LastLedgerSequence and a signature |
+| TC-306 | P0 | `src/xrpl/txspec/identity.rs`, `src/xrpl/txspec/mpt.rs` | Typed confirm phrases: `DELETE` on CredentialDelete / DIDDelete / OracleDelete / PermissionedDomainDelete, `DESTROY` on MPTokenIssuanceDestroy; none on the other types |
+| TC-307 | P1 | `src/xrpl/txspec/identity.rs`, `src/xrpl/txspec/mpt.rs` | Builder applies the crate model rules: OracleSet without a series refused; MPTokenIssuanceSet / MPTokenAuthorize `Holder` = signer refused |
+| TC-308 | P1 | `src/xrpl/txspec/identity.rs` | Flat grammars: `BASE/QUOTE=price@scale` (delete form, u64 bounds, scale 20/21, duplicate / base = quote) and `rIssuer:Type` credentials (hex-encoded type, duplicates, bad issuer, size) |
+| TC-309 | P0 | `src/xrpl/txspec/identity.rs` | Generic submit of DIDSet vs local RPC mock: empty form never reaches RPC; `server_info` → `account_info` → `simulate` → `submit`, hex-encoded URI in simulate request and signed blob |
+| TC-310 | P0 | `src/xrpl/txspec/mpt.rs` | Generic submit of MPTokenIssuanceCreate vs local RPC mock: transfer fee without canTransfer never reaches RPC; flags / metadata / Sequence / Fee / LastLedgerSequence in simulate request and signed blob |
+| TC-088 / 190 / 234 | P0 | (extended) | TC-088 mainnet-gate table gains `generic_nft_mint` / `generic_nft_burn`; TC-190 `spec_subcommands_parse`; TC-234 `--watch` refuses `tx` / `nft-mint` / `nft-burn`, still allows `coverage` |
 | TC-106 | P1 | `src/xrpl/submit.rs`, `src/app.rs` | Submit failure emits error + account resync; user actions mark dirty |
 | TC-107 | P1 | `src/xrpl/submit.rs`, `src/app.rs` | Closed action channel returns failure without panic; ticks redraw |
 | TC-108 | P1 | `src/app.rs` | Dirty-render — `run()` draws once per loop iteration when `needs_draw` (`draw_frame`: clears dirty, counts toward FPS). No automated test (needs a real terminal): smoke via PTY — splash and main UI must appear without a resize |
 | TC-109 | P2 | `src/components/tabs/nft.rs` | NFT with URI emits `NftImageRequest` |
 | TC-110 | P2 | `src/components/tabs/nft.rs` | NFT without URI emits no preview request |
-| TC-111 | P1 | `src/network.rs` | Xahau networks parse, resolve endpoints, and guard writes |
+| TC-111 | P1 | `src/network.rs` | Every network resolves distinct `https://`/`wss://` endpoints (xahau included) |
 | TC-112 | P2 | `src/network.rs` | serde roundtrip for all networks including xahau variants |
-| TC-113 | P2 | `src/config.rs` | FlareNetwork parses case-insensitively, defaults to Flare, presets per chain |
-| TC-114 | P2 | `src/config.rs` | FlareDisplay parses and defaults to full |
+| TC-113-114 | P2 | `src/config.rs` | `[flare]` `network`/`display` load from a config file (coston2 preset URL) and default to Flare/Full |
 | TC-115 | P1 | `src/app.rs` | NetworkSwitchCycle updates `app.network`, net_tx, and StatusBar badge padding |
 | TC-116 | P2 | `src/components/tabs/overview.rs` | Overview Off omits combined Flare panel |
 | TC-117 | P2 | `src/components/tabs/overview.rs` | Overview Compact uses one-line FTSO/FXRP summaries (44/56 split kept) |
@@ -135,7 +183,7 @@ cargo deny check
 | TC-124 | P2 | `src/flare.rs` | Flare registry cache — addresses stored per RPC URL |
 | TC-125 | P1 | `src/cli.rs` | CLI `--network` accepts `xahau` / `xahau-test` (rejects clap-default `xahau-testnet`) |
 | TC-126 | P1 | `src/cli.rs` | `--allow-insecure-rpc` defaults off; flag enables TUI and `rp` |
-| TC-127 | P1 | `src/config.rs` | Config file `network = "xahau-test"` loads XahauTest |
+| TC-127 | P1 | `src/config.rs` | Config file `network = "xahau-test"` loads XahauTest (merged with TC-042 test) |
 | TC-128 | P2 | `src/components/shared/theme.rs` | DESIGN.md frontmatter `colors.*` hex values match `theme.rs` constants |
 | TC-129 | P1 | `src/components/panels/wallet.rs` | Fxrp proof preview truncates multibyte JSON by chars (byte-slice panic regression) |
 | TC-130 | P1 | `src/components/panels/wallet_keys.rs` | `payment_edit_keys` input filters — IOU currency ≤3 chars, amount digits + single dot, destination graphic ASCII |
@@ -166,7 +214,7 @@ cargo deny check
 | TC-157 | P1 | `src/xrpl/cli_exec.rs` | All read-only CLI commands succeed against a deterministic local JSON-RPC server |
 | TC-158 | P1 | `tests/cli_smoke.rs` | `lazyxrp` and `rp` binaries parse argv, return exit status, and render local-RPC output |
 | TC-159 | P2 | `src/components/tabs/assets.rs` | Assets focus cycles NFT → objects → pay channels → escrows in both directions |
-| TC-160 | P2 | `src/components/panels/account.rs`, `src/components/panels/book.rs` | Account/Book panels render loading, empty, and populated states |
+| TC-160 | P2 | `src/components/panels/account.rs`, `src/components/panels/book.rs` | Account panel renders loading and populated states; Book panel also renders its empty state |
 | TC-161 | P2 | `src/components/panels/amm.rs` | AMM panel renders loading and populated pool summary |
 | TC-162 | P2 | `src/components/panels/oracle.rs` | Oracle panel renders not-configured and price-table states |
 | TC-163 | P2 | `src/components/panels/trust_lines.rs` | Trust-lines panel renders loading, empty, and populated states |
@@ -177,8 +225,8 @@ cargo deny check
 | TC-168 | P3 | `src/components/panels/wallet_keygen.rs` | Keygen popup — renders nothing without keygen result; shows seed/address/pubkey + offline warning |
 | TC-169 | P3 | `src/components/panels/server_detail.rs` | Validator detail — identity + dUNL + fetching state, verified TOML with rotated master + raw dump, missing manifest + TOML error state |
 | TC-170 | P3 | `src/components/tabs/account_wallet.rs` | Wallet detection — seed-configured, mnemonic-configured, and no-signing-config branches |
-| TC-171 | P3 | `src/components/shared/splash.rs` | Splash helpers — `trailing_dots` cycle, `splash_art_column` centering/width edges, `splash_ascii_lines_for_height` fits/tight |
-| TC-172 | P2 | `src/flare.rs` | FTSO feed normalization — trims, drops empties, maps `FXRP/USD` → `XRP/USD`, dedups preserving order; batched `getFeedsById` fetch with fee-aware retry; unknown feed fails cleanly (live) |
+| TC-171 | P3 | `src/components/shared/splash.rs` | Splash helpers — `splash_art_column` centering/width edges, `splash_ascii_lines_for_height` fits/tight |
+| TC-172 | P2 | `src/flare.rs` | FTSO feed normalization — trims, drops empties, maps `FXRP/USD` → `XRP/USD`, dedups preserving order. Batched `getFeedsById` fetch with fee-aware retry and unknown-feed failure are covered only by `#[ignore]` live tests |
 | TC-173 | P2 | `src/xrpl/dunl.rs`, `src/xrpl/poll.rs` | dUNL cache — stale-on-error serves cached summary during 60 s retry cooldown, none after clear; tab gates — account panels poll only on Account tab (market/assets gates unchanged) |
 | TC-174 | P2 | `src/components/shared/status_bar.rs` | Status bar health — staleness-aware XRPL chip (STALE after 30 s, `server_info` error = OFFLINE), flare dot (enabled/failed/stale), dUNL data-age marker |
 | TC-175 | P1 | `src/lib.rs` | Flare RPC URL — `http://` rejected without `--allow-insecure-rpc`; refused for signing even with it |
@@ -254,12 +302,14 @@ cargo deny check
 | TC-142–143 | — | §3 public-network politeness | — |
 | TC-144–145 | — | §3 poll loop | — |
 | TC-146–147 | NFR (SSRF) | §3 SSRF fetch guards | — |
+| TC-248–256 | FR-18 | §2 Transaction composer, §2.1 txspec + coverage | §6 composer `m`, NFT `x` |
 | TC-148–149 | — | §3 public-network politeness | — |
 | TC-150 | — | §1 self-uninstall | — |
 | TC-151–152 | — | §5.4 ledger objects, §5.2 tx detail | §4 Assets / tx detail |
 | TC-153–165 | — | §5.1 Assets panels, §5.2 tx history, §4 CLI | §4 Assets tx history |
 | TC-166–171 | — | §2 address guards, §3 dUNL | §5 (splash) |
 | TC-172–174 | — | §3 public-network politeness | §5 Status bar |
+| TC-239–247 | FR-17 | §6.9 Flare Smart Accounts, §2 wallet composer | §4 Overview FXRP rows, §6 composer `a` |
 
 ## Risk coverage
 
@@ -269,10 +319,15 @@ cargo deny check
 | R-007 config merge precedence | TC-033-035/TC-092 `config_source_precedence`, TC-036 | `src/config.rs` |
 | R-001 seed priority chain | TC-045/046/049 `credential_from_secrets` + env override | `src/signing.rs`, `src/config.rs` |
 | R-016 endpoint network ≠ selected network | TC-203 `endpoint_network_id_must_match` + CLI/TUI refusal | `src/network.rs`, `src/xrpl/cli_exec.rs`, `src/xrpl/submit.rs` |
+| R-017 Smart Account operator / fee from one RPC answer | TC-240, TC-243 (`check_operator`, `smart_account_instruction_refusals_never_reach_rpc`); mainnet gate TC-088 | `src/flare.rs`, `src/xrpl/submit.rs` |
 
 ## Testnet E2E
 
 **Automated (opt-in):** `mise run e2e-testnet` (`tests/testnet_e2e.rs`, `#[ignore]`, not in CI): `-x faucet` ×2 → `send` → `offer-create` → `offers` → `offer-cancel` → `offers` = `[]`, every write `Validated: tesSUCCESS`. Run before each release. Passed 2026-10-11 (≈ 27 s).
+
+**NFT mint → burn (opt-in, `testnet_nft_mint_burn_validate`, same file):** faucet account → `nft-mint --taxon 4242 --flags burnable,transferable --transfer-fee 500` → `nfts` shows it → `nft-burn <id>` → `nfts` empty, all `Validated: tesSUCCESS`. See the run note below.
+
+**Run note (2026-10-16):** on testnet, 12 attempts stopped at the first write's simulate with `[XRPL-11] Fee of … exceeds the requested tx limit of 100`. Cause measured, not in lazyxrp: the `fee` RPC reported `open_ledger_fee` 6509–27343 drops (base 10, `load_factor` ≈ 501, ledger 5651 txs vs expected 4953), and a bare `simulate` of an AccountSet sent outside lazyxrp fails identically; `simulate` ignores `fee_mult_max`, so only an explicit `Fee` passes. Re-run on **devnet** (quiet, open-ledger fee 1 drop) via `LAZYXRP_E2E_NETWORK=devnet mise run e2e-testnet`. Run in parallel, the mint got `telCAN_NOT_QUEUE` once, so the task now passes `--test-threads=1`; the full task then passed (2 passed, 40 s): send / offer-create / offer-cancel and NFT mint → `nfts` → burn → `nfts` empty, every write `Validated: tesSUCCESS`. Earlier single-test run: mint `75786BFA29DC04B4834F15546D3EB7112CE5D6B09882E7B85078E7769C1FEB62`, burn `B3DC83C16DFFC498704D90204251590B3D9D6A02C2187E717C06F754338C41D9`. Only NFT Mint/Burn are live-verified; the other spec families are offline-tested only. Known gap: under heavy fee escalation the app cannot simulate (no `Fee` is supplied to `simulate`).
 
 **AMM (manual, 2026-10-11):** pool XRP/TST created on testnet by a throwaway xrpl.js script (lazyxrp has no AMMCreate). CLI `-x amm-deposit XRP:1000000 TST:<iss>:10` and `-x amm-withdraw XRP TST:<iss> --lp 1000`, then TUI composer `d` (deposit, Amount2 limited the XRP side to 0.5 XRP) and `w` with empty LP (withdraw all; the sole LP's withdrawal deleted the pool): all `tesSUCCESS`.
 

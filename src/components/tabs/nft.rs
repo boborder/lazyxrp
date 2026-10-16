@@ -74,11 +74,14 @@ impl NftTab {
         })
     }
 
-    fn poll_image_resize(&mut self) {
+    /// Drain finished off-thread resizes; `true` when a frame should be redrawn.
+    fn poll_image_resize(&mut self) -> bool {
         let Some(rx) = self.image_result_rx.as_ref() else {
-            return;
+            return false;
         };
+        let mut changed = false;
         while let Ok(result) = rx.try_recv() {
+            changed = true;
             match result {
                 Ok(response) => {
                     if self
@@ -96,6 +99,7 @@ impl NftTab {
                 }
             }
         }
+        changed
     }
 
     fn handle_image_loaded(&mut self, nft_id: &str, bytes: &[u8]) {
@@ -180,7 +184,21 @@ impl Component for NftTab {
         match action {
             Action::Tick => {
                 self.tick = self.tick.wrapping_add(1);
-                self.poll_image_resize();
+                if self.poll_image_resize() {
+                    return Ok(Some(Action::Render));
+                }
+            }
+            Action::NftBurnStart => {
+                if let Some(nft) = self
+                    .table_state
+                    .selected_if_focused(self.is_focused, len)
+                    .and_then(|idx| self.nfts.get(idx))
+                {
+                    return Ok(Some(Action::TxComposerOpen {
+                        tx_type: "NFTokenBurn".into(),
+                        fields: vec![("NFTokenID".into(), nft.nft_id.clone())],
+                    }));
+                }
             }
             Action::XrplAccountNfts(nfts) => {
                 self.nfts = nfts.to_vec();
@@ -328,6 +346,28 @@ mod tests {
         Ok(())
     }
 
+    /// TC-178: remote multibyte `nft_id`/`uri` truncate by chars at draw time (no panic, no
+    /// mid-codepoint cut); an empty list renders the empty state.
+    #[test]
+    fn draw_truncates_multibyte_remote_fields_and_handles_empty_list() -> color_eyre::Result<()> {
+        let mut tab = focused_tab()?;
+        tab.update(&Action::XrplAccountNfts(vec![sample_nft(
+            &"é".repeat(30),
+            &"ü".repeat(50),
+        )]))?;
+        let out =
+            crate::test_support::render_to_string(220, 20, |f| tab.draw(f, f.area()).unwrap());
+        assert!(out.contains(&format!("{}…", "é".repeat(16))), "{out}");
+        assert!(out.contains(&format!("{}…", "ü".repeat(40))), "{out}");
+        assert!(!out.contains(&"ü".repeat(41)));
+
+        assert_eq!(tab.update(&Action::XrplAccountNfts(Vec::new()))?, None);
+        let out =
+            crate::test_support::render_to_string(220, 20, |f| tab.draw(f, f.area()).unwrap());
+        assert!(out.contains("(no NFTs)"), "{out}");
+        Ok(())
+    }
+
     #[test]
     fn select_next_emits_image_request_for_newly_selected_nft() -> color_eyre::Result<()> {
         let mut tab = focused_tab()?;
@@ -356,6 +396,29 @@ mod tests {
             "NFT_A", "ipfs://a",
         )]))?;
         assert_eq!(action, None);
+        Ok(())
+    }
+
+    /// TC-256: `NftBurnStart` answers with `TxComposerOpen` for the selected NFTokenID (prefilled);
+    /// an unfocused tab or an empty list answers nothing.
+    #[test]
+    fn burn_start_prefills_selected_nft_id() -> color_eyre::Result<()> {
+        let mut tab = focused_tab()?;
+        assert_eq!(tab.update(&Action::NftBurnStart)?, None, "empty list");
+        tab.update(&Action::XrplAccountNfts(vec![
+            sample_nft("NFT_A", ""),
+            sample_nft("NFT_B", ""),
+        ]))?;
+        tab.update(&Action::SelectNext)?;
+        assert_eq!(
+            tab.update(&Action::NftBurnStart)?,
+            Some(Action::TxComposerOpen {
+                tx_type: "NFTokenBurn".into(),
+                fields: vec![("NFTokenID".into(), "NFT_B".into())],
+            })
+        );
+        tab.is_focused = false;
+        assert_eq!(tab.update(&Action::NftBurnStart)?, None);
         Ok(())
     }
 }

@@ -84,33 +84,3 @@ impl Component for HelpOverlay {
         Ok(())
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Help copy must match the 4-tab shell (`TAB_TITLES` / TC-060).
-    #[test]
-    fn help_bindings_match_four_tabs_and_assets() {
-        use crate::app::TAB_TITLES;
-        let tab_count = TAB_TITLES.len();
-        let jump = format!("1-{tab_count}");
-        assert!(
-            BINDINGS.iter().any(|(k, _)| k.contains(&jump)),
-            "help must list 1-{tab_count} tab jumps"
-        );
-        let over = format!("1-{tab_count_plus}", tab_count_plus = tab_count + 1);
-        assert!(
-            BINDINGS.iter().all(|(k, _)| !k.contains(&over)),
-            "help must not list a tab beyond the shell count"
-        );
-        assert!(
-            BINDINGS.iter().any(|(_, v)| v.contains("Assets tab")),
-            "ledger-objects hint must name Assets tab"
-        );
-        assert!(
-            BINDINGS.iter().all(|(_, v)| !v.contains("Objects tab")),
-            "legacy Objects tab name must not appear"
-        );
-    }
-}

@@ -14,9 +14,10 @@ use crate::{
     xrpl::{
         AccountDeleteSubmitParams, AccountSetSubmitParams, AmmDepositSubmitParams,
         AmmWithdrawSubmitParams, EscrowCloseSubmitParams, EscrowCreateSubmitParams,
-        FxrpDirectMintPaymentParams, FxrpExecuteDirectMintParams, OfferCancelSubmitParams,
-        OfferCreateSubmitParams, PaymentQuoteParams, PaymentSubmitParams,
-        SetRegularKeySubmitParams, TrustSetSubmitParams,
+        FxrpDirectMintPaymentParams, FxrpExecuteDirectMintParams, GenericTxSubmitParams,
+        OfferCancelSubmitParams, OfferCreateSubmitParams, PaymentQuoteParams, PaymentSubmitParams,
+        SetRegularKeySubmitParams, SmartAccountInstructionParams, TrustSetSubmitParams,
+        txspec::{Fields, TxSpec},
     },
 };
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -337,6 +338,67 @@ impl WalletPanel {
         })
     }
 
+    pub(super) fn open_tx_pick_composer(&mut self) {
+        self.composer = Some(ComposerPhase::TxPick { selected: 0 });
+        self.is_form_editing = false;
+    }
+
+    /// Form generated from `spec.fields`: spec default, overridden by a matching `prefill` entry.
+    pub(super) fn open_tx_composer(&mut self, spec: &'static TxSpec, prefill: &[(String, String)]) {
+        let values = spec
+            .fields
+            .iter()
+            .map(|f| {
+                prefill
+                    .iter()
+                    .find(|(name, _)| name == f.name)
+                    .map_or_else(|| f.default.to_string(), |(_, v)| v.clone())
+            })
+            .collect();
+        self.composer = Some(ComposerPhase::Tx {
+            spec,
+            row: 0,
+            values,
+        });
+        self.is_form_editing = false;
+    }
+
+    pub(super) fn tx_fields(spec: &TxSpec, values: &[String]) -> Fields {
+        spec.fields
+            .iter()
+            .zip(values)
+            .map(|(f, v)| (f.name.to_string(), v.clone()))
+            .collect()
+    }
+
+    pub(super) fn tx_action(&self, spec: &TxSpec, values: &[String]) -> Action {
+        Action::GenericTxSubmit(GenericTxSubmitParams {
+            tx_type: spec.tx_type.to_string(),
+            fields: Self::tx_fields(spec, values),
+            skip_mainnet_prompt: self.skip_mainnet_prompt,
+        })
+    }
+
+    /// Same validation as the poll task, so a bad form flashes instead of round-tripping.
+    /// Types with `TxSpec::confirm` never queue directly: a valid form opens type-to-confirm.
+    pub(super) fn queue_submit_tx(&mut self) -> Option<Action> {
+        let Some(ComposerPhase::Tx { spec, values, .. }) = &self.composer else {
+            return None;
+        };
+        let (spec, values) = (*spec, values.clone());
+        if let Err(e) = spec.validate(&Self::tx_fields(spec, &values)) {
+            self.set_submit_flash(SubmitFlash::Error(format!("{} · {e}", spec.tx_type)));
+            return None;
+        }
+        let Some(confirm) = spec.confirm else {
+            return Some(self.tx_action(spec, &values));
+        };
+        let summary = spec.summary_line(&Self::tx_fields(spec, &values));
+        let hint = format!("{} — {}", confirm.hint, fmt::truncate_middle(&summary, 120));
+        self.enter_danger_confirm(confirm.phrase, &hint, DangerResume::Tx { spec, values });
+        None
+    }
+
     pub(super) fn open_escrows_composer(&mut self) -> Action {
         self.composer = Some(ComposerPhase::Escrows {
             escrows: None,
@@ -464,6 +526,98 @@ impl WalletPanel {
         }
         Action::FxrpExecuteDirectMintSubmit(FxrpExecuteDirectMintParams {
             proof_json,
+            skip_mainnet_prompt: self.skip_mainnet_prompt,
+        })
+    }
+
+    pub(super) fn open_smart_account_composer(&mut self) {
+        if self.smart_account.is_none() {
+            self.set_submit_flash(SubmitFlash::Error(
+                "Smart Account · not loaded yet (stay on Overview a moment)".into(),
+            ));
+            return;
+        }
+        self.composer = Some(ComposerPhase::SmartAccount {
+            row: 0,
+            redeem: false,
+            recipient: String::new(),
+            amount: String::new(),
+        });
+        self.is_form_editing = false;
+    }
+
+    /// Validate the Smart Account form against the last read and queue the instruction Payment.
+    /// Failures come back as `SmartAccountInstructionSubmitErr` (flash), never as a Payment.
+    pub(super) fn queue_submit_smart_account(&self) -> Action {
+        let err = Action::SmartAccountInstructionSubmitErr;
+        let Some(ComposerPhase::SmartAccount {
+            redeem,
+            recipient,
+            amount,
+            ..
+        }) = &self.composer
+        else {
+            return err("composer closed".into());
+        };
+        let Some(info) = &self.smart_account else {
+            return err("Smart Account not loaded yet".into());
+        };
+        match &self.seed_address {
+            Some(Ok(signer)) if *signer == info.xrpl_owner => {}
+            _ => {
+                return err(format!(
+                    "Smart Account read is for {}, not the signing account",
+                    crate::xrpl::sanitize_text(&info.xrpl_owner, 64)
+                ));
+            }
+        }
+        let Some(operator) = info.operator_wallets.first() else {
+            return err("Flare reports no operator wallet".into());
+        };
+        let fee_drops = if *redeem {
+            info.redeem_fee_drops
+        } else {
+            info.transfer_fee_drops
+        };
+        if let Err(e) = crate::signing::check_smart_account_fee(fee_drops) {
+            return err(e.to_string());
+        }
+        let amount = amount.trim();
+        let value = if *redeem {
+            match amount.parse::<u128>() {
+                Ok(lots) => lots,
+                Err(_) => return err("lots must be a whole number".into()),
+            }
+        } else {
+            match crate::signing::parse_token_amount(amount, info.fxrp_decimals) {
+                Ok(units) => units,
+                Err(e) => return err(format!("amount: {e}")),
+            }
+        };
+        let encoded = if *redeem {
+            crate::signing::encode_fxrp_redeem_instruction(0, value)
+        } else {
+            crate::signing::encode_fxrp_transfer_instruction(0, value, recipient)
+        };
+        if let Err(e) = encoded {
+            return err(e.to_string());
+        }
+        if !*redeem && value > info.fxrp_balance_units {
+            return err(format!(
+                "amount exceeds the personal account FXRP balance ({} FXRP)",
+                crate::flare::format_token_units(info.fxrp_balance_units, info.fxrp_decimals)
+            ));
+        }
+        Action::SmartAccountInstructionSubmit(SmartAccountInstructionParams {
+            redeem: *redeem,
+            value,
+            recipient: if *redeem {
+                String::new()
+            } else {
+                recipient.trim().to_string()
+            },
+            operator_xrpl: operator.clone(),
+            fee_drops,
             skip_mainnet_prompt: self.skip_mainnet_prompt,
         })
     }
@@ -685,7 +839,12 @@ impl WalletPanel {
             return;
         };
 
-        let popup_w = area.width.clamp(54, 74);
+        let max_w = if matches!(phase, ComposerPhase::Tx { .. }) {
+            100
+        } else {
+            74
+        };
+        let popup_w = area.width.clamp(54, max_w);
         let popup_h = match phase {
             ComposerPhase::PickKind { .. } => 16u16,
             ComposerPhase::AccountSet => 21u16,
@@ -708,6 +867,9 @@ impl WalletPanel {
             ComposerPhase::AmmDeposit { .. } => 14u16,
             ComposerPhase::AmmWithdraw { .. } => 15u16,
             ComposerPhase::AccountDelete { .. } => 12u16,
+            ComposerPhase::SmartAccount { .. } => 16u16,
+            ComposerPhase::TxPick { .. } => 14u16,
+            ComposerPhase::Tx { spec, .. } => spec.fields.len() as u16 * 2 + 10,
         }
         .min(area.height.saturating_sub(2))
         .max(8);
@@ -739,6 +901,9 @@ impl WalletPanel {
             ComposerPhase::AmmDeposit { .. } => "AMM deposit (two-asset)",
             ComposerPhase::AmmWithdraw { .. } => "AMM withdraw",
             ComposerPhase::AccountDelete { .. } => "Delete account",
+            ComposerPhase::SmartAccount { .. } => "Smart Account",
+            ComposerPhase::TxPick { .. } => "Transaction",
+            ComposerPhase::Tx { spec, .. } => spec.tx_type,
         };
         let block = theme::panel_block(inner_title, true);
         let inner = block.inner(popup);
@@ -765,12 +930,12 @@ impl WalletPanel {
                     ])
                 };
                 // Hint first and scroll to keep the selection visible: the wallet panel is often
-                // shorter than the 13-row list.
+                // shorter than the 14-row list.
                 let first_row = 2u16;
                 let scroll = (first_row + *selected as u16 + 1).saturating_sub(inner.height);
                 Paragraph::new(vec![
                     Line::from(Span::styled(
-                        "1–9, 0, d, w, x jump · j/k move · Enter open · Esc close",
+                        "1–9, 0, d, w, x, a, m jump · j/k move · Enter open · Esc close",
                         theme::secondary_style(),
                     )),
                     Line::from(""),
@@ -787,6 +952,13 @@ impl WalletPanel {
                     row(10, "d", "AMMDeposit", "add both assets to a pool"),
                     row(11, "w", "AMMWithdraw", "return LP tokens"),
                     row(12, "x", "AccountDelete", "delete account, send rest ⚠"),
+                    row(13, "a", "Smart Account", "FXRP transfer / redeem via Flare"),
+                    row(
+                        14,
+                        "m",
+                        "Transaction",
+                        "NFT mint / burn / offers, more types",
+                    ),
                 ])
                 .scroll((scroll, 0))
             }
@@ -1225,11 +1397,7 @@ impl WalletPanel {
                 } else {
                     ""
                 };
-                let preview = if proof_json.chars().count() > 72 {
-                    format!("{}…", proof_json.chars().take(72).collect::<String>())
-                } else {
-                    proof_json.clone()
-                };
+                let preview = proof_json_preview(proof_json);
                 Paragraph::new(vec![
                     Line::from(Span::styled(
                         format!("Paste FDC proof JSON (gate: flare.fassets.execute){net_note}"),
@@ -1250,6 +1418,105 @@ impl WalletPanel {
                         theme::secondary_style(),
                     )),
                 ])
+            }
+            ComposerPhase::SmartAccount {
+                row,
+                redeem,
+                recipient,
+                amount,
+            } => {
+                let net_note = if self.network.is_production() && !self.skip_mainnet_prompt {
+                    " · production writes need --yes"
+                } else {
+                    ""
+                };
+                let hi = |i: usize| {
+                    if *row == i {
+                        highlight_style
+                    } else {
+                        label_style
+                    }
+                };
+                let pinned = self
+                    .config
+                    .as_ref()
+                    .and_then(|c| c.flare.smart_accounts.expected_operator.as_deref());
+                let (operator, fee, balance, pin_note) = match &self.smart_account {
+                    Some(info) => {
+                        let operator = info.operator_wallets.first().map_or_else(
+                            || "(none)".to_string(),
+                            |o| crate::xrpl::sanitize_text(o, 64),
+                        );
+                        let fee = if *redeem {
+                            info.redeem_fee_drops
+                        } else {
+                            info.transfer_fee_drops
+                        };
+                        let pin_note = match crate::flare::check_operator(&operator, pinned) {
+                            Ok(()) => "pinned ✓",
+                            Err(_) => "NOT pinned — set [flare.smart_accounts] expected_operator",
+                        };
+                        (
+                            operator,
+                            crate::flare::uba_to_xrp_display(u128::from(fee)),
+                            crate::flare::format_token_units(
+                                info.fxrp_balance_units,
+                                info.fxrp_decimals,
+                            ),
+                            pin_note,
+                        )
+                    }
+                    None => (
+                        "(not loaded)".into(),
+                        String::new(),
+                        String::new(),
+                        "NOT pinned",
+                    ),
+                };
+                let mut lines = vec![
+                    Line::from(Span::styled(
+                        if *redeem {
+                            "0x02 redeem · amount = lots (FXRP → XRP on XRPL)"
+                        } else {
+                            "0x01 transfer · FXRP from the personal account"
+                        },
+                        theme::secondary_style(),
+                    )),
+                    Line::from(Span::styled(
+                        format!(
+                            "Operator {} · {pin_note}",
+                            fmt::truncate_middle(&operator, 34)
+                        ),
+                        theme::secondary_style(),
+                    )),
+                    Line::from(Span::styled(
+                        format!("Pays {fee} XRP fee · balance {balance} FXRP"),
+                        theme::secondary_style(),
+                    )),
+                    Line::from(""),
+                ];
+                if !*redeem {
+                    lines.push(Line::from(vec![
+                        Span::styled("Flare recipient ", hi(0)),
+                        Span::styled(recipient.clone(), value_style),
+                    ]));
+                }
+                lines.push(Line::from(vec![
+                    Span::styled(if *redeem { "Lots " } else { "Amount FXRP " }, hi(1)),
+                    Span::styled(amount.clone(), value_style),
+                ]));
+                lines.push(Line::from(""));
+                lines.push(Line::from(Span::styled(
+                    "No DestinationTag · memo = 32-byte instruction",
+                    theme::dim_style(),
+                )));
+                lines.push(Line::from(Span::styled(
+                    format!(
+                        "i transfer↔redeem · e edit · Tab rows · s/Ctrl-S send · Esc back{net_note}"
+                    ),
+                    theme::secondary_style(),
+                )));
+                Paragraph::new(lines).wrap(Wrap { trim: false })
             }
             ComposerPhase::OfferCancel { offers, selected } => {
                 let net_note = if self.network.is_production() && !self.skip_mainnet_prompt {
@@ -1484,6 +1751,79 @@ impl WalletPanel {
                     )),
                 ])
             }
+            ComposerPhase::TxPick { selected } => {
+                let mut lines = vec![
+                    Line::from(Span::styled(
+                        "j/k move · Enter open · Esc back",
+                        theme::secondary_style(),
+                    )),
+                    Line::from(""),
+                ];
+                for (i, spec) in crate::xrpl::txspec::registry().enumerate() {
+                    lines.push(Line::from(vec![
+                        Span::raw(if *selected == i { "⟩ " } else { "  " }),
+                        Span::styled(
+                            format!("[{}] {}", spec.family, spec.tx_type),
+                            if *selected == i {
+                                highlight_style
+                            } else {
+                                label_style
+                            },
+                        ),
+                        Span::styled(format!(" — {}", spec.summary), theme::dim_style()),
+                    ]));
+                }
+                let scroll = (2 + *selected as u16 + 1).saturating_sub(inner.height);
+                Paragraph::new(lines).scroll((scroll, 0))
+            }
+            ComposerPhase::Tx { spec, row, values } => {
+                let fields = Self::tx_fields(spec, values);
+                let mut lines = vec![
+                    Line::from(Span::styled(
+                        format!("{}{}", spec.summary, self.production_note()),
+                        theme::secondary_style(),
+                    )),
+                    Line::from(""),
+                ];
+                for (i, (f, v)) in spec.fields.iter().zip(values).enumerate() {
+                    let on = *row == i;
+                    lines.push(Line::from(vec![
+                        Span::styled(
+                            format!("{:<18}[{}] ", f.name, if on { "*" } else { " " }),
+                            if on { highlight_style } else { label_style },
+                        ),
+                        Span::styled(v.clone(), value_style),
+                    ]));
+                }
+                lines.push(Line::from(""));
+                if let (Some(f), Some(v)) = (spec.fields.get(*row), values.get(*row)) {
+                    lines.push(Line::from(Span::styled(
+                        format!("{}{}", f.help, if f.required { " (required)" } else { "" }),
+                        theme::dim_style(),
+                    )));
+                    lines.push(match f.validate_value(v) {
+                        Err(e) => Line::from(Span::styled(format!("✗ {e}"), theme::error_style())),
+                        Ok(()) => Line::from(""),
+                    });
+                }
+                let (preview, style) = match spec.validate(&fields) {
+                    Ok(()) => (
+                        format!("▸ {}", spec.summary_line(&fields)),
+                        theme::success_style(),
+                    ),
+                    Err(e) => (e, theme::warning_style()),
+                };
+                lines.push(Line::from(Span::styled(preview, style)));
+                lines.push(Line::from(""));
+                let then = spec
+                    .confirm
+                    .map_or(String::new(), |c| format!(" (then type {})", c.phrase));
+                lines.push(Line::from(Span::styled(
+                    format!("e edit · Tab rows · Ctrl+S / S submit{then} · Esc back"),
+                    theme::secondary_style(),
+                )));
+                Paragraph::new(lines).wrap(Wrap { trim: false })
+            }
         };
         frame.render_widget(body, inner);
     }
@@ -1494,6 +1834,15 @@ impl WalletPanel {
         } else {
             ""
         }
+    }
+}
+
+/// First 72 chars of the pasted proof (char-based: byte slicing panics on multibyte JSON).
+pub(super) fn proof_json_preview(proof_json: &str) -> String {
+    if proof_json.chars().count() > 72 {
+        format!("{}…", proof_json.chars().take(72).collect::<String>())
+    } else {
+        proof_json.to_string()
     }
 }
 

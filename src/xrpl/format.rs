@@ -38,6 +38,14 @@ fn civil_from_days(days: i64) -> (i64, i64, i64) {
 pub fn xrp_to_drops(xrp: &str) -> color_eyre::Result<u64> {
     const DROPS_PER_XRP: u64 = 1_000_000;
     let overflow = || color_eyre::eyre::eyre!("XRP amount overflow");
+    let digits = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
+    let bad = || color_eyre::eyre::eyre!("XRP amount must be digits with an optional fraction");
+    if !xrp.split_once('.').map_or_else(
+        || digits(xrp),
+        |(w, f)| digits(w) && (f.is_empty() || digits(f)),
+    ) {
+        return Err(bad());
+    }
     match xrp.split_once('.') {
         None => {
             let whole = xrp.parse::<u64>()?;
@@ -58,6 +66,10 @@ pub fn xrp_to_drops(xrp: &str) -> color_eyre::Result<u64> {
 }
 
 pub fn drops_to_xrp(drops: &str) -> String {
+    if let Ok(d) = drops.parse::<u128>() {
+        return format!("{}.{:06}", d / 1_000_000, d % 1_000_000);
+    }
+    // Not a whole number of drops (decimal XRP strings, garbage): best-effort float.
     let drops_num = drops.parse::<f64>().unwrap_or_default();
     format!("{:.6}", drops_num / 1_000_000.0)
 }
@@ -373,6 +385,35 @@ mod tests {
         assert_eq!(drops_to_xrp("1000000"), "1.000000");
         assert_eq!(drops_to_xrp("250000"), "0.250000");
         assert_eq!(drops_to_xrp("not-a-number"), "0.000000");
+        // Beyond 2^53 drops an f64 loses the last digits; whole-drop amounts stay exact.
+        assert_eq!(
+            drops_to_xrp("99999999999999999"),
+            "99999999999.999999",
+            "total-supply scale"
+        );
+    }
+
+    /// Money invariant: every whole-drop amount survives drops → XRP string → drops
+    /// (edges around 2^53 and the 10^17 XRP total supply included).
+    #[test]
+    fn drops_xrp_round_trip_is_lossless() {
+        let edges = [
+            0u64,
+            1,
+            999_999,
+            1_000_000,
+            (1 << 53) - 1,
+            1 << 53,
+            (1 << 53) + 1,
+        ];
+        let supply = 100_000_000_000_000_000u64;
+        for d in edges.into_iter().chain([supply - 1, supply]) {
+            assert_eq!(
+                xrp_to_drops(&drops_to_xrp(&d.to_string())).unwrap(),
+                d,
+                "{d}"
+            );
+        }
     }
 
     /// `format_amount`: None → "-", XRP drops string → XRP amount, and an
@@ -397,17 +438,16 @@ mod tests {
         assert_eq!(format_ripple_time_utc(838_204_893), "2026-07-24 10:41 UTC");
         assert_eq!(format_ripple_time_utc(0), "2000-01-01 00:00 UTC");
         assert_eq!(format_ripple_time_utc(59 * 86_400), "2000-02-29 00:00 UTC");
+        // Leap-day boundary in 2024 (unix day 19_782 = ripple day 8_825).
+        assert_eq!(
+            format_ripple_time_utc(8_825 * 86_400),
+            "2024-02-29 00:00 UTC"
+        );
+        assert_eq!(
+            format_ripple_time_utc(8_826 * 86_400),
+            "2024-03-01 00:00 UTC"
+        );
         assert_eq!(format_ripple_time_utc(u64::MAX), "9999-12-31 23:59 UTC");
-    }
-
-    #[test]
-    fn civil_from_days_boundaries() {
-        assert_eq!(civil_from_days(0), (1970, 1, 1));
-        // Unix day 10_957 = 946_684_800 / 86_400 = the Ripple epoch.
-        assert_eq!(civil_from_days(10_956), (1999, 12, 31));
-        assert_eq!(civil_from_days(10_957), (2000, 1, 1));
-        assert_eq!(civil_from_days(19_782), (2024, 2, 29));
-        assert_eq!(civil_from_days(19_783), (2024, 3, 1));
     }
 
     /// TC-141: xrp_to_drops — parses whole/fractional XRP into drops,
@@ -415,7 +455,7 @@ mod tests {
     /// rejects malformed or overflowing inputs.
     #[test]
     fn xrp_to_drops_converts_and_rejects_inputs() {
-        let cases: [(&str, Option<u64>); 13] = [
+        let cases: [(&str, Option<u64>); 20] = [
             ("1", Some(1_000_000)),
             ("1.5", Some(1_500_000)),
             ("1.123456", Some(1_123_456)),
@@ -429,6 +469,14 @@ mod tests {
             (".5", None),
             ("18446744073709.551616", None),
             ("18446744073710", None),
+            // `u64::parse` accepts a leading `+`: "1.+5" must not become 1.05 XRP.
+            ("+1", None),
+            ("1.+5", None),
+            ("+1.5", None),
+            ("1.-5", None),
+            ("1 .5", None),
+            (" 1", None),
+            ("1.5 ", None),
         ];
         for (input, expected) in cases {
             assert_eq!(xrp_to_drops(input).ok(), expected, "input: {input:?}");

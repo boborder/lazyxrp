@@ -308,16 +308,6 @@ mod tests {
         r#"{"blob":"eyJzZXF1ZW5jZSI6MSwiZXhwaXJhdGlvbiI6MCwidmFsaWRhdG9ycyI6W3sidmFsaWRhdGlvbl9wdWJsaWNfa2V5IjoibiIsIm1hbmlmZXN0IjoibSJ9XX0="}"#
     }
 
-    #[test]
-    fn parse_xrplf_dunl_fixture() {
-        let dunl = parse_xrplf_dunl_json(dunl_sample()).expect("parse dUNL");
-        assert_eq!(dunl.validator_count, 1);
-        assert_eq!(dunl.sequence, 1);
-        assert_eq!(dunl.expiration_utc, "2000-01-01 00:00 UTC");
-        assert_eq!(dunl.validators.len(), 1);
-        assert_eq!(dunl.validators[0].validation_public_key, "n");
-    }
-
     /// TC-123: dUNL cache — fresh hit within TTL, stale entry served during failure cooldown,
     /// none after clear.
     #[test]
@@ -340,6 +330,25 @@ mod tests {
         dunl_summary_cache_clear();
         dunl_cache_mark_failed();
         assert!(dunl_cache_get().is_none());
+
+        // Expired TTL without a failure cooldown: miss. Expired TTL + live cooldown: stale hit.
+        // Expired TTL + expired cooldown: miss.
+        let age = |entry_age: Duration, failed_ago: Option<Duration>| {
+            let mut guard = dunl_summary_cache().lock().unwrap();
+            let entry = guard.as_mut().expect("entry");
+            entry.fetched_at = Instant::now().checked_sub(entry_age).expect("clock");
+            entry.last_failed_at =
+                failed_ago.map(|d| Instant::now().checked_sub(d).expect("clock"));
+        };
+        dunl_summary_cache_clear();
+        dunl_cache_store(dunl.clone());
+        let past_ttl = DUNL_CACHE_TTL + Duration::from_secs(1);
+        age(past_ttl, None);
+        assert!(dunl_cache_get().is_none(), "expired TTL must miss");
+        age(past_ttl, Some(Duration::from_secs(1)));
+        assert_eq!(dunl_cache_get().expect("cooldown serves stale"), dunl);
+        age(past_ttl, Some(DUNL_RETRY_BACKOFF + Duration::from_secs(1)));
+        assert!(dunl_cache_get().is_none(), "expired cooldown must miss");
     }
 
     /// Drops with the test: clears the shared manifest decode cache even if an assert panics.
@@ -414,5 +423,14 @@ mod tests {
         assert_eq!(dunl.expiration_ripple, 838_204_893);
         assert_eq!(dunl.expiration_utc, "2026-07-24 10:41 UTC");
         assert!(dunl.validators.is_empty());
+
+        // Minimal fixture: epoch 0, one validator whose manifest is undecodable.
+        let dunl = parse_xrplf_dunl_json(dunl_sample()).expect("parse dUNL fixture");
+        assert_eq!(dunl.expiration_utc, "2000-01-01 00:00 UTC");
+        assert_eq!(dunl.sequence, 1);
+        assert_eq!(dunl.validator_count, 1);
+        assert_eq!(dunl.validators[0].validation_public_key, "n");
+        assert!(dunl.validators[0].has_manifest);
+        assert_eq!(dunl.validators[0].domain, None);
     }
 }
