@@ -368,10 +368,38 @@ mod tests {
         }
     }
 
+    const MANIFEST_B64: &str = "JAAAAAFxIe0Tqvy2qHvLXQk8LvN/BEMcKREm1nQpMwUVLZd2xquk1nMhA9RioHJW8Kz6IjnHOOktbvbaHsZqwJb8otgoIu+46QbWdkYwRAIgE0pz8HpSKrUsJ8E390K8KCwmvExB00jLvqPv9LZr6roCIAl9zLWeIRSsBRIaOl5alblYMYMXrpbxJZ7t+jtbiT9Ldwd4cnAudmV0cBJADEZOQPQJcWj0zPjulcvH1o8WhQ9jrKzWV/mkXSHGjmzIiekkOzUcEnzmJXwJYWZZnA0jTLE30OYmxCRXfCm9Bg==";
+
+    /// Manifest bytes come off the network: no truncation, bit flip or junk may panic the parser
+    /// (xrpl-rust's `binarycodec::decode` panics on truncated input, so it is not used here).
+    #[test]
+    fn parse_validator_manifest_bytes_never_panics_on_bad_input() {
+        let bytes = base64_decode(MANIFEST_B64).expect("fixture");
+        for n in 0..=bytes.len() {
+            let _ = parse_validator_manifest_bytes(&bytes[..n]);
+        }
+        let mut flipped = bytes.clone();
+        for i in 0..flipped.len() {
+            flipped[i] ^= 0xFF;
+            let _ = parse_validator_manifest_bytes(&flipped);
+            flipped[i] ^= 0xFF;
+        }
+        for junk in [
+            &[][..],
+            &[0xFF; 64],
+            &[0x00; 64],
+            &[0x73, 0xC1, 0xFF, 0xFF, 0xFF],
+            &[0x24, 0, 0],
+            &[0x71, 0xF0, 0xFF],
+        ] {
+            let _ = parse_validator_manifest_bytes(junk);
+        }
+    }
+
     #[test]
     fn parse_validator_manifest_extracts_domain_and_seq() {
         let _guard = ManifestDecodeCacheGuard;
-        let manifest_b64 = "JAAAAAFxIe0Tqvy2qHvLXQk8LvN/BEMcKREm1nQpMwUVLZd2xquk1nMhA9RioHJW8Kz6IjnHOOktbvbaHsZqwJb8otgoIu+46QbWdkYwRAIgE0pz8HpSKrUsJ8E390K8KCwmvExB00jLvqPv9LZr6roCIAl9zLWeIRSsBRIaOl5alblYMYMXrpbxJZ7t+jtbiT9Ldwd4cnAudmV0cBJADEZOQPQJcWj0zPjulcvH1o8WhQ9jrKzWV/mkXSHGjmzIiekkOzUcEnzmJXwJYWZZnA0jTLE30OYmxCRXfCm9Bg==";
+        let manifest_b64 = MANIFEST_B64;
         let meta = parse_validator_manifest_b64(manifest_b64).expect("manifest");
         assert_eq!(meta.domain.as_deref(), Some("xrp.vet"));
         assert_eq!(meta.sequence, Some(1));
