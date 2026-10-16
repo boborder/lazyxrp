@@ -4,6 +4,8 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-10-16
+
 ### Added
 
 - Flare Smart Accounts (proof-based instruction flow). Overview FXRP panel rows show the Flare personal account of your XRPL address (FXRP balance, nonce, deployed?, operator, transfer / redeem instruction fees; `MasterAccountController` resolved via the Flare contract registry, same Flare poll batch and `[flare] display` gating as FXRP). Wallet composer `a` sends an `0x01` FXRP transfer (decimal FXRP amount → the token's raw base units using the FXRP `decimals()` read from the chain, exact integer math; `0x` recipient) or `0x02` FXRP redeem (lots) as an XRPL Payment of exactly `getInstructionFee(id)` XRP drops to the operator, no `DestinationTag`, with the 32-byte instruction as the only Memo; after submit the operator executes it on Flare. The composer refuses to queue until the Smart Account read (including `decimals()`) is loaded. Not included yet: custom instructions `0xFE` / `0xFF`, `executeDirectMintingWithData`, vault instructions, FDC proof fetching.
@@ -137,7 +139,8 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 See [GitHub Releases](https://github.com/boborder/lazyxrp/releases) for 0.2.11 and older.
 
-[Unreleased]: https://github.com/boborder/lazyxrp/compare/v0.6.1...HEAD
+[Unreleased]: https://github.com/boborder/lazyxrp/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/boborder/lazyxrp/compare/v0.6.1...v0.7.0
 [0.6.1]: https://github.com/boborder/lazyxrp/compare/v0.4.1...v0.6.1
 [0.6.0]: https://github.com/boborder/lazyxrp/compare/v0.4.1...v0.6.0
 [0.5.0]: https://github.com/boborder/lazyxrp/compare/v0.4.1...v0.5.0
