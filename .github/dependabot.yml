@@ -15,3 +15,7 @@ updates:
     groups:
       cargo-minor:
         update-types: [minor, patch]
+    ignore:
+      # dev-dep must match the 0.24 tree xrpl-rust pulls in; drop when xrpl-rust upgrades.
+      - dependency-name: tokio-tungstenite
+        versions: [">=0.25"]

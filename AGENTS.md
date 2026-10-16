@@ -22,26 +22,17 @@
 | [`DESIGN.md`](DESIGN.md) | **どう見える・操作するか** — UI/UX |
 | **AGENTS.md** *(here)* | **どう作る・運用するか** — Agent 指示（最小） |
 
-## Optional: OpenSpec
-
-`openspec/` is **optional** agent change-tracking. It may reference `docs/`; **`docs/` never links to `openspec/`** (one-way).
-
-| Use | Path |
-|-----|------|
-| Active change checklists | `openspec/changes/<name>/tasks.md` |
-| Archived changes | `openspec/changes/archive/` |
-| Agent runtime contracts | `openspec/specs/<cap>/spec.md` |
-| Hub config | `openspec/config.yaml` |
-
-When shipping behavior: update root `ROADMAP.md` and `docs/` (`architecture.md`, `test.md`, …) in the same change. If OpenSpec was used: `openspec archive <name> -y`.
+When shipping behavior: update root `ROADMAP.md` and `docs/` (`architecture.md`, `test.md`, …) in the same change.
 
 ## Execution contract
 
 1. Missing **target**, **reproduction**, or **completion criteria** → ask **1–2** focused questions before implementing.
 2. Otherwise implement.
-3. After implementation → run **`cargo check`** (minimum).
+3. After implementation → run **`cargo check`** (minimum); `mise run lint` is the CI lint gate (fmt + clippy).
 4. After `cargo check` → sync related **`docs/`**.
 5. Changes to **`src/config.rs`** keys or behavior → update every **`docs/`** file that mentions them in the same change.
+6. Parallel agents: one integrator edits shared files (`CHANGELOG.md`, the `ROADMAP.md` coverage table, README counts); regenerate the table with `lazyxrp -x coverage`, never by hand.
+7. Dependency updates → `mise run update` (cargo update + check + audit).
 
 If assumptions are unavoidable, state them explicitly before proceeding.
 
@@ -51,9 +42,9 @@ If assumptions are unavoidable, state them explicitly before proceeding.
 - Never sign/submit without simulate; mainnet writes require `--yes`.
 - Use `SigningCredential` via `credential_from_secrets` (family seed **or** BIP39 mnemonic, not both). Cleared plaintext `seed`/`mnemonic` fields are invalid. Never mutate shared `ArcValue` JSON.
 - No unrelated refactors; do not remove features to bypass errors; do not contradict `docs/`.
-- Do not skip `cargo check` after implementation.
+- Live-network checks (RPC state, fees): `ctx_execute` fetch; the shell hook rejects raw HTTP.
 
 ## Detailed instructions
 
 - Graphify: [`graphify-out/GRAPH_REPORT.md`](graphify-out/GRAPH_REPORT.md) — if `HEAD` differs or `graphify-out/needs_update` exists, run `graphify update .` before structure queries.
-- Domain skills: [`.agents/skills/xrpl-rust/`](.agents/skills/xrpl-rust/SKILL.md) · Flare: `flare-general` / `flare-ftso` / `flare-fassets`
+- Domain skills: [`.agents/skills/xrpl-rust/`](.agents/skills/xrpl-rust/SKILL.md) · Flare: `flare-general` / `flare-ftso` / `flare-fassets` / `flare-fdc` / `flare-smart-accounts` (vendored from `flare-foundation/flare-ai-skills`; refresh with `npx skills update -p -y`, then restore any local-only `flare-fassets/scripts/_*` probes)

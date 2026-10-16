@@ -8,10 +8,6 @@
 graphify-out
 .codegraph
 
-# OpenSpec — local agent workflow, not published
-openspec/*
-!openspec/config.yaml
-
 # Local agent / harness state (not part of the product)
 .pi/
 .atl/

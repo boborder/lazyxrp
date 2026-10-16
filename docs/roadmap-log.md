@@ -11,6 +11,7 @@
 
 ## Pivot log（進路変更記録）
 
+- **2026-10-16** — OpenSpec（`openspec/`）を廃止。人間向け SSOT は `docs/` に一本化。モジュール依存規則は `docs/directory.md` §3、不変条件 I-1〜I-11 は `docs/security.md`、Benchmark 運用は `docs/maintenance.md` へ統合し、他の spec は docs の複製だったため削除。`docs/` → `openspec/` リンクガード（CI / `mise run lint`）も不要になり削除。
 - **2026-10-11** — 0.5.0 後、長期 Watch / Operate 分離（ユーザー選択: `--watch` フラグ）。判断: Wallet パネルに新モードを足さず、起動時に `Config` から鍵を全部消す（`enter_watch_mode`）だけにした — 鍵が無ければ既存の Account パネル（読み取り専用）が出て composer・鍵生成は存在せず、poll task も署名できない。鍵のアドレスは `--account` 未指定時の監視先に使う。`-x` 署名系は鍵不在エラーに頼らず明示的に拒否。ステータスバーの WATCH 表示は見送り（パネルの違いで判別できる）。
 - **2026-10-11** — 0.4.2 公開後、長期から F-01 AccountDelete に着手（ユーザー選択: TUI + CLI `-x account-delete`）。判断: 宛先は Payment と同じ classic / X-address（tag は X-address で指定、専用欄は作らない）。不可逆なので TUI は常に `DELETE` 入力の確認を挟む（SetRegularKey CLEAR と同じ DangerConfirm、宛先を表示）。Fee はローカル計算せず simulate の autofill（owner reserve 0.2 XRP）を署名 — testnet で 200000 drops を確認。256 ledger 制約や所有オブジェクトは simulate に任せる（`tecTOO_SOON` を実地確認）。削除後の Wallet パネルが "None" とだけ出ていたので文言を変えた。
 - **2026-10-11** — 0.4.1 公開後、中期 #8（C3 smoke）をユーザー判断で testnet 実資金に切替えて実施。lazyxrp 経由では一度も通っていなかったことが判明: C2 は simulate で `MemoFormat: null` 拒否（0.3.0 で simulate 必須化して以降壊れていた）、C3 は存在しない selector（`bytes data` 版 ABI）を呼んでいた。2026-09-12 の Coston2 成功は外部スクリプトによるもので、lazyxrp のコード経路は未検証だった。修正後、実 DA 応答を fixture にして TC-230/231。注意: 32-byte memo では公開 executor が数分で先に実行するため、自前 C3 の検証は 48-byte memo（executor 指定）で行った。
@@ -25,4 +26,4 @@
 - **2026-10-10** — 短期 3 件（DEX trading / CLI redesign / keymap）を完了扱いに。判断: Payment 見積りは Send max 欄の通貨で `ripple_path_find`（自動最安選択は通貨間比較不可のため不採用）、`--seed`/`--mnemonic` は FR-13 維持＋警告、keymap はグローバルキーの user merge で完了（パネル内キーの設定化は長期）、`rc` alias は install.sh に入れない（シェル rc を書き換えない）。
 - **2026-09-21** — ROADMAP を horizon 型（最終ゴール / 長期 / 中期 / 短期）へ再構成。最終ゴールを「XRPL エコシステム（dev/user）で人気の CLI/TUI ツール + セキュリティ維持」と明文化。短期 = DEX trading (P1) / CLI redesign (P2) / keymap customization (P3)。F-02 OfferCancel → DEX trading に統合、F-04 AMM を Later→P3。
 - **2026-09-17** — 新機能より安定化を優先: Flare read-path 最適化・XRPL poll 効率化・status bar health（0.2.11）。
-- **2026-09-12** — multichain 拡大（Xahau + Flare）と docs 階層再設計。`docs/` → `openspec/` の一方通行リンク規則を確立。
+- **2026-09-12** — multichain 拡大（Xahau + Flare）と docs 階層再設計。

@@ -20,11 +20,13 @@
 | `build-binaries` | 6 ターゲット（macOS x86_64/arm64、Linux x86_64/aarch64/i686、Windows x86_64 MSVC）を `--locked --release` でビルド。`lazyxrp-<tag>-<os>-<arch>.tar.gz` + `.sha256`（`rp` 同梱） |
 | `publish-github-release` | tarball 一式を GitHub Release へ添付。本文 = 前タグからのコミット件名（`git log`）+ GitHub 生成ノート（`.github/release.yml` の PR ラベル分類） |
 | `publish-cargo` | `cargo package --locked`（token なしで検証）→ `cargo publish --locked --no-verify`（crates.io、`CARGO_REGISTRY_TOKEN`）。アーカイブ内容は `Cargo.toml` の `include`（crates.io allowlist）が決定 |
-| `trigger-benchmark` | リリース成功後、Benchmark workflow を `--ref v<version>` で dispatch |
+| `trigger-benchmark` | リリース成功後、Benchmark workflow を `gh workflow run Benchmark -R "$GITHUB_REPOSITORY" --ref v<version>` で dispatch（checkout 無しの job なので `-R` 明示）。`workflow_run` 待ち受けは使わない: GITHUB_TOKEN 由来の CD では 5 回連続（v0.2.3–v0.2.7）で発火しなかった |
 
 **手動フォールバック:** 自動経路不調時のみ `mise run tag-push`（lint / test / doc / audit の 4 ゲート → `v<version>` タグ作成・push。tag push 自体で `cd.yml` が起動する）。
 
-**リリース前（write 経路を変えた場合は必須）:** `mise run e2e-testnet`（`tests/testnet_e2e.rs`、公開 faucet + testnet で send / offer-create / offer-cancel を validated まで確認、約 30 秒）。CI では実行しない。0.3.0 では mock と実ノードの `simulate` 応答の差で全 write が壊れていた（TC-200）。
+**リリース前（write 経路を変えた場合は必須）:** `mise run e2e-testnet`（`tests/testnet_e2e.rs`、公開 faucet + testnet で send / offer-create / offer-cancel / NFT mint → burn を validated まで確認、2 テストは `--test-threads=1` で直列、約 40 秒）。testnet の open-ledger fee が高騰すると simulate が `exceeds the requested tx limit` で落ちる。`fee` RPC で確認し（`ctx_execute` の fetch）、`LAZYXRP_E2E_NETWORK=devnet mise run e2e-testnet` で代替する（docs/test.md の run note）。CI では実行しない。0.3.0 では mock と実ノードの `simulate` 応答の差で全 write が壊れていた（TC-200）。
+
+**Benchmark:** `benchmark.sh`（`--json` / `--ci` / `--fast`、`mise run bench` / `bench-fast` / `bench-ci`）がビルド・check・test・clippy・doc・起動時間（hyperfine）・バイナリサイズ（cargo-bloat）・`cargo --timings` を個別 timeout で独立実行する（1 件の失敗が他を止めるのは `--ci` のときだけ）。`.github/workflows/benchmark.yml` は `workflow_dispatch` のみ（main push / PR では走らせない）。手動 dispatch の `strict=true` は `--ci` を渡す。成果物 `benchmark-results`（`benchmark-summary.json`・`benchmark.log`・`target/bloat-report.txt`・`target/timings-report.html`）。`--json` は `{benchmarks:[{name,result,value,unit,message}], summary:{pass,fail,skip,timestamp}, cache_comparison}`、`result` は `PASS` / `FAIL` / `TIMEOUT` / `SKIP`。
 
 **変更履歴:** 利用者に見える変更は、その変更のコミットで `CHANGELOG.md` の `## [Unreleased]` に追記する。
 
@@ -34,4 +36,4 @@
 
 **定期 CI:** 毎週月曜 00:00 UTC に CI 全体を実行し、yanked crate や新しい advisory を push 前に検出する（2026-10-03 の yanked `yoke-derive` は push 時に初めて落ちた）。auto-tag は push 時のみ動く。
 
-**依存更新:** [`.github/dependabot.yml`](../.github/dependabot.yml) が週次で PR を作る。GitHub Actions はコミット SHA 固定（`# vN` コメント付き）なので、その更新もこの PR 経由。cargo は minor/patch をまとめた 1 PR、major は個別。
+**依存更新:** [`.github/dependabot.yml`](../.github/dependabot.yml) が週次で PR を作る。GitHub Actions はコミット SHA 固定（`# vN` コメント付き）なので、その更新もこの PR 経由。cargo は minor/patch をまとめた 1 PR、major は個別。例外: `tokio-tungstenite >=0.25` は dependabot で ignore、かつ `deny.toml` の `[bans] deny`（`tungstenite` / `tokio-tungstenite` `>=0.25`）で fail — xrpl-rust の 0.24 ツリーとの二重化を防ぐ。xrpl-rust が上げたら両方外す。

@@ -36,6 +36,12 @@ confidence-threshold = 0.8
 [bans]
 multiple-versions = "warn"
 wildcards = "allow"
+# ~110 transitive duplicates exist, so multiple-versions stays "warn". This pins the one
+# we control: tungstenite must stay on the 0.24 tree xrpl-rust uses (see dependabot.yml).
+deny = [
+  { name = "tungstenite", version = ">=0.25" },
+  { name = "tokio-tungstenite", version = ">=0.25" },
+]
 
 [sources]
 unknown-registry = "deny"
