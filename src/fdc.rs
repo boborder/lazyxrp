@@ -247,6 +247,7 @@ pub async fn prove_xrp_payment(
     private_key_hex: &str,
     cfg: &FdcConfig,
     xrpl_tx_hash: &str,
+    resume_round: Option<u64>,
     progress: impl Fn(&str),
 ) -> color_eyre::Result<String> {
     let signer = flare::parse_evm_key(private_key_hex)?;
@@ -264,44 +265,57 @@ pub async fn prove_xrp_payment(
         flare::resolve_registry_contract(provider.clone(), rpc_url, "Relay"),
         flare::resolve_registry_contract(provider.clone(), rpc_url, "FlareSystemsManager"),
     )?;
-    let request_bytes = Bytes::from(request.clone());
-    let fee = IFdcRequestFeeConfigurations::new(fees, provider.clone())
-        .getRequestFee(request_bytes.clone())
-        .call()
-        .await?;
-    if fee > U256::from(MAX_REQUEST_FEE_WEI) {
-        color_eyre::eyre::bail!("attestation fee {fee} wei is implausibly high; refusing to pay");
-    }
-
-    progress(&format!("requesting the attestation (fee {fee} wei)…"));
-    let pending = IFdcHub::new(hub, provider.clone())
-        .requestAttestation(request_bytes)
-        .value(fee)
-        .send()
-        .await
-        .map_err(|e| color_eyre::eyre::eyre!("requestAttestation failed: {e}"))?;
-    let receipt = pending.get_receipt().await?;
-    if !receipt.status() {
-        color_eyre::eyre::bail!(
-            "requestAttestation reverted: {:#x}",
-            receipt.transaction_hash
-        );
-    }
-    let block = provider
-        .get_block_by_number(
-            receipt
-                .block_number
-                .ok_or_else(|| color_eyre::eyre::eyre!("receipt has no block number"))?
-                .into(),
-        )
-        .await?
-        .ok_or_else(|| color_eyre::eyre::eyre!("attestation block not found"))?;
-    let sm = IFlareSystemsManager::new(systems, provider.clone());
-    let (first, epoch) = tokio::try_join!(
-        async { Ok::<_, color_eyre::Report>(sm.firstVotingRoundStartTs().call().await?) },
-        async { Ok(sm.votingEpochDurationSeconds().call().await?) },
-    )?;
-    let round = voting_round(block.header.timestamp, first, epoch)?;
+    let round = if let Some(r) = resume_round {
+        progress(&format!(
+            "resuming voting round {r}: not paying for a new attestation"
+        ));
+        r
+    } else {
+        let request_bytes = Bytes::from(request.clone());
+        let fee = IFdcRequestFeeConfigurations::new(fees, provider.clone())
+            .getRequestFee(request_bytes.clone())
+            .call()
+            .await?;
+        if fee > U256::from(MAX_REQUEST_FEE_WEI) {
+            color_eyre::eyre::bail!(
+                "attestation fee {fee} wei is implausibly high; refusing to pay"
+            );
+        }
+        progress(&format!("requesting the attestation (fee {fee} wei)…"));
+        let pending = IFdcHub::new(hub, provider.clone())
+            .requestAttestation(request_bytes)
+            .value(fee)
+            .send()
+            .await
+            .map_err(|e| color_eyre::eyre::eyre!("requestAttestation failed: {e}"))?;
+        let receipt = pending.get_receipt().await?;
+        if !receipt.status() {
+            color_eyre::eyre::bail!(
+                "requestAttestation reverted: {:#x}",
+                receipt.transaction_hash
+            );
+        }
+        let block = provider
+            .get_block_by_number(
+                receipt
+                    .block_number
+                    .ok_or_else(|| color_eyre::eyre::eyre!("receipt has no block number"))?
+                    .into(),
+            )
+            .await?
+            .ok_or_else(|| color_eyre::eyre::eyre!("attestation block not found"))?;
+        let sm = IFlareSystemsManager::new(systems, provider.clone());
+        let (first, epoch) = tokio::try_join!(
+            async { Ok::<_, color_eyre::Report>(sm.firstVotingRoundStartTs().call().await?) },
+            async { Ok(sm.votingEpochDurationSeconds().call().await?) },
+        )?;
+        let round = voting_round(block.header.timestamp, first, epoch)?;
+        // Printed before the wait so a dropped run can resume with `--round`.
+        progress(&format!(
+            "attestation paid; if this run dies, resume with --round {round}"
+        ));
+        round
+    };
 
     progress(&format!("waiting for voting round {round} to finalize…"));
     let relay = IRelay::new(relay, provider.clone());

@@ -286,6 +286,10 @@ pub enum Cmd {
         /// Use `executeDirectMintingWithData` with these bytes (Smart Account custom instruction)
         #[arg(long, value_name = "HEX")]
         data: Option<String>,
+        /// Resume a run that already paid the attestation: reuse this voting round instead of
+        /// paying again (the round is printed right after the attestation is requested)
+        #[arg(long)]
+        round: Option<u64>,
     },
     /// Burn FXRP and have an agent pay XRP to an XRPL address (`redeemAmount`; `redeemWithTag`
     /// with `--tag`). Needs `[flare.fassets] execute = true`; `--yes` on Flare mainnet.

@@ -354,7 +354,11 @@ async fn run_flare_command(
             let report = flare::fetch_fxrp_report(&url, tag).await?;
             println!("{}", serde_json::to_string_pretty(&report)?);
         }
-        Cmd::FxrpExecute { tx_hash, data } => {
+        Cmd::FxrpExecute {
+            tx_hash,
+            data,
+            round,
+        } => {
             let data = data
                 .map(|d| {
                     hex::decode(d.trim().trim_start_matches("0x"))
@@ -367,7 +371,7 @@ async fn run_flare_command(
                 "FDC verifier {} · DA layer {} (attestation fee + gas are paid in FLR)",
                 cfg.verifier_base, cfg.da_base
             ));
-            let proof = fdc::prove_xrp_payment(&url, key, &cfg, &tx_hash, say).await?;
+            let proof = fdc::prove_xrp_payment(&url, key, &cfg, &tx_hash, round, say).await?;
             say("proof ready; submitting executeDirectMinting…");
             let (hash, outcome) =
                 flare::execute_direct_minting_with(&url, key, &proof, data).await?;
