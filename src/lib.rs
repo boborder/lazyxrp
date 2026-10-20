@@ -30,7 +30,9 @@ mod components;
 mod config;
 mod coverage;
 mod errors;
+mod fdc;
 mod flare;
+mod flare_cmd;
 mod logging;
 mod network;
 mod signing;
@@ -253,10 +255,266 @@ pub async fn run() -> color_eyre::Result<()> {
             )?;
             app.run().await?;
         }
+        Some(
+            cmd @ (Cmd::Fxrp { .. }
+            | Cmd::FxrpExecute { .. }
+            | Cmd::FxrpRedeem { .. }
+            | Cmd::FxrpTagReserve
+            | Cmd::FxrpTagSet { .. }
+            | Cmd::FxrpTagTransfer { .. }
+            | Cmd::SaVault { .. }
+            | Cmd::SaMemo { .. }),
+        ) => run_flare_command(cmd, &config, &args, &rpc_url, &network, credential).await?,
         Some(cmd) => {
             let wait = !args.no_wait;
             xrpl::execute_cli_command(cmd, &rpc_url, &network, credential, yes, wait).await?;
         }
+    }
+    Ok(())
+}
+
+/// XRPL Mainnet ↔ Flare, XRPL Testnet ↔ Coston2; anything else is refused before any RPC.
+fn check_network_pair(xrpl: &Network, flare: config::FlareNetwork) -> color_eyre::Result<()> {
+    match (xrpl, flare) {
+        (Network::Mainnet, config::FlareNetwork::Flare)
+        | (Network::Testnet, config::FlareNetwork::Coston2) => Ok(()),
+        (x, f) => color_eyre::eyre::bail!(
+            "XRPL {x:?} does not pair with [flare] network {f:?} (Mainnet ↔ flare, Testnet ↔ coston2)"
+        ),
+    }
+}
+
+fn check_xrpl_tx_hash(h: &str) -> color_eyre::Result<()> {
+    let h = h.trim().trim_start_matches("0x");
+    if h.len() != 64 || !h.bytes().all(|b| b.is_ascii_hexdigit()) {
+        color_eyre::eyre::bail!("tx_hash must be 64 hex characters (the XRPL transaction hash)");
+    }
+    Ok(())
+}
+
+/// Flare subcommands (`-x fxrp*`, `-x sa-vault`): handled before the XRPL client because they
+/// need the Flare RPC / EVM key. Writes need `[flare.fassets] execute = true`, the Flare EVM key,
+/// an https RPC and `--yes` on Flare mainnet; every EVM write estimates gas (= simulates) first.
+async fn run_flare_command(
+    cmd: Cmd,
+    config: &Config,
+    args: &Cli,
+    xrpl_rpc_url: &str,
+    xrpl_network: &Network,
+    credential: Option<signing::SigningCredential>,
+) -> color_eyre::Result<()> {
+    use secrecy::ExposeSecret;
+
+    let url = app::resolve_flare_rpc_url(&config.flare).ok_or_else(|| {
+        color_eyre::eyre::eyre!("no Flare RPC: set [flare] network or FLARE_RPC_URL")
+    })?;
+    let writes = cmd.signs();
+    match &cmd {
+        Cmd::FxrpExecute { tx_hash, .. } => {
+            check_network_pair(xrpl_network, config.flare.network)?;
+            check_xrpl_tx_hash(tx_hash)?;
+        }
+        Cmd::FxrpRedeem { .. } | Cmd::SaVault { .. } | Cmd::SaMemo { .. } => {
+            check_network_pair(xrpl_network, config.flare.network)?;
+        }
+        _ => {}
+    }
+    let url = check_flare_endpoint(&url, args.allow_insecure_rpc, writes)?;
+    let flare_mainnet = matches!(config.flare.network, config::FlareNetwork::Flare);
+    let say = |m: &str| eprintln!("{m}");
+    let yes_gate = || {
+        if flare_mainnet && !args.yes {
+            color_eyre::eyre::bail!("Flare mainnet write: re-run with --yes to allow it");
+        }
+        Ok(())
+    };
+    // EVM writes: opt-in + key + mainnet confirmation, in that order.
+    let evm_key = |cmd: &Cmd| -> color_eyre::Result<Option<String>> {
+        if matches!(
+            cmd,
+            Cmd::Fxrp { .. } | Cmd::SaVault { .. } | Cmd::SaMemo { .. }
+        ) {
+            return Ok(None);
+        }
+        flare::ensure_fassets_execute_enabled(config.flare.fassets.execute)?;
+        let key = config.flare_evm_key.as_ref().ok_or_else(|| {
+            color_eyre::eyre::eyre!(
+                "env {} was not set at startup (Flare EVM key)",
+                config.flare.fassets.evm_key_env
+            )
+        })?;
+        yes_gate()?;
+        Ok(Some(key.expose_secret().to_string()))
+    };
+    let key = evm_key(&cmd)?;
+    let key = key.as_deref().unwrap_or_default();
+
+    match cmd {
+        Cmd::Fxrp { tag } => {
+            let report = flare::fetch_fxrp_report(&url, tag).await?;
+            println!("{}", serde_json::to_string_pretty(&report)?);
+        }
+        Cmd::FxrpExecute { tx_hash, data } => {
+            let data = data
+                .map(|d| {
+                    hex::decode(d.trim().trim_start_matches("0x"))
+                        .map(alloy::primitives::Bytes::from)
+                })
+                .transpose()
+                .map_err(|e| color_eyre::eyre::eyre!("--data must be hex: {e}"))?;
+            let cfg = fdc::fdc_config(config.flare.network, |v| env::var(v).ok())?;
+            say(&format!(
+                "FDC verifier {} · DA layer {} (attestation fee + gas are paid in FLR)",
+                cfg.verifier_base, cfg.da_base
+            ));
+            let proof = fdc::prove_xrp_payment(&url, key, &cfg, &tx_hash, say).await?;
+            say("proof ready; submitting executeDirectMinting…");
+            let (hash, outcome) =
+                flare::execute_direct_minting_with(&url, key, &proof, data).await?;
+            if let flare::DirectMintOutcome::PaymentTooSmall { .. } = outcome {
+                color_eyre::eyre::bail!("{hash} · {outcome}");
+            }
+            println!("{hash} · {outcome}");
+        }
+        Cmd::FxrpRedeem { amount, to, tag } => {
+            let drops = xrpl::xrp_to_drops(amount.trim())?;
+            let hash = flare_cmd::redeem_fxrp(&url, key, u128::from(drops), &to, tag, say).await?;
+            println!("{hash}");
+        }
+        Cmd::FxrpTagReserve => {
+            let (hash, tag) = flare_cmd::reserve_tag(&url, key, say).await?;
+            println!("{hash} · reserved tag {tag}");
+        }
+        Cmd::FxrpTagSet {
+            tag,
+            recipient,
+            executor,
+        } => {
+            let parse = |v: Option<String>| {
+                v.map(|s| {
+                    signing::parse_smart_account_recipient(&s).map(alloy::primitives::Address::from)
+                })
+                .transpose()
+            };
+            let hashes =
+                flare_cmd::set_tag(&url, key, tag, parse(recipient)?, parse(executor)?, say)
+                    .await?;
+            println!("{}", hashes.join("\n"));
+        }
+        Cmd::FxrpTagTransfer { tag, to } => {
+            let to = alloy::primitives::Address::from(signing::parse_smart_account_recipient(&to)?);
+            let hash = flare_cmd::transfer_tag(&url, key, tag, to, say).await?;
+            println!("{hash}");
+        }
+        Cmd::SaVault {
+            protocol,
+            action,
+            vault_id,
+            value,
+        } => {
+            let id = protocol.instruction_id(action);
+            let kind = u8::from(matches!(protocol, cli::VaultProtocol::Upshift)) + 1;
+            flare_cmd::ensure_vault_registered(&url, vault_id, kind).await?;
+            let (operator, fee_drops) = flare_cmd::instruction_route(&url, id).await?;
+            let reference = signing::encode_vault_instruction(id, 0, value, vault_id)?;
+            say(&format!(
+                "instruction 0x{id:02x} · vault {vault_id} · value {value} · memo {} · fee {} XRP → operator {operator}",
+                signing::smart_account_memo_data(&reference),
+                flare::uba_to_xrp_display(u128::from(fee_drops)),
+            ));
+            let params = xrpl::SmartAccountInstructionParams {
+                redeem: false,
+                value,
+                recipient: String::new(),
+                operator_xrpl: operator,
+                fee_drops,
+                vault: Some(xrpl::SmartAccountVaultOp {
+                    instruction_id: id,
+                    vault_id,
+                }),
+                skip_mainnet_prompt: args.yes,
+            };
+            let hash = xrpl::run_smart_account_instruction(
+                xrpl_rpc_url,
+                xrpl_network,
+                params,
+                config.flare.smart_accounts.expected_operator.as_deref(),
+                credential.as_ref(),
+            )
+            .await
+            .map_err(|e| color_eyre::eyre::eyre!(e))?;
+            println!("{hash}");
+        }
+        Cmd::SaMemo {
+            op,
+            amount,
+            fee,
+            target,
+            nonce,
+            new_fee,
+            executor,
+        } => {
+            let info = flare::fetch_fxrp_direct_mint_info(&url).await?;
+            if info.minting_paused == Some(true)
+                || info.emergency_pause_level.is_some_and(|l| l > 0)
+            {
+                color_eyre::eyre::bail!(
+                    "FXRP minting is paused on Flare; not sending XRP to the Core Vault"
+                );
+            }
+            let me = credential
+                .as_ref()
+                .ok_or_else(|| color_eyre::eyre::eyre!("no signing key"))?
+                .address()?;
+            let target_id = target.as_deref().map(flare_cmd::parse_tx_id).transpose()?;
+            let state = flare::read_memo_state(&url, &me, target_id).await?;
+            flare_cmd::check_target_state(op, state.target_used)?;
+            let current_nonce = Some(state.nonce);
+            if state.executor != alloy::primitives::Address::ZERO {
+                say(&format!(
+                    "executor pinned to {:#x}: only it can finalize this payment (0xD0 / 0xD1 bypass the pin)",
+                    state.executor
+                ));
+            } else if matches!(op, cli::MemoOp::SetExecutor) {
+                say(
+                    "no executor is pinned yet; after this, only the pinned one can finalize memo payments",
+                );
+            }
+            let memo = flare_cmd::recovery_memo(
+                op,
+                fee,
+                target.as_deref(),
+                nonce,
+                new_fee,
+                executor.as_deref(),
+                current_nonce,
+            )?;
+            say(&format!(
+                "memo {memo} · {amount} XRP → Core Vault {} (finalize afterwards with `fxrp-execute <tx> --data 0x`)",
+                info.core_vault_xrpl
+            ));
+            let params = xrpl::FxrpDirectMintPaymentParams {
+                core_vault_xrpl: info.core_vault_xrpl.clone(),
+                min_fee_uba: info.min_fee_uba,
+                fee_bips: info.fee_bips,
+                executor_fee_uba: u128::from(fee),
+                flare_recipient: String::new(),
+                amount_xrp: amount,
+                custom_memo: Some(memo),
+                skip_mainnet_prompt: args.yes,
+            };
+            let hash = xrpl::run_direct_mint_payment(
+                xrpl_rpc_url,
+                xrpl_network,
+                params,
+                config.flare.fassets.expected_core_vault.as_deref(),
+                credential.as_ref(),
+            )
+            .await
+            .map_err(|e| color_eyre::eyre::eyre!(e))?;
+            println!("{hash}");
+        }
+        _ => color_eyre::eyre::bail!("not a Flare subcommand"),
     }
     Ok(())
 }
@@ -539,6 +797,29 @@ mod command_resolve_tests {
 
         let mut empty = Config::default();
         assert_eq!(enter_watch_mode(&mut empty, None).unwrap(), None);
+    }
+
+    /// TC-343: XRPL ↔ Flare network pairing and tx-hash shape.
+    #[test]
+    fn flare_network_pair_and_tx_hash_checks() {
+        use config::FlareNetwork::{Coston2, Flare, Songbird};
+        assert!(check_network_pair(&Network::Mainnet, Flare).is_ok());
+        assert!(check_network_pair(&Network::Testnet, Coston2).is_ok());
+        for (x, f) in [
+            (Network::Mainnet, Coston2),
+            (Network::Testnet, Flare),
+            (Network::Mainnet, Songbird),
+            (Network::Devnet, Flare),
+            (Network::Xahau, Flare),
+        ] {
+            assert!(check_network_pair(&x, f).is_err(), "{x:?}/{f:?}");
+        }
+        let h = "8B1625C463F2D71EA21806EB7B6C5D56642915EC8EDC0473A9F70CF9F92252E9";
+        assert!(check_xrpl_tx_hash(h).is_ok());
+        assert!(check_xrpl_tx_hash(&format!("0x{h}")).is_ok());
+        for bad in ["zz", &h[1..], &format!("{h}0"), &h.replace('8', "g")] {
+            assert!(check_xrpl_tx_hash(bad).is_err(), "{bad}");
+        }
     }
 
     #[test]

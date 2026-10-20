@@ -1245,12 +1245,18 @@ pub(super) async fn submit_fxrp_direct_mint_payment(
     signing_credential: Option<&crate::signing::SigningCredential>,
 ) {
     let submit_err = Action::FxrpDirectMintPaymentSubmitErr;
-    let Some(memo) = unwrap_or_submit_err(
-        signing::build_direct_mint_memo_data(&params.flare_recipient),
-        submit_err,
-        action_tx,
-    ) else {
-        return;
+    let memo = match &params.custom_memo {
+        Some(m) => m.clone(),
+        None => {
+            let Some(m) = unwrap_or_submit_err(
+                signing::build_direct_mint_memo_data(&params.flare_recipient),
+                submit_err,
+                action_tx,
+            ) else {
+                return;
+            };
+            m
+        }
     };
     let amount_drops = match xrp_to_drops(params.amount_xrp.trim()) {
         Ok(v) => v,
@@ -1264,6 +1270,15 @@ pub(super) async fn submit_fxrp_direct_mint_payment(
             action_tx,
             submit_err("amount must be greater than zero".into()),
         );
+        return;
+    }
+    if let Err(e) = crate::flare::check_direct_mint_amount(
+        amount_drops,
+        params.min_fee_uba,
+        params.fee_bips,
+        params.executor_fee_uba,
+    ) {
+        send_action(action_tx, submit_err(e));
         return;
     }
     let Some(destination) = unwrap_or_submit_err(
@@ -1388,6 +1403,36 @@ pub(super) async fn submit_fxrp_direct_mint_payment(
     .await;
 }
 
+/// CLI entry (`-x sa-memo`): one Direct Mint Payment (custom memo) through the C2 pipeline.
+pub async fn run_direct_mint_payment(
+    rpc_url: &str,
+    network: &Network,
+    params: FxrpDirectMintPaymentParams,
+    expected_core_vault: Option<&str>,
+    signing_credential: Option<&crate::signing::SigningCredential>,
+) -> Result<String, String> {
+    let rpc = RpcClient::connect(rpc_url).map_err(|e| e.to_string())?;
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    submit_fxrp_direct_mint_payment(
+        &rpc,
+        network,
+        params,
+        expected_core_vault,
+        &tx,
+        signing_credential,
+    )
+    .await;
+    drop(tx);
+    while let Some(action) = rx.recv().await {
+        match action {
+            Action::FxrpDirectMintPaymentSubmitOk(hash) => return Ok(hash),
+            Action::FxrpDirectMintPaymentSubmitErr(e) => return Err(e),
+            _ => {}
+        }
+    }
+    Err("direct mint payment pipeline ended without a result".into())
+}
+
 /// Smart Account instruction (`0x01` FXRP transfer / `0x02` redeem): a Payment of exactly
 /// `getInstructionFee(id)` drops to the pinned operator, no `DestinationTag`, one 32-byte memo.
 /// The operator (and fee) come from one Flare RPC answer, so signing needs
@@ -1402,7 +1447,9 @@ pub(super) async fn submit_smart_account_instruction(
 ) {
     let submit_err = Action::SmartAccountInstructionSubmitErr;
     // Wallet id 0: "use 0 if unassigned" (Flare Smart Accounts docs).
-    let reference = if params.redeem {
+    let reference = if let Some(v) = params.vault {
+        signing::encode_vault_instruction(v.instruction_id, 0, params.value, v.vault_id)
+    } else if params.redeem {
         signing::encode_fxrp_redeem_instruction(0, params.value)
     } else {
         signing::encode_fxrp_transfer_instruction(0, params.value, &params.recipient)
@@ -1546,6 +1593,36 @@ pub(super) async fn submit_smart_account_instruction(
     .await;
 }
 
+/// CLI entry (`-x sa-vault`): run the instruction pipeline once and return the XRPL tx hash.
+pub async fn run_smart_account_instruction(
+    rpc_url: &str,
+    network: &Network,
+    params: SmartAccountInstructionParams,
+    expected_operator: Option<&str>,
+    signing_credential: Option<&crate::signing::SigningCredential>,
+) -> Result<String, String> {
+    let rpc = RpcClient::connect(rpc_url).map_err(|e| e.to_string())?;
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    submit_smart_account_instruction(
+        &rpc,
+        network,
+        params,
+        expected_operator,
+        &tx,
+        signing_credential,
+    )
+    .await;
+    drop(tx);
+    while let Some(action) = rx.recv().await {
+        match action {
+            Action::SmartAccountInstructionSubmitOk(hash) => return Ok(hash),
+            Action::SmartAccountInstructionSubmitErr(e) => return Err(e),
+            _ => {}
+        }
+    }
+    Err("instruction pipeline ended without a result".into())
+}
+
 /// `ripple_path_find` from the signing account in the Send max field's currency →
 /// Send max spec with slippage. Read-only; signing still goes through simulate.
 pub(super) async fn quote_payment(
@@ -1633,7 +1710,16 @@ pub(super) async fn submit_fxrp_execute_direct_mint(
     )
     .await
     {
-        Ok(hash) => send_action(action_tx, Action::FxrpExecuteDirectMintSubmitOk(hash)),
+        Ok((hash, crate::flare::DirectMintOutcome::PaymentTooSmall { .. })) => send_action(
+            action_tx,
+            submit_err(format!(
+                "executeDirectMinting {hash}: payment lost to the fee receiver"
+            )),
+        ),
+        Ok((hash, outcome)) => send_action(
+            action_tx,
+            Action::FxrpExecuteDirectMintSubmitOk(format!("{hash} · {outcome}")),
+        ),
         Err(e) => send_action(action_tx, submit_err(format!("{e}"))),
     };
 }
@@ -2197,6 +2283,7 @@ mod tests {
             },
             operator_xrpl: SA_GENESIS.into(),
             fee_drops,
+            vault: None,
             skip_mainnet_prompt: false,
         }
     }
@@ -2628,10 +2715,14 @@ mod tests {
                             &Network::Mainnet,
                             FxrpDirectMintPaymentParams {
                                 core_vault_xrpl: GENESIS.into(),
+                                min_fee_uba: 0,
+                                fee_bips: 0,
+                                executor_fee_uba: 0,
                                 flare_recipient: "0xabcdef0123456789abcdef0123456789abcdef01"
                                     .into(),
                                 amount_xrp: "1".into(),
                                 skip_mainnet_prompt: false,
+                                custom_memo: None,
                             },
                             None,
                             &tx,

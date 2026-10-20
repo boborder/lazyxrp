@@ -76,6 +76,12 @@ Risks without a matching S entry (e.g. R-006 mainnet guard bypass, R-008 RPC 429
 - **Channel / AMM family（PaymentChannelCreate / Fund / Claim、AMMCreate / Bid / Delete）**: XRP ロック・資産移転・LP トークン消費・不可逆な種別は型付き確認（`LOCK` / `FUND` / `CLAIM` / `CREATE` / `BID` / `DELETE`）必須、AMMVote のみ確認なし。Claim の `Signature` / `PublicKey` は貼り付け入力の hex 検証のみで、署名はローカルで生成しない（`CredentialIDs` は未対応）。drops は 1..=1e17 の整数、AuthAccounts は ≤ 4 件・重複なし・署名者自身は拒否。AMMCreate は owner reserve 相当の特別 Fee を burn するため Fee 上限ガード（共通経路）が効く。
 - **MPT / Identity family（MPTokenIssuanceDestroy、CredentialDelete、DIDDelete、OracleDelete、PermissionedDomainDelete）**: 不可逆な削除系は型付き確認（`DESTROY` / `DELETE`）必須。Credential / DID / Oracle の blob は平文を hex 化（任意バイト列を直接入れない）、価格は decimal u64 のみ、Domain ID はゼロハッシュ拒否。MPT の確認不要な Set（lock / unlock）・Authorize は可逆。Vault* と MPT mutation / confidential 系は未対応（`coverage.rs` に理由）。
 
+## 2026-10-20 Flare EVM 書き込み面の拡張と FDC proof 取得（ユーザー承認済みの方針転換）
+
+- **新しい書き込み面**（Flare EVM key）: `-x fxrp-execute`（FDC 手数料 + `executeDirectMinting`）/ `fxrp-redeem`（FXRP を burn）/ `fxrp-tag-reserve` / `fxrp-tag-set` / `fxrp-tag-transfer`。TUI には出さず CLI のみ。ガードは全て共通: `[flare.fassets] execute = true`（既定 false）→ 起動時に取り込んだ EVM key → https の Flare RPC → Flare mainnet は `--yes`。`--watch` は key を落とすので拒否される。各書き込みは前提を on-chain で読んでから `estimate_gas`（revert ならここで止まる）→ 送信。
+- **FDC proof 取得は lazyxrp の外、という roadmap-log の方針を覆した**。新しい外部 HTTP 面は verifier と DA layer の 2 つ。対策: https 限定（`FDC_VERIFIER_URL` / `FDC_DA_URL` の上書きも）、redirect 無効、応答 1 MiB 上限、30 s timeout、verifier の `abiEncodedRequest` を tx hash / `proofOwner` / 型 / source id と byte 照合してから手数料を払う（偽の request に手数料を払わせない）、手数料上限 100 FLR（実測 20 FLR）、DA 応答は実行前に proof parser で形を検査。proof の正否は contract が Merkle 検証するため、DA / verifier が偽造できるのは手数料の浪費まで。proof は署名鍵の address に束縛される（他者は使えない）。
+- **残るリスク**: 手数料（約 20 FLR）は round が finalize しない / DA が応答しない場合に戻らない。`fxrp-tag-transfer` は取り消せない。`sa-vault` の `value` は生値で受ける（単位は upstream `Instructions.sol` で確認: deposit = FXRP 最小単位、redeem = shares、claim = period / `YYYYMMDD`）ため、桁の取り違えは利用者側の責任で、メモ hex を事前表示する。`fxrp-execute` / `fxrp-redeem` / `sa-vault` は XRPL と Flare の network 対（mainnet ↔ flare、testnet ↔ coston2）を RPC 前に強制する。全て実送信は未実施（読み取り側の拒否経路のみ実測）。
+
 ## 2026-10-16 Smart Account operator pin（S-018）
 
 - **新しい信頼境界**: Flare Smart Accounts の instruction Payment の宛先（`MasterAccountController.getXrplProviderWallets()[0]`）と `Amount`（`getInstructionFee(id)`）は Flare RPC の単一の応答で決まる。悪意ある / 侵害された RPC は自分の XRPL アドレスを operator として返し、ユーザーの XRP と FXRP 操作の意図（32-byte memo）を横取りできる。Core Vault（C2）と同じ構造。

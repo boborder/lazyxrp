@@ -270,6 +270,136 @@ pub enum Cmd {
         /// Existing classic address to fund
         address: Option<String>,
     },
+    /// Read-only Flare FXRP report (JSON): Direct Mint fees / pause / limits, MintingTagManager
+    /// (optionally one tag) and the global redemption queue. Uses `FLARE_RPC_URL` or `[flare] network`.
+    Fxrp {
+        /// Minting tag ID to look up (owner, recipient, allowed executor)
+        #[arg(long)]
+        tag: Option<u64>,
+    },
+    /// Prove an XRPL Payment with the Flare Data Connector (verifier → FdcHub → DA layer) and run
+    /// `executeDirectMinting` with it: the one-command FXRP Direct Mint finalize (C3).
+    /// Pays the attestation fee in FLR from the Flare EVM key; needs `[flare.fassets] execute = true`.
+    FxrpExecute {
+        /// XRPL transaction hash of the Payment to the Core Vault (64 hex)
+        tx_hash: String,
+        /// Use `executeDirectMintingWithData` with these bytes (Smart Account custom instruction)
+        #[arg(long, value_name = "HEX")]
+        data: Option<String>,
+    },
+    /// Burn FXRP and have an agent pay XRP to an XRPL address (`redeemAmount`; `redeemWithTag`
+    /// with `--tag`). Needs `[flare.fassets] execute = true`; `--yes` on Flare mainnet.
+    FxrpRedeem {
+        /// FXRP amount in XRP units, e.g. 12.5 (at least `minimumRedeemAmountUBA`)
+        amount: String,
+        /// Classic XRPL r-address that receives the XRP
+        to: String,
+        /// XRPL destination tag for the agent's payment (exchange deposits)
+        #[arg(long)]
+        tag: Option<u64>,
+    },
+    /// Reserve a minting tag (`MintingTagManager.reserve()`, pays the reservation fee in FLR).
+    FxrpTagReserve,
+    /// Set a tag's minting recipient and / or allowed executor (tag owner only; an executor
+    /// change activates after the cooldown).
+    FxrpTagSet {
+        tag: u64,
+        /// Flare address that receives FXRP minted with this tag
+        #[arg(long)]
+        recipient: Option<String>,
+        /// Only this Flare address may execute mints for the tag
+        #[arg(long)]
+        executor: Option<String>,
+    },
+    /// Transfer a minting tag you own to another Flare address (irreversible; resets recipient
+    /// and executor).
+    FxrpTagTransfer {
+        tag: u64,
+        to: String,
+    },
+    /// Smart Account vault instruction as an XRPL Payment to the operator: Firelight / Upshift
+    /// deposit, request-redeem or claim. `--value` is the instruction's value field verbatim
+    /// (upstream `Instructions.sol`: deposit = FXRP base units, redeem = shares, claim = period / date).
+    SaVault {
+        #[arg(value_enum)]
+        protocol: VaultProtocol,
+        #[arg(value_enum)]
+        action: VaultAction,
+        /// Vault id from `MasterAccountController.getVaults()`
+        vault_id: u16,
+        /// Value field (deposit: FXRP base units, 6 decimals; redeem: vault shares; Firelight claim: period; Upshift claim: YYYYMMDD)
+        value: u128,
+    },
+    /// Smart Account memo instruction (recovery / executor pin): a Direct Mint Payment to the
+    /// Core Vault carrying the 10–50 byte memo. The payment must mint a positive net amount
+    /// (fee-only direct mints revert); an executor then finalizes it with
+    /// `fxrp-execute <tx> --data 0x`. No destination tag.
+    SaMemo {
+        #[arg(value_enum)]
+        op: MemoOp,
+        /// XRP to send to the Core Vault (must exceed the Direct Mint fees + `--fee`)
+        amount: String,
+        /// Executor fee in UBA (drops) written into the memo header
+        #[arg(long, default_value_t = 0)]
+        fee: u64,
+        /// ignore-memo / replace-fee: the stuck XRPL transaction hash
+        #[arg(long)]
+        target: Option<String>,
+        /// set-nonce: the new nonce (> current, jump <= u32::MAX)
+        #[arg(long)]
+        nonce: Option<u64>,
+        /// replace-fee: the replacement executor fee (UBA)
+        #[arg(long)]
+        new_fee: Option<u64>,
+        /// set-executor: Flare address of the executor to pin
+        #[arg(long)]
+        executor: Option<String>,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
+pub enum VaultProtocol {
+    Firelight,
+    Upshift,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
+pub enum VaultAction {
+    Deposit,
+    RequestRedeem,
+    Claim,
+}
+
+/// Direct-mint memo instructions of a Smart Account (`MemoInstructions.sol`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
+pub enum MemoOp {
+    /// `0xE0`: skip the memo of a stuck XRPL payment on its next direct mint
+    IgnoreMemo,
+    /// `0xE1`: fast-forward the memo-instruction nonce
+    SetNonce,
+    /// `0xE2`: replace the executor fee of a stuck XRPL payment
+    ReplaceFee,
+    /// `0xD0`: pin one executor for the personal account
+    SetExecutor,
+    /// `0xD1`: remove the executor pin
+    RemoveExecutor,
+}
+
+impl VaultProtocol {
+    /// Smart Account instruction id: type nibble (`1` Firelight, `2` Upshift) + command nibble
+    /// (`1` deposit, `2` redeem, `3` claim).
+    #[must_use]
+    pub fn instruction_id(self, action: VaultAction) -> u8 {
+        let kind = match self {
+            Self::Firelight => 0x10,
+            Self::Upshift => 0x20,
+        };
+        kind | match action {
+            VaultAction::Deposit => 1,
+            VaultAction::RequestRedeem => 2,
+            VaultAction::Claim => 3,
+        }
+    }
 }
 
 impl Cmd {
@@ -296,6 +426,14 @@ impl Cmd {
             Cmd::NftMint { .. } => "nft-mint",
             Cmd::NftBurn { .. } => "nft-burn",
             Cmd::Faucet { .. } => "faucet",
+            Cmd::Fxrp { .. } => "fxrp",
+            Cmd::FxrpExecute { .. } => "fxrp-execute",
+            Cmd::FxrpRedeem { .. } => "fxrp-redeem",
+            Cmd::FxrpTagReserve => "fxrp-tag-reserve",
+            Cmd::FxrpTagSet { .. } => "fxrp-tag-set",
+            Cmd::FxrpTagTransfer { .. } => "fxrp-tag-transfer",
+            Cmd::SaVault { .. } => "sa-vault",
+            Cmd::SaMemo { .. } => "sa-memo",
         }
     }
 
@@ -312,6 +450,13 @@ impl Cmd {
                 | Cmd::Tx { .. }
                 | Cmd::NftMint { .. }
                 | Cmd::NftBurn { .. }
+                | Cmd::FxrpExecute { .. }
+                | Cmd::FxrpRedeem { .. }
+                | Cmd::FxrpTagReserve
+                | Cmd::FxrpTagSet { .. }
+                | Cmd::FxrpTagTransfer { .. }
+                | Cmd::SaVault { .. }
+                | Cmd::SaMemo { .. }
         )
     }
 }

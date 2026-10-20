@@ -18,6 +18,25 @@ use crate::{
     xrpl::FlareFeedPrice,
 };
 
+/// A feed older than this is flagged: FTSOv2 block-latency feeds update about every 1.8 s, so a
+/// minute without an update means a stalled feed or a lagging RPC.
+const FEED_STALE_SECS: u64 = 60;
+
+/// Age of a feed value (`now - timestamp`) as a label, and whether it is stale. A zero
+/// timestamp (never updated) is stale; a timestamp ahead of `now` (clock skew) reads as 0s.
+fn feed_age(now_secs: u64, timestamp: u64) -> (String, bool) {
+    if timestamp == 0 {
+        return ("never".to_string(), true);
+    }
+    let age = now_secs.saturating_sub(timestamp);
+    let label = match age {
+        0..=119 => format!("{age}s"),
+        120..=7199 => format!("{}m", age / 60),
+        _ => format!("{}h", age / 3600),
+    };
+    (label, age > FEED_STALE_SECS)
+}
+
 #[derive(Default)]
 pub struct FlareFtsoPanel {
     prices: Vec<FlareFeedPrice>,
@@ -71,11 +90,20 @@ impl FlareFtsoPanel {
             return;
         }
 
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs());
         let rows = self.prices.iter().map(|fp| {
+            let (age, stale) = feed_age(now, fp.timestamp);
+            let age_style = if stale {
+                theme::warning_style()
+            } else {
+                theme::dim_style()
+            };
             Row::new(vec![
                 Cell::from(fp.pair.as_str()),
                 Cell::from(fp.price.as_str()),
-                Cell::from(fp.timestamp.to_string()),
+                Cell::from(age).style(age_style),
                 Cell::from(fp.source.as_str()),
             ])
         });
@@ -88,7 +116,7 @@ impl FlareFtsoPanel {
                 Constraint::Fill(1),
             ],
         )
-        .header(Row::new(vec!["Pair", "Price", "Time", "Source"]).style(theme::header_row_style()));
+        .header(Row::new(vec!["Pair", "Price", "Age", "Source"]).style(theme::header_row_style()));
         render_selectable_table(frame, area, table, &mut self.table_state, self.is_focused);
     }
 }
@@ -127,5 +155,22 @@ impl Component for FlareFtsoPanel {
         frame.render_widget(block, area);
         self.render_content(frame, inner);
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// TC-338: feed age labels and the stale threshold (boundary, skew, never updated).
+    #[test]
+    fn feed_age_labels_and_staleness() {
+        assert_eq!(feed_age(1_000, 998), ("2s".to_string(), false));
+        assert_eq!(feed_age(1_060, 1_000), ("60s".to_string(), false));
+        assert_eq!(feed_age(1_061, 1_000), ("61s".to_string(), true));
+        assert_eq!(feed_age(1_000 + 600, 1_000), ("10m".to_string(), true));
+        assert_eq!(feed_age(1_000 + 7_200, 1_000), ("2h".to_string(), true));
+        assert_eq!(feed_age(1_000, 1_500), ("0s".to_string(), false));
+        assert_eq!(feed_age(1_000, 0), ("never".to_string(), true));
     }
 }

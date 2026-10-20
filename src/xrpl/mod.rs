@@ -22,6 +22,7 @@ pub(crate) use format::{JsonAmount, format_ripple_time_utc, hex_to_ascii, json_a
 pub use format::{drops_to_xrp, xrp_to_drops};
 pub(crate) use nft_image::fetch_nft_image;
 pub use poll::start_poll_task;
+pub use submit::{run_direct_mint_payment, run_smart_account_instruction};
 pub use toml::fetch_xrpl_toml_with_meta;
 pub(crate) use types::RIPPLE_EPOCH_UNIX;
 pub use types::*;

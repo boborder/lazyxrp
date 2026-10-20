@@ -2461,6 +2461,7 @@ mod tests {
             redeem_fee_drops: 1_500_000,
             fxrp_decimals: 6,
             fxrp_balance_units: 12_500_000,
+            vaults: vec![],
         });
         panel
     }
@@ -2529,6 +2530,7 @@ mod tests {
                 recipient: TO.into(),
                 operator_xrpl: "rOperator".into(),
                 fee_drops: 200_000,
+                vault: None,
                 skip_mainnet_prompt: false,
             }
         );
@@ -2654,5 +2656,99 @@ mod tests {
         panel.smart_account = None;
         panel.open_smart_account_composer();
         assert!(panel.composer.is_none());
+    }
+
+    /// TC-333: the FXRP Mint composer carries the read fee views into the queued params and
+    /// refuses to queue while FXRP minting is paused (mint pause or any emergency level).
+    #[test]
+    fn fxrp_mint_composer_refuses_when_paused_and_carries_fees() {
+        let info = |paused, level| crate::xrpl::FxrpDirectMintInfo {
+            core_vault_xrpl: "rVault".into(),
+            asset_manager: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
+            min_fee_uba: 100_000,
+            fee_bips: 10,
+            executor_fee_uba: 200_000,
+            minting_paused: paused,
+            emergency_pause_level: level,
+            limits: None,
+        };
+        let mut panel = WalletPanel::new(true);
+        panel.fxrp_direct_mint = Some(info(None, None));
+        panel.open_fxrp_direct_mint_composer();
+        if let Some(ComposerPhase::FxrpDirectMint {
+            flare_recipient, ..
+        }) = &mut panel.composer
+        {
+            *flare_recipient = "0xabcdef0123456789abcdef0123456789abcdef01".into();
+        }
+        let Action::FxrpDirectMintPaymentSubmit(p) = panel.queue_submit_fxrp_direct_mint() else {
+            panic!("unpaused unknown state must queue");
+        };
+        assert_eq!(
+            (p.min_fee_uba, p.fee_bips, p.executor_fee_uba),
+            (100_000, 10, 200_000)
+        );
+        for (paused, level) in [
+            (Some(true), Some(0)),
+            (Some(false), Some(1)),
+            (None, Some(3)),
+        ] {
+            panel.fxrp_direct_mint = Some(info(paused, level));
+            assert!(
+                matches!(
+                    panel.queue_submit_fxrp_direct_mint(),
+                    Action::FxrpDirectMintPaymentSubmitErr(m) if m.contains("paused")
+                ),
+                "{paused:?}/{level:?}"
+            );
+        }
+    }
+
+    /// TC-335: the FXRP Mint composer refuses an amount over the global minting cap headroom
+    /// (executeDirectMinting would revert and the XRP would wait in the Core Vault); a delayed
+    /// amount is still queued.
+    #[test]
+    fn fxrp_mint_composer_refuses_over_cap_only() {
+        let mut panel = WalletPanel::new(true);
+        panel.fxrp_direct_mint = Some(crate::xrpl::FxrpDirectMintInfo {
+            core_vault_xrpl: "rVault".into(),
+            asset_manager: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
+            min_fee_uba: 100_000,
+            fee_bips: 10,
+            executor_fee_uba: 200_000,
+            minting_paused: Some(false),
+            emergency_pause_level: Some(0),
+            limits: Some(crate::xrpl::MintLimits {
+                cap_uba: 1_000_000_000,
+                supply_uba: 990_000_000,
+                cap_headroom_uba: Some(10_000_000),
+                window_max_now_uba: 1_000_000,
+                large_threshold_uba: 4_000_000_000,
+                large_delay_secs: 7200,
+                granularity_uba: 1,
+            }),
+        });
+        panel.open_fxrp_direct_mint_composer();
+        let set_amount = |p: &mut WalletPanel, v: &str| {
+            if let Some(ComposerPhase::FxrpDirectMint {
+                flare_recipient,
+                amount_xrp,
+                ..
+            }) = &mut p.composer
+            {
+                *flare_recipient = "0xabcdef0123456789abcdef0123456789abcdef01".into();
+                *amount_xrp = v.into();
+            }
+        };
+        set_amount(&mut panel, "5"); // over the window max (delayed), under the cap headroom
+        assert!(matches!(
+            panel.queue_submit_fxrp_direct_mint(),
+            Action::FxrpDirectMintPaymentSubmit(_)
+        ));
+        set_amount(&mut panel, "10.000001");
+        assert!(matches!(
+            panel.queue_submit_fxrp_direct_mint(),
+            Action::FxrpDirectMintPaymentSubmitErr(m) if m.contains("cap")
+        ));
     }
 }

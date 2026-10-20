@@ -495,6 +495,21 @@ impl WalletPanel {
         let Some(info) = &self.fxrp_direct_mint else {
             return Action::FxrpDirectMintPaymentSubmitErr("Core Vault not loaded yet".into());
         };
+        if info.minting_paused == Some(true) || info.emergency_pause_level.is_some_and(|l| l > 0) {
+            return Action::FxrpDirectMintPaymentSubmitErr(
+                "FXRP minting is paused on Flare (mintingPaused / emergency pause); not sending XRP to the Core Vault".into(),
+            );
+        }
+        if let Some(limits) = &info.limits
+            && let Ok(drops) = crate::xrpl::xrp_to_drops(amount_xrp.trim())
+            && crate::flare::classify_mint(u128::from(drops), limits)
+                == crate::flare::MintClass::CapExceeded
+        {
+            return Action::FxrpDirectMintPaymentSubmitErr(format!(
+                "{}; the XRP would sit in the Core Vault until the cap has room",
+                crate::flare::MintClass::CapExceeded
+            ));
+        }
         if let Err(e) = crate::signing::normalize_eth_address_hex(&flare_recipient) {
             return Action::FxrpDirectMintPaymentSubmitErr(format!("{e}"));
         }
@@ -503,8 +518,12 @@ impl WalletPanel {
         }
         Action::FxrpDirectMintPaymentSubmit(FxrpDirectMintPaymentParams {
             core_vault_xrpl: info.core_vault_xrpl.clone(),
+            min_fee_uba: info.min_fee_uba,
+            fee_bips: info.fee_bips,
+            executor_fee_uba: info.executor_fee_uba,
             flare_recipient,
             amount_xrp,
+            custom_memo: None,
             skip_mainnet_prompt: self.skip_mainnet_prompt,
         })
     }
@@ -618,6 +637,7 @@ impl WalletPanel {
             },
             operator_xrpl: operator.clone(),
             fee_drops,
+            vault: None,
             skip_mainnet_prompt: self.skip_mainnet_prompt,
         })
     }

@@ -5,12 +5,13 @@
 ## Cautions（計画上の注意点）
 
 - **セキュリティは非交渉。** mainnet write は simulate + `--yes`、seed/mnemonic は `credential_from_secrets` 経由のみ、config の world-readable 警告を外さない。採用（人気）追求のために緩めない。詳細は [`security.md`](security.md)。
-- C3 は testnet（XRPL testnet + Coston2）で検証済み（2026-10-11）。mainnet での実行は未実施・計画外（ユーザー判断: 実資金は testnet）。FDC proof の取得（verifier `prepareRequest` → `FdcHub` → DA layer）は lazyxrp の外。
+- C3 は testnet（XRPL testnet + Coston2）で検証済み（2026-10-11）。mainnet での実行は未実施・計画外（ユーザー判断: 実資金は testnet）。FDC proof の取得（verifier `prepareRequest` → `FdcHub` → DA layer）は **2026-10-20 に方針転換**（ユーザー承認）: `-x fxrp-execute` が取得から `executeDirectMinting` までを 1 コマンドで行う。TUI の C3 は従来どおり proof 貼り付け。理由と対策は [`security.md`](security.md) 2026-10-20 節。
 - Keymap customization は `src/config.rs` を触る → AGENTS.md 契約により config キーに言及する全 `docs/` を同一変更内で同期。組み込みデフォルトは `config.json5`。
 - OfferCancel（旧 F-02）は DEX trading に統合済み。個別タスクとしては追わない。
 
 ## Pivot log（進路変更記録）
 
+- **2026-10-20** — Flare 最新機能の調査（Developer Hub + ニュース + vendored skills + mainnet RPC 実測）を ROADMAP「Flare adoption plan」に反映。調査で、v1.3 の mint 制限・`DirectMintingPaymentTooSmallForFee` に対し C2 / C3 が無防備（最小額ガードなし、delayed を成功扱い）と判明したため F1 を P1 に。FDC proof 自動取得（F3-d）は公開 API だけで可能と分かったが、Cautions の「lazyxrp の外」と矛盾するので方針変更として**ユーザー判断待ち**にした。実装は未着手（計画のみ）。
 - **2026-10-16** — OpenSpec（`openspec/`）を廃止。人間向け SSOT は `docs/` に一本化。モジュール依存規則は `docs/directory.md` §3、不変条件 I-1〜I-11 は `docs/security.md`、Benchmark 運用は `docs/maintenance.md` へ統合し、他の spec は docs の複製だったため削除。`docs/` → `openspec/` リンクガード（CI / `mise run lint`）も不要になり削除。
 - **2026-10-11** — 0.5.0 後、長期 Watch / Operate 分離（ユーザー選択: `--watch` フラグ）。判断: Wallet パネルに新モードを足さず、起動時に `Config` から鍵を全部消す（`enter_watch_mode`）だけにした — 鍵が無ければ既存の Account パネル（読み取り専用）が出て composer・鍵生成は存在せず、poll task も署名できない。鍵のアドレスは `--account` 未指定時の監視先に使う。`-x` 署名系は鍵不在エラーに頼らず明示的に拒否。ステータスバーの WATCH 表示は見送り（パネルの違いで判別できる）。
 - **2026-10-11** — 0.4.2 公開後、長期から F-01 AccountDelete に着手（ユーザー選択: TUI + CLI `-x account-delete`）。判断: 宛先は Payment と同じ classic / X-address（tag は X-address で指定、専用欄は作らない）。不可逆なので TUI は常に `DELETE` 入力の確認を挟む（SetRegularKey CLEAR と同じ DangerConfirm、宛先を表示）。Fee はローカル計算せず simulate の autofill（owner reserve 0.2 XRP）を署名 — testnet で 200000 drops を確認。256 ledger 制約や所有オブジェクトは simulate に任せる（`tecTOO_SOON` を実地確認）。削除後の Wallet パネルが "None" とだけ出ていたので文言を変えた。

@@ -295,6 +295,50 @@ pub fn encode_fxrp_redeem_instruction(wallet_id: u8, lots: u128) -> color_eyre::
     encode_smart_account_instruction(SMART_ACCOUNT_FXRP_REDEEM, wallet_id, lots, [0_u8; 20])
 }
 
+/// Firelight (`0x1_`) and Upshift (`0x2_`) deposit / request-redeem / claim instruction ids.
+pub const SMART_ACCOUNT_VAULT_INSTRUCTIONS: [u8; 6] = [0x11, 0x12, 0x13, 0x21, 0x22, 0x23];
+
+/// Vault instruction: `[id | walletId | value (10 B) | 2 B ignored | vaultId (2 B BE) | 16 B ignored]`.
+/// `value` is carried verbatim (deposit / redeem amount, Firelight claim period, Upshift claim
+/// date `YYYYMMDD`).
+pub fn encode_vault_instruction(
+    id: u8,
+    wallet_id: u8,
+    value: u128,
+    vault_id: u16,
+) -> color_eyre::Result<[u8; 32]> {
+    if !SMART_ACCOUNT_VAULT_INSTRUCTIONS.contains(&id) {
+        color_eyre::eyre::bail!("0x{id:02x} is not a vault instruction id");
+    }
+    let mut tail = [0_u8; 20];
+    tail[2..4].copy_from_slice(&vault_id.to_be_bytes());
+    encode_smart_account_instruction(id, wallet_id, value, tail)
+}
+
+/// Direct-mint memo instruction (`MemoInstructions.sol`): `[op | walletId=0 | executorFeeUBA (8 B BE) | body]`.
+/// Total length per op is fixed on-chain (`InvalidMemoData` otherwise): `0xE0` / `0xE1` 42,
+/// `0xE2` 50, `0xD0` 30, `0xD1` 10. Returns `MemoData` hex (no `0x`).
+pub fn encode_memo_instruction(op: u8, fee_uba: u64, body: &[u8]) -> color_eyre::Result<String> {
+    let total = match op {
+        0xE0 | 0xE1 => 42,
+        0xE2 => 50,
+        0xD0 => 30,
+        0xD1 => 10,
+        _ => color_eyre::eyre::bail!("0x{op:02x} is not a memo recovery instruction"),
+    };
+    let mut memo = vec![op, 0];
+    memo.extend_from_slice(&fee_uba.to_be_bytes());
+    memo.extend_from_slice(body);
+    if memo.len() != total {
+        color_eyre::eyre::bail!(
+            "0x{op:02x} memo must be {total} bytes, got {} (body {} bytes)",
+            memo.len(),
+            body.len()
+        );
+    }
+    Ok(hex::encode(memo))
+}
+
 /// Highest ERC-20 `decimals()` accepted (10^18 · values stay inside u128 arithmetic).
 pub const MAX_TOKEN_DECIMALS: u8 = 18;
 

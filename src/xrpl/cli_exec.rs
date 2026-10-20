@@ -118,6 +118,14 @@ fn validate_cmd_account_and_issuer_addresses(cmd: &Cmd) -> color_eyre::Result<()
         }
         Cmd::Info
         | Cmd::Coverage
+        | Cmd::Fxrp { .. }
+        | Cmd::FxrpExecute { .. }
+        | Cmd::FxrpRedeem { .. }
+        | Cmd::FxrpTagReserve
+        | Cmd::FxrpTagSet { .. }
+        | Cmd::FxrpTagTransfer { .. }
+        | Cmd::SaVault { .. }
+        | Cmd::SaMemo { .. }
         | Cmd::Send { .. }
         | Cmd::OfferCancel { .. }
         | Cmd::Faucet { address: None } => {}
@@ -571,6 +579,16 @@ pub async fn execute_cli_command(
             print!("{}", crate::coverage::markdown_table());
             let (writable, total) = crate::coverage::write_counts(&crate::coverage::rows());
             println!("\nWritable: {writable} / {total} XRPL transaction types");
+        }
+        Cmd::Fxrp { .. }
+        | Cmd::FxrpExecute { .. }
+        | Cmd::FxrpRedeem { .. }
+        | Cmd::FxrpTagReserve
+        | Cmd::FxrpTagSet { .. }
+        | Cmd::FxrpTagTransfer { .. }
+        | Cmd::SaMemo { .. }
+        | Cmd::SaVault { .. } => {
+            color_eyre::eyre::bail!("this Flare subcommand is handled before the XRPL client")
         }
         Cmd::AccountDelete { destination } => {
             use super::address::{ensure_xaddress_matches_network, resolve_payment_destination};

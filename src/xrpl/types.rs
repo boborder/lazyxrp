@@ -434,6 +434,25 @@ pub struct FlareWalletSummary {
     pub executor_key_configured: bool,
 }
 
+/// Direct Mint throttles read from AssetManagerFXRP, already replayed to the block time
+/// (the limiter views are stale between writes). All amounts in UBA (XRP drops).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MintLimits {
+    /// `mintingCapAMG × granularity`; 0 = cap disabled.
+    pub cap_uba: u128,
+    /// FXRP total supply (the cap headroom derived from it is an upper bound).
+    pub supply_uba: u128,
+    /// Largest single mint the global cap still accepts (`None` = cap disabled).
+    pub cap_headroom_uba: Option<u128>,
+    /// Largest mint that neither window delays right now (min of hourly / daily).
+    pub window_max_now_uba: u128,
+    /// Mints at or above this are delayed by `large_delay_secs`.
+    pub large_threshold_uba: u128,
+    pub large_delay_secs: u64,
+    /// `assetMintingGranularityUBA` (mint amounts are floored to it).
+    pub granularity_uba: u128,
+}
+
 /// FXRP Direct Mint read-only snapshot from AssetManagerFXRP (C1).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct FxrpDirectMintInfo {
@@ -447,6 +466,13 @@ pub struct FxrpDirectMintInfo {
     pub fee_bips: u64,
     /// Preferred-executor fee in UBA (XRP drops).
     pub executor_fee_uba: u128,
+    /// `mintingPaused()` (governance mint-only pause); `None` when the contract has no such view.
+    pub minting_paused: Option<bool>,
+    /// `emergencyPauseLevel()` (0 = none, 1 = start operations, 2 = full, 3 = full + transfers);
+    /// `None` when the view is missing.
+    pub emergency_pause_level: Option<u8>,
+    /// Mint rate-limit / cap snapshot; `None` when any of its views could not be read.
+    pub limits: Option<MintLimits>,
 }
 
 /// Flare Smart Account read snapshot for one XRPL owner (`MasterAccountController` views).
@@ -472,6 +498,22 @@ pub struct SmartAccountInfo {
     pub fxrp_decimals: u8,
     /// FXRP `balanceOf(personal_account)` in base units (`10^-fxrp_decimals` FXRP).
     pub fxrp_balance_units: u128,
+    /// Registered vault positions (`getVaults()`; Firelight / Upshift) of the personal account
+    /// with a non-zero share balance. Advisory: empty when the vault reads fail.
+    pub vaults: Vec<SmartAccountVault>,
+}
+
+/// One Smart Account vault position (vault list comes from `MasterAccountController.getVaults()`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SmartAccountVault {
+    pub id: u64,
+    pub address: String,
+    /// `1` = Firelight, `2` = Upshift (`getVaults()` vault type).
+    pub kind: u8,
+    /// `balanceOf(personal_account)` in vault share base units.
+    pub shares: u128,
+    /// ERC-4626 `convertToAssets(shares)` in FXRP base units; `None` if the vault lacks it.
+    pub assets: Option<u128>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -624,10 +666,17 @@ pub struct PaymentQuoteParams {
 pub struct FxrpDirectMintPaymentParams {
     /// Core Vault XRPL classic address (from C1 / AssetManager).
     pub core_vault_xrpl: String,
+    /// Fee views from the same C1 snapshot; the amount must leave something after them.
+    pub min_fee_uba: u128,
+    pub fee_bips: u64,
+    pub executor_fee_uba: u128,
     /// Flare/EVM recipient address (`0x` + 40 hex).
     pub flare_recipient: String,
     /// XRP amount to send (fees deducted on Flare side from this payment).
     pub amount_xrp: String,
+    /// Complete `MemoData` hex (no `0x`) replacing the recipient memo: Smart Account memo
+    /// instructions (`0xE0`–`0xE2`, `0xD0`, `0xD1`) travel in a Direct Mint Payment too.
+    pub custom_memo: Option<String>,
     pub skip_mainnet_prompt: bool,
 }
 
@@ -653,7 +702,18 @@ pub struct SmartAccountInstructionParams {
     pub operator_xrpl: String,
     /// `getInstructionFee(id)` in XRP drops: the exact Payment `Amount`.
     pub fee_drops: u64,
+    /// `Some` → a Firelight / Upshift vault instruction (`redeem` / `recipient` are ignored and
+    /// `value` is the instruction's value field verbatim).
+    pub vault: Option<SmartAccountVaultOp>,
     pub skip_mainnet_prompt: bool,
+}
+
+/// Which vault instruction to encode (`id` = `0x11`–`0x13` Firelight, `0x21`–`0x23` Upshift).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SmartAccountVaultOp {
+    pub instruction_id: u8,
+    /// Vault id registered in `MasterAccountController.getVaults()`.
+    pub vault_id: u16,
 }
 
 /// SetRegularKey from the Wallet form.
