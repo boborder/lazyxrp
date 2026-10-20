@@ -979,7 +979,14 @@ pub async fn execute_direct_minting_with(
         None => am.executeDirectMinting(proof).send().await,
         Some(d) => am.executeDirectMintingWithData(proof, d).send().await,
     }
-    .map_err(|e| color_eyre::eyre::eyre!("executeDirectMinting send failed: {e}"))?;
+    .map_err(|e| {
+        let hint = if e.to_string().contains("0x18dce79f") {
+            " (PaymentAlreadyConfirmed: another executor already finalized this payment; check the recipient balance)"
+        } else {
+            ""
+        };
+        color_eyre::eyre::eyre!("executeDirectMinting send failed: {e}{hint}")
+    })?;
     let tx_hash = *pending.tx_hash();
     let receipt = pending
         .get_receipt()

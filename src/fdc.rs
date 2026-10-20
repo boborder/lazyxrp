@@ -306,11 +306,24 @@ pub async fn prove_xrp_payment(
     progress(&format!("waiting for voting round {round} to finalize…"));
     let relay = IRelay::new(relay, provider.clone());
     let deadline = tokio::time::Instant::now() + FINALIZE_TIMEOUT;
-    while !relay
-        .isFinalized(U256::from(FDC_PROTOCOL_ID), U256::from(round))
-        .call()
-        .await?
-    {
+    // A dropped connection mid-wait must not strand the paid attestation: tolerate a few
+    // consecutive RPC errors before giving up.
+    let mut rpc_errors = 0_u32;
+    loop {
+        match relay
+            .isFinalized(U256::from(FDC_PROTOCOL_ID), U256::from(round))
+            .call()
+            .await
+        {
+            Ok(true) => break,
+            Ok(false) => rpc_errors = 0,
+            Err(e) => {
+                rpc_errors += 1;
+                if rpc_errors > 5 {
+                    return Err(e.into());
+                }
+            }
+        }
         if tokio::time::Instant::now() >= deadline {
             color_eyre::eyre::bail!(
                 "round {round} did not finalize in {} s (the attestation fee is spent)",
