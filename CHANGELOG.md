@@ -4,6 +4,8 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-10-21
+
 ## [0.7.0] - 2026-10-16
 
 ### Added
@@ -148,7 +150,8 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 See [GitHub Releases](https://github.com/boborder/lazyxrp/releases) for 0.2.11 and older.
 
-[Unreleased]: https://github.com/boborder/lazyxrp/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/boborder/lazyxrp/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/boborder/lazyxrp/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/boborder/lazyxrp/compare/v0.6.1...v0.7.0
 [0.6.1]: https://github.com/boborder/lazyxrp/compare/v0.4.1...v0.6.1
 [0.6.0]: https://github.com/boborder/lazyxrp/compare/v0.4.1...v0.6.0
