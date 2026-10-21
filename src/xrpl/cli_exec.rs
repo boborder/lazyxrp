@@ -126,6 +126,7 @@ fn validate_cmd_account_and_issuer_addresses(cmd: &Cmd) -> color_eyre::Result<()
         | Cmd::FxrpTagTransfer { .. }
         | Cmd::SaVault { .. }
         | Cmd::SaMemo { .. }
+        | Cmd::SaCall { .. }
         | Cmd::Send { .. }
         | Cmd::OfferCancel { .. }
         | Cmd::Faucet { address: None } => {}
@@ -587,6 +588,7 @@ pub async fn execute_cli_command(
         | Cmd::FxrpTagSet { .. }
         | Cmd::FxrpTagTransfer { .. }
         | Cmd::SaMemo { .. }
+        | Cmd::SaCall { .. }
         | Cmd::SaVault { .. } => {
             color_eyre::eyre::bail!("this Flare subcommand is handled before the XRPL client")
         }

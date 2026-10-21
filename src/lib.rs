@@ -263,7 +263,8 @@ pub async fn run() -> color_eyre::Result<()> {
             | Cmd::FxrpTagSet { .. }
             | Cmd::FxrpTagTransfer { .. }
             | Cmd::SaVault { .. }
-            | Cmd::SaMemo { .. }),
+            | Cmd::SaMemo { .. }
+            | Cmd::SaCall { .. }),
         ) => run_flare_command(cmd, &config, &args, &rpc_url, &network, credential).await?,
         Some(cmd) => {
             let wait = !args.no_wait;
@@ -314,7 +315,7 @@ async fn run_flare_command(
             check_network_pair(xrpl_network, config.flare.network)?;
             check_xrpl_tx_hash(tx_hash)?;
         }
-        Cmd::FxrpRedeem { .. } | Cmd::SaVault { .. } | Cmd::SaMemo { .. } => {
+        Cmd::FxrpRedeem { .. } | Cmd::SaVault { .. } | Cmd::SaMemo { .. } | Cmd::SaCall { .. } => {
             check_network_pair(xrpl_network, config.flare.network)?;
         }
         _ => {}
@@ -332,7 +333,7 @@ async fn run_flare_command(
     let evm_key = |cmd: &Cmd| -> color_eyre::Result<Option<String>> {
         if matches!(
             cmd,
-            Cmd::Fxrp { .. } | Cmd::SaVault { .. } | Cmd::SaMemo { .. }
+            Cmd::Fxrp { .. } | Cmd::SaVault { .. } | Cmd::SaMemo { .. } | Cmd::SaCall { .. }
         ) {
             return Ok(None);
         }
@@ -496,6 +497,59 @@ async fn run_flare_command(
             say(&format!(
                 "memo {memo} · {amount} XRP → Core Vault {} (finalize afterwards with `fxrp-execute <tx> --data 0x`)",
                 info.core_vault_xrpl
+            ));
+            let params = xrpl::FxrpDirectMintPaymentParams {
+                core_vault_xrpl: info.core_vault_xrpl.clone(),
+                min_fee_uba: info.min_fee_uba,
+                fee_bips: info.fee_bips,
+                executor_fee_uba: u128::from(fee),
+                flare_recipient: String::new(),
+                amount_xrp: amount,
+                custom_memo: Some(memo),
+                skip_mainnet_prompt: args.yes,
+            };
+            let hash = xrpl::run_direct_mint_payment(
+                xrpl_rpc_url,
+                xrpl_network,
+                params,
+                config.flare.fassets.expected_core_vault.as_deref(),
+                credential.as_ref(),
+            )
+            .await
+            .map_err(|e| color_eyre::eyre::eyre!(e))?;
+            println!("{hash}");
+        }
+        Cmd::SaCall { amount, calls, fee } => {
+            let info = flare::fetch_fxrp_direct_mint_info(&url).await?;
+            if info.minting_paused == Some(true)
+                || info.emergency_pause_level.is_some_and(|l| l > 0)
+            {
+                color_eyre::eyre::bail!(
+                    "FXRP minting is paused on Flare; not sending XRP to the Core Vault"
+                );
+            }
+            let me = credential
+                .as_ref()
+                .ok_or_else(|| color_eyre::eyre::eyre!("no signing key"))?
+                .address()?;
+            let state = flare::read_memo_state(&url, &me, None).await?;
+            if state.executor != alloy::primitives::Address::ZERO {
+                say(&format!(
+                    "executor pinned to {:#x}: only it can finalize this payment",
+                    state.executor
+                ));
+            }
+            let (user_op, memo) =
+                flare_cmd::build_user_operation(state.personal, state.nonce, &calls, fee)?;
+            say(&format!(
+                "personal account {:#x} · nonce {} · {} call(s) · memo {memo}",
+                state.personal,
+                state.nonce,
+                calls.len()
+            ));
+            say(&format!(
+                "after the payment validates, finalize with: fxrp-execute <tx> --data 0x{}",
+                hex::encode(&user_op)
             ));
             let params = xrpl::FxrpDirectMintPaymentParams {
                 core_vault_xrpl: info.core_vault_xrpl.clone(),

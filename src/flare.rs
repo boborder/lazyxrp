@@ -618,6 +618,7 @@ pub async fn fetch_fxrp_report(
 /// Memo-instruction state of one XRPL owner's personal account.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MemoState {
+    pub personal: alloy::primitives::Address,
     pub nonce: u128,
     /// Pinned executor (`Address::ZERO` = none).
     pub executor: alloy::primitives::Address,
@@ -655,6 +656,7 @@ pub async fn read_memo_state(
     Ok(MemoState {
         nonce: u128::try_from(nonce)
             .map_err(|_| color_eyre::eyre::eyre!("Flare RPC returned an out-of-range nonce"))?,
+        personal,
         executor,
         target_used,
     })

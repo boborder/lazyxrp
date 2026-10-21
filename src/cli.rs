@@ -359,6 +359,20 @@ pub enum Cmd {
         #[arg(long)]
         executor: Option<String>,
     },
+    /// Smart Account custom instruction `0xFE`: contract calls run from your personal account.
+    /// Sends the 42-byte memo (keccak256 of the user operation) as a Direct Mint Payment and prints
+    /// the user-operation bytes the executor must pass: `fxrp-execute <tx> --data <HEX>`.
+    /// Calls carry no FLR value.
+    SaCall {
+        /// XRP to send to the Core Vault (must exceed the Direct Mint fees + `--fee`)
+        amount: String,
+        /// `TARGET:0xDATA` (repeatable); executed in order from the personal account
+        #[arg(long = "call", required = true)]
+        calls: Vec<String>,
+        /// Executor fee in UBA (drops) written into the memo header
+        #[arg(long, default_value_t = 0)]
+        fee: u64,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
@@ -438,6 +452,7 @@ impl Cmd {
             Cmd::FxrpTagTransfer { .. } => "fxrp-tag-transfer",
             Cmd::SaVault { .. } => "sa-vault",
             Cmd::SaMemo { .. } => "sa-memo",
+            Cmd::SaCall { .. } => "sa-call",
         }
     }
 
@@ -461,6 +476,7 @@ impl Cmd {
                 | Cmd::FxrpTagTransfer { .. }
                 | Cmd::SaVault { .. }
                 | Cmd::SaMemo { .. }
+                | Cmd::SaCall { .. }
         )
     }
 }

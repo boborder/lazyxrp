@@ -320,11 +320,11 @@ pub fn encode_vault_instruction(
 /// `0xE2` 50, `0xD0` 30, `0xD1` 10. Returns `MemoData` hex (no `0x`).
 pub fn encode_memo_instruction(op: u8, fee_uba: u64, body: &[u8]) -> color_eyre::Result<String> {
     let total = match op {
-        0xE0 | 0xE1 => 42,
+        0xE0 | 0xE1 | 0xFE => 42,
         0xE2 => 50,
         0xD0 => 30,
         0xD1 => 10,
-        _ => color_eyre::eyre::bail!("0x{op:02x} is not a memo recovery instruction"),
+        _ => color_eyre::eyre::bail!("0x{op:02x} is not a memo instruction with a fixed layout"),
     };
     let mut memo = vec![op, 0];
     memo.extend_from_slice(&fee_uba.to_be_bytes());

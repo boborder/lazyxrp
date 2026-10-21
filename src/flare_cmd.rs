@@ -13,6 +13,80 @@ use alloy::{
 
 use crate::flare::{self, IAssetManager, IERC20, IMasterAccountController, IMintingTagManager};
 
+alloy::sol! {
+    struct Call {
+        address target;
+        uint256 value;
+        bytes data;
+    }
+    function executeUserOp(Call[] calls) external payable;
+    /// ERC-4337 `PackedUserOperation`; only `sender`, `nonce` and `callData` are validated.
+    struct PackedUserOperation {
+        address sender;
+        uint256 nonce;
+        bytes initCode;
+        bytes callData;
+        bytes32 accountGasLimits;
+        uint256 preVerificationGas;
+        bytes32 gasFees;
+        bytes paymasterAndData;
+        bytes signature;
+    }
+}
+
+/// Build a `0xFE` custom instruction: the ABI-encoded `PackedUserOperation` (delivered to the
+/// executor as `--data`) and the 42-byte memo `[0xFE | 0 | fee | keccak256(userOp)]` as hex.
+/// Each call is `TARGET:0xDATA`, sent with value 0 (value-carrying calls are not supported).
+pub fn build_user_operation(
+    personal: Address,
+    nonce: u128,
+    calls: &[String],
+    fee_uba: u64,
+) -> color_eyre::Result<(Vec<u8>, String)> {
+    use alloy::sol_types::{SolCall, SolValue};
+    use color_eyre::eyre::{bail, eyre};
+    if calls.is_empty() {
+        bail!("at least one --call TARGET:0xDATA is required");
+    }
+    let calls = calls
+        .iter()
+        .map(|c| {
+            let (t, d) = c
+                .split_once(':')
+                .ok_or_else(|| eyre!("call must be TARGET:0xDATA, got {c}"))?;
+            let target: Address = t
+                .trim()
+                .parse()
+                .map_err(|e| eyre!("call target {t}: {e}"))?;
+            let data = hex::decode(d.trim().trim_start_matches("0x"))
+                .map_err(|e| eyre!("call data must be hex: {e}"))?;
+            Ok(Call {
+                target,
+                value: U256::ZERO,
+                data: data.into(),
+            })
+        })
+        .collect::<color_eyre::Result<Vec<_>>>()?;
+    let op = PackedUserOperation {
+        sender: personal,
+        nonce: U256::from(nonce),
+        initCode: Default::default(),
+        callData: executeUserOpCall { calls }.abi_encode().into(),
+        accountGasLimits: Default::default(),
+        preVerificationGas: U256::ZERO,
+        gasFees: Default::default(),
+        paymasterAndData: Default::default(),
+        signature: Default::default(),
+    };
+    let bytes = op.abi_encode();
+    let memo = crate::signing::encode_memo_instruction(
+        0xFE,
+        fee_uba,
+        alloy::primitives::keccak256(&bytes).as_slice(),
+    )?;
+    Ok((bytes, memo))
+}
+
 /// Validate a redeem request against what the chain reports. `tag` must fit XRPL's `uint32`.
 pub fn check_redeem(
     amount_uba: u128,
@@ -430,6 +504,7 @@ pub async fn instruction_route(rpc_url: &str, id: u8) -> color_eyre::Result<(Str
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloy::sol_types::SolCall as _;
 
     /// TC-341: redeem validation (zero, minimum, balance, tag width) and tag-address guards.
     #[test]
@@ -526,5 +601,32 @@ mod tests {
         assert!(check_target_state(SetNonce, Some(false)).is_err());
         assert!(check_target_state(SetNonce, None).is_err());
         assert!(check_target_state(RemoveExecutor, None).is_ok());
+    }
+
+    /// TC-345: `0xFE` user operation. The memo hash commits to `abi.encode(PackedUserOperation)`,
+    /// which decodes back to the same operation (the controller does `abi.decode(_data, (PackedUserOperation))`).
+    #[test]
+    fn user_operation_encoding_and_memo() {
+        use alloy::sol_types::SolValue;
+        let personal = Address::repeat_byte(0xAA);
+        let target = format!("{:#x}", Address::repeat_byte(0xBB));
+        let calls = vec![format!("{target}:0xdeadbeef"), format!("{target}:0x")];
+        let (bytes, memo) = build_user_operation(personal, 7, &calls, 9).unwrap();
+        let op = <PackedUserOperation as SolValue>::abi_decode(&bytes).unwrap();
+        assert_eq!((op.sender, op.nonce), (personal, U256::from(7)));
+        assert!(op.signature.is_empty() && op.initCode.is_empty());
+        let inner = executeUserOpCall::abi_decode(&op.callData).unwrap();
+        assert_eq!(inner.calls.len(), 2);
+        assert_eq!(inner.calls[0].data.as_ref(), &[0xde, 0xad, 0xbe, 0xef]);
+        // memo = [0xFE | wallet 0 | fee 9 (u64 BE) | keccak256(bytes)]
+        let m = hex::decode(&memo).unwrap();
+        assert_eq!(m.len(), 42);
+        assert_eq!((m[0], m[1], &m[2..10]), (0xFE, 0, &9_u64.to_be_bytes()[..]));
+        assert_eq!(&m[10..], alloy::primitives::keccak256(&bytes).as_slice());
+        // Refused: no calls, bad target, value-carrying calls are not expressible.
+        assert!(build_user_operation(personal, 0, &[], 0).is_err());
+        assert!(build_user_operation(personal, 0, &["0x12:0x".into()], 0).is_err());
+        assert!(build_user_operation(personal, 0, &[format!("{target}:zz")], 0).is_err());
+        assert!(build_user_operation(personal, 0, &[target], 0).is_err());
     }
 }

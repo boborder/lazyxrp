@@ -22,7 +22,7 @@ XRPL エコシステム（開発者・ユーザー双方）で人気の CLI/TUI 
 | ~~TX surface completion — F-01 AccountDelete~~ **済**（0.5.0、2026-10-11） | — | composer `x`（`DELETE` 入力の確認必須）+ `-x account-delete`。Fee（owner reserve）は simulate 由来。TC-232–233、testnet で TUI（X-address tag 付き）/ CLI を validated |
 | ~~Watch / Operate UI 分離~~ **済**（0.6.0、2026-10-11） | — | ユーザー選択: `--watch` フラグ。全鍵を起動時に破棄しアドレスだけ表示、TUI は Account パネル（composer・鍵生成なし）、`-x` 署名系は拒否。TC-234–235 |
 | Flare Smart Accounts — proof-based FXRP transfer / redeem（`[Unreleased]`、2026-10-16） | — | 読み取り（personal account / FXRP 残高 + `decimals()` / nonce / operator / fee、FXRP パネル）+ composer `a`（`0x01` transfer・`0x02` redeem を operator へ Payment + 32-byte memo。transfer の額は読み取った `decimals()` で最小単位に整数変換）。署名は `[flare.smart_accounts] expected_operator` と一致時のみ。TC-239–247。読み取りは Coston2 / Flare mainnet で実機確認（FXRP `decimals()` = 6）、書き込みはオフライン（local JSON-RPC）のみ — 実機 E2E 未実施 |
-| Smart Accounts follow-up: カスタム instruction `0xFE` / `0xFF`（`PackedUserOperation` 構築） | Later | 未対応。vault instruction・`executeDirectMintingWithData`・FDC proof 取得・memo 回復系（`sa-memo`）は F3 で実装済み。`docs/architecture.md` §6.9 |
+| Smart Accounts follow-up: `0xFF`（memo 内に userOp を直接載せる変種。1024 byte 上限） | Later | 未対応。`0xFE` は `-x sa-call` で実装・Coston2 実機確認済み（F3-c）。需要が出たら `0xFF` を追加（`0xFE` と同じ userOp 組み立てで、memo が `[0xFF｜wallet｜fee｜userOp]` になるだけ）。`docs/architecture.md` §6.9 |
 | Action エラー型移行（`String` → 型付き） | Later | `docs/security.md` 構造課題。UI 文言の SSOT 化と同時に |
 | Global row cache (A1) — render perf at scale | Later | 計測で問題が出たら |
 | パネル内キー（`j`/`k`・`t`・composer）の設定化 | Later | グローバルキーは設定可（DESIGN §6）。需要が出たら中期へ |
