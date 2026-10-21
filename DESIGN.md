@@ -117,7 +117,7 @@ Guard: `TAB_TITLES.len() == panels.len() == 4` (`app.rs`, TC-060).
 | Table | `render_selectable_table` | Header accent underline. Focused selection: white on royal. Unfocused selection: muted reversed |
 | TX row | `tx_table_row` | Hash `SECONDARY` (16-char + `…`); ▼ `ERROR` / ▲ `SUCCESS` / · `MUTED`; type `ACCENT`; ledger muted; result success/error |
 | Status bar | `status_bar.rs` | Left: connection chip reversed (`● ONLINE` green / `✖ OFFLINE` red / `○ CONNECTING` orange / `● STALE` orange — XRPL turns STALE after 30 s without `server_info`; a `server_info`-labeled error is OFFLINE even with success history) + `acct:` / `srv:` / `acc:` / `bk:` freshness + `flr:` (flare dot + freshness when flare enabled; red on `FlareFetchFailed`, orange after 30 s without a success) + `dunl:` (manifest **data** age; orange `!` once older than the 10 min `DUNL_CACHE_TTL`) + optional mid price + spinner while refresh. Right: `format!(" {} ", display_name())` reversed bold — `ERROR` if `is_production()` (mainnet **or** xahau), else `WARNING` |
-| Footer hints | `footer_line` | Keys bold, labels dim. Always `?` `Tab` `1-4` `jk` `hl` `^Z` `q`. Tab extras: Overview `t` `g` `r` `Enter`; Account `t` `f` `r`; Market `b`; Assets `o` `x` |
+| Footer hints | `footer_line` | Keys bold, labels dim. Always `?` `Tab` `1-4` `jk` `hl` `^Z` `q`. Tab extras: Overview `r` `Enter` (no wallet here); Account `t` `g` `f` `r`; Market `b`; Assets `o` `x`. Keys and paste go to the **visible** tab only |
 | Loading | `render_loading` | Accent braille spinner (`⠋…`) + muted message |
 | Empty | `render_empty` | Muted paragraph in titled block |
 | Error | `render_error` | `error: ` in `ERROR` + message |
@@ -161,7 +161,7 @@ Defaults: [`config.json5`](config.json5) `keybindings.Splash`. User merge: `~/.c
 |---------|-----|--------|
 | Table, modal closed | `j`/`k`, arrows | Row + scrollbar |
 | Table | `Enter` | TX detail |
-| Wallet | `t` | Composer picker: Payment, AccountSet, SetRegularKey, OfferCreate, TrustSet, FXRP Mint, Execute, OfferCancel, EscrowCreate, Escrows, AMMDeposit, AMMWithdraw, AccountDelete, Smart Account. Under `--watch` the Wallet panel is replaced by the read-only Account panel (no `t` / `g`) |
+| Wallet | `t`, `g` | Account tab only. `t`: composer picker (Payment, AccountSet, SetRegularKey, OfferCreate, TrustSet, FXRP Mint, Execute, OfferCancel, EscrowCreate, Escrows, AMMDeposit, AMMWithdraw, AccountDelete, Smart Account); needs a funded account. `g`: key generation (works for an unfunded seed; the popup draws in every wallet state). Under `--watch` the Wallet panel is replaced by the read-only Account panel (no `t` / `g`) |
 | Picker | `m` | **Transaction** (row 14): second list of spec'd types (`NFTokenMint`, `NFTokenBurn`, …; `j`/`k`/arrows, `Enter`; Esc → picker). Form is generated from the type's field specs |
 | Transaction | `j`/`k`, `Tab`, `[` `]`, `e`, `Enter` | Field nav / edit like other forms; the focused row shows its help text and inline validation error; preview `▸ <summary>` green when valid, orange with the error otherwise. `s` / `Ctrl-s` queue; Esc → type list. Burn / AcceptOffer: `s` opens a type-to-confirm (`BURN` / `ACCEPT`, Esc restores the form) |
 | Smart Account | `a` (picker), `i`, `e`, `Tab`, `s` | Needs the Overview Flare read (incl. FXRP `decimals()`; no read → no composer). `i` flips `0x01` FXRP transfer ↔ `0x02` redeem; rows: Flare recipient (transfer only) + Amount FXRP (decimal, converted to base units with the read `decimals()`; extra fraction digits refused) / Lots; header shows operator + pin status, fee (XRP) and personal-account FXRP balance. Overview FXRP panel gains rows: `Smart acct`, `SA FXRP`, `Nonce · deployed`, `Operator`, `SA fee` |
@@ -177,7 +177,7 @@ Defaults: [`config.json5`](config.json5) `keybindings.Splash`. User merge: `~/.c
 | AccountDelete | form, then type `DELETE` | Destination (classic, or X-address for a tag). Submit always opens a type-to-confirm; Esc keeps the destination. Remaining XRP goes to Destination; fee = owner reserve |
 | Submit | `s`, `Ctrl-s` | Queue; preview color as in §5 |
 
-**Tx history:** `f` filter (`Enter` confirm, `Esc` cancel); `m` next page when marker.
+**Tx history:** `f` filter (`Enter` confirm, `Esc` cancel; typing owns the keyboard — `q` / digits are filter text); `m` next page when marker. **Paste** (bracketed) inserts into the field being edited only and never triggers hotkeys.
 
 **NFT:** `j`/`k` select (URI → image fetch); `x` (Assets tab) opens the Account-tab Transaction composer on NFTokenBurn with the selected NFTokenID prefilled (needs a signing credential; still goes through the `BURN` confirm and simulate).
 

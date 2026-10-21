@@ -26,6 +26,7 @@ pub struct MarketOracleTab {
     oracle: OraclePanel,
     focus_index: usize,
     flare_display: FlareDisplay,
+    action_tx: Option<tokio::sync::mpsc::UnboundedSender<Action>>,
 }
 
 impl MarketOracleTab {
@@ -41,6 +42,7 @@ impl MarketOracleTab {
             oracle: OraclePanel::default(),
             focus_index: 0,
             flare_display,
+            action_tx: None,
         }
     }
 
@@ -74,6 +76,7 @@ impl Component for MarketOracleTab {
         &mut self,
         action_tx: tokio::sync::mpsc::UnboundedSender<Action>,
     ) -> color_eyre::Result<()> {
+        self.action_tx = Some(action_tx.clone());
         self.book.register_action_handler(action_tx.clone())?;
         self.path.register_action_handler(action_tx.clone())?;
         self.amm.register_action_handler(action_tx.clone())?;
@@ -106,22 +109,19 @@ impl Component for MarketOracleTab {
             _ => {}
         }
 
-        if let Some(a) = self.book.update(action)? {
-            return Ok(Some(a));
-        }
-        if let Some(a) = self.path.update(action)? {
-            return Ok(Some(a));
-        }
-        if let Some(a) = self.amm.update(action)? {
-            return Ok(Some(a));
-        }
-        if let Some(a) = self.trust.update(action)? {
-            return Ok(Some(a));
-        }
-        if let Some(a) = self.ftso.update(action)? {
-            return Ok(Some(a));
-        }
-        self.oracle.update(action)
+        let tx = self.action_tx.as_ref();
+        crate::components::update_children(
+            &mut [
+                &mut self.book,
+                &mut self.path,
+                &mut self.amm,
+                &mut self.trust,
+                &mut self.ftso,
+                &mut self.oracle,
+            ],
+            action,
+            tx,
+        )
     }
 
     fn draw(&mut self, frame: &mut Frame, area: Rect) -> color_eyre::Result<()> {

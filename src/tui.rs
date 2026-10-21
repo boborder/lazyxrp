@@ -5,7 +5,10 @@ use std::{
 
 use crossterm::{
     cursor,
-    event::{Event as CrosstermEvent, EventStream, KeyEvent, KeyEventKind},
+    event::{
+        DisableBracketedPaste, EnableBracketedPaste, Event as CrosstermEvent, EventStream,
+        KeyEvent, KeyEventKind,
+    },
     terminal::{EnterAlternateScreen, LeaveAlternateScreen},
 };
 use futures::{FutureExt, StreamExt};
@@ -24,6 +27,7 @@ pub enum Event {
     Error,
     Tick,
     Key(KeyEvent),
+    Paste(String),
     Resize(u16, u16),
 }
 
@@ -86,6 +90,7 @@ impl Tui {
                 crossterm_event = event_stream.next().fuse() => match crossterm_event {
                     Some(Ok(event)) => match event {
                         CrosstermEvent::Key(key) if key.kind == KeyEventKind::Press => Event::Key(key),
+                        CrosstermEvent::Paste(text) => Event::Paste(text),
                         CrosstermEvent::Resize(x, y) => Event::Resize(x, y),
                         _ => continue, // ignore other events
                     }
@@ -123,7 +128,12 @@ impl Tui {
     }
     pub fn enter(&mut self) -> color_eyre::Result<()> {
         crossterm::terminal::enable_raw_mode()?;
-        crossterm::execute!(stdout(), EnterAlternateScreen, cursor::Hide)?;
+        crossterm::execute!(
+            stdout(),
+            EnterAlternateScreen,
+            EnableBracketedPaste,
+            cursor::Hide
+        )?;
         self.start();
         Ok(())
     }
@@ -132,7 +142,12 @@ impl Tui {
         self.stop()?;
         if crossterm::terminal::is_raw_mode_enabled()? {
             self.terminal.flush()?;
-            crossterm::execute!(stdout(), LeaveAlternateScreen, cursor::Show)?;
+            crossterm::execute!(
+                stdout(),
+                DisableBracketedPaste,
+                LeaveAlternateScreen,
+                cursor::Show
+            )?;
             crossterm::terminal::disable_raw_mode()?;
         }
         Ok(())

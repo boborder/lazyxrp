@@ -1,4 +1,4 @@
-// use secrecy::ExposeSecret;
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -9,7 +9,6 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Paragraph, Tabs},
 };
-// use serde::{Deserialize, Serialize};
 use tokio::sync::{mpsc, watch};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
@@ -27,7 +26,7 @@ use crate::{
             overview::OverviewTab,
         },
     },
-    config::{Config, FlareConfig},
+    config::{Config, FlareConfig, Secrets},
     flare::DEFAULT_FLARE_FEEDS,
     network::Network,
     tui::{Event, Tui},
@@ -60,13 +59,12 @@ fn footer_line(active_tab: usize) -> Line<'static> {
     // Tab indices: 0 Overview, 1 Account, 2 Market, 3 Assets
     match active_tab {
         0 => {
-            hint("t", ":tx");
-            hint("g", ":keygen");
             hint("r", ":refresh");
             hint("Enter", ":dUNL");
         }
         1 => {
             hint("t", ":tx");
+            hint("g", ":keygen");
             hint("f", ":filter");
             hint("r", ":refresh");
         }
@@ -83,6 +81,12 @@ fn footer_line(active_tab: usize) -> Line<'static> {
 
 pub struct App {
     config: Arc<Config>,
+    /// Signing credential and Flare EVM key: kept out of the shared `config`, moved into the poll
+    /// task by `run()`.
+    credential: Option<crate::signing::SigningCredential>,
+    flare_evm_key: Option<secrecy::SecretString>,
+    /// A seed or mnemonic is configured: the wallet pane (and its composer) exists.
+    has_wallet: bool,
     /// Wallet AccountSet form typing mode: skip Splash keymap in `on_key_event`.
     keymap_suppressed: bool,
     tick_rate: f64,
@@ -118,6 +122,9 @@ pub struct App {
     net_tx: watch::Sender<Network>,
     tab_tx: watch::Sender<usize>,
     needs_draw: bool,
+    /// NFT ids / domains whose fetch is still running (a repeat request is dropped).
+    nft_images_inflight: HashSet<String>,
+    toml_inflight: HashSet<String>,
 }
 
 pub(crate) fn resolve_flare_rpc_url(flare: &FlareConfig) -> Option<String> {
@@ -161,7 +168,7 @@ impl App {
         account: Option<String>,
         network: Network,
         mut config: Config,
-        seed: Option<String>,
+        secrets: Secrets,
         skip_mainnet_prompt: bool,
     ) -> color_eyre::Result<Self> {
         let (action_tx, action_rx) = mpsc::unbounded_channel();
@@ -174,24 +181,28 @@ impl App {
         };
         let (net_tx, _net_rx) = watch::channel(network);
         let (tab_tx, _tab_rx) = watch::channel(0usize);
-        if let Some(cli_seed) = seed {
-            let trimmed_seed = cli_seed.trim();
-            config.xrpl.signing.seed = None;
-            config.xrpl.signing.secret_seed = if trimmed_seed.is_empty() {
-                None
-            } else {
-                Some(secrecy::SecretString::from(trimmed_seed.to_string()))
-            };
-        }
         // Keep wallet UI / config network aligned with the resolved CLI/env network.
         config.xrpl.network = network;
-        let watch_account = account.unwrap_or_else(|| config.xrpl.account.clone());
+        let credential = secrets.credential()?;
+        // Derived once; the wallet pane gets only the address, never a key.
+        let wallet = credential
+            .as_ref()
+            .map(|c| c.address().map_err(|e| e.to_string()));
+        let has_wallet = wallet.is_some();
+        let watch_account = account.unwrap_or_else(|| {
+            // The wallet signs for its own address: history/refresh must follow it, not the
+            // config default, or "Recent txs" would describe a different account.
+            wallet
+                .clone()
+                .and_then(Result::ok)
+                .unwrap_or_else(|| config.xrpl.account.clone())
+        });
         let flare_display = config.flare.display;
         let custom_rpc = rpc_server != network.rpc_url();
         let custom_ws = ws_server != network.ws_url();
         let panels: Vec<Box<dyn Component>> = vec![
             Box::new(OverviewTab::new(rpc_server.clone(), flare_display)),
-            Box::new(AccountWalletTab::new(skip_mainnet_prompt)),
+            Box::new(AccountWalletTab::new(skip_mainnet_prompt, wallet)),
             Box::new(MarketOracleTab::new(flare_display)),
             Box::new(AssetsTab::new()),
         ];
@@ -225,6 +236,9 @@ impl App {
             should_quit: false,
             should_suspend: false,
             config: Arc::new(config),
+            credential,
+            flare_evm_key: secrets.flare_evm_key,
+            has_wallet,
             last_tick_key_events: Vec::new(),
             action_tx,
             action_rx,
@@ -239,6 +253,8 @@ impl App {
             net_tx,
             tab_tx,
             needs_draw: true,
+            nft_images_inflight: HashSet::new(),
+            toml_inflight: HashSet::new(),
         })
     }
 
@@ -287,10 +303,7 @@ impl App {
             poll_trigger_tx,
             cancel.clone(),
         );
-        let signing_credential = crate::signing::credential_from_secrets(
-            self.config.xrpl.signing.secret_seed.as_ref(),
-            self.config.xrpl.signing.secret_mnemonic.as_ref(),
-        )?;
+        let signing_credential = self.credential.take();
         let seed_address = signing_credential.as_ref().and_then(|c| c.address().ok());
         let flare_rpc_url = resolve_flare_rpc_url(&self.config.flare);
         let flare_feeds = resolve_flare_feeds();
@@ -307,14 +320,15 @@ impl App {
                 tab_watch: self.tab_tx.subscribe(),
                 oracles: self.config.xrpl.oracles.clone(),
                 oracle_pairs: self.config.xrpl.oracle_pairs.clone(),
-                flare_rpc_url: flare_rpc_url.clone(),
-                flare_feeds: flare_feeds.clone(),
+                flare_rpc_url,
+                flare_feeds,
                 flare_expected_core_vault: self.config.flare.fassets.expected_core_vault.clone(),
                 flare_expected_operator: self.config.flare.smart_accounts.expected_operator.clone(),
                 flare_fassets_execute: self.config.flare.fassets.execute,
+                flare_network: self.config.flare.network,
                 flare_display: self.config.flare.display,
                 flare_evm_key_env: self.config.flare.fassets.evm_key_env.clone(),
-                flare_evm_key: self.config.flare_evm_key.clone(),
+                flare_evm_key: self.flare_evm_key.take(),
                 flare_wallet_address: self.config.flare.wallet.address.clone(),
                 submit_lock: Arc::new(tokio::sync::Mutex::new(())),
             },
@@ -323,8 +337,9 @@ impl App {
             action_tx.clone(),
             cancel.clone(),
         );
-        if self.config.xrpl.oracles.is_empty()
-            && flare_rpc_url.is_none()
+        // The Oracle panel is the XRPL on-chain oracle table; without both lists nothing is ever
+        // fetched, so say so instead of spinning forever.
+        if (self.config.xrpl.oracles.is_empty() || self.config.xrpl.oracle_pairs.is_empty())
             && action_tx.send(Action::XrplOracleNotConfigured).is_err()
         {
             warn!("action channel closed (oracle not configured)");
@@ -354,17 +369,27 @@ impl App {
         let Some(event) = tui.next_event().await else {
             return Ok(());
         };
+        self.route_event(&event)
+    }
+
+    /// Keys and paste belong to the visible tab only: a hidden tab must not open modals,
+    /// move selections or fire fetches from input the user typed elsewhere.
+    fn route_event(&mut self, event: &Event) -> color_eyre::Result<()> {
         let action_tx = self.action_tx.clone();
-        match &event {
+        match event {
             Event::Tick => action_tx.send(Action::Tick)?,
             Event::Resize(x, y) => action_tx.send(Action::Resize(*x, *y))?,
             Event::Key(key) => self.on_key_event(*key)?,
             _ => {}
         }
-        for panel in self.panels.iter_mut() {
-            if let Some(action) = panel.on_event(Some(&event))? {
-                action_tx.send(action)?;
-            }
+        // The help overlay owns the keyboard while open.
+        if self.show_help {
+            return Ok(());
+        }
+        if let Some(panel) = self.panels.get_mut(self.active_tab)
+            && let Some(action) = panel.on_event(Some(event))?
+        {
+            action_tx.send(action)?;
         }
         Ok(())
     }
@@ -530,55 +555,65 @@ impl App {
                     }
                 }
                 Action::NftImageRequest { nft_id, uri } => {
-                    let action_tx = self.action_tx.clone();
-                    let nft_id = nft_id.clone();
-                    let uri = uri.clone();
-                    tokio::spawn(async move {
-                        match crate::xrpl::fetch_nft_image(&uri).await {
-                            Ok(image) => {
-                                if let Err(err) = action_tx.send(Action::NftImageLoaded {
-                                    nft_id,
-                                    bytes: Arc::new(image.bytes),
-                                }) {
-                                    warn!(?err, "action channel closed (nft image)");
+                    if self.nft_images_inflight.insert(nft_id.clone()) {
+                        let action_tx = self.action_tx.clone();
+                        let nft_id = nft_id.clone();
+                        let uri = uri.clone();
+                        tokio::spawn(async move {
+                            match crate::xrpl::fetch_nft_image(&uri).await {
+                                Ok(image) => {
+                                    if let Err(err) = action_tx.send(Action::NftImageLoaded {
+                                        nft_id,
+                                        bytes: Arc::new(image.bytes),
+                                    }) {
+                                        warn!(?err, "action channel closed (nft image)");
+                                    }
+                                }
+                                Err(err) => {
+                                    let _ = action_tx.send(Action::NftImageError {
+                                        nft_id,
+                                        message: err.to_string(),
+                                    });
                                 }
                             }
-                            Err(err) => {
-                                let _ = action_tx.send(Action::NftImageError {
-                                    nft_id,
-                                    message: err.to_string(),
-                                });
-                            }
-                        }
-                    });
+                        });
+                    }
                 }
                 Action::RequestXrplToml {
                     domain,
                     expected_pubkey,
                 } => {
-                    let domain = domain.clone();
-                    let expected_pubkey = expected_pubkey.clone();
-                    let tx = self.action_tx.clone();
-                    tokio::spawn(async move {
-                        let fetched = fetch_xrpl_toml_with_meta(
-                            &domain,
-                            &expected_pubkey,
-                            Duration::from_secs(10),
-                        )
-                        .await;
-                        if tx
-                            .send(Action::XrplTomlFetched {
-                                domain,
-                                status: fetched.status,
-                                content_type: fetched.content_type,
-                                raw: fetched.raw,
-                                result: fetched.result,
-                            })
-                            .is_err()
-                        {
-                            warn!("action channel closed (xrpl toml fetch)");
-                        }
-                    });
+                    if self.toml_inflight.insert(domain.clone()) {
+                        let domain = domain.clone();
+                        let expected_pubkey = expected_pubkey.clone();
+                        let tx = self.action_tx.clone();
+                        tokio::spawn(async move {
+                            let fetched = fetch_xrpl_toml_with_meta(
+                                &domain,
+                                &expected_pubkey,
+                                Duration::from_secs(10),
+                            )
+                            .await;
+                            if tx
+                                .send(Action::XrplTomlFetched {
+                                    domain,
+                                    status: fetched.status,
+                                    content_type: fetched.content_type,
+                                    raw: fetched.raw,
+                                    result: fetched.result,
+                                })
+                                .is_err()
+                            {
+                                warn!("action channel closed (xrpl toml fetch)");
+                            }
+                        });
+                    }
+                }
+                Action::XrplTomlFetched { domain, .. } => {
+                    self.toml_inflight.remove(domain);
+                }
+                Action::NftImageLoaded { nft_id, .. } | Action::NftImageError { nft_id, .. } => {
+                    self.nft_images_inflight.remove(nft_id);
                 }
                 Action::RefreshAccount => {
                     Self::send_debounced_poll(
@@ -665,8 +700,12 @@ impl App {
                     self.send_poll(PollCommand::GenericTx(params.clone()))
                 }
                 Action::TxComposerOpen { .. } => {
-                    self.active_tab = ACCOUNT_TAB;
-                    let _ = self.tab_tx.send(self.active_tab);
+                    // Only the signing wallet answers it (--watch has none): never jump to
+                    // an Account tab that would show no composer.
+                    if self.has_wallet {
+                        self.active_tab = ACCOUNT_TAB;
+                        let _ = self.tab_tx.send(self.active_tab);
+                    }
                 }
                 Action::OfferCreateSubmit(params) => {
                     self.send_poll(PollCommand::OfferCreateSubmit(params.clone()))
@@ -691,10 +730,30 @@ impl App {
                     self.send_poll(PollCommand::GenerateWalletKeys("ed25519".into()))
                 }
                 Action::XrplServerInfo(_) => self.startup_done = true,
+                // Unreachable RPC: leave the splash so the error UI is visible.
+                Action::XrplError(msg)
+                    if msg.starts_with("server_info") || msg.starts_with("rpc init failed") =>
+                {
+                    self.startup_done = true;
+                }
                 Action::Help => self.show_help = !self.show_help,
                 _ => {}
             }
-            for panel in self.panels.iter_mut() {
+            // Nav/selection/overlay actions belong to the visible tab; data and results fan out.
+            let targets = if matches!(
+                action,
+                Action::FocusNext
+                    | Action::FocusPrev
+                    | Action::SelectNext
+                    | Action::SelectPrev
+                    | Action::TxDetailToggle
+                    | Action::NftBurnStart
+            ) {
+                self.active_tab..self.active_tab + 1
+            } else {
+                0..self.panels.len()
+            };
+            for panel in &mut self.panels[targets] {
                 if let Some(a) = panel.update(&action)? {
                     self.action_tx.send(a)?;
                 }
@@ -814,6 +873,10 @@ mod tests {
     /// XDG at an empty dir so parallel env-mutating tests and a developer's real
     /// `config.toml` cannot leak in.
     async fn test_app() -> color_eyre::Result<App> {
+        test_app_seeded(None).await
+    }
+
+    async fn test_app_seeded(seed: Option<&str>) -> color_eyre::Result<App> {
         use crate::test_support::{TestEnvGuard, env_lock_async};
         let config = {
             let _lock = env_lock_async().await;
@@ -841,7 +904,14 @@ mod tests {
                     .to_str()
                     .expect("temp xdg path"),
             );
-            Config::new()?
+            let mut config = Config::new()?;
+            // Drop whatever the environment supplied; the test's own seed is the only secret.
+            drop(config.take_secrets());
+            config
+        };
+        let secrets = Secrets {
+            seed: seed.map(|s| secrecy::SecretString::from(s.to_string())),
+            ..Secrets::default()
         };
         App::new(
             4.0,
@@ -850,7 +920,7 @@ mod tests {
             Some("rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh".into()),
             Network::Mainnet,
             config,
-            None,
+            secrets,
             false,
         )
     }
@@ -964,8 +1034,8 @@ mod tests {
     }
 
     /// TC-256: Assets tab `x` starts an NFTokenBurn for the selected NFT — the NFT tab answers
-    /// with `TxComposerOpen` and the app jumps to the Account tab; other tabs ignore `x`, and an
-    /// empty NFT list opens nothing.
+    /// with `TxComposerOpen` and the app jumps to the Account tab (signing credential only);
+    /// other tabs ignore `x`, and an empty NFT list opens nothing.
     #[tokio::test]
     async fn x_on_assets_tab_opens_burn_composer_for_selected_nft() -> color_eyre::Result<()> {
         let x = KeyEvent::new(KeyCode::Char('x'), KeyModifiers::empty());
@@ -979,7 +1049,7 @@ mod tests {
             raw_json: Default::default(),
         };
 
-        let mut app = test_app().await?;
+        let mut app = test_app_seeded(Some("sEdSkooMk31MeTjbHVE7vLvgCpEMAdB")).await?;
         app.action_tx
             .send(Action::XrplAccountNfts(vec![nft.clone()]))?;
         app.drain_and_dispatch_actions(None)?;
@@ -994,7 +1064,7 @@ mod tests {
         app.drain_and_dispatch_actions(None)?;
         assert_eq!(app.active_tab, ACCOUNT_TAB);
 
-        let mut empty = test_app().await?;
+        let mut empty = test_app_seeded(Some("sEdSkooMk31MeTjbHVE7vLvgCpEMAdB")).await?;
         empty.active_tab = ASSETS_TAB;
         empty.on_key_event(x)?;
         empty.drain_and_dispatch_actions(None)?;
@@ -1002,6 +1072,114 @@ mod tests {
             empty.active_tab, ASSETS_TAB,
             "no NFT selected → nothing opens"
         );
+        Ok(())
+    }
+
+    /// Funded wallet + seed, handlers registered the way `run()` does, then Overview active.
+    async fn seeded_app() -> color_eyre::Result<App> {
+        let mut app = test_app_seeded(Some("sEdSkooMk31MeTjbHVE7vLvgCpEMAdB")).await?;
+        let tx = app.action_tx.clone();
+        for panel in app.panels.iter_mut() {
+            panel.register_action_handler(tx.clone())?;
+            panel.register_config_handler(Arc::clone(&app.config))?;
+        }
+        app.action_tx.send(Action::XrplWalletOverview(Some(
+            crate::xrpl::AccountSummary {
+                account: "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh".into(),
+                balance_xrp: "100".into(),
+                sequence: 1,
+                owner_count: 0,
+                flags: 0,
+                regular_key: None,
+                domain_hex: None,
+            },
+        )))?;
+        app.drain_and_dispatch_actions(None)?;
+        Ok(app)
+    }
+
+    fn press(app: &mut App, c: char) -> color_eyre::Result<()> {
+        app.route_event(&Event::Key(KeyEvent::new(
+            KeyCode::Char(c),
+            KeyModifiers::empty(),
+        )))?;
+        app.drain_and_dispatch_actions(None)
+    }
+
+    /// Keys belong to the visible tab: `t` on Overview must not open the (invisible) wallet
+    /// composer or suppress the global keymap; on the Account tab it does.
+    #[tokio::test]
+    async fn overview_t_key_does_not_open_hidden_composer() -> color_eyre::Result<()> {
+        let mut app = seeded_app().await?;
+        assert_eq!(app.active_tab, 0);
+        press(&mut app, 't')?;
+        assert!(
+            !app.keymap_suppressed,
+            "hidden composer must not capture keys"
+        );
+        let account_tab = crate::test_support::render_to_string(120, 40, |f| {
+            app.panels[ACCOUNT_TAB].draw(f, f.area()).unwrap();
+        });
+        assert!(!account_tab.contains("Choose action"), "{account_tab}");
+        press(&mut app, 'q')?;
+        assert!(
+            app.should_quit,
+            "keymap must still work after `t` on Overview"
+        );
+
+        let mut app = seeded_app().await?;
+        app.active_tab = ACCOUNT_TAB;
+        press(&mut app, 't')?;
+        assert!(app.keymap_suppressed, "composer opens on the Account tab");
+        Ok(())
+    }
+
+    /// Tx History `f` / `m` reach the focused pane; filter typing suppresses the keymap.
+    #[tokio::test]
+    async fn account_tab_filter_key_reaches_tx_history() -> color_eyre::Result<()> {
+        let mut app = seeded_app().await?;
+        app.active_tab = ACCOUNT_TAB;
+        app.action_tx.send(Action::FocusNext)?;
+        app.drain_and_dispatch_actions(None)?;
+        press(&mut app, 'f')?;
+        assert!(app.keymap_suppressed, "filter typing must own the keyboard");
+        press(&mut app, 'q')?;
+        assert!(!app.should_quit, "`q` is filter text, not quit");
+        app.route_event(&Event::Key(KeyEvent::new(
+            KeyCode::Enter,
+            KeyModifiers::empty(),
+        )))?;
+        app.drain_and_dispatch_actions(None)?;
+        assert!(!app.keymap_suppressed);
+        Ok(())
+    }
+
+    /// An unreachable RPC (`server_info` error) ends the splash; unrelated errors do not.
+    #[tokio::test]
+    async fn startup_ends_when_server_info_errors() -> color_eyre::Result<()> {
+        let mut app = test_app().await?;
+        assert!(!app.startup_done);
+        app.action_tx
+            .send(Action::XrplError("account_tx: timeout".into()))?;
+        app.drain_and_dispatch_actions(None)?;
+        assert!(!app.startup_done, "unrelated errors keep the splash");
+        app.action_tx
+            .send(Action::XrplError("server_info: connection refused".into()))?;
+        app.drain_and_dispatch_actions(None)?;
+        assert!(app.startup_done, "unreachable RPC must reach the error UI");
+        Ok(())
+    }
+
+    /// `TxComposerOpen` without a signing credential (--watch) does not jump to Account.
+    #[tokio::test]
+    async fn composer_open_without_credential_stays_on_tab() -> color_eyre::Result<()> {
+        let mut app = test_app().await?;
+        app.action_tx.send(Action::TxComposerOpen {
+            tx_type: "NFTokenBurn".into(),
+            fields: vec![],
+        })?;
+        app.drain_and_dispatch_actions(None)?;
+        assert_eq!(app.active_tab, 0);
         Ok(())
     }
 }

@@ -19,7 +19,7 @@ impl WalletPanel {
         let popup_h = 11u16;
         let popup_x = area.x + (area.width.saturating_sub(popup_w)) / 2;
         let popup_y = area.y + (area.height.saturating_sub(popup_h)) / 2;
-        let popup = Rect::new(popup_x, popup_y, popup_w, popup_h);
+        let popup = Rect::new(popup_x, popup_y, popup_w, popup_h).intersection(area);
 
         frame.render_widget(Clear, popup);
         let block = theme::panel_block("New Key (local)", true);
@@ -33,22 +33,21 @@ impl WalletPanel {
         let body = Paragraph::new(vec![
             Line::from(vec![
                 Span::styled("Seed:   ", label_style),
-                Span::styled(result.master_seed.clone(), warning_style),
+                Span::styled(result.master_seed.as_str(), warning_style),
             ]),
             Line::from(vec![
                 Span::styled("Addr:   ", label_style),
-                Span::styled(result.account_id.clone(), value_style),
+                Span::styled(result.account_id.as_str(), value_style),
             ]),
             Line::from(vec![
                 Span::styled("PubKey: ", label_style),
-                Span::styled(result.public_key.clone(), theme::secondary_style()),
+                Span::styled(result.public_key.as_str(), theme::secondary_style()),
             ]),
             Line::from(vec![
                 Span::styled("Type:   ", label_style),
-                Span::raw(format!(
-                    "{}  Seed hex: {}",
-                    result.key_type, result.master_seed_hex
-                )),
+                Span::raw(result.key_type.as_str()),
+                Span::raw("  Seed hex: "),
+                Span::raw(result.master_seed_hex.as_str()),
             ]),
             Line::from(""),
             Line::from(Span::styled(
@@ -120,5 +119,17 @@ mod tests {
             .update(&Action::NetworkChange(crate::network::Network::Devnet))
             .unwrap();
         assert!(popup_rendered(&panel, 100, 24).trim().is_empty());
+    }
+
+    /// A terminal narrower/shorter than the popup must clip, not panic.
+    #[test]
+    fn keygen_popup_narrow_terminal_does_not_panic() {
+        let mut panel = WalletPanel::new(false);
+        panel
+            .update(&Action::GenerateWalletKeysOk(keygen_result()))
+            .unwrap();
+        for (w, h) in [(40, 24), (40, 6), (5, 3)] {
+            popup_rendered(&panel, w, h);
+        }
     }
 }

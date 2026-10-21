@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{sync::Arc, time::Instant};
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
@@ -192,6 +192,12 @@ pub struct WalletPanel {
     submit_flash: Option<SubmitFlash>,
     /// Debug form of the last queued write; an identical one is refused until a result arrives.
     pending_submit: Option<String>,
+    /// The open composer queued `pending_submit`: its Ok result may close it. Cleared when the
+    /// user backs out, so a later composer is never closed by an earlier submit's result.
+    submit_in_composer: bool,
+    /// When the Flare snapshots below last arrived (stale ones refuse to submit).
+    fxrp_direct_mint_at: Option<Instant>,
+    smart_account_at: Option<Instant>,
     /// Last AssetManager C1 snapshot (Core Vault address for Direct Mint).
     fxrp_direct_mint: Option<crate::xrpl::FxrpDirectMintInfo>,
     /// Last Smart Account read (personal account, balance, operator, fees).
@@ -221,6 +227,9 @@ impl Default for WalletPanel {
             transfer_rate: String::new(),
             submit_flash: None,
             pending_submit: None,
+            submit_in_composer: false,
+            fxrp_direct_mint_at: None,
+            smart_account_at: None,
             fxrp_direct_mint: None,
             smart_account: None,
             keygen_result: None,
@@ -234,6 +243,12 @@ impl WalletPanel {
             skip_mainnet_prompt,
             ..Self::default()
         }
+    }
+
+    /// The signing wallet's address (or why it has none); `None` = no wallet configured.
+    pub fn with_seed_address(mut self, seed_address: Option<Result<String, String>>) -> Self {
+        self.seed_address = seed_address;
+        self
     }
 
     fn label_for_flag(ix: usize) -> String {
@@ -270,14 +285,6 @@ fn submit_err(action: &Action) -> Option<(&'static str, &String)> {
 
 impl Component for WalletPanel {
     fn register_config_handler(&mut self, config: Arc<Config>) -> color_eyre::Result<()> {
-        self.seed_address = match crate::signing::credential_from_secrets(
-            config.xrpl.signing.secret_seed.as_ref(),
-            config.xrpl.signing.secret_mnemonic.as_ref(),
-        ) {
-            Ok(None) => None,
-            Ok(Some(credential)) => Some(credential.address().map_err(|e| e.to_string())),
-            Err(error) => Some(Err(error.to_string())),
-        };
         self.network = config.xrpl.network;
         self.config = Some(config);
         Ok(())
@@ -395,6 +402,7 @@ impl Component for WalletPanel {
             }
             Action::FxrpDirectMintInfo(info) => {
                 self.fxrp_direct_mint = Some((**info).clone());
+                self.fxrp_direct_mint_at = Some(Instant::now());
             }
             Action::FxrpDirectMintPaymentSubmitOk(hash) => {
                 return self.submit_ok(
@@ -415,6 +423,7 @@ impl Component for WalletPanel {
             }
             Action::SmartAccountInfo(info) => {
                 self.smart_account = Some((**info).clone());
+                self.smart_account_at = Some(Instant::now());
             }
             Action::SmartAccountInstructionSubmitOk(hash) => {
                 return self.submit_ok(
@@ -438,12 +447,18 @@ impl Component for WalletPanel {
                     && let Some(spec) = crate::xrpl::txspec::lookup(tx_type)
                 {
                     self.open_tx_composer(spec, fields);
+                    self.submit_in_composer = false;
                     return Ok(Some(Action::SetKeymapSuppression(true)));
                 }
             }
             Action::NetworkChange(net) => {
                 self.network = *net;
                 self.keygen_result = None;
+                // Flare reads belong to the previous network's session; never submit from them.
+                self.fxrp_direct_mint = None;
+                self.fxrp_direct_mint_at = None;
+                self.smart_account = None;
+                self.smart_account_at = None;
             }
             _ => {}
         }
@@ -478,6 +493,8 @@ impl Component for WalletPanel {
             return Ok(());
         }
 
+        // Modals (keygen result, an already-open composer) must stay visible while the wallet
+        // body is still loading or the account is unfunded: `g` works for an unfunded seed.
         if !self.has_received_wallet_data {
             render_loading(
                 frame,
@@ -487,12 +504,16 @@ impl Component for WalletPanel {
                 "loading...",
                 self.is_focused,
             );
+            self.render_composer(frame, area);
+            self.render_keygen_popup(frame, area);
             return Ok(());
         }
 
         let Some(account) = self.account.as_ref() else {
-            let msg = "account not found on this network (unfunded or deleted)";
+            let msg = "account not found on this network (unfunded or deleted) — g new keys";
             render_empty(frame, area, "Wallet", msg, self.is_focused);
+            self.render_composer(frame, area);
+            self.render_keygen_popup(frame, area);
             return Ok(());
         };
 
@@ -596,18 +617,155 @@ impl Component for WalletPanel {
 
 impl WalletPanel {
     /// Flash a submit success; when `closes_composer`, also dismiss it and release keymap suppression.
+    /// Only a composer that queued the in-flight submit closes: a composer the user re-opened
+    /// after backing out of the submitted one stays put.
     fn submit_ok(
         &mut self,
         text: String,
         closes_composer: bool,
     ) -> color_eyre::Result<Option<Action>> {
         self.set_submit_flash(SubmitFlash::Success(text));
-        if !closes_composer {
+        if !closes_composer || !self.submit_in_composer {
             return Ok(None);
         }
+        self.submit_in_composer = false;
         self.composer = None;
         self.is_form_editing = false;
         Ok(Some(Action::SetKeymapSuppression(false)))
+    }
+
+    /// Text field the cursor is in for every phase that types plain characters. Payment and
+    /// AccountSet filter per row (`payment_edit_keys` / `account_set_edit_keys`); DangerConfirm
+    /// is type-to-confirm and never receives pasted text.
+    fn edit_target(&mut self) -> Option<&mut String> {
+        Some(match self.composer.as_mut()? {
+            ComposerPhase::SetRegularKey { regular_key } => regular_key,
+            ComposerPhase::OfferCreate {
+                row,
+                taker_gets,
+                taker_pays,
+            } => {
+                if *row == 0 {
+                    taker_gets
+                } else {
+                    taker_pays
+                }
+            }
+            ComposerPhase::TrustSet {
+                row,
+                currency,
+                issuer,
+                limit,
+            } => match *row {
+                0 => currency,
+                1 => issuer,
+                _ => limit,
+            },
+            ComposerPhase::FxrpDirectMint {
+                row,
+                flare_recipient,
+                amount_xrp,
+            } => {
+                if *row == 0 {
+                    flare_recipient
+                } else {
+                    amount_xrp
+                }
+            }
+            ComposerPhase::FxrpExecuteDirectMint { proof_json } => proof_json,
+            ComposerPhase::SmartAccount {
+                row,
+                redeem,
+                recipient,
+                amount,
+            } => {
+                if *redeem || *row == 1 {
+                    amount
+                } else {
+                    recipient
+                }
+            }
+            ComposerPhase::EscrowCreate {
+                row,
+                destination,
+                amount_xrp,
+                finish_after,
+                cancel_after,
+            } => match *row {
+                0 => destination,
+                1 => amount_xrp,
+                2 => finish_after,
+                _ => cancel_after,
+            },
+            ComposerPhase::AmmDeposit {
+                row,
+                amount,
+                amount2,
+            } => {
+                if *row == 0 {
+                    amount
+                } else {
+                    amount2
+                }
+            }
+            ComposerPhase::AmmWithdraw {
+                row,
+                asset,
+                asset2,
+                lp_amount,
+            } => match *row {
+                0 => asset,
+                1 => asset2,
+                _ => lp_amount,
+            },
+            ComposerPhase::AccountDelete { destination } => destination,
+            ComposerPhase::Tx { row, values, .. } => values.get_mut(*row)?,
+            _ => return None,
+        })
+    }
+
+    /// Bracketed paste: inserted into the field being edited only. Characters go straight to
+    /// the field (same per-row filters as typing), never through the key handlers, so pasted
+    /// text cannot trigger hotkeys; newlines and other control characters are dropped.
+    pub fn paste(&mut self, text: &str) {
+        if !self.is_focused || !self.is_form_editing {
+            return;
+        }
+        let chars = text.chars().filter(|c| !c.is_control());
+        if matches!(self.composer, Some(ComposerPhase::AccountSet)) {
+            for c in chars {
+                self.account_set_edit_keys(&KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+            }
+            return;
+        }
+        if let Some(ComposerPhase::Payment {
+            row,
+            destination,
+            amount,
+            iou_currency,
+            iou_issuer,
+            send_max,
+            is_iou,
+        }) = &mut self.composer
+        {
+            for c in chars {
+                let key = KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE);
+                Self::payment_edit_keys(
+                    destination,
+                    amount,
+                    iou_currency,
+                    iou_issuer,
+                    send_max,
+                    *is_iou,
+                    *row,
+                    &key,
+                );
+            }
+            return;
+        }
+        if let Some(target) = self.edit_target() {
+            target.extend(chars);
+        }
     }
 
     fn key_action(&mut self, key: KeyEvent) -> color_eyre::Result<Option<Action>> {
@@ -624,6 +782,7 @@ impl WalletPanel {
                 self.keygen_result = None;
                 return Ok(None);
             }
+            self.submit_in_composer = false;
             return Ok(match &self.composer {
                 None => None,
                 Some(ComposerPhase::PickKind { .. }) => {
@@ -888,7 +1047,7 @@ impl WalletPanel {
         if matches!(&self.composer, Some(ComposerPhase::TrustSet { .. }))
             && submit_shortcut(&key, self.is_form_editing)
         {
-            return Ok(Some(self.queue_submit_trust_set()));
+            return Ok(self.queue_submit_trust_set());
         }
 
         if matches!(&self.composer, Some(ComposerPhase::FxrpDirectMint { .. }))
@@ -911,19 +1070,9 @@ impl WalletPanel {
             return Ok(Some(self.queue_submit_smart_account()));
         }
 
-        if let Some(ComposerPhase::TrustSet {
-            row,
-            ref mut currency,
-            ref mut issuer,
-            ref mut limit,
-        }) = self.composer
-            && self.is_form_editing
+        if self.is_form_editing
+            && let Some(target) = self.edit_target()
         {
-            let target = match row {
-                0 => currency,
-                1 => issuer,
-                _ => limit,
-            };
             match key.code {
                 KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
                     target.push(c);
@@ -931,176 +1080,6 @@ impl WalletPanel {
                 }
                 KeyCode::Backspace => {
                     target.pop();
-                    return Ok(None);
-                }
-                _ => {}
-            }
-        }
-
-        if let Some(ComposerPhase::FxrpDirectMint {
-            row,
-            ref mut flare_recipient,
-            ref mut amount_xrp,
-        }) = self.composer
-            && self.is_form_editing
-        {
-            let target = if row == 0 {
-                flare_recipient
-            } else {
-                amount_xrp
-            };
-            match key.code {
-                KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
-                    target.push(c);
-                    return Ok(None);
-                }
-                KeyCode::Backspace => {
-                    target.pop();
-                    return Ok(None);
-                }
-                _ => {}
-            }
-        }
-
-        if let Some(ComposerPhase::SmartAccount {
-            row,
-            redeem,
-            ref mut recipient,
-            ref mut amount,
-        }) = self.composer
-            && self.is_form_editing
-        {
-            let target = if redeem || row == 1 {
-                amount
-            } else {
-                recipient
-            };
-            match key.code {
-                KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
-                    target.push(c);
-                    return Ok(None);
-                }
-                KeyCode::Backspace => {
-                    target.pop();
-                    return Ok(None);
-                }
-                _ => {}
-            }
-        }
-
-        if let Some(ComposerPhase::FxrpExecuteDirectMint { ref mut proof_json }) = self.composer
-            && self.is_form_editing
-        {
-            match key.code {
-                KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
-                    proof_json.push(c);
-                    return Ok(None);
-                }
-                KeyCode::Backspace => {
-                    proof_json.pop();
-                    return Ok(None);
-                }
-                _ => {}
-            }
-        }
-
-        if self.is_form_editing {
-            let target = match &mut self.composer {
-                Some(ComposerPhase::AmmDeposit {
-                    row,
-                    amount,
-                    amount2,
-                }) => Some(if *row == 0 { amount } else { amount2 }),
-                Some(ComposerPhase::AmmWithdraw {
-                    row,
-                    asset,
-                    asset2,
-                    lp_amount,
-                }) => Some(match *row {
-                    0 => asset,
-                    1 => asset2,
-                    _ => lp_amount,
-                }),
-                Some(ComposerPhase::AccountDelete { destination }) => Some(destination),
-                Some(ComposerPhase::Tx { row, values, .. }) => values.get_mut(*row),
-                _ => None,
-            };
-            if let Some(target) = target {
-                match key.code {
-                    KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
-                        target.push(c);
-                        return Ok(None);
-                    }
-                    KeyCode::Backspace => {
-                        target.pop();
-                        return Ok(None);
-                    }
-                    _ => {}
-                }
-            }
-        }
-
-        if let Some(ComposerPhase::EscrowCreate {
-            row,
-            ref mut destination,
-            ref mut amount_xrp,
-            ref mut finish_after,
-            ref mut cancel_after,
-        }) = self.composer
-            && self.is_form_editing
-        {
-            let target = match row {
-                0 => destination,
-                1 => amount_xrp,
-                2 => finish_after,
-                _ => cancel_after,
-            };
-            match key.code {
-                KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
-                    target.push(c);
-                    return Ok(None);
-                }
-                KeyCode::Backspace => {
-                    target.pop();
-                    return Ok(None);
-                }
-                _ => {}
-            }
-        }
-
-        if let Some(ComposerPhase::OfferCreate {
-            row,
-            ref mut taker_gets,
-            ref mut taker_pays,
-        }) = self.composer
-            && self.is_form_editing
-        {
-            let target = if row == 0 { taker_gets } else { taker_pays };
-            match key.code {
-                KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
-                    target.push(c);
-                    return Ok(None);
-                }
-                KeyCode::Backspace => {
-                    target.pop();
-                    return Ok(None);
-                }
-                _ => {}
-            }
-        }
-
-        if let Some(ComposerPhase::SetRegularKey {
-            ref mut regular_key,
-        }) = self.composer
-            && self.is_form_editing
-        {
-            match key.code {
-                KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
-                    regular_key.push(c);
-                    return Ok(None);
-                }
-                KeyCode::Backspace => {
-                    regular_key.pop();
                     return Ok(None);
                 }
                 _ => {}
@@ -1322,7 +1301,11 @@ impl WalletPanel {
             None => {}
         }
 
+        // Composer needs a funded account (modals draw in every state, but a send from an
+        // unfunded/unknown account is pointless); keygen only needs a valid wallet config.
         if self.composer.is_none()
+            && self.account.is_some()
+            && matches!(self.seed_address, Some(Ok(_)))
             && matches!(key.code, KeyCode::Char('t') | KeyCode::Char('T'))
             && !key.modifiers.contains(KeyModifiers::CONTROL)
         {
@@ -1333,6 +1316,7 @@ impl WalletPanel {
 
         // Key generation (g — only when no composer open)
         if self.composer.is_none()
+            && matches!(self.seed_address, Some(Ok(_)))
             && key.code == KeyCode::Char('g')
             && !key.modifiers.contains(KeyModifiers::CONTROL)
         {
@@ -1344,8 +1328,14 @@ impl WalletPanel {
     }
 
     /// Refuse a write identical to one still awaiting its Ok/Err (double `s`, repeated confirm).
+    /// Local validation failures (`*SubmitErr` built by the composer) only flash: they are not
+    /// results of an in-flight write, so they must not release its guard.
     fn guard_double_submit(&mut self, out: Option<Action>) -> Option<Action> {
         let action = out?;
+        if let Some((label, msg)) = submit_err(&action) {
+            self.set_submit_flash(SubmitFlash::Error(format!("{label} · {msg}")));
+            return None;
+        }
         if !is_write_submit(&action) {
             return Some(action);
         }
@@ -1357,6 +1347,7 @@ impl WalletPanel {
             return None;
         }
         self.pending_submit = Some(key);
+        self.submit_in_composer = true;
         Some(action)
     }
 }
@@ -1548,6 +1539,7 @@ mod tests {
         };
         let mut panel = WalletPanel::new(false);
         panel.is_focused = true;
+        panel.seed_address = Some(Ok("rOwner".into()));
         panel
             .update(&Action::GenerateWalletKeysOk(result()))
             .expect("ok");
@@ -2333,15 +2325,41 @@ mod tests {
         }) = &mut panel.composer
         {
             *currency = "usd".into();
-            *issuer = "rRewrittenIssuer".into();
+            *issuer = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh".into();
             *limit = "42".into();
         }
         match panel.queue_submit_trust_set() {
-            Action::TrustSetSubmit(p) => {
+            Some(Action::TrustSetSubmit(p)) => {
                 assert_eq!(p.currency, "USD", "currency must be uppercased");
             }
             other => panic!("expected TrustSetSubmit, got {other:?}"),
         }
+    }
+
+    /// The TrustSet form starts empty: pressing `s` straight away must not queue a trust
+    /// line to a pre-filled issuer, and a malformed form flashes instead of queueing.
+    #[test]
+    fn trust_set_default_form_cannot_submit() {
+        let mut panel = WalletPanel::new(true);
+        panel.is_focused = true;
+        panel.open_trust_set_composer();
+        assert!(panel.on_key_event(key('s')).expect("s").is_none());
+        assert!(matches!(
+            &panel.submit_flash,
+            Some(SubmitFlash::Error(m)) if m.contains("TrustSet")
+        ));
+        if let Some(ComposerPhase::TrustSet {
+            currency,
+            issuer,
+            limit,
+            ..
+        }) = &mut panel.composer
+        {
+            *currency = "USD".into();
+            *issuer = "rNotAnAddress".into();
+            *limit = "1".into();
+        }
+        assert!(panel.on_key_event(key('s')).expect("s").is_none());
     }
 
     #[test]
@@ -2532,6 +2550,7 @@ mod tests {
                 fee_drops: 200_000,
                 vault: None,
                 skip_mainnet_prompt: false,
+                network: panel.network,
             }
         );
         let Action::SmartAccountInstructionSubmit(p) =
@@ -2749,6 +2768,180 @@ mod tests {
         assert!(matches!(
             panel.queue_submit_fxrp_direct_mint(),
             Action::FxrpDirectMintPaymentSubmitErr(m) if m.contains("cap")
+        ));
+    }
+
+    fn drawn(panel: &mut WalletPanel, w: u16, h: u16) -> String {
+        crate::test_support::render_to_string(w, h, |f| panel.draw(f, f.area()).unwrap())
+    }
+
+    fn unfunded_panel() -> WalletPanel {
+        let mut panel = WalletPanel::new(true);
+        panel.is_focused = true;
+        panel.seed_address = Some(Ok("rOwner".into()));
+        panel.has_received_wallet_data = true;
+        panel
+    }
+
+    /// `g` works for an unfunded seed and its popup draws; `t` (composer) needs an account.
+    #[test]
+    fn keygen_works_unfunded_and_composer_is_gated() {
+        let mut panel = unfunded_panel();
+        assert!(panel.on_key_event(key('t')).unwrap().is_none());
+        assert!(
+            panel.composer.is_none(),
+            "no composer for an unfunded account"
+        );
+        assert_eq!(
+            panel.on_key_event(key('g')).unwrap(),
+            Some(Action::GenerateWalletKeys)
+        );
+        panel
+            .update(&Action::GenerateWalletKeysOk(GeneratedWalletKeys {
+                master_seed: "sEdTestOnlySeedValue".into(),
+                master_seed_hex: "DEADBEEF01".into(),
+                account_id: "rTestAccountAddress123".into(),
+                public_key: "aTestPublicKey99".into(),
+                key_type: "ed25519".into(),
+            }))
+            .unwrap();
+        let out = drawn(&mut panel, 100, 24);
+        assert!(out.contains("New Key (local)") && out.contains("sEdTestOnlySeedValue"));
+
+        // A composer opened earlier stays visible while the body is loading.
+        let mut loading = unfunded_panel();
+        loading.has_received_wallet_data = false;
+        loading.composer = Some(ComposerPhase::PickKind { selected: 0 });
+        assert!(drawn(&mut loading, 100, 24).contains("Choose action"));
+    }
+
+    /// A terminal narrower than the popup clips instead of panicking.
+    #[test]
+    fn composer_popup_narrow_terminal_does_not_panic() {
+        let mut panel = unfunded_panel();
+        panel.open_payment_composer();
+        for (w, h) in [(40, 24), (40, 6), (5, 3)] {
+            crate::test_support::render_to_string(w, h, |f| panel.render_composer(f, f.area()));
+        }
+        panel.composer = Some(ComposerPhase::PickKind { selected: 0 });
+        crate::test_support::render_to_string(40, 24, |f| panel.render_composer(f, f.area()));
+        panel.open_tx_pick_composer();
+        crate::test_support::render_to_string(40, 24, |f| panel.render_composer(f, f.area()));
+    }
+
+    /// NoFreeze can never be cleared: it needs type-to-confirm; reversible flags do not.
+    #[test]
+    fn account_set_no_freeze_requires_confirm() {
+        let mut panel = unfunded_panel();
+        panel.open_account_set_composer();
+        let ix = |name: &str| FLAG_OPTIONS.iter().position(|f| *f == name).unwrap();
+        panel.set_flag_ix = ix("GlobalFreeze");
+        assert!(matches!(
+            panel.queue_submit_account_set(),
+            Some(Action::AccountSetSubmit(_))
+        ));
+        panel.set_flag_ix = ix("NoFreeze");
+        assert!(panel.queue_submit_account_set().is_none());
+        assert!(matches!(
+            &panel.composer,
+            Some(ComposerPhase::DangerConfirm { expected, .. }) if expected == "NOFREEZE"
+        ));
+    }
+
+    /// A local validation error must not release the guard of a write still in flight, and a
+    /// result only closes the composer that queued the write.
+    #[test]
+    fn submit_guard_survives_local_errors_and_stale_results() {
+        let mut panel = smart_account_panel();
+        panel.pending_submit = Some("in-flight".into());
+        panel.open_smart_account_composer();
+        assert!(
+            panel.on_key_event(key('s')).unwrap().is_none(),
+            "empty form"
+        );
+        assert_eq!(panel.pending_submit.as_deref(), Some("in-flight"));
+        assert!(matches!(&panel.submit_flash, Some(SubmitFlash::Error(_))));
+
+        let mut panel = unfunded_panel();
+        panel.open_offer_create_composer();
+        assert!(matches!(
+            panel.on_key_event(key('s')).unwrap(),
+            Some(Action::OfferCreateSubmit(_))
+        ));
+        panel.on_key_event(KeyEvent::from(KeyCode::Esc)).unwrap();
+        panel.open_offer_create_composer();
+        panel
+            .update(&Action::OfferCreateSubmitOk("H".into()))
+            .unwrap();
+        assert!(
+            panel.composer.is_some(),
+            "earlier submit must not close a new composer"
+        );
+        assert!(panel.on_key_event(key('s')).unwrap().is_some());
+        panel
+            .update(&Action::OfferCreateSubmitOk("H".into()))
+            .unwrap();
+        assert!(
+            panel.composer.is_none(),
+            "its own result closes the composer"
+        );
+    }
+
+    /// Flare snapshots older than the limit, or from another network, never submit.
+    #[test]
+    fn stale_or_foreign_network_snapshots_refuse_to_submit() {
+        use std::time::Duration;
+        const TO: &str = "0x1234567890abcdef1234567890abcdef12345678";
+        let mut panel = smart_account_panel();
+        assert!(matches!(
+            smart_account_submit(&mut panel, false, TO, "1"),
+            Action::SmartAccountInstructionSubmit(_)
+        ));
+        panel.smart_account_at = Instant::now().checked_sub(Duration::from_secs(3600));
+        assert!(matches!(
+            smart_account_submit(&mut panel, false, TO, "1"),
+            Action::SmartAccountInstructionSubmitErr(m) if m.contains("stale")
+        ));
+        panel
+            .update(&Action::NetworkChange(Network::Testnet))
+            .unwrap();
+        assert!(panel.smart_account.is_none() && panel.fxrp_direct_mint.is_none());
+        assert!(matches!(
+            smart_account_submit(&mut panel, false, TO, "1"),
+            Action::SmartAccountInstructionSubmitErr(_)
+        ));
+    }
+
+    /// Paste lands in the edited field only (same per-row filters as typing) and cannot
+    /// toggle edit mode or trigger hotkeys.
+    #[test]
+    fn paste_inserts_only_while_editing_without_hotkeys() {
+        let mut panel = unfunded_panel();
+        panel.open_payment_composer();
+        panel.paste("rAbc");
+        assert!(matches!(
+            &panel.composer,
+            Some(ComposerPhase::Payment { destination, .. }) if destination.is_empty()
+        ));
+        panel.is_form_editing = true;
+        panel.paste("rAbc\n def");
+        if let Some(ComposerPhase::Payment { row, .. }) = &mut panel.composer {
+            *row = 1;
+        }
+        panel.paste("1e5");
+        assert!(panel.is_form_editing, "`e` in pasted text is not a hotkey");
+        assert!(matches!(
+            &panel.composer,
+            Some(ComposerPhase::Payment { destination, amount, .. })
+                if destination == "rAbcdef" && amount == "115"
+        ));
+
+        panel.open_trust_set_composer();
+        panel.is_form_editing = true;
+        panel.paste("USD");
+        assert!(matches!(
+            &panel.composer,
+            Some(ComposerPhase::TrustSet { currency, .. }) if currency == "USD"
         ));
     }
 }

@@ -1,11 +1,13 @@
 use std::time::{Duration, Instant};
 
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
+use tokio::time::MissedTickBehavior;
 use tokio_util::sync::CancellationToken;
 
 use tracing::warn;
 
 use crate::action::Action;
+use crate::network::Network;
 
 use super::client::{
     RPC_TIMEOUT, RpcClient, empty_account_tx_page_on_not_found, path_find_snapshot,
@@ -616,6 +618,43 @@ fn send_account_tx_action(action_tx: &UnboundedSender<Action>, action: Action) {
     }
 }
 
+/// A write carries the XRPL network it was composed on. A network switch rebinds the RPC client
+/// while the command may still be queued, so a write dequeued after one would be signed for a
+/// different network than the user saw: refuse it with the command's own error (nothing signed).
+fn stale_write_refusal(cmd: &PollCommand, active: Network) -> Option<Action> {
+    let (composed, err): (Network, fn(String) -> Action) = match cmd {
+        PollCommand::AccountSetSubmit(p) => (p.network, Action::AccountSetSubmitErr),
+        PollCommand::PaymentSubmit(p) => (p.network, Action::PaymentSubmitErr),
+        PollCommand::FxrpDirectMintPayment(p) => {
+            (p.network, Action::FxrpDirectMintPaymentSubmitErr)
+        }
+        PollCommand::FxrpExecuteDirectMint(p) => {
+            (p.network, Action::FxrpExecuteDirectMintSubmitErr)
+        }
+        PollCommand::SmartAccountInstruction(p) => {
+            (p.network, Action::SmartAccountInstructionSubmitErr)
+        }
+        PollCommand::SetRegularKeySubmit(p) => (p.network, Action::SetRegularKeySubmitErr),
+        PollCommand::EscrowCreateSubmit(p) => (p.network, Action::EscrowCreateSubmitErr),
+        PollCommand::EscrowCloseSubmit(p) => (p.network, Action::EscrowCloseSubmitErr),
+        PollCommand::AmmDepositSubmit(p) => (p.network, Action::AmmSubmitErr),
+        PollCommand::AmmWithdrawSubmit(p) => (p.network, Action::AmmSubmitErr),
+        PollCommand::AccountDeleteSubmit(p) => (p.network, Action::AccountDeleteSubmitErr),
+        PollCommand::GenericTx(p) => (p.network, Action::GenericTxSubmitErr),
+        PollCommand::OfferCreateSubmit(p) => (p.network, Action::OfferCreateSubmitErr),
+        PollCommand::OfferCancelSubmit(p) => (p.network, Action::OfferCancelSubmitErr),
+        PollCommand::TrustSetSubmit(p) => (p.network, Action::TrustSetSubmitErr),
+        _ => return None,
+    };
+    (composed != active).then(|| {
+        err(format!(
+            "network changed from {} to {} since this was composed; nothing was signed, reopen the form",
+            composed.display_name(),
+            active.display_name()
+        ))
+    })
+}
+
 async fn drive_poll_loop(
     ctx: PollContext,
     mut refresh_rx: UnboundedReceiver<PollCommand>,
@@ -637,6 +676,7 @@ async fn drive_poll_loop(
         flare_rpc_url,
         flare_feeds,
         flare_fassets_execute,
+        flare_network,
         flare_expected_core_vault,
         flare_expected_operator,
         flare_display,
@@ -669,6 +709,9 @@ async fn drive_poll_loop(
     let mut flare_backoff_until: Option<Instant> = None;
     let mut tick = tokio::time::interval(poll_interval.max(Duration::from_millis(500)));
     let mut price_tick = tokio::time::interval(Duration::from_secs(90));
+    // A slow poll must push the next one back, not trigger a catch-up burst of RPC calls.
+    tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
+    price_tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
     let mut last_poll: Option<Instant> = None;
     // Shared by the interval and trigger arms: one scheduled poll against the live client.
     macro_rules! scheduled_poll {
@@ -762,6 +805,10 @@ async fn drive_poll_loop(
             }
             Some(cmd) = refresh_rx.recv() => {
                 let network = *network_watch.borrow();
+                if let Some(refusal) = stale_write_refusal(&cmd, network) {
+                    send_action(&action_tx, refusal);
+                    continue;
+                }
                 macro_rules! submit {
                     ($submit_fn:ident, $params:expr $(, $extra:expr)*) => {{
                         let _guard = submit_lock.lock().await;
@@ -824,18 +871,71 @@ async fn drive_poll_loop(
                         submit!(submit_payment_transaction, params);
                     }
                     PollCommand::FxrpDirectMintPayment(params) => {
-                        submit!(submit_fxrp_direct_mint_payment, params, flare_expected_core_vault.as_deref());
+                        let _guard = submit_lock.lock().await;
+                        let fresh = match flare_rpc_url.as_deref() {
+                            Some(url) => tokio::time::timeout(
+                                RPC_TIMEOUT,
+                                crate::flare::verify_direct_mint_terms(url, &params),
+                            )
+                            .await
+                            .unwrap_or_else(|_| Err("Flare re-check before signing timed out".into())),
+                            None => Err("flare RPC URL not configured".into()),
+                        };
+                        match fresh {
+                            Err(e) => {
+                                send_action(&action_tx, Action::FxrpDirectMintPaymentSubmitErr(e));
+                            }
+                            Ok(()) => {
+                                submit_fxrp_direct_mint_payment(
+                                    &*rpc_cell.read().await,
+                                    &network,
+                                    flare_network,
+                                    params,
+                                    flare_expected_core_vault.as_deref(),
+                                    &action_tx,
+                                    signing_credential,
+                                )
+                                .await;
+                            }
+                        }
                     }
                     PollCommand::SmartAccountInstruction(params) => {
-                        submit!(submit_smart_account_instruction, params, flare_expected_operator.as_deref());
+                        let _guard = submit_lock.lock().await;
+                        let owner = signing_credential.and_then(|c| c.address().ok());
+                        let fresh = match (flare_rpc_url.as_deref(), owner) {
+                            (Some(url), Some(owner)) => tokio::time::timeout(
+                                RPC_TIMEOUT,
+                                crate::flare::verify_smart_account_terms(url, &owner, &params),
+                            )
+                            .await
+                            .unwrap_or_else(|_| Err("Flare re-check before signing timed out".into())),
+                            _ => Err("flare RPC URL or signing key not configured".into()),
+                        };
+                        match fresh {
+                            Err(e) => {
+                                send_action(&action_tx, Action::SmartAccountInstructionSubmitErr(e));
+                            }
+                            Ok(()) => {
+                                submit_smart_account_instruction(
+                                    &*rpc_cell.read().await,
+                                    &network,
+                                    flare_network,
+                                    params,
+                                    flare_expected_operator.as_deref(),
+                                    &action_tx,
+                                    signing_credential,
+                                )
+                                .await;
+                            }
+                        }
                     }
                     PollCommand::FxrpExecuteDirectMint(params) => {
                         submit_fxrp_execute_direct_mint(
                             flare_rpc_url.as_deref(),
                             flare_fassets_execute,
+                            flare_network,
                             &flare_evm_key_env,
                             flare_evm_key.as_ref(),
-                            &network,
                             params,
                             &action_tx,
                         ).await;
@@ -937,6 +1037,35 @@ mod tests {
     use tokio::sync::mpsc;
 
     use super::*;
+
+    /// TC-362: a write composed on one network is refused (nothing signed) when another is
+    /// active at dequeue; the refusal is the command's own error action. Reads pass.
+    #[test]
+    fn stale_write_refusal_on_network_switch() {
+        use crate::xrpl::{FxrpExecuteDirectMintParams, OfferCancelSubmitParams};
+        let cancel = |network| {
+            PollCommand::OfferCancelSubmit(OfferCancelSubmitParams {
+                offer_sequence: 1,
+                skip_mainnet_prompt: true,
+                network,
+            })
+        };
+        assert!(stale_write_refusal(&cancel(Network::Testnet), Network::Testnet).is_none());
+        assert!(matches!(
+            stale_write_refusal(&cancel(Network::Testnet), Network::Mainnet),
+            Some(Action::OfferCancelSubmitErr(m)) if m.contains("TESTNET") && m.contains("MAINNET")
+        ));
+        let execute = PollCommand::FxrpExecuteDirectMint(FxrpExecuteDirectMintParams {
+            proof_json: "{}".into(),
+            skip_mainnet_prompt: true,
+            network: Network::Mainnet,
+        });
+        assert!(matches!(
+            stale_write_refusal(&execute, Network::Testnet),
+            Some(Action::FxrpExecuteDirectMintSubmitErr(_))
+        ));
+        assert!(stale_write_refusal(&PollCommand::Account, Network::Testnet).is_none());
+    }
 
     /// Poll gates are tab-scoped: each predicate polls only on its own tab.
     #[test]

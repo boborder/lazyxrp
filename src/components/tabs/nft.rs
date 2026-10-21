@@ -53,6 +53,13 @@ pub struct NftTab {
     image_error: Option<String>,
 }
 
+/// Widths of the fixed NFT table columns (NFTokenID, dNFT, Taxon, Serial, Fee).
+const NFT_FIXED_COLS: [u16; 5] = [18, 4, 8, 8, 6];
+/// Columns the URI column cannot use: the fixed columns, 5 column gaps, the `"▶ "` highlight
+/// symbol (2) and the scrollbar column `render_selectable_table` reserves (1). The table sits in
+/// an already inner (border-free) area.
+const NFT_TABLE_OVERHEAD: u16 = 18 + 4 + 8 + 8 + 6 + 5 + 2 + 1;
+
 impl NftTab {
     fn request_selected_image(&mut self) -> Option<Action> {
         let nft = self
@@ -141,6 +148,32 @@ impl NftTab {
         if inner.width == 0 || inner.height == 0 {
             return;
         }
+        // Full URI above the image (wrapped, at most 4 lines), so a long CID is never cut.
+        let uri = self
+            .table_state
+            .selected()
+            .and_then(|i| self.nfts.get(i))
+            .map(|n| crate::xrpl::sanitize_text(&crate::xrpl::display_uri(&n.uri), 512))
+            .filter(|u| !u.is_empty());
+        let inner = match uri {
+            Some(uri) if inner.height > 6 => {
+                let lines = uri
+                    .chars()
+                    .count()
+                    .div_ceil(usize::from(inner.width))
+                    .clamp(1, 4) as u16;
+                let [uri_area, rest] =
+                    Layout::vertical([Constraint::Length(lines), Constraint::Fill(1)]).areas(inner);
+                frame.render_widget(
+                    Paragraph::new(uri)
+                        .wrap(ratatui::widgets::Wrap { trim: false })
+                        .style(theme::dim_style()),
+                    uri_area,
+                );
+                rest
+            }
+            _ => inner,
+        };
         let show_image = self.has_preview_protocol() && self.image_error.is_none();
         if show_image && let Some(state) = self.image_state.as_mut() {
             frame.render_stateful_widget(
@@ -158,6 +191,18 @@ impl NftTab {
                 .unwrap_or("select NFT with image URI");
             frame.render_widget(Paragraph::new(message).style(theme::dim_style()), inner);
         }
+    }
+}
+
+/// Truncate to `max` chars with a trailing `…` (by chars, never mid-codepoint).
+fn ellipsize(s: &str, max: usize) -> String {
+    if s.chars().count() > max {
+        format!(
+            "{}…",
+            s.chars().take(max.saturating_sub(1)).collect::<String>()
+        )
+    } else {
+        s.to_owned()
     }
 }
 
@@ -255,17 +300,19 @@ impl Component for NftTab {
 
         let header = Row::new(vec!["NFTokenID", "dNFT", "Taxon", "Serial", "Fee", "URI"])
             .style(theme::header_row_style());
+        // The URI column is whatever the fixed columns, gaps, highlight symbol and scrollbar leave.
+        let uri_width = usize::from(table_area.width.saturating_sub(NFT_TABLE_OVERHEAD)).max(8);
         let rows = self.nfts.iter().map(|n| {
             let short_id = if n.nft_id.chars().count() > 16 {
                 format!("{}…", n.nft_id.chars().take(16).collect::<String>())
             } else {
                 n.nft_id.clone()
             };
-            let short_uri = if n.uri.chars().count() > 40 {
-                format!("{}…", n.uri.chars().take(40).collect::<String>())
-            } else {
-                n.uri.clone()
-            };
+            // On-chain, issuer-controlled text: strip control / bidi / zero-width characters.
+            let short_uri = ellipsize(
+                &crate::xrpl::sanitize_text(&crate::xrpl::display_uri(&n.uri), 512),
+                uri_width,
+            );
             let dnft = if n.is_mutable { "yes" } else { "no" };
             Row::new(vec![
                 short_id,
@@ -278,14 +325,10 @@ impl Component for NftTab {
         });
         let table = Table::new(
             rows,
-            [
-                Constraint::Length(18),
-                Constraint::Length(4),
-                Constraint::Length(8),
-                Constraint::Length(8),
-                Constraint::Length(6),
-                Constraint::Fill(1),
-            ],
+            NFT_FIXED_COLS
+                .map(Constraint::Length)
+                .into_iter()
+                .chain([Constraint::Fill(1)]),
         )
         .header(header);
         render_selectable_table(
@@ -346,8 +389,27 @@ mod tests {
         Ok(())
     }
 
+    /// The issuer controls the URI: ESC / newline / bidi override never reach the screen.
+    #[test]
+    fn draw_strips_control_and_bidi_chars_from_uri() -> color_eyre::Result<()> {
+        let mut tab = focused_tab()?;
+        tab.update(&Action::XrplAccountNfts(vec![sample_nft(
+            "NFT_A",
+            "ipfs://a\u{1b}[31mb\u{202e}c\nd",
+        )]))?;
+        let out =
+            crate::test_support::render_to_string(220, 20, |f| tab.draw(f, f.area()).unwrap());
+        assert!(out.contains("https://ipfs.io/ipfs/a[31mbcd"), "{out}");
+        assert!(
+            !out.contains('\u{1b}') && !out.contains('\u{202e}'),
+            "{out}"
+        );
+        Ok(())
+    }
+
     /// TC-178: remote multibyte `nft_id`/`uri` truncate by chars at draw time (no panic, no
-    /// mid-codepoint cut); an empty list renders the empty state.
+    /// mid-codepoint cut); the URI column uses the available width, so a wide terminal shows
+    /// the whole URI and a narrow one ellipsizes it; an empty list renders the empty state.
     #[test]
     fn draw_truncates_multibyte_remote_fields_and_handles_empty_list() -> color_eyre::Result<()> {
         let mut tab = focused_tab()?;
@@ -358,8 +420,10 @@ mod tests {
         let out =
             crate::test_support::render_to_string(220, 20, |f| tab.draw(f, f.area()).unwrap());
         assert!(out.contains(&format!("{}…", "é".repeat(16))), "{out}");
-        assert!(out.contains(&format!("{}…", "ü".repeat(40))), "{out}");
-        assert!(!out.contains(&"ü".repeat(41)));
+        assert!(out.contains(&"ü".repeat(50)), "{out}");
+        let narrow =
+            crate::test_support::render_to_string(100, 20, |f| tab.draw(f, f.area()).unwrap());
+        assert!(narrow.contains("ü…"), "{narrow}");
 
         assert_eq!(tab.update(&Action::XrplAccountNfts(Vec::new()))?, None);
         let out =

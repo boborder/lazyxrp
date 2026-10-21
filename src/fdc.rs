@@ -245,6 +245,7 @@ pub fn voting_round(block_ts: u64, first_start: u64, epoch_secs: u64) -> color_e
 pub async fn prove_xrp_payment(
     rpc_url: &str,
     private_key_hex: &str,
+    gate: flare::EvmGate,
     cfg: &FdcConfig,
     xrpl_tx_hash: &str,
     resume_round: Option<u64>,
@@ -255,6 +256,7 @@ pub async fn prove_xrp_payment(
     let provider = ProviderBuilder::new()
         .wallet(EthereumWallet::from(signer))
         .connect_http(rpc_url.parse()?);
+    gate.check(&provider).await?;
 
     progress("asking the verifier to prepare the request…");
     let request = prepare_request(cfg, xrpl_tx_hash, owner).await?;
@@ -265,12 +267,19 @@ pub async fn prove_xrp_payment(
         flare::resolve_registry_contract(provider.clone(), rpc_url, "Relay"),
         flare::resolve_registry_contract(provider.clone(), rpc_url, "FlareSystemsManager"),
     )?;
-    let round = if let Some(r) = resume_round {
+    let (round, paid_tx) = if let Some(r) = resume_round {
         progress(&format!(
             "resuming voting round {r}: not paying for a new attestation"
         ));
-        r
+        (r, None)
     } else {
+        // Everything needed to name the round is read BEFORE paying, so a failure after the
+        // payment can always say which round to resume.
+        let sm = IFlareSystemsManager::new(systems, provider.clone());
+        let (first, epoch) = tokio::try_join!(
+            async { Ok::<_, color_eyre::Report>(sm.firstVotingRoundStartTs().call().await?) },
+            async { Ok(sm.votingEpochDurationSeconds().call().await?) },
+        )?;
         let request_bytes = Bytes::from(request.clone());
         let fee = IFdcRequestFeeConfigurations::new(fees, provider.clone())
             .getRequestFee(request_bytes.clone())
@@ -282,39 +291,47 @@ pub async fn prove_xrp_payment(
             );
         }
         progress(&format!("requesting the attestation (fee {fee} wei)…"));
-        let pending = IFdcHub::new(hub, provider.clone())
-            .requestAttestation(request_bytes)
-            .value(fee)
-            .send()
-            .await
-            .map_err(|e| color_eyre::eyre::eyre!("requestAttestation failed: {e}"))?;
-        let receipt = pending.get_receipt().await?;
-        if !receipt.status() {
-            color_eyre::eyre::bail!(
-                "requestAttestation reverted: {:#x}",
-                receipt.transaction_hash
-            );
-        }
-        let block = provider
-            .get_block_by_number(
-                receipt
-                    .block_number
-                    .ok_or_else(|| color_eyre::eyre::eyre!("receipt has no block number"))?
-                    .into(),
+        let hub = IFdcHub::new(hub, provider.clone());
+        let pending =
+            flare::send_capped(hub.requestAttestation(request_bytes).value(fee), &progress)
+                .await
+                .map_err(|e| color_eyre::eyre::eyre!("requestAttestation failed: {e}"))?;
+        let tx_hash = *pending.tx_hash();
+        progress(&format!("attestation transaction sent: {tx_hash:#x}"));
+        // Past this point the fee may be spent: every error names the hash and how to resume.
+        let after = |what: String| {
+            color_eyre::eyre::eyre!(
+                "{what} (attestation tx {tx_hash:#x}; resume with --round <round>, round = (attestation block timestamp - {first}) / {epoch})"
             )
-            .await?
-            .ok_or_else(|| color_eyre::eyre::eyre!("attestation block not found"))?;
-        let sm = IFlareSystemsManager::new(systems, provider.clone());
-        let (first, epoch) = tokio::try_join!(
-            async { Ok::<_, color_eyre::Report>(sm.firstVotingRoundStartTs().call().await?) },
-            async { Ok(sm.votingEpochDurationSeconds().call().await?) },
-        )?;
-        let round = voting_round(block.header.timestamp, first, epoch)?;
+        };
+        let receipt = pending
+            .get_receipt()
+            .await
+            .map_err(|e| after(format!("requestAttestation receipt failed: {e}")))?;
+        if !receipt.status() {
+            color_eyre::eyre::bail!("requestAttestation reverted: {tx_hash:#x}");
+        }
+        let block_number = receipt
+            .block_number
+            .ok_or_else(|| after("receipt has no block number".into()))?;
+        let block = provider
+            .get_block_by_number(block_number.into())
+            .await
+            .map_err(|e| after(format!("attestation block lookup failed: {e}")))?
+            .ok_or_else(|| after("attestation block not found".into()))?;
+        let round =
+            voting_round(block.header.timestamp, first, epoch).map_err(|e| after(e.to_string()))?;
         // Printed before the wait so a dropped run can resume with `--round`.
         progress(&format!(
             "attestation paid; if this run dies, resume with --round {round}"
         ));
-        round
+        (round, Some(tx_hash))
+    };
+    let after = |what: String| match paid_tx {
+        Some(h) => {
+            color_eyre::eyre::eyre!("{what} (attestation tx {h:#x}; resume with --round {round})")
+        }
+        None => color_eyre::eyre::eyre!("{what} (resume with --round {round})"),
     };
 
     progress(&format!("waiting for voting round {round} to finalize…"));
@@ -334,15 +351,15 @@ pub async fn prove_xrp_payment(
             Err(e) => {
                 rpc_errors += 1;
                 if rpc_errors > 5 {
-                    return Err(e.into());
+                    return Err(after(e.to_string()));
                 }
             }
         }
         if tokio::time::Instant::now() >= deadline {
-            color_eyre::eyre::bail!(
+            return Err(after(format!(
                 "round {round} did not finalize in {} s (the attestation fee is spent)",
                 FINALIZE_TIMEOUT.as_secs()
-            );
+            )));
         }
         tokio::time::sleep(POLL_EVERY).await;
     }
@@ -357,7 +374,10 @@ pub async fn prove_xrp_payment(
         }
         tokio::time::sleep(POLL_EVERY).await;
     }
-    Err(last.unwrap_or_else(|| color_eyre::eyre::eyre!("DA layer returned no proof")))
+    Err(after(last.map_or_else(
+        || "DA layer returned no proof".into(),
+        |e| e.to_string(),
+    )))
 }
 
 #[cfg(test)]

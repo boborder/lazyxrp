@@ -6,9 +6,8 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ## [0.8.0] - 2026-10-21
 
-## [0.7.0] - 2026-10-16
-
 ### Added
+
 - FXRP Direct Mint guards for FAssets v1.3: the C2 Payment is refused when the amount does not exceed the Direct Mint fees (a payment below the minimum fee is minted entirely to the fee receiver on Flare) or while FXRP minting is paused (`mintingPaused()` / `emergencyPauseLevel()`, shown as a badge in the FXRP panel). C3 now reports what the receipt actually did: minted, delayed by the mint rate limit (re-run with the same proof after `executionAllowedAt`), or payment lost to the fee receiver — previously any non-reverting call was shown as success.
 - FXRP panel shows the Direct Mint limits (`Max now` = largest mint that is neither delayed nor over the cap; `Cap used`), read in the same Flare batch; the FXRP Mint composer refuses an amount above the global minting cap headroom (the mint would revert and the XRP would wait in the Core Vault).
 - CLI `-x fxrp [--tag N]`: read-only Flare FXRP report (JSON) — Direct Mint fees / pause / limits, MintingTagManager (reservation fee, next tag, executor-change cooldown; with `--tag` the owner, minting recipient, allowed executor and any pending executor change), the Core Vault holdings, the registered agent vaults and the global redemption queue (tickets, total XRP and lots, 10 largest agents).
@@ -19,6 +18,43 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 - `-x sa-call <XRP> --call TARGET:0xDATA …`: Smart Account custom instruction `0xFE` (calls run from the personal account, value 0): sends the 42-byte memo with the keccak256 of the `PackedUserOperation` and prints the user-operation bytes for `fxrp-execute <tx> --data 0x…`. Verified live on Coston2. `fxrp-execute --round N` resumes a run whose attestation fee was already paid.
 - `fxrp-redeem` warns when the receipt carries `RedemptionAmountIncomplete` (remaining UBA) or the older `RedemptionRequestIncomplete` (remaining lots): only part of the amount was allocated.
 - FXRP panel shows the personal account's Firelight / Upshift vault positions (vault list from `MasterAccountController.getVaults()`; share balance converted with ERC-4626 `convertToAssets` when the vault has it).
+
+### Security
+
+- Flare writes verify the RPC `eth_chainId` once up front (every Flare subcommand) and decide the mainnet `--yes` gate from the reported chain id; the TUI pairs the XRPL network with its Flare network (`check_network_pair`) for C2 / Smart Account / C3, and C3 gates on the Flare network.
+- Flare EVM writes are capped at 10 FLR of gas cost (`MAX_TX_FEE_WEI`, via `send_capped`); FDC reads round parameters before paying the attestation fee and prints the tx hash and a `--round` resume hint; `sa-memo` / `sa-call` apply the same cap checks.
+- TUI FXRP Direct Mint and Smart Account (`0x01`/`0x02`) payments re-read the Flare views (fees, Core Vault, pause / mint cap, operator, instruction fee) right before signing and refuse when they differ from the composer's snapshot (`flare::verify_direct_mint_terms` / `verify_smart_account_terms`); the 300 s snapshot age limit is now only a secondary guard. Vault instructions re-check the operator pin only.
+- XRPL writes carry the compose-time network and are refused after a network switch; submit is a single attempt (no blind resubmit) and a lost reply is resolved with a `tx(hash)` lookup (makes S-014 true).
+- EIP-55 checksums are enforced on mixed-case EVM addresses; `tag_owner` treats only reverts as "not reserved".
+- Keybindings are restricted to an allowlist (rejected at load); config permissions are checked on the file actually read; `~` is expanded in `config_dir` / `data_dir` / `LAZYXRP_*`; credentials resolve CLI > env > file, a lower source's other kind is dropped (both kinds at one level is an error).
+- More zeroization of key material in `signing.rs`; release profile builds with `overflow-checks = true`.
+- `RUSTSEC-2026-0235` ignore removed (`rkyv` is not in `Cargo.lock`); `cargo audit` runs without ignores.
+- `install.sh`: the `NO_VERIFY=1` MITM warning is shown at run time; binary installs no longer install Rust by default (`--install-rust` opts in).
+
+### Changed
+
+- NFT URIs: `ipfs://ipfs/<cid>`, upper-case `IPFS://`, `/ipfs/<cid>` and bare CIDs resolve (the doubled form used to 404); gateways are now `ipfs.io`, `gateway.pinata.cloud`, `dweb.link`; base64 `data:` URIs load; the NFT table and preview display ipfs URIs as `https://ipfs.io/ipfs/…` (openable in a browser); the URI column uses the available width and the preview shows the whole URI, sanitised of control / bidi characters.
+- Key and bracketed-paste events go to the visible tab only; paste is edit-only (wallet fields and the Tx History filter) and never triggers hotkeys. Overview has no wallet; Tx History `f` / `m` are reachable; the TrustSet form starts empty; NoFreeze needs a typed `NOFREEZE`; the watch account defaults to the signing address when a credential is present; the IOU currency row accepts up to 40 characters; the startup splash ends on a `server_info` error; Flare snapshots are cleared on network change and refused when older than 300 s; in-flight fetches are de-duplicated; help overlay lists the real bindings.
+- XRPL coverage is now 50 / 77 (the nine `Loan*` types are Unsupported).
+- Currency display: non-standard codes are never shown as standard ones; a fake `XRP` code is shown as a hex prefix.
+
+### Fixed
+
+- `terQUEUED` is reported as queued, not failed.
+- DEX ask prices are computed correctly (`1e6 / quality`).
+- `NetworkID` is injected when the network id is > 1024 (simulate and signing). Whether Xahau accepts `simulate` with it is **not verified** (docs/problems.md P-007).
+- WebSocket has a 30 s read timeout and reconnects after a drop or a network switch.
+- Domain verification accepts base58 `nH…` and hex node keys; activation = `account_info` success; dUNL validator-list field ids / VL lengths are decoded per spec; `parse_drops` is strict; IPv6 NFT URIs work.
+- The Market oracle panel reports "not configured" (`XrplOracleNotConfigured`) when no oracles are configured.
+
+### Deferred
+
+- Split of `wallet.rs` / `wallet_composer.rs`, a `vendored-openssl` feature, install attestation / signing, and a confirm step for GlobalFreeze / RequireAuth.
+
+## [0.7.0] - 2026-10-16
+
+### Added
+
 - Flare Smart Accounts (proof-based instruction flow). Overview FXRP panel rows show the Flare personal account of your XRPL address (FXRP balance, nonce, deployed?, operator, transfer / redeem instruction fees; `MasterAccountController` resolved via the Flare contract registry, same Flare poll batch and `[flare] display` gating as FXRP). Wallet composer `a` sends an `0x01` FXRP transfer (decimal FXRP amount → the token's raw base units using the FXRP `decimals()` read from the chain, exact integer math; `0x` recipient) or `0x02` FXRP redeem (lots) as an XRPL Payment of exactly `getInstructionFee(id)` XRP drops to the operator, no `DestinationTag`, with the 32-byte instruction as the only Memo; after submit the operator executes it on Flare. The composer refuses to queue until the Smart Account read (including `decimals()`) is loaded. Not included yet: custom instructions `0xFE` / `0xFF`.
 - **New config `[flare.smart_accounts] expected_operator`**: the operator address returned by the Flare RPC is paid only when it equals this pin (verify it out of band); unset or mismatched → refused before any RPC. The instruction fee must be 1 drop – 10 XRP. Mainnet needs `--yes`; simulate runs before signing.
 - **Declarative transaction specs (`src/xrpl/txspec/`)** and the first family, NFT: NFTokenMint / NFTokenBurn / NFTokenCreateOffer / NFTokenAcceptOffer / NFTokenCancelOffer, written through one generic path (one `GenericTxSubmit` Action trio, one `PollCommand`, the existing mainnet `--yes` / simulate-first / Fee-cap / submit-lock guards). Wallet composer `m` "Transaction" generates the form from the field specs (inline validation, help, preview; Burn and AcceptOffer need a typed `BURN` / `ACCEPT`). CLI `-x tx <TYPE> Field=value…`, `-x nft-mint --uri --taxon [--flags burnable,onlyXRP,transferable] [--transfer-fee bps] [--issuer]`, `-x nft-burn <NFTokenID> [--owner]`; all refused under `--watch`. Assets tab `x` opens the burn composer for the selected NFT. `tfMutable` minting and zero-price offers are not supported.

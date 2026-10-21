@@ -19,7 +19,9 @@ lazyxrp/
 ├── .env.example
 ├── install.sh
 ├── mise.toml
+├── deny.toml
 ├── AGENTS.md
+├── .github/workflows/     # ci.yml / cd.yml / benchmark.yml
 ├── src/
 │   ├── lib.rs                 # shared library (lazyxrp + rp binaries)
 │   ├── main.rs                # thin `lazyxrp` binary entry
@@ -32,6 +34,10 @@ lazyxrp/
 │   ├── network.rs
 │   ├── signing.rs
 │   ├── flare.rs
+│   ├── flare_cmd.rs           # Flare EVM write commands (`-x fxrp-execute` / `fxrp-redeem` / `fxrp-tag-*` / `sa-*`)
+│   ├── fdc.rs                 # Flare Data Connector proof flow (`prove_xrp_payment`)
+│   ├── coverage.rs            # XRPL TX coverage SSOT (`-x coverage`)
+│   ├── test_support.rs        # test helpers (`#[cfg(test)]`)
 │   ├── tui.rs
 │   ├── uninstall.rs
 │   ├── logging.rs
@@ -47,7 +53,14 @@ lazyxrp/
 │   │   ├── nft_image.rs          # NFT metadata/image fetch and limits
 │   │   ├── poll.rs               # poll loop + read batch; PollCommand dispatch
 │   │   ├── submit.rs             # write paths: guard → simulate → sign → submit, quote
-│   │   ├── txspec/               # declarative tx specs: mod.rs (TxSpec / FieldSpec / registry), nft.rs (NFT family)
+│   │   ├── txspec/               # declarative tx specs
+│   │   │   ├── mod.rs            # TxSpec / FieldSpec / registry
+│   │   │   ├── nft.rs            # NFT family
+│   │   │   ├── channel_amm.rs    # PaymentChannel / AMM families
+│   │   │   ├── checks_misc.rs    # Check / Ticket / DepositPreauth / SignerListSet / Clawback
+│   │   │   ├── identity.rs       # Credential / DID / Oracle / PermissionedDomain
+│   │   │   ├── mpt.rs            # MPT family
+│   │   │   └── xchain.rs         # XChain bridge family
 │   │   ├── toml.rs
 │   │   ├── types.rs
 │   │   ├── util.rs               # JSON path helpers + reconnect backoff
@@ -96,12 +109,16 @@ lazyxrp/
 │               ├── mod.rs
 │               ├── format.rs
 │               └── parsers.rs
+├── tests/
+│   ├── cli_smoke.rs           # binary boundary smoke
+│   └── testnet_e2e.rs         # opt-in live testnet/devnet writes
 ├── docs/
     ├── architecture.md    # システム・行動設計（TX detail §5.2.1 含む）
     ├── requirements.md    # FR/NFR（何をするか）
     ├── tech.md
     ├── maintenance.md     # リリース・公開フロー（運用）
     ├── test.md            # TC カタログ（requirements / architecture へトレース）
+    ├── roadmap-log.md     # 進路変更記録・計画上の注意点
     ├── directory.md
     ├── references.md
     ├── security.md
@@ -125,7 +142,8 @@ lazyxrp/
 - `.env.example`: `XRPL_*` 環境変数の例（任意。一覧は `docs/tech.md` と実装を参照）。
 - `install.sh`: インタラクティブインストーラ（必須は `curl` **または** `wget`）。プロンプトとメッセージは英語。`--help` で CLI 一覧（`--method cargo|binary`、`--install-rust` / `--no-install-rust`、`--install-mise` / `--no-install-mise`、`-q`）。`CI=1` は `-q` 相当。PATH 未設定時は shell profile へ追記可。リリースアーカイブに `rp` があればそれを入れ、無ければ `rp` → `lazyxrp` symlink。**手動アンインストール**は `--uninstall-help`（`lazyxrp --self-uninstall`、`INSTALL_DIR/rp` 削除など）。
 - `mise.toml`: [mise](https://mise.jdx.dev/) タスク（`install`、`tags`（一覧）、`tag-push`（緊急時の手動タグフォールバック）、`bench` / `bench-fast` / `bench-ci`（ベンチマーク））。公開フロー（CI の `Cargo.toml` version 検知 → auto-tag → CD 公開）の詳細は [`maintenance.md`](maintenance.md)。
-- `AGENTS.md`: プロジェクト運用ルールと実行契約（禁止事項・読み順）。graphify の構造情報も参照。
+- `AGENTS.md`: プロジェクト運用ルールと実行契約（禁止事項・読み順）。graphify の構造情報（`graphify-out/`）は gitignore で、ローカル生成のみ。
+- `deny.toml`: cargo-deny 設定（advisories / licenses / bans / sources）。CI `security-advisories` と `mise run audit` が使う。
 
 ## 3. `src/` 配下の責務
 
@@ -150,10 +168,11 @@ lazyxrp/
 - `../tests/cli_smoke.rs`: バイナリ境界スモーク（`lazyxrp` / `rp` 実行ファイルの argv・終了コード・出力をローカル JSON-RPC で検証、TC-158）。
 
 **依存方向（import 規則）:**
-- `components/` が import してよいのは `action`・`config`（`Arc<Config>`）・`xrpl` の行型だけ。`xrpl/client`・`xrpl/poll`・`app` は import しない。`RpcClient` を持たず、データは `Action` 経由で受け取る。
-- `xrpl/` が import してよい内部モジュールは `action::Action`・`network::Network`・`signing` のみ。`xrpl/types.rs` は UI / poll に依存しない leaf。
+- `components/` が import してよいのは `action`・`config`（`Arc<Config>`）・`network`・`xrpl` の行型 / 純粋ヘルパ（`xrpl::sanitize_text` / `xrp_to_drops` / `hex_to_ascii` / `txspec`）・`signing` の純粋な検証・エンコード関数（`validate_*` / `parse_*` / `encode_fxrp_*`）・`flare` の型と純粋ヘルパ（`format_token_units` / `classify_mint` / `check_operator` など）。`xrpl/client`・`xrpl/poll`・`xrpl/submit`・`app` は import しない（`RpcClient` を持たず、I/O は `Action` 経由）。
+- `xrpl/` が import してよい内部モジュールは `action`・`network`・`signing`・`config`・`cli`・`flare`・`coverage`（`cli_exec.rs` / `poll.rs` から）。`components/` と `app` は import しない。`xrpl/types.rs` は UI / poll に依存しない leaf。
+- `coverage.rs` は `components::shared::tx_detail`（parser 登録）と `xrpl::txspec`（registry）を import する逆向き依存を持つ。`xrpl/cli_exec.rs` が `coverage` を呼ぶため、`xrpl/` → `coverage` → `components` の経路が存在する（読み取り専用の登録情報のみ）。
 - `config.rs` は `action` の `Action` / `Mode` を import する（keybinding デシリアライズ用）。`Mode` は `action.rs` に置く。
-- `signing.rs` は `network`・`secrecy`・XRPL SDK crate のみに依存し、`components/` と `app` を import しない。
+- `signing.rs` は `network`・`secrecy`・XRPL SDK crate と `xrpl` の純粋ヘルパ（`xrp_to_drops` / `resolve_payment_destination` / `GeneratedWalletKeys`）に依存し、`components/` と `app` を import しない。
 - 新しい TX 種別の write は共有パイプライン（`xrpl/submit.rs` の resolve / simulate / sign / submit、`poll.rs` の handler）を再利用し、種別ごとに独自の simulate・署名を書かない。宣言的な型は `xrpl/txspec/`（architecture.md §2.1）。
 - パネルを追加したら同じ変更で `app::TAB_TITLES` を更新する（タブ index とパネル順を一致させる、security.md I-9）。
 - 結合が強い箇所: `action.rs`（全送受信のハブ）、`poll.rs` の `submit_*`（型ごとの検証 + 共有 simulate/sign/submit）、`tx_detail/parsers.rs`（登録された TX 種別、architecture.md「TX 詳細オーバーレイ」）。
@@ -197,24 +216,8 @@ lazyxrp/
 
 ## 7. `docs/` 配下の責務
 
-ドキュメント階層（ルート [`DESIGN.md`](../DESIGN.md) は `docs/` 外）:
+ドキュメントの索引（各 doc が答える質問）は [`AGENTS.md`](../AGENTS.md) が SSOT。ここでは複製しない。
 
-| File | Layer | Contents |
-|------|-------|----------|
-| `requirements.md` | What | FR/NFR ids |
-| `architecture.md` | How (system) | Network, config precedence, data flow, behavioral contracts |
-| `../DESIGN.md` | Look & feel | Keys, layout splits, theme, modals, loading |
-| `test.md` | Verify | TC catalog → traces to requirements + architecture |
-| [`ROADMAP.md`](../ROADMAP.md) | When | Goal hierarchy (final / long / mid / short), shipped milestones |
-| `roadmap-log.md` | Why | Pivot log, planning cautions |
-| `tech.md` | Stack | Dependencies, versions, dev commands |
-| `maintenance.md` | Ops | Release pipeline (CI version detection → auto-tag → CD), publish flow |
-| `directory.md` | Index | This file |
-| `references.md` | Links | External references |
-| `security.md` | Audit | S-xxx / R-xxx, threat model |
-| `problems.md` | Debt | P-xxx known issues |
-
-Index: [`AGENTS.md`](../AGENTS.md).
 
 ## 8. Build / test commands and entry points
 

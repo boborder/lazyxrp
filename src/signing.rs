@@ -60,12 +60,14 @@ impl SigningCredential {
                 let account = kobe_xrpl::Deriver::new(&wallet)
                     .derive(0)
                     .map_err(|e| color_eyre::eyre::eyre!("XRPL derivation: {e}"))?;
-                let private_key = account.private_key_hex();
+                let private_key =
+                    secrecy::zeroize::Zeroizing::new(account.private_key_hex().to_string());
+                let upper = secrecy::zeroize::Zeroizing::new(private_key.to_uppercase());
 
                 Ok(xrpl::wallet::Wallet {
                     seed: String::new(),
                     public_key: account.public_key_hex().to_uppercase(),
-                    private_key: format!("00{}", private_key.to_uppercase()),
+                    private_key: format!("00{}", upper.as_str()),
                     classic_address: account.address().to_owned(),
                     sequence: 0,
                 })
@@ -143,19 +145,24 @@ pub fn wallet_from_family_seed(
 
     let seed = seed.trim();
     if seed.starts_with("sEd") {
-        let payload = decode_base58(seed, XRPL_ED25519_SEED_PREFIX).map_err(|e| {
-            color_eyre::eyre::eyre!(
-                "invalid Ed25519 family seed (check characters / checksum): {e:?}"
-            )
-        })?;
-        let bytes: [u8; SEED_LENGTH] = payload.try_into().map_err(|v: Vec<u8>| {
-            color_eyre::eyre::eyre!(
-                "Ed25519 family seed payload length {} (expected {SEED_LENGTH})",
-                v.len()
-            )
-        })?;
-        let canonical = generate_seed(Some(bytes), Some(CryptoAlgorithm::ED25519))
-            .map_err(|e| color_eyre::eyre::eyre!("Ed25519 seed re-encode: {e:?}"))?;
+        let payload = secrecy::zeroize::Zeroizing::new(
+            decode_base58(seed, XRPL_ED25519_SEED_PREFIX).map_err(|e| {
+                color_eyre::eyre::eyre!(
+                    "invalid Ed25519 family seed (check characters / checksum): {e:?}"
+                )
+            })?,
+        );
+        let bytes: secrecy::zeroize::Zeroizing<[u8; SEED_LENGTH]> =
+            secrecy::zeroize::Zeroizing::new(payload.as_slice().try_into().map_err(|_| {
+                color_eyre::eyre::eyre!(
+                    "Ed25519 family seed payload length {} (expected {SEED_LENGTH})",
+                    payload.len()
+                )
+            })?);
+        let canonical = secrecy::zeroize::Zeroizing::new(
+            generate_seed(Some(*bytes), Some(CryptoAlgorithm::ED25519))
+                .map_err(|e| color_eyre::eyre::eyre!("Ed25519 seed re-encode: {e:?}"))?,
+        );
         Wallet::new(&canonical, sequence)
             .map_err(|e| color_eyre::eyre::eyre!("wallet error: {:?}", e))
     } else {
@@ -200,7 +207,8 @@ fn read_confirmation(mut reader: impl std::io::BufRead) -> bool {
 /// Direct Mint memo prefix (`DIRECT_MINTING`) — 8 bytes as lowercase hex.
 pub const DIRECT_MINT_MEMO_PREFIX: &str = "4642505266410018";
 
-/// Normalize a Flare/EVM address to 40 lowercase hex chars (no `0x`).
+/// Normalize a Flare/EVM address to 40 lowercase hex chars (no `0x`). All-lowercase is accepted
+/// as is; any uppercase hex letter means the sender meant an EIP-55 checksum, which must verify.
 pub fn normalize_eth_address_hex(addr: &str) -> color_eyre::Result<String> {
     let s = addr.trim();
     let s = s
@@ -215,6 +223,13 @@ pub fn normalize_eth_address_hex(addr: &str) -> color_eyre::Result<String> {
     }
     if !s.chars().all(|c| c.is_ascii_hexdigit()) {
         color_eyre::eyre::bail!("Flare recipient must be hex");
+    }
+    if s.bytes().any(|b| b.is_ascii_uppercase()) {
+        alloy::primitives::Address::parse_checksummed(format!("0x{s}"), None).map_err(|_| {
+            color_eyre::eyre::eyre!(
+                "Flare recipient has an invalid EIP-55 checksum (typo?); use all-lowercase to skip the check"
+            )
+        })?;
     }
     Ok(s.to_ascii_lowercase())
 }
@@ -504,14 +519,37 @@ fn payment_send_max(
 /// XRP drops a SendMax spec may debit (0 for an IOU SendMax).
 pub(crate) fn send_max_xrp_drops(spec: &str) -> color_eyre::Result<u64> {
     match parse_offer_amount_spec(spec.trim())? {
-        OfferAmountSpec::Xrp(drops) => Ok(drops.parse::<u64>()?),
+        OfferAmountSpec::Xrp(drops) => Ok(drops),
         OfferAmountSpec::Iou { .. } => Ok(0),
     }
+}
+
+thread_local! {
+    static SIGN_NETWORK_ID: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// Run the (synchronous) signing closure `f` for a network with `network_id`: `sign_blob!` then
+/// sets `NetworkID` when it is > 1024 (Xahau, whose nodes require it in every tx). Mainnet/testnet
+/// (0/1) and devnet never carry it.
+pub(crate) fn with_network_id<T>(network_id: u32, f: impl FnOnce() -> T) -> T {
+    let prev = SIGN_NETWORK_ID.replace(network_id);
+    let out = f();
+    SIGN_NETWORK_ID.set(prev);
+    out
+}
+
+/// `NetworkID` the current signing scope must carry (`None` below the 1024 cut-off).
+pub(crate) fn signing_network_id() -> Option<u32> {
+    Some(SIGN_NETWORK_ID.get()).filter(|id| *id > 1024)
 }
 
 /// Sign `tx` with `wallet` and return the binary-encoded blob (hex).
 macro_rules! sign_blob {
     ($tx:ident, $wallet:expr) => {{
+        if let Some(id) = crate::signing::signing_network_id() {
+            xrpl::models::transactions::Transaction::get_mut_common_fields(&mut $tx).network_id =
+                Some(id);
+        }
         xrpl::transaction::sign(&mut $tx, $wallet, false)
             .map_err(|e| color_eyre::eyre::eyre!("sign error: {:?}", e))?;
         xrpl::core::binarycodec::encode(&$tx)
@@ -770,7 +808,7 @@ fn validate_iou_fields(currency: &str, issuer: &str, value: &str) -> color_eyre:
 }
 
 enum OfferAmountSpec<'a> {
-    Xrp(&'a str),
+    Xrp(u64),
     Iou {
         currency: &'a str,
         issuer: &'a str,
@@ -787,13 +825,12 @@ fn parse_offer_amount_spec(spec: &str) -> color_eyre::Result<OfferAmountSpec<'_>
         if parts.len() > 2 {
             color_eyre::eyre::bail!("XRP amount takes 2 parts (XRP:drops): {spec}");
         }
-        let drops = parts[1]
-            .parse::<u64>()
-            .map_err(|_| color_eyre::eyre::eyre!("XRP drops must be an integer"))?;
+        let drops = crate::xrpl::txspec::parse_drops(parts[1])
+            .map_err(|e| color_eyre::eyre::eyre!("XRP drops: {e}"))?;
         if drops == 0 {
             color_eyre::eyre::bail!("XRP drops must be greater than zero");
         }
-        return Ok(OfferAmountSpec::Xrp(parts[1]));
+        return Ok(OfferAmountSpec::Xrp(drops));
     }
     if parts.len() < 3 {
         color_eyre::eyre::bail!("IOU amount needs 3 parts (CUR:issuer:value): {spec}");
@@ -1816,18 +1853,41 @@ mod tests {
 
     #[test]
     fn build_direct_mint_memo_data_recipient_only() {
+        // EIP-55 spec vector.
         let memo =
-            build_direct_mint_memo_data("0xAbCDEF0123456789AbCDEF0123456789aBcDEF01").unwrap();
+            build_direct_mint_memo_data("0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed").unwrap();
         assert_eq!(memo.len(), 64);
         assert!(memo.starts_with(DIRECT_MINT_MEMO_PREFIX));
         assert_eq!(&memo[16..24], "00000000");
-        assert_eq!(&memo[24..], "abcdef0123456789abcdef0123456789abcdef01");
+        assert_eq!(&memo[24..], "5aaeb6053f3e94c9b9a09f33669435e7ef1beaed");
     }
 
     #[test]
     fn build_direct_mint_memo_data_rejects_bad_addr() {
         assert!(build_direct_mint_memo_data("0xabc").is_err());
         assert!(build_direct_mint_memo_data("not-hex-zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz").is_err());
+    }
+
+    /// Mixed-case (any uppercase hex letter) recipients must carry a valid EIP-55 checksum;
+    /// all-lowercase stays accepted.
+    #[test]
+    fn eth_address_checksum_enforced_for_mixed_case() {
+        let lower = "5aaeb6053f3e94c9b9a09f33669435e7ef1beaed";
+        assert_eq!(
+            normalize_eth_address_hex("0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed").unwrap(),
+            lower
+        );
+        assert_eq!(normalize_eth_address_hex(lower).unwrap(), lower);
+        // One flipped letter, and an all-uppercase body, fail the checksum.
+        for bad in [
+            "0x5AAeb6053F3E94C9b9A09f33669435E7Ef1BeAed",
+            "0x5AAEB6053F3E94C9B9A09F33669435E7EF1BEAED",
+        ] {
+            let err = normalize_eth_address_hex(bad).unwrap_err().to_string();
+            assert!(err.contains("EIP-55"), "{bad}: {err}");
+            assert!(build_direct_mint_memo_data(bad).is_err());
+            assert!(parse_smart_account_recipient(bad).is_err());
+        }
     }
 
     /// TC-239: Smart Account payment reference layout — id at byte 0, walletId at 1, value
@@ -1899,11 +1959,21 @@ mod tests {
                 "{bad:?} must be refused"
             );
         }
-        // Case and surrounding whitespace are normalized.
-        let upper = "  0XF5488132432118596FA13800B68DF4C0FF25131D ";
+        // Surrounding whitespace is trimmed and a valid EIP-55 form normalizes to lowercase; an
+        // all-uppercase body is not a checksum and is refused.
+        let checksummed = format!(
+            "  {}  ",
+            to.parse::<alloy::primitives::Address>()
+                .unwrap()
+                .to_checksum(None)
+        );
         assert_eq!(
-            encode_fxrp_transfer_instruction(0, 1, upper).unwrap(),
+            encode_fxrp_transfer_instruction(0, 1, &checksummed).unwrap(),
             encode_fxrp_transfer_instruction(0, 1, to).unwrap()
+        );
+        assert!(
+            encode_fxrp_transfer_instruction(0, 1, "  0XF5488132432118596FA13800B68DF4C0FF25131D ")
+                .is_err()
         );
     }
 

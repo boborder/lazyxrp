@@ -6,6 +6,10 @@ on:
       - "[v]?[0-9]+.[0-9]+.[0-9]+"
   workflow_dispatch:
 
+permissions:
+  contents: read
+  actions: read
+
 jobs:
   # Release gate: never build/publish from a commit whose CI is not green.
   # Tag pushes and workflow_dispatch both land here; the CI workflow run for
@@ -17,6 +21,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
       - name: Wait for and verify CI on tagged commit
         env:
           GH_TOKEN: ${{ github.token }}
@@ -87,6 +93,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # v1
         with:
@@ -164,6 +172,7 @@ jobs:
       - name: Checkout repository (history + tags for notes)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
+          persist-credentials: false
           fetch-depth: 0
 
       # Direct pushes to main (few PRs) leave GitHub's generated notes nearly empty:
@@ -204,6 +213,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # v1
         with:

@@ -5,7 +5,8 @@
 #   INSTALL_DIR     Installation bin directory (default: ~/.local/bin)
 #   BINARY_INSTALL  Set to 1 to skip source build even when Cargo.toml is present
 #   VERSION         Specific version for binary install (default: latest release tag)
-#   NO_VERIFY       Set to 1 to skip checksum verification (binary install only)
+#   NO_VERIFY       Set to 1 to skip checksum verification (binary install only).
+#                   DANGEROUS: without it a man-in-the-middle can swap the binary.
 #   CI              When set, force non-interactive defaults (same as -q)
 #
 # GitHub Releases API (`releases/latest`): optional auth to reduce rate-limit failures —
@@ -62,8 +63,8 @@ Options:
   --method cargo         Build from source (requires Cargo.toml next to install.sh)
   --method binary        Download prebuilt release archive for this OS/arch
 
-  --install-rust         If cargo is missing, install Rust via rustup (TTY: skip prompt)
-  --no-install-rust      If cargo is missing, do not install Rust (binary path only)
+  --install-rust         Source build only: if cargo is missing, install Rust via rustup (TTY: skip prompt)
+  --no-install-rust      If cargo is missing, never install Rust (use with --method binary)
 
   --install-mise         If mise is missing, install it (TTY: skip prompt)
   --no-install-mise      Skip mise install / offer
@@ -72,7 +73,8 @@ Environment variables:
   INSTALL_DIR            Target bin directory (default: ~/.local/bin)
   BINARY_INSTALL=1       Force prebuilt download even when a local clone exists
   VERSION=<tag>          Release tag for binary install (default: latest GitHub release)
-  NO_VERIFY=1            Skip SHA-256 checksum verification (binary only; not recommended)
+  NO_VERIFY=1            Skip SHA-256 checksum verification (binary only; DANGEROUS: a
+                         man-in-the-middle or a tampered mirror could then supply a malicious binary)
   CI=1                   Non-interactive mode (same as -q); auto-append PATH when needed
   GITHUB_TOKEN           Optional GitHub API token (or GITHUB_API_TOKEN) for release lookup
 
@@ -353,8 +355,8 @@ offer_install_rustup() {
                 ;;
         esac
     elif [ "$IS_TTY" = 0 ]; then
-        info "cargo not found — installing Rust via rustup (non-interactive default)"
-        do_install=1
+        warn "cargo not found — not installing Rust non-interactively (pass --install-rust to allow it)"
+        return 1
     elif ! prompt_yn "Rust (cargo) not found. Install via rustup?" "y"; then
         warn "cargo not available — source builds disabled unless you install Rust separately"
         return 1
@@ -689,6 +691,7 @@ verify_checksum() {
         printf '\n'
         printf '  %b%b ⚠  WARNING %b  Checksum verification DISABLED (NO_VERIFY=1)\n' "$BG_RED" "$WHITE" "$RESET"
         printf '  %b  The binary has NOT been verified for integrity.%b\n' "$YELLOW" "$RESET"
+        printf '  %b  A man-in-the-middle could substitute a malicious binary. Do not use on untrusted networks.%b\n' "$YELLOW" "$RESET"
         return
     fi
 
@@ -1103,25 +1106,9 @@ main() {
     local has_local_tree=0
     [ -n "$repo_root" ] && [ -f "${repo_root}/Cargo.toml" ] && has_local_tree=1
 
-    # ── Offer to install missing tools ──────────────────────────────────────
-    [ "$IS_TTY" = 1 ] && step "Checking tools"
-    if has cargo; then
-        ok "cargo $(cargo --version 2>/dev/null | sed 's/cargo //')"
-    else
-        offer_install_rustup || true
-    fi
-    sleep_tick 0.1
-    if has mise; then
-        ok "mise $(mise --version 2>/dev/null | head -1)"
-    else
-        offer_install_mise || true
-    fi
-
-    # Re-check cargo availability after potential install
+    # ── Choose install method first; Rust is offered only for a source build ──
     local has_cargo=0
     has cargo && has_cargo=1
-
-    # Determine install method
     local method=""
 
     if [ -n "$CLI_METHOD" ]; then
@@ -1131,21 +1118,19 @@ main() {
         esac
     elif [ "$BINARY_INSTALL" = "1" ]; then
         method="binary"
+    elif [ "$has_local_tree" = 1 ] && [ "$IS_TTY" = 1 ]; then
+        local choice cargo_label="Build from source (cargo install)"
+        [ "$has_cargo" = 1 ] || cargo_label="Build from source (offers to install Rust via rustup first)"
+        choice=$(prompt_choice "How do you want to install?" \
+            "$cargo_label" \
+            "Download prebuilt binary (GitHub Releases)")
+        case "$choice" in
+            2) method="binary" ;;
+            *) method="cargo" ;;
+        esac
     elif [ "$has_local_tree" = 1 ] && [ "$has_cargo" = 1 ]; then
-        if [ "$IS_TTY" = 1 ]; then
-            local choice
-            choice=$(prompt_choice "How do you want to install?" \
-                "Build from source (cargo install)" \
-                "Download prebuilt binary (GitHub Releases)")
-            case "$choice" in
-                1) method="cargo" ;;
-                2) method="binary" ;;
-                *) method="cargo" ;;
-            esac
-        else
-            method="cargo"
-            info "Local source tree found — building from source"
-        fi
+        method="cargo"
+        info "Local source tree found — building from source"
     else
         method="binary"
         [ "$IS_TTY" = 0 ] && info "Using prebuilt binary download"
@@ -1154,7 +1139,19 @@ main() {
     if [ "$method" = "cargo" ]; then
         [ "$has_local_tree" = 1 ] || die \
             "Source build requires a local clone (Cargo.toml next to install.sh). Use --method binary or clone the repo."
-        has cargo || die "cargo is required for source build (install Rust or drop --no-install-rust)"
+        [ "$IS_TTY" = 1 ] && step "Checking tools"
+        if [ "$has_cargo" = 1 ]; then
+            ok "cargo $(cargo --version 2>/dev/null | sed 's/cargo //')"
+        else
+            offer_install_rustup || true
+        fi
+        has cargo || die "cargo is required for source build (install Rust, or pass --install-rust, or use --method binary)"
+    fi
+
+    if has mise; then
+        ok "mise $(mise --version 2>/dev/null | head -1)"
+    else
+        offer_install_mise || true
     fi
 
     # Custom install dir prompt (interactive only)

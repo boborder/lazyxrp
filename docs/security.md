@@ -8,11 +8,11 @@ This file tracks **security review findings (S-xxx)** and **implementation risks
 
 | ID | Invariant | Enforced in |
 |----|-----------|-------------|
-| I-1 | 平文 `seed` / `mnemonic` は `Config::new()` で `None` に消し、`secret_seed` / `secret_mnemonic`（`SecretString`）のみ残す | `config.rs` |
+| I-1 | 平文 `seed` / `mnemonic` は `Config::new()` で `None` に消し、`SecretString` のみ残す。`lib.rs::run` が `Config::take_secrets()` で `Secrets`（seed / mnemonic / Flare EVM 鍵）へ移してから `Arc<Config>` を共有する（共有 config は秘密を持たない） | `config.rs` / `lib.rs` |
 | I-2 | mainnet（`Network::is_production()`）の write は `--yes` または `skip_mainnet_prompt: true` が必須 | `poll.rs` / `submit.rs` の各 submit |
 | I-3 | write は必ず simulate → `tesSUCCESS` → `Sequence`/`Fee` 取得 → sign → submit。simulate なしで署名しない | `poll.rs` / `submit.rs` |
-| I-4 | `XRPL_SEED` / `XRPL_MNEMONIC` は tokio 起動前の単一スレッド `Config::new()` で env から除去 | `config.rs` |
-| I-5 | 設定優先順位: CLI > env > user `config.toml` > 組み込み `config.json5` | `lib.rs` resolve 関数 + `config.rs` |
+| I-4 | `XRPL_SEED` / `XRPL_MNEMONIC` は `Config::new()` が poll / UI タスクを spawn する前に一度だけ取り出して env から除去（`take_secret_env`）。以降 `remove_var` は走らない。Linux では起動時の `/proc/self/environ` ブロックは書き換わらず、同一 uid の読み手には見え続ける（既知の限界） | `config.rs` |
+| I-5 | 設定優先順位: CLI > env > user `config.toml` > 組み込み `config.json5`。資格情報は上位ソースが seed / mnemonic のどちらかを設定したら下位ソースの両方を破棄（同一階層で両方設定は `credential_from_secrets` がエラー） | `lib.rs` resolve 関数 + `config.rs` (`layer_credentials`, `apply_cli_credentials`) |
 | I-6 | 定期 poll は `MIN_POLL_INTERVAL`（10 s）未満にしない | `poll.rs` `drive_poll_loop` |
 | I-7 | `account_tx` の not-found は空リスト（エラーにしない） | `poll.rs` |
 | I-8 | `Tui::drop` は端末を復元し、drop 中に panic しない | `tui.rs` |
@@ -25,10 +25,10 @@ This file tracks **security review findings (S-xxx)** and **implementation risks
 
 | S-ID | Topic | Related R-ID | Notes |
 |------|-------|--------------|-------|
-| S-001 | Seed or mnemonic in `Debug` output | R-001 | Plaintext logging; use `secret_seed` / `secret_mnemonic` only after `Config::new()` |
+| S-001 | Seed or mnemonic in `Debug` output | R-001 | Plaintext logging; secrets live in `Secrets` (via `Config::take_secrets()`), never in the shared `Arc<Config>` |
 | S-002 | Signing env var not cleared | R-001, I-4 | `Config::new()` removes `XRPL_SEED` and `XRPL_MNEMONIC` |
 | S-003 | Config file credential permissions | R-001 | Unix warn on group/world read |
-| S-010 | Plaintext credential retained on `Config` | R-001 | Cleared in `Config::new()` |
+| S-010 | Plaintext credential retained on `Config` | R-001 | Plaintext cleared in `Config::new()`; secrets moved out by `take_secrets()` before `Arc<Config>` |
 | S-011 | CLI credentials visible in `ps` | R-001 | Prefer env/file; startup warning |
 | S-006 | `Tui::drop` panic / raw mode | R-005, I-8 | `eprintln!` on `exit()` failure |
 | S-009 | `--self-uninstall` data deletion | — | User-driven; not an R entry |
@@ -46,7 +46,7 @@ Risks without a matching S entry (e.g. R-006 mainnet guard bypass, R-008 RPC 429
 
 | R-ID | S-ID (if any) | One-line |
 |------|---------------|----------|
-| R-001 | S-001, S-002, S-010, S-011 | Seed resolution / `secret_seed` vs cleared `seed` |
+| R-001 | S-001, S-002, S-010, S-011 | Seed resolution / `Secrets` vs cleared `seed` |
 | R-002 | — | Submit errors dropped on closed `action_tx` |
 | R-003 | — | `ArcValue` shared JSON mutation |
 | R-004 | — | Unbounded channel growth |
@@ -80,7 +80,7 @@ Risks without a matching S entry (e.g. R-006 mainnet guard bypass, R-008 RPC 429
 
 - **新しい書き込み面**（Flare EVM key）: `-x fxrp-execute`（FDC 手数料 + `executeDirectMinting`）/ `fxrp-redeem`（FXRP を burn）/ `fxrp-tag-reserve` / `fxrp-tag-set` / `fxrp-tag-transfer`。TUI には出さず CLI のみ。ガードは全て共通: `[flare.fassets] execute = true`（既定 false）→ 起動時に取り込んだ EVM key → https の Flare RPC → Flare mainnet は `--yes`。`--watch` は key を落とすので拒否される。各書き込みは前提を on-chain で読んでから `estimate_gas`（revert ならここで止まる）→ 送信。
 - **FDC proof 取得は lazyxrp の外、という roadmap-log の方針を覆した**。新しい外部 HTTP 面は verifier と DA layer の 2 つ。対策: https 限定（`FDC_VERIFIER_URL` / `FDC_DA_URL` の上書きも）、redirect 無効、応答 1 MiB 上限、30 s timeout、verifier の `abiEncodedRequest` を tx hash / `proofOwner` / 型 / source id と byte 照合してから手数料を払う（偽の request に手数料を払わせない）、手数料上限 100 FLR（実測 20 FLR）、DA 応答は実行前に proof parser で形を検査。proof の正否は contract が Merkle 検証するため、DA / verifier が偽造できるのは手数料の浪費まで。proof は署名鍵の address に束縛される（他者は使えない）。
-- **残るリスク**: 手数料（約 20 FLR）は round が finalize しない / DA が応答しない場合に戻らない。`fxrp-tag-transfer` は取り消せない。`sa-vault` の `value` は生値で受ける（単位は upstream `Instructions.sol` で確認: deposit = FXRP 最小単位、redeem = shares、claim = period / `YYYYMMDD`）ため、桁の取り違えは利用者側の責任で、メモ hex を事前表示する。`fxrp-execute` / `fxrp-redeem` / `sa-vault` は XRPL と Flare の network 対（mainnet ↔ flare、testnet ↔ coston2）を RPC 前に強制する。全て実送信は未実施（読み取り側の拒否経路のみ実測）。
+- **残るリスク**: 手数料（約 20 FLR）は round が finalize しない / DA が応答しない場合に戻らない。`fxrp-tag-transfer` は取り消せない。`sa-vault` の `value` は生値で受ける（単位は upstream `Instructions.sol` で確認: deposit = FXRP 最小単位、redeem = shares、claim = period / `YYYYMMDD`）ため、桁の取り違えは利用者側の責任で、メモ hex を事前表示する。`fxrp-execute` / `fxrp-redeem` / `sa-vault` は XRPL と Flare の network 対（mainnet ↔ flare、testnet ↔ coston2）を RPC 前に強制する。**実送信の確認状況**: Coston2 では `fxrp-redeem`（`redeemAmount` / `redeemWithTag`）、`sa-vault`、`sa-memo`、`sa-call`、`fxrp-execute` を実送信で確認済み（ROADMAP F3-b〜F3-d、TC-345）。Flare mainnet への書き込みと `fxrp-tag-reserve` / `fxrp-tag-set` / `fxrp-tag-transfer` は実送信していない（拒否経路のみ実測、ROADMAP F3-a）。
 
 ## 2026-10-16 Smart Account operator pin（S-018）
 
@@ -113,7 +113,7 @@ Risks without a matching S entry (e.g. R-006 mainnet guard bypass, R-008 RPC 429
 - **node が決める Fee の上限**: `signing::MAX_NODE_FEE_DROPS`（2 XRP = 2,000,000 drops）超の Fee は署名前に拒否（TUI・CLI `Send` とも simulate 経路の `sequence_fee_ledger_from_simulate`）。CLI `Send` も simulate 必須（`tesSUCCESS` 以外は署名しない）、残高検査は `amount + fee` を `checked_add`。2026-10-11 から `parse::check_simulate_bound_to_request`（全 write 共通の `simulate_tx_requiring_tes_success` 内）で simulate の `Sequence` が要求値と一致し、`LastLedgerSequence` が `ledger_index` 超 `+ MAX_LLS_WINDOW`（100）以下であることも検査。残余: 窓は node 自身の `ledger_index` 基準。
 - **`xrp-ledger.toml` 取得（S-012 拡張）**: manifest 由来 domain を ASCII ホスト名のみに制限し、NFT 画像と同じガード付き取得（`nft_image::fetch_via`/`client_for_url`: private/loopback 拒否・DNS 固定・redirect 毎に再検査・上限 1 MiB）を使用。
 - **proxy 経由の DNS 固定バイパス**: `client_for_url` は `.no_proxy()`。**HTTP(S)_PROXY 必須環境では NFT 画像・toml の取得は失敗する（fail closed）**。private 判定に `100.64/10`・`192.0.0.0/24`・`198.18/15`・`240/4` を追加。
-- **`--watch`（閲覧専用起動、2026-10-11、TC-234–235）**: `lib::enter_watch_mode` が起動直後に `Config` から全鍵（seed / mnemonic の平文欄と secret 欄、`flare_evm_key`）を消し、アドレスだけを表示用に残す。TUI は Wallet（composer・鍵生成）を出さず、poll task に credential が渡らない。`-x` の署名系サブコマンドは RPC 前に拒否。
+- **`--watch`（閲覧専用起動、2026-10-11、TC-234–235）**: `lib::enter_watch_mode` が起動直後に `Secrets`（`take_secrets()` で `Config` から移した seed / mnemonic / `flare_evm_key`）を空にし、アドレスだけを表示用に残す。TUI は Wallet（composer・鍵生成）を出さず、poll task に credential が渡らない。`-x` の署名系サブコマンドは RPC 前に拒否。
 - **クラッシュ系**: 遠隔文字列のバイトスライス（`short_hex` / tx hash / path address）を文字単位に、Flare の `U256::to::<T>()` を `saturating_to` / `try_into` に、`ripple_path_find` のソートを `f64::total_cmp`（非有限値は末尾）に変更。panic hook は `process::exit(1)` のため、これらはすべて遠隔入力で TUI を終了させ得た。
 - **RPC 本文上限**: 16 MiB を `Content-Length` 事前検査に加えて chunk 読み込み中にも強制。
 - **リモート文字列の制御・不可視文字**: `error_message` / `engine_result(_message)` / tx hash（`util::sanitize_remote`）と Server パネルの host / version（`sanitize_text`）から制御文字・bidi override・zero-width 書式文字を除去（TC-236）。
@@ -121,13 +121,13 @@ Risks without a matching S entry (e.g. R-006 mainnet guard bypass, R-008 RPC 429
 - **`install.sh`**: GitHub token を curl `-K -`(stdin) / wget `--config`(fd) 経由にして argv から除去。想定外文字を含む token は無視。curl は `--proto '=https' --proto-redir '=https'`（redirect 先も https のみ）、README のワンライナーも `--proto '=https' --tlsv1.2`。wget フォールバックは scheme 制限なし（`--https-only` は再帰時のみ有効）。
 - **`cd.yml`**: `cargo package --locked`（token なし）で検証ビルドし、token 付きは `cargo publish --locked --no-verify`。
 
-調査して**修正しなかった**もの（同一オペレーター内の操作 / ハードニング）: Ctrl-N 後のネットワーク表示と接続先のずれ、config の keybindings からの Action 束縛、URL に入れた provider token のログ出力、dUNL 署名未検証（表示専用）、NFT デコードの寸法上限、CD の ref/environment 制約（GitHub 側 ruleset で担保）。二重送信は 2026-10-11 に対応（TUI: 同一 params の write は結果 Ok/Err 到着まで拒否、TC-228）。
+調査して**修正しなかった**もの（同一オペレーター内の操作 / ハードニング）: Ctrl-N 後のネットワーク表示と接続先のずれ、URL に入れた provider token のログ出力、dUNL 署名未検証（表示専用）、NFT デコードの寸法上限、CD の ref/environment 制約（GitHub 側 ruleset で担保）。二重送信は 2026-10-11 に対応（TUI: 同一 params の write は結果 Ok/Err 到着まで拒否、TC-228）。config の keybindings からの Action 束縛は後日修正: `config::is_bindable` の許可リスト（payload なしのナビ/リフレッシュ系のみ）外はロード時エラー（`*Submit` 等は束縛不可）。
 
 ## 2026-10-11 セキュリティ監査 run-2 対応
 
 needs_validation 4 件（Core Vault ピン・simulate の Sequence/LLS 照合・quote 通貨照合・simulate 文字列 sanitize）は上の 2026-10-04 節の各項目を参照。以下はハードニング（テストは `docs/test.md` TC-204〜214）。
 
-- **env 秘密の取得**: `XRPL_SEED` / `XRPL_MNEMONIC` / Flare EVM 鍵（`[flare.fassets] evm_key_env`）は `config::take_secret_env` が `Config::new()` で一度だけ取り出して env から削除し、`SecretString` で保持、生 `String` は zeroize。EVM 鍵は以前は初回 execute 時に poll task 内で `remove_var`（他タスクが env を読み得る実行中の変更、失敗すると以後使えない）だった。**Linux では `remove_var` は初期 `/proc/self/environ` を書き換えない**（同一 uid からは読める）— env 渡しは引き続き同一ユーザー内の信頼が前提。
+- **env 秘密の取得**: `XRPL_SEED` / `XRPL_MNEMONIC` / Flare EVM 鍵（`[flare.fassets] evm_key_env`）は `config::take_secret_env` が `Config::new()` で一度だけ取り出して env から削除し、`SecretString` で保持、生 `String` は zeroize。`lib.rs::run` は CLI 資格情報の適用直後に `Config::take_secrets()` で seed / mnemonic / EVM 鍵を `Config` から `Secrets` へ移し（`Config` 側は `None`）、`Arc<Config>` を共有する panel / status bar / splash には秘密が渡らない。`Secrets` は署名経路（`App` → poll task、`run_flare_command`）だけが受け取り、UI には `App::new` が一度だけ導出した address（`AccountWalletTab::new` → `WalletPanel`）だけが渡る。EVM 鍵は以前は初回 execute 時に poll task 内で `remove_var`（他タスクが env を読み得る実行中の変更、失敗すると以後使えない）だった。**Linux では `remove_var` は初期 `/proc/self/environ` を書き換えない**（同一 uid からは読める）— env 渡しは引き続き同一ユーザー内の信頼が前提。
 - **JSON-RPC client は redirect を追わない**（`client.rs`、`Policy::none()`）。https endpoint が `submit`（署名済み blob）を http へ 307 で転送する経路を閉じた。system proxy はそのまま（運用者の選択）。faucet も redirect なし + 本文上限。
 - **tx hash** は署名済み blob からローカル計算。TUI の送信結果に simulate 由来の署名済み Fee を表示（`<hash> · fee N drops`）。署名前の確認ステップは無い（Fee 上限 `MAX_NODE_FEE_DROPS` が担保）。
 - **入力**: `XRP:100:tail` のような余分な区切りを拒否。CLI `send` も composer と同じ `validate_payment_input`（amount > 0 など）を RPC 前に実行。
@@ -141,12 +141,6 @@ needs_validation 4 件（Core Vault ピン・simulate の Sequence/LLS 照合・
 - いずれも ignore 追加ではなく依存更新で解決。`mise run audit`（cargo-audit + cargo-deny）が CI の security-advisories と同一基準でローカル検知できるようになった初回実行で発見。
 
 ## 未対応・確認事項
-
-### RUSTSEC-2026-0235: rkyv 0.7.46（未コンパイルの optional 依存）
-
-- `Cargo.lock` に `rkyv 0.7.46` が残るのは `rust_decimal` の optional `rkyv` feature 経由。`xrpl-rust` → `rust_decimal` はこの feature を有効化しないため、rkyv はビルド・実行されない（`cargo tree -i rkyv` = 空）。
-- 0.7.x に修正版なし。upstream fix は rkyv 0.8 移行（rust_decimal 未対応）。
-- CI では `cargo audit --ignore RUSTSEC-2026-0235`（`ci.yml`）と `deny.toml` の `ignore` で記録済み。rust_decimal が rkyv 0.8 対応 or feature 削除したら ignore を外す。
 
 ### S-009: `--self-uninstall`（ユーザー主導でバイナリと設定データを削除）
 
@@ -165,6 +159,6 @@ needs_validation 4 件（Core Vault ピン・simulate の Sequence/LLS 照合・
 | S-006 | `tui.rs` の `Drop` 実装で `unwrap()` を使用 | `if let Err(e) = self.exit() { eprintln!(...) }` |
 | S-007 | 組み込み設定のパース | ビルド時 `expect` で開発時検知 |
 | S-008 | tracing ログのデフォルトレベルが INFO | S-001 対処後に問題なし |
-| S-005 | `install.sh` で `NO_VERIFY=1` の警告が不十分 | `usage()` / ヘッダに MITM リスク警告を追加 |
-| S-010 | `Config` が平文 `seed` を `Arc<Config>` として継続保持 | `RawSigningConfig` に `secret_seed: Option<SecretString>` を追加し、`Config::new()` / `main.rs` / `app.rs` で平文を即座にクリア |
+| S-005 | `install.sh` で `NO_VERIFY=1` の警告が不十分 | `usage()` / ヘッダに加え、`NO_VERIFY=1` 実行時にも MITM リスクの赤字警告バナーを表示 |
+| S-010 | `Config` が平文 `seed` を `Arc<Config>` として継続保持 | `RawSigningConfig` に `secret_seed: Option<SecretString>` を追加し、`Config::new()` で平文をクリア。さらに `lib.rs::run` が `Config::take_secrets()` で秘密を `Secrets` へ移してから `Arc<Config>` を共有 |
 | S-011 | CLI `--seed` がプロセス引数に残り `ps` から閲覧可能 | `README.md` 警告 + 起動時 `eprintln!` 警告 + `--help` に非推奨注記 |

@@ -1085,6 +1085,7 @@ mod tests {
                 .into_iter()
                 .collect(),
             skip_mainnet_prompt: false,
+            network: Network::Testnet,
         };
 
         submit_generic_transaction(

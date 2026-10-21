@@ -24,6 +24,7 @@ include = [
     "/SECURITY.md",
     "/LICENSE",
     "/README.md",
+    "/ROADMAP.md",
     "/.env.example",
 ]
 autobins = false
@@ -102,3 +103,5 @@ codegen-units = 1
 lto = "fat"
 opt-level = "s"
 strip = true
+# Money tool: integer overflow must panic, not wrap silently. Cost is negligible for this I/O-bound TUI.
+overflow-checks = true

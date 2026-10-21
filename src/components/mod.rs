@@ -111,3 +111,25 @@ pub trait Component {
     /// * [`color_eyre::Result<()>`] - An Ok result or an error.
     fn draw(&mut self, frame: &mut Frame, area: Rect) -> color_eyre::Result<()>;
 }
+
+/// Fan `action` out to every child. The first emitted action is returned; further ones go out
+/// on `tx`, so no sibling is skipped (or its output dropped) because an earlier one answered.
+pub(crate) fn update_children(
+    children: &mut [&mut dyn Component],
+    action: &Action,
+    tx: Option<&UnboundedSender<Action>>,
+) -> color_eyre::Result<Option<Action>> {
+    let mut first = None;
+    for child in children {
+        match (child.update(action)?, &first) {
+            (Some(a), None) => first = Some(a),
+            (Some(a), Some(_)) => {
+                if let Some(tx) = tx {
+                    let _ = tx.send(a);
+                }
+            }
+            (None, _) => {}
+        }
+    }
+    Ok(first)
+}

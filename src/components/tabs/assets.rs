@@ -21,6 +21,7 @@ pub struct AssetsTab {
     pay: LedgerObjectsPanel,
     escrow: LedgerObjectsPanel,
     focus_index: usize,
+    action_tx: Option<tokio::sync::mpsc::UnboundedSender<Action>>,
 }
 
 impl AssetsTab {
@@ -33,6 +34,7 @@ impl AssetsTab {
             pay: LedgerObjectsPanel::new("Pay channels", LedgerObjectFilter::PayChannelOnly),
             escrow: LedgerObjectsPanel::new("Escrows", LedgerObjectFilter::EscrowOnly),
             focus_index: 0,
+            action_tx: None,
         }
     }
 
@@ -54,6 +56,7 @@ impl Component for AssetsTab {
         &mut self,
         action_tx: tokio::sync::mpsc::UnboundedSender<Action>,
     ) -> color_eyre::Result<()> {
+        self.action_tx = Some(action_tx.clone());
         self.nft.register_action_handler(action_tx.clone())?;
         self.objects.register_action_handler(action_tx.clone())?;
         self.pay.register_action_handler(action_tx.clone())?;
@@ -82,16 +85,17 @@ impl Component for AssetsTab {
             _ => {}
         }
 
-        if let Some(a) = self.nft.update(action)? {
-            return Ok(Some(a));
-        }
-        if let Some(a) = self.objects.update(action)? {
-            return Ok(Some(a));
-        }
-        if let Some(a) = self.pay.update(action)? {
-            return Ok(Some(a));
-        }
-        self.escrow.update(action)
+        let tx = self.action_tx.as_ref();
+        crate::components::update_children(
+            &mut [
+                &mut self.nft,
+                &mut self.objects,
+                &mut self.pay,
+                &mut self.escrow,
+            ],
+            action,
+            tx,
+        )
     }
 
     fn draw(&mut self, frame: &mut Frame, area: Rect) -> color_eyre::Result<()> {

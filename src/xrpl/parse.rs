@@ -7,11 +7,19 @@ use super::types::{
     AccountOfferRow, AccountTxPage, AggregatePrice, AmmSummary, ArcValue, EscrowRow, FeeSummary,
     LedgerObjectRow, NFTOKEN_FLAG_MUTABLE, NftRow, NodeValidatorListSummary, OfferRow,
     PathAlternative, PriceStats, RipplePathFindResult, ServerInfoSummary, SimulateResult,
-    TrustLineRow, TxRow, TxSummary,
+    TrustLineRow, TxRow,
 };
 use super::util::{json_str, json_u32};
 
-pub(crate) fn parse_submit_success(value: &Value) -> color_eyre::Result<TxSummary> {
+/// A submit the node accepted: `queued` = `terQUEUED` (held in the open-ledger queue, not yet
+/// applied; may still expire or be dropped, so callers confirm via `tx`/`wait_validated`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SubmitOutcome {
+    pub hash: String,
+    pub queued: bool,
+}
+
+pub(crate) fn parse_submit_success(value: &Value) -> color_eyre::Result<SubmitOutcome> {
     let result = value.get("result").unwrap_or(&Value::Null);
     let engine_result = super::util::sanitize_remote(
         result
@@ -19,7 +27,8 @@ pub(crate) fn parse_submit_success(value: &Value) -> color_eyre::Result<TxSummar
             .and_then(Value::as_str)
             .unwrap_or_default(),
     );
-    if engine_result != "tesSUCCESS" {
+    let queued = engine_result == "terQUEUED";
+    if engine_result != "tesSUCCESS" && !queued {
         let message = super::util::sanitize_remote(
             result
                 .get("engine_result_message")
@@ -39,7 +48,10 @@ pub(crate) fn parse_submit_success(value: &Value) -> color_eyre::Result<TxSummar
         .filter(|hash| !hash.is_empty())
         .ok_or_else(|| color_eyre::eyre::eyre!("submit response missing transaction hash"))?;
 
-    Ok(TxSummary { hash: tx_hash })
+    Ok(SubmitOutcome {
+        hash: tx_hash,
+        queued,
+    })
 }
 
 pub(crate) fn parse_simulate_result(value: &Value) -> color_eyre::Result<SimulateResult> {
@@ -392,8 +404,15 @@ pub(crate) fn parse_book_offers_value(value: &Value) -> Vec<OfferRow> {
                 .and_then(Value::as_str)
                 .unwrap_or("-")
                 .to_string();
+            let is_drops = |side: &str| offer.get(side).is_some_and(Value::is_string);
+            // quality = TakerPays/TakerGets in raw units; XRP amounts are drops.
+            let scale = match (is_drops("TakerGets"), is_drops("TakerPays")) {
+                (true, false) => 1_000_000.0,
+                (false, true) => 1.0 / 1_000_000.0,
+                _ => 1.0,
+            };
             let price = if let Ok(q) = quality.parse::<f64>() {
-                format!("{:.6}", q * 1_000_000.0)
+                format!("{:.6}", q * scale)
             } else {
                 "-".to_string()
             };
@@ -516,6 +535,9 @@ pub(crate) fn is_transient_xrpl_error(message: &str) -> bool {
     .any(|k| lower.contains(k))
 }
 
+/// Best XRP-quoted price (IOU per 1 XRP) from the first `book_offers` entry. `quality` is
+/// TakerPays/TakerGets: the bid book (gets XRP drops, pays IOU) is IOU/drop → ×1e6; the ask book
+/// (gets IOU, pays XRP drops) is drops/IOU, so `invert` gives IOU per XRP = 1e6/quality.
 pub(crate) fn book_offer_best_price(value: &Value, invert: bool) -> Option<f64> {
     let offers = value
         .get("result")
@@ -526,11 +548,10 @@ pub(crate) fn book_offer_best_price(value: &Value, invert: bool) -> Option<f64> 
         .get("quality")
         .and_then(|v| v.as_str().and_then(|s| s.parse::<f64>().ok()))
         .or_else(|| first.get("quality").and_then(Value::as_f64))?;
-    let price = quality * 1_000_000.0;
     if invert {
-        Some(1.0 / price)
+        Some(1_000_000.0 / quality)
     } else {
-        Some(price)
+        Some(quality * 1_000_000.0)
     }
 }
 
@@ -845,20 +866,34 @@ mod tests {
                         "TakerGets": "1000000",
                         "TakerPays": {"currency": "USD", "value": "2", "issuer": "rI"}
                     },
-                    { "quality": "0.5" },
+                    { "quality": "0.5", "TakerGets": "1000000" },
+                    {
+                        "quality": "2000000",
+                        "TakerGets": {"currency": "USD", "value": "1", "issuer": "rI"},
+                        "TakerPays": "2000000"
+                    },
+                    {
+                        "quality": "0.5",
+                        "TakerGets": {"currency": "USD", "value": "2", "issuer": "rI"},
+                        "TakerPays": {"currency": "EUR", "value": "1", "issuer": "rI"}
+                    },
                     { "quality": "oops" }
                 ]
             }
         });
         let rows = parse_book_offers_value(&v);
-        assert_eq!(rows.len(), 3);
+        assert_eq!(rows.len(), 5);
         assert_eq!(rows[0].quality, "0.5");
         assert_eq!(rows[0].price, "500000.000000");
         assert_eq!(rows[0].taker_gets, "1.000000");
         assert_eq!(rows[0].taker_pays, "2 USD");
         assert_eq!(rows[1].price, "500000.000000");
-        assert_eq!(rows[2].quality, "oops");
-        assert_eq!(rows[2].price, "-");
+        // Ask side (gets IOU, pays drops): drops/IOU → XRP per IOU.
+        assert_eq!(rows[2].price, "2.000000");
+        // IOU/IOU: no drops scaling.
+        assert_eq!(rows[3].price, "0.500000");
+        assert_eq!(rows[4].quality, "oops");
+        assert_eq!(rows[4].price, "-");
     }
 
     /// TC-218: escrow rows keep owner/destination/times/condition; `Sequence` is used when present.
@@ -921,7 +956,7 @@ mod tests {
     }
 
     /// TC-137: book_offer_best_price — string quality is not inverted,
-    /// invert=true returns 1/price, non-numeric quality falls back to None,
+    /// invert=true (ask book: drops per IOU) returns IOU per XRP = 1e6/quality, non-numeric quality falls back to None,
     /// and missing/empty offers yield None.
     #[test]
     fn book_offer_best_price_branches() {
@@ -935,10 +970,10 @@ mod tests {
             book_offer_best_price(&book(json!("0.5")), false),
             Some(500_000.0)
         );
-        // (b) invert=true → 1/price
+        // (b) invert=true → ask side: quality is drops/IOU, price is IOU per XRP
         assert_eq!(
             book_offer_best_price(&book(json!("0.5")), true),
-            Some(1.0 / 500_000.0)
+            Some(2_000_000.0)
         );
         // (c) non-numeric quality → fallback None
         assert_eq!(book_offer_best_price(&book(json!("abc")), false), None);
@@ -1051,6 +1086,17 @@ mod tests {
         assert!(is_not_found_error("Object not found"));
         assert!(is_not_found_error("Account not found."));
         assert!(!is_not_found_error("tecUNFUNDED_PAYMENT"));
+    }
+
+    /// `terQUEUED` is provisional success: reported queued with the hash; other `ter*` still fail.
+    #[test]
+    fn parse_submit_success_treats_terqueued_as_queued() {
+        let submit =
+            |code: &str| json!({"result": {"engine_result": code, "tx_json": {"hash": "H1"}}});
+        let queued = parse_submit_success(&submit("terQUEUED")).expect("queued is accepted");
+        assert_eq!((queued.hash.as_str(), queued.queued), ("H1", true));
+        assert!(!parse_submit_success(&submit("tesSUCCESS")).unwrap().queued);
+        assert!(parse_submit_success(&submit("terPRE_SEQ")).is_err());
     }
 
     #[test]

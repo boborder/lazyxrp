@@ -281,11 +281,15 @@ async fn simulate_confirm_submit(
         println!("Transaction cancelled by user.");
         return Ok(());
     }
-    let blob = sign(tx_sequence, fee_drops, last_ledger_sequence)?;
+    let blob = signing::with_network_id(rpc.network_id(), || {
+        sign(tx_sequence, fee_drops, last_ledger_sequence)
+    })?;
     // Sign/submit failures propagate so scripts see a non-zero exit.
     let summary = rpc.submit_signed_tx(&blob).await?;
     println!("Transaction Hash: {}", summary.hash);
-    if announce_success {
+    if summary.queued {
+        println!("Transaction queued (terQUEUED): not yet applied; confirm by hash.");
+    } else if announce_success {
         println!("Transaction submitted successfully!");
     }
     if wait {
@@ -405,7 +409,9 @@ pub async fn execute_cli_command(
                 }
             );
             if !is_activated {
-                println!("Note: Account requires 10+ XRP to be activated for transactions");
+                println!(
+                    "Note: the account does not exist on the ledger until a payment funds it past the reserve"
+                );
             }
         }
         Cmd::Offers { address } => {

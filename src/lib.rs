@@ -18,7 +18,7 @@
 //! [SECURITY.md](https://github.com/boborder/lazyxrp/blob/main/SECURITY.md).
 use clap::Parser;
 use cli::{Cli, Cmd, RpCli};
-use config::Config;
+use config::{Config, Secrets};
 use network::Network;
 use std::env;
 use std::path::Path;
@@ -180,36 +180,22 @@ pub async fn run() -> color_eyre::Result<()> {
 
     let mut config = Config::new()?;
     crate::logging::init(config.resolved_data_dir())?;
-    if let Some(cli_seed) = args.seed.as_ref() {
+    if args.seed.is_some() {
         eprintln!(
             "lazyxrp: warning: --seed exposes the family seed in process argv and shell history; prefer XRPL_SEED or config"
         );
-        let family_seed = cli_seed.trim();
-        config.xrpl.signing.seed = None;
-        config.xrpl.signing.secret_seed = if family_seed.is_empty() {
-            None
-        } else {
-            Some(secrecy::SecretString::from(family_seed.to_string()))
-        };
     }
-    if let Some(cli_mnemonic) = args.mnemonic.as_ref() {
+    if args.mnemonic.is_some() {
         eprintln!(
             "lazyxrp: warning: --mnemonic exposes the BIP39 phrase in process argv and shell history; prefer XRPL_MNEMONIC or config"
         );
-        let mnemonic = cli_mnemonic.trim();
-        config.xrpl.signing.mnemonic = None;
-        config.xrpl.signing.secret_mnemonic = if mnemonic.is_empty() {
-            None
-        } else {
-            Some(secrecy::SecretString::from(mnemonic.to_string()))
-        };
     }
-    let mut credential = signing::credential_from_secrets(
-        config.xrpl.signing.secret_seed.as_ref(),
-        config.xrpl.signing.secret_mnemonic.as_ref(),
-    )?;
+    config.apply_cli_credentials(args.seed.as_deref(), args.mnemonic.as_deref());
+    // Secrets leave the config here: what is shared as `Arc<Config>` carries none.
+    let mut secrets = config.take_secrets();
+    let mut credential = secrets.credential()?;
     let watch_address = if args.watch {
-        let address = enter_watch_mode(&mut config, credential.as_ref())?;
+        let address = enter_watch_mode(&mut secrets, credential.as_ref())?;
         credential = None;
         address
     } else {
@@ -236,7 +222,7 @@ pub async fn run() -> color_eyre::Result<()> {
     match resolve_lazyxrp_command(&args)? {
         None => {
             if let Some(url) = app::resolve_flare_rpc_url(&config.flare) {
-                let evm_key_set = config.flare_evm_key.is_some();
+                let evm_key_set = secrets.flare_evm_key.is_some();
                 check_flare_endpoint(
                     &url,
                     args.allow_insecure_rpc,
@@ -250,7 +236,7 @@ pub async fn run() -> color_eyre::Result<()> {
                 args.account.clone().or(watch_address),
                 network,
                 config,
-                None,
+                secrets,
                 yes,
             )?;
             app.run().await?;
@@ -265,24 +251,16 @@ pub async fn run() -> color_eyre::Result<()> {
             | Cmd::SaVault { .. }
             | Cmd::SaMemo { .. }
             | Cmd::SaCall { .. }),
-        ) => run_flare_command(cmd, &config, &args, &rpc_url, &network, credential).await?,
+        ) => {
+            let evm_key = secrets.flare_evm_key.as_ref();
+            run_flare_command(cmd, &config, &args, &rpc_url, &network, credential, evm_key).await?
+        }
         Some(cmd) => {
             let wait = !args.no_wait;
             xrpl::execute_cli_command(cmd, &rpc_url, &network, credential, yes, wait).await?;
         }
     }
     Ok(())
-}
-
-/// XRPL Mainnet ↔ Flare, XRPL Testnet ↔ Coston2; anything else is refused before any RPC.
-fn check_network_pair(xrpl: &Network, flare: config::FlareNetwork) -> color_eyre::Result<()> {
-    match (xrpl, flare) {
-        (Network::Mainnet, config::FlareNetwork::Flare)
-        | (Network::Testnet, config::FlareNetwork::Coston2) => Ok(()),
-        (x, f) => color_eyre::eyre::bail!(
-            "XRPL {x:?} does not pair with [flare] network {f:?} (Mainnet ↔ flare, Testnet ↔ coston2)"
-        ),
-    }
 }
 
 fn check_xrpl_tx_hash(h: &str) -> color_eyre::Result<()> {
@@ -303,6 +281,7 @@ async fn run_flare_command(
     xrpl_rpc_url: &str,
     xrpl_network: &Network,
     credential: Option<signing::SigningCredential>,
+    evm_key: Option<&secrecy::SecretString>,
 ) -> color_eyre::Result<()> {
     use secrecy::ExposeSecret;
 
@@ -310,45 +289,48 @@ async fn run_flare_command(
         color_eyre::eyre::eyre!("no Flare RPC: set [flare] network or FLARE_RPC_URL")
     })?;
     let writes = cmd.signs();
+    let pair = || {
+        flare::check_network_pair(xrpl_network, config.flare.network)
+            .map_err(|e| color_eyre::eyre::eyre!(e))
+    };
     match &cmd {
         Cmd::FxrpExecute { tx_hash, .. } => {
-            check_network_pair(xrpl_network, config.flare.network)?;
+            pair()?;
             check_xrpl_tx_hash(tx_hash)?;
         }
         Cmd::FxrpRedeem { .. } | Cmd::SaVault { .. } | Cmd::SaMemo { .. } | Cmd::SaCall { .. } => {
-            check_network_pair(xrpl_network, config.flare.network)?;
+            pair()?;
         }
         _ => {}
     }
     let url = check_flare_endpoint(&url, args.allow_insecure_rpc, writes)?;
-    let flare_mainnet = matches!(config.flare.network, config::FlareNetwork::Flare);
+    // What the Flare reads below return decides what gets signed (operator, Core Vault, fees),
+    // so the RPC must be the chain the config names before any command runs.
+    flare::verify_rpc_chain(&url, config.flare.network).await?;
+    // Each EVM write re-checks the chain id (and `--yes` on Flare mainnet, decided from the
+    // reported chain id) on its own provider before it signs anything.
+    let gate = flare::EvmGate {
+        network: config.flare.network,
+        yes: args.yes,
+    };
     let say = |m: &str| eprintln!("{m}");
-    let yes_gate = || {
-        if flare_mainnet && !args.yes {
-            color_eyre::eyre::bail!("Flare mainnet write: re-run with --yes to allow it");
-        }
-        Ok(())
-    };
-    // EVM writes: opt-in + key + mainnet confirmation, in that order.
-    let evm_key = |cmd: &Cmd| -> color_eyre::Result<Option<String>> {
-        if matches!(
-            cmd,
-            Cmd::Fxrp { .. } | Cmd::SaVault { .. } | Cmd::SaMemo { .. } | Cmd::SaCall { .. }
-        ) {
-            return Ok(None);
-        }
+    // EVM writes: opt-in + key. The key is borrowed from the caller's `Secrets`, never copied.
+    let key: &str = if matches!(
+        cmd,
+        Cmd::Fxrp { .. } | Cmd::SaVault { .. } | Cmd::SaMemo { .. } | Cmd::SaCall { .. }
+    ) {
+        ""
+    } else {
         flare::ensure_fassets_execute_enabled(config.flare.fassets.execute)?;
-        let key = config.flare_evm_key.as_ref().ok_or_else(|| {
-            color_eyre::eyre::eyre!(
-                "env {} was not set at startup (Flare EVM key)",
-                config.flare.fassets.evm_key_env
-            )
-        })?;
-        yes_gate()?;
-        Ok(Some(key.expose_secret().to_string()))
+        evm_key
+            .ok_or_else(|| {
+                color_eyre::eyre::eyre!(
+                    "env {} was not set at startup (Flare EVM key)",
+                    config.flare.fassets.evm_key_env
+                )
+            })?
+            .expose_secret()
     };
-    let key = evm_key(&cmd)?;
-    let key = key.as_deref().unwrap_or_default();
 
     match cmd {
         Cmd::Fxrp { tag } => {
@@ -372,10 +354,10 @@ async fn run_flare_command(
                 "FDC verifier {} · DA layer {} (attestation fee + gas are paid in FLR)",
                 cfg.verifier_base, cfg.da_base
             ));
-            let proof = fdc::prove_xrp_payment(&url, key, &cfg, &tx_hash, round, say).await?;
+            let proof = fdc::prove_xrp_payment(&url, key, gate, &cfg, &tx_hash, round, say).await?;
             say("proof ready; submitting executeDirectMinting…");
             let (hash, outcome) =
-                flare::execute_direct_minting_with(&url, key, &proof, data).await?;
+                flare::execute_direct_minting_with(&url, key, gate, &proof, data).await?;
             if let flare::DirectMintOutcome::PaymentTooSmall { .. } = outcome {
                 color_eyre::eyre::bail!("{hash} · {outcome}");
             }
@@ -383,11 +365,12 @@ async fn run_flare_command(
         }
         Cmd::FxrpRedeem { amount, to, tag } => {
             let drops = xrpl::xrp_to_drops(amount.trim())?;
-            let hash = flare_cmd::redeem_fxrp(&url, key, u128::from(drops), &to, tag, say).await?;
+            let hash =
+                flare_cmd::redeem_fxrp(&url, key, gate, u128::from(drops), &to, tag, say).await?;
             println!("{hash}");
         }
         Cmd::FxrpTagReserve => {
-            let (hash, tag) = flare_cmd::reserve_tag(&url, key, say).await?;
+            let (hash, tag) = flare_cmd::reserve_tag(&url, key, gate, say).await?;
             println!("{hash} · reserved tag {tag}");
         }
         Cmd::FxrpTagSet {
@@ -401,14 +384,21 @@ async fn run_flare_command(
                 })
                 .transpose()
             };
-            let hashes =
-                flare_cmd::set_tag(&url, key, tag, parse(recipient)?, parse(executor)?, say)
-                    .await?;
+            let hashes = flare_cmd::set_tag(
+                &url,
+                key,
+                gate,
+                tag,
+                parse(recipient)?,
+                parse(executor)?,
+                say,
+            )
+            .await?;
             println!("{}", hashes.join("\n"));
         }
         Cmd::FxrpTagTransfer { tag, to } => {
             let to = alloy::primitives::Address::from(signing::parse_smart_account_recipient(&to)?);
-            let hash = flare_cmd::transfer_tag(&url, key, tag, to, say).await?;
+            let hash = flare_cmd::transfer_tag(&url, key, gate, tag, to, say).await?;
             println!("{hash}");
         }
         Cmd::SaVault {
@@ -438,10 +428,12 @@ async fn run_flare_command(
                     vault_id,
                 }),
                 skip_mainnet_prompt: args.yes,
+                network: *xrpl_network,
             };
             let hash = xrpl::run_smart_account_instruction(
                 xrpl_rpc_url,
                 xrpl_network,
+                config.flare.network,
                 params,
                 config.flare.smart_accounts.expected_operator.as_deref(),
                 credential.as_ref(),
@@ -460,13 +452,8 @@ async fn run_flare_command(
             executor,
         } => {
             let info = flare::fetch_fxrp_direct_mint_info(&url).await?;
-            if info.minting_paused == Some(true)
-                || info.emergency_pause_level.is_some_and(|l| l > 0)
-            {
-                color_eyre::eyre::bail!(
-                    "FXRP minting is paused on Flare; not sending XRP to the Core Vault"
-                );
-            }
+            flare::check_direct_mint_open(&info, &amount)
+                .map_err(|e| color_eyre::eyre::eyre!(e))?;
             let me = credential
                 .as_ref()
                 .ok_or_else(|| color_eyre::eyre::eyre!("no signing key"))?
@@ -507,10 +494,12 @@ async fn run_flare_command(
                 amount_xrp: amount,
                 custom_memo: Some(memo),
                 skip_mainnet_prompt: args.yes,
+                network: *xrpl_network,
             };
             let hash = xrpl::run_direct_mint_payment(
                 xrpl_rpc_url,
                 xrpl_network,
+                config.flare.network,
                 params,
                 config.flare.fassets.expected_core_vault.as_deref(),
                 credential.as_ref(),
@@ -521,13 +510,8 @@ async fn run_flare_command(
         }
         Cmd::SaCall { amount, calls, fee } => {
             let info = flare::fetch_fxrp_direct_mint_info(&url).await?;
-            if info.minting_paused == Some(true)
-                || info.emergency_pause_level.is_some_and(|l| l > 0)
-            {
-                color_eyre::eyre::bail!(
-                    "FXRP minting is paused on Flare; not sending XRP to the Core Vault"
-                );
-            }
+            flare::check_direct_mint_open(&info, &amount)
+                .map_err(|e| color_eyre::eyre::eyre!(e))?;
             let me = credential
                 .as_ref()
                 .ok_or_else(|| color_eyre::eyre::eyre!("no signing key"))?
@@ -560,10 +544,12 @@ async fn run_flare_command(
                 amount_xrp: amount,
                 custom_memo: Some(memo),
                 skip_mainnet_prompt: args.yes,
+                network: *xrpl_network,
             };
             let hash = xrpl::run_direct_mint_payment(
                 xrpl_rpc_url,
                 xrpl_network,
+                config.flare.network,
                 params,
                 config.flare.fassets.expected_core_vault.as_deref(),
                 credential.as_ref(),
@@ -577,15 +563,13 @@ async fn run_flare_command(
     Ok(())
 }
 
-/// `--watch`: keep the signing key's address for display, drop every key from `config`.
+/// `--watch`: keep the signing key's address for display, drop every key.
 fn enter_watch_mode(
-    config: &mut Config,
+    secrets: &mut Secrets,
     credential: Option<&signing::SigningCredential>,
 ) -> color_eyre::Result<Option<String>> {
     let address = credential.map(|c| c.address()).transpose()?;
-    let s = &mut config.xrpl.signing;
-    (s.seed, s.mnemonic, s.secret_seed, s.secret_mnemonic) = (None, None, None, None);
-    config.flare_evm_key = None;
+    *secrets = Secrets::default();
     Ok(address)
 }
 
@@ -829,31 +813,26 @@ mod command_resolve_tests {
         assert!(resolve_lazyxrp_command(&args).unwrap().is_none());
     }
 
-    /// TC-235: watch mode keeps only the address: every key (seed, mnemonic, plaintext fields,
-    /// Flare EVM key) is dropped from the config the TUI / CLI receive.
+    /// TC-235: watch mode keeps only the address: every key (seed, mnemonic, Flare EVM key) is
+    /// dropped from the secrets the TUI / CLI receive.
     #[test]
     fn watch_mode_drops_all_keys_and_keeps_address() {
         use secrecy::SecretString;
-        let mut config = Config::default();
-        config.xrpl.signing.seed = Some("plain".into());
-        config.xrpl.signing.mnemonic = Some("plain".into());
-        config.xrpl.signing.secret_mnemonic = Some(SecretString::from("abandon about"));
-        config.xrpl.signing.secret_seed =
-            Some(SecretString::from("sEdSkooMk31MeTjbHVE7vLvgCpEMAdB"));
-        config.flare_evm_key = Some(SecretString::from("0x01"));
-        let credential =
-            signing::credential_from_secrets(config.xrpl.signing.secret_seed.as_ref(), None)
-                .unwrap();
+        let mut secrets = Secrets {
+            seed: Some(SecretString::from("sEdSkooMk31MeTjbHVE7vLvgCpEMAdB")),
+            mnemonic: Some(SecretString::from("abandon about")),
+            flare_evm_key: Some(SecretString::from("0x01")),
+        };
+        let credential = signing::credential_from_secrets(secrets.seed.as_ref(), None).unwrap();
         let expected = credential.as_ref().unwrap().address().unwrap();
 
-        let address = enter_watch_mode(&mut config, credential.as_ref()).unwrap();
+        let address = enter_watch_mode(&mut secrets, credential.as_ref()).unwrap();
         assert_eq!(address, Some(expected));
-        assert!(config.xrpl.signing.seed.is_none() && config.xrpl.signing.mnemonic.is_none());
-        assert!(config.xrpl.signing.secret_seed.is_none());
-        assert!(config.xrpl.signing.secret_mnemonic.is_none());
-        assert!(config.flare_evm_key.is_none());
+        assert!(secrets.seed.is_none());
+        assert!(secrets.mnemonic.is_none());
+        assert!(secrets.flare_evm_key.is_none());
 
-        let mut empty = Config::default();
+        let mut empty = Secrets::default();
         assert_eq!(enter_watch_mode(&mut empty, None).unwrap(), None);
     }
 
@@ -861,8 +840,8 @@ mod command_resolve_tests {
     #[test]
     fn flare_network_pair_and_tx_hash_checks() {
         use config::FlareNetwork::{Coston2, Flare, Songbird};
-        assert!(check_network_pair(&Network::Mainnet, Flare).is_ok());
-        assert!(check_network_pair(&Network::Testnet, Coston2).is_ok());
+        assert!(flare::check_network_pair(&Network::Mainnet, Flare).is_ok());
+        assert!(flare::check_network_pair(&Network::Testnet, Coston2).is_ok());
         for (x, f) in [
             (Network::Mainnet, Coston2),
             (Network::Testnet, Flare),
@@ -870,7 +849,7 @@ mod command_resolve_tests {
             (Network::Devnet, Flare),
             (Network::Xahau, Flare),
         ] {
-            assert!(check_network_pair(&x, f).is_err(), "{x:?}/{f:?}");
+            assert!(flare::check_network_pair(&x, f).is_err(), "{x:?}/{f:?}");
         }
         let h = "8B1625C463F2D71EA21806EB7B6C5D56642915EC8EDC0473A9F70CF9F92252E9";
         assert!(check_xrpl_tx_hash(h).is_ok());
@@ -878,6 +857,40 @@ mod command_resolve_tests {
         for bad in ["zz", &h[1..], &format!("{h}0"), &h.replace('8', "g")] {
             assert!(check_xrpl_tx_hash(bad).is_err(), "{bad}");
         }
+    }
+
+    /// TC-363: `sa-memo` / `sa-call` refuse a paused mint and an amount over the minting cap,
+    /// like the TUI composer does.
+    #[test]
+    fn direct_mint_payment_refused_when_paused_or_over_cap() {
+        let mut info = xrpl::FxrpDirectMintInfo {
+            core_vault_xrpl: "rVault".into(),
+            asset_manager: String::new(),
+            min_fee_uba: 0,
+            fee_bips: 0,
+            executor_fee_uba: 0,
+            minting_paused: Some(false),
+            emergency_pause_level: Some(0),
+            limits: Some(xrpl::MintLimits {
+                cap_uba: 1_000_000_000,
+                supply_uba: 950_000_000,
+                cap_headroom_uba: Some(50_000_000),
+                window_max_now_uba: 1_000_000_000,
+                large_threshold_uba: 4_000_000_000,
+                large_delay_secs: 7200,
+                granularity_uba: 1,
+            }),
+        };
+        assert!(flare::check_direct_mint_open(&info, "50").is_ok());
+        let err = flare::check_direct_mint_open(&info, "51").unwrap_err();
+        assert!(err.contains("cap"), "{err}");
+        assert!(flare::check_direct_mint_open(&info, "nope").is_err());
+        info.minting_paused = Some(true);
+        assert!(
+            flare::check_direct_mint_open(&info, "1")
+                .unwrap_err()
+                .contains("paused")
+        );
     }
 
     #[test]

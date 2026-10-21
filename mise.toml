@@ -5,8 +5,7 @@
 rust = "stable"
 # cargo backend: the prebuilt GitHub asset resolves to x86_64 on arm64 macOS (no Rosetta → "Bad CPU type").
 "cargo:hyperfine" = "latest"
-# CI security-advisories parity (`.github/workflows/ci.yml`): cargo-audit uses
-# CLI flag --ignore RUSTSEC-2026-0235 (same as ci.yml); cargo-deny reads deny.toml.
+# CI security-advisories parity (`.github/workflows/ci.yml`): cargo-audit and cargo-deny (ignores in deny.toml).
 "cargo:cargo-audit" = "latest"
 "cargo:cargo-deny" = "latest"
 # benchmark.sh --full runs cargo bloat; without it that step SKIPs.
@@ -53,8 +52,8 @@ env = { RUSTDOCFLAGS = "-D warnings" }
 run = "cargo doc --locked --no-deps --document-private-items --all-features --workspace --examples"
 
 [tasks.audit]
-description = "CI Security Advisories gate: cargo-audit (CLI --ignore RUSTSEC-2026-0235, same as ci.yml) + cargo-deny (ignores in deny.toml)"
-run = "cargo audit --ignore RUSTSEC-2026-0235 && cargo deny check"
+description = "CI Security Advisories gate: cargo-audit + cargo-deny (ignores in deny.toml)"
+run = "cargo audit && cargo deny check"
 
 [tasks.update]
 description = "Update Cargo.lock within semver, then rebuild-check + advisory rescan"
@@ -91,6 +90,7 @@ NEW="${1:?usage: mise run release <x.y.z>}"
 git rev-parse "v$NEW" >/dev/null 2>&1 && { echo "error: tag v$NEW exists" >&2; exit 1; }
 PREV="$(git describe --tags --abbrev=0 --match 'v[0-9]*')"
 grep -q '^## \[Unreleased\]$' CHANGELOG.md || { echo "error: CHANGELOG.md has no ## [Unreleased]" >&2; exit 1; }
+awk '/^## \[Unreleased\]$/{u=1;next} u&&/^## \[/{exit} u&&/^- /{f=1} END{exit !f}' CHANGELOG.md || { echo "error: CHANGELOG.md [Unreleased] has no entries" >&2; exit 1; }
 awk -v v="$NEW" '!done && /^version = /{sub(/"[^"]+"/, "\"" v "\""); done=1} 1' Cargo.toml > Cargo.toml.tmp && mv Cargo.toml.tmp Cargo.toml
 # Unreleased → "## [NEW] - date" (fresh empty Unreleased above it) and compare links.
 awk -v v="$NEW" -v d="$(date +%F)" -v prev="$PREV" -v repo="https://github.com/boborder/lazyxrp" '

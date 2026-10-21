@@ -343,56 +343,34 @@ pub struct OraclePricePair {
     pub quote_asset: String,
 }
 
-/// Known XRPL hex currency codes → human-readable display names.
-pub static CURRENCY_HEX_MAP: &[(&str, &str)] = &[
-    ("524C555344000000000000000000000000000000", "RLUSD"),
-    ("5553444300000000000000000000000000000000", "USDC"),
-    ("5553445400000000000000000000000000000000", "USDT"),
-    ("4254430000000000000000000000000000000000", "BTC"),
-    ("4554480000000000000000000000000000000000", "ETH"),
-    ("5852500000000000000000000000000000000000", "XRP"),
-    ("4555520000000000000000000000000000000000", "EUR"),
-    ("584C4D0000000000000000000000000000000000", "XLM"),
-    ("534F4C0000000000000000000000000000000000", "SOL"),
-    ("4144410000000000000000000000000000000000", "ADA"),
-    ("444F474500000000000000000000000000000000", "DOGE"),
-    ("4C54430000000000000000000000000000000000", "LTC"),
-    ("504F4C0000000000000000000000000000000000", "DOT"),
-];
-
-/// Decode a standard XRPL 160-bit currency (3 ASCII letters + zero padding).
-fn currency_from_standard_hex(hex: &str) -> Option<String> {
-    if hex.len() != 40 || !hex.chars().all(|c| c.is_ascii_hexdigit()) {
-        return None;
-    }
-    let suffix = &hex[6..];
-    if !suffix.chars().all(|c| c == '0') {
-        return None;
-    }
-    let mut letters = [0u8; 3];
-    for (i, byte) in letters.iter_mut().enumerate() {
-        let pair = &hex[i * 2..i * 2 + 2];
-        *byte = u8::from_str_radix(pair, 16).ok()?;
-        if !byte.is_ascii_graphic() {
-            return None;
-        }
-    }
-    std::str::from_utf8(&letters).ok().map(str::to_string)
-}
-
-/// Convert an XRPL currency code (hex or 3-letter string) to a display name.
+/// Display name of an XRPL currency code; 40-hex (160-bit) codes are decoded:
+///
+/// - all zero → `XRP` (the native asset);
+/// - standard form (first 12 and last 5 bytes zero, 3 ASCII letters between) → the 3 letters
+///   (`XRP` excluded: it is the native asset's name, never an issued code);
+/// - non-standard form that is printable ASCII, 4+ characters (`RLUSD`, `USDC`…) → that text;
+/// - anything else, including non-standard codes that decode to only 1–3 characters → the first
+///   8 hex digits plus `…`, so it can never read like a standard 3-letter code from another issuer.
+///
+/// Non-hex input is returned unchanged.
 #[must_use]
 pub fn asset_display_name(asset: &str) -> String {
-    let upper = asset.to_ascii_uppercase();
-    for (hex, display) in CURRENCY_HEX_MAP {
-        if upper == *hex {
-            return (*display).to_string();
-        }
+    let Some(bytes) = hex::decode(asset).ok().filter(|b| b.len() == 20) else {
+        return asset.to_string();
+    };
+    if bytes.iter().all(|b| *b == 0) {
+        return "XRP".to_string();
     }
-    if let Some(code) = currency_from_standard_hex(&upper) {
-        return code;
+    let printable = |b: &[u8]| !b.is_empty() && b.iter().all(u8::is_ascii_graphic);
+    let standard = bytes[..12].iter().chain(&bytes[15..]).all(|b| *b == 0);
+    let text = &bytes[..bytes.iter().rposition(|b| *b != 0).map_or(0, |i| i + 1)];
+    if standard && printable(&bytes[12..15]) && &bytes[12..15] != b"XRP" {
+        String::from_utf8_lossy(&bytes[12..15]).into_owned()
+    } else if !standard && text.len() >= 4 && printable(text) {
+        String::from_utf8_lossy(text).into_owned()
+    } else {
+        format!("{}…", asset[..8].to_ascii_uppercase())
     }
-    asset.to_string()
 }
 
 /// Price statistics subset (entire_set or trimmed_set).
@@ -626,6 +604,8 @@ pub struct AccountSetSubmitParams {
     pub transfer_rate: String,
     /// From CLI `--yes` via Wallet panel.
     pub skip_mainnet_prompt: bool,
+    /// XRPL network the user composed this on; the poll task refuses it if the active network differs.
+    pub network: Network,
 }
 
 /// XRP or IOU Payment from the Wallet modal.
@@ -647,6 +627,7 @@ pub struct PaymentSubmitParams {
     /// Optional SendMax spec (`XRP:drops` or `CUR:issuer:value`) → cross-currency payment via default paths.
     pub send_max: Option<String>,
     pub skip_mainnet_prompt: bool,
+    pub network: Network,
 }
 
 /// Payment composer quote request (`ripple_path_find` from the signing account).
@@ -678,6 +659,7 @@ pub struct FxrpDirectMintPaymentParams {
     /// instructions (`0xE0`–`0xE2`, `0xD0`, `0xD1`) travel in a Direct Mint Payment too.
     pub custom_memo: Option<String>,
     pub skip_mainnet_prompt: bool,
+    pub network: Network,
 }
 
 /// FXRP C3: paste FDC `XRPPayment` proof JSON and call `executeDirectMinting` (flagged).
@@ -687,6 +669,7 @@ pub struct FxrpExecuteDirectMintParams {
     /// attestation object), or the contract-shaped `{data, merkleProof}`.
     pub proof_json: String,
     pub skip_mainnet_prompt: bool,
+    pub network: Network,
 }
 
 /// Smart Account proof-based FXRP instruction: Payment to the operator with a 32-byte memo.
@@ -706,6 +689,7 @@ pub struct SmartAccountInstructionParams {
     /// `value` is the instruction's value field verbatim).
     pub vault: Option<SmartAccountVaultOp>,
     pub skip_mainnet_prompt: bool,
+    pub network: Network,
 }
 
 /// Which vault instruction to encode (`id` = `0x11`–`0x13` Firelight, `0x21`–`0x23` Upshift).
@@ -722,6 +706,7 @@ pub struct SmartAccountVaultOp {
 pub struct SetRegularKeySubmitParams {
     pub regular_key: String,
     pub skip_mainnet_prompt: bool,
+    pub network: Network,
 }
 
 /// EscrowCreate from the Wallet composer (XRP only, time-based; no crypto-condition).
@@ -734,6 +719,7 @@ pub struct EscrowCreateSubmitParams {
     /// Optional relative duration (empty = none); becomes `CancelAfter`, must exceed `finish_after`.
     pub cancel_after: String,
     pub skip_mainnet_prompt: bool,
+    pub network: Network,
 }
 
 /// One escrow the signing account owns or receives (`account_objects` type `escrow`).
@@ -761,6 +747,7 @@ pub struct EscrowCloseSubmitParams {
     pub offer_sequence: u32,
     pub cancel: bool,
     pub skip_mainnet_prompt: bool,
+    pub network: Network,
 }
 
 /// Two-asset AMMDeposit: amount specs (`XRP:drops` / `CUR:issuer:value`) are maxima and name the pool.
@@ -769,6 +756,7 @@ pub struct AmmDepositSubmitParams {
     pub amount: String,
     pub amount2: String,
     pub skip_mainnet_prompt: bool,
+    pub network: Network,
 }
 
 /// AMMWithdraw: pool assets (`XRP` / `CUR:issuer`); empty `lp_amount` = withdraw all.
@@ -778,6 +766,7 @@ pub struct AmmWithdrawSubmitParams {
     pub asset2: String,
     pub lp_amount: String,
     pub skip_mainnet_prompt: bool,
+    pub network: Network,
 }
 
 /// AccountDelete: classic or X-address (tag from the X-address). Irreversible.
@@ -785,6 +774,7 @@ pub struct AmmWithdrawSubmitParams {
 pub struct AccountDeleteSubmitParams {
     pub destination: String,
     pub skip_mainnet_prompt: bool,
+    pub network: Network,
 }
 
 /// OfferCreate from the Wallet form.
@@ -794,6 +784,7 @@ pub struct OfferCreateSubmitParams {
     pub taker_gets: String,
     pub taker_pays: String,
     pub skip_mainnet_prompt: bool,
+    pub network: Network,
 }
 
 /// One of the watched account's open DEX offers (`account_offers`).
@@ -809,6 +800,7 @@ pub struct AccountOfferRow {
 pub struct OfferCancelSubmitParams {
     pub offer_sequence: u32,
     pub skip_mainnet_prompt: bool,
+    pub network: Network,
 }
 
 /// TrustSet from the Wallet form (v1: Limit + Currency + Issuer only).
@@ -818,6 +810,7 @@ pub struct TrustSetSubmitParams {
     pub issuer: String,
     pub limit: String,
     pub skip_mainnet_prompt: bool,
+    pub network: Network,
 }
 
 /// Any spec'd transaction type (`xrpl::txspec`): canonical field name → raw value.
@@ -826,6 +819,7 @@ pub struct GenericTxSubmitParams {
     pub tx_type: String,
     pub fields: std::collections::BTreeMap<String, String>,
     pub skip_mainnet_prompt: bool,
+    pub network: Network,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -901,6 +895,8 @@ pub struct PollContext {
     pub flare_expected_core_vault: Option<String>,
     /// `[flare.fassets] execute` — when false, C3 execute path is refused.
     pub flare_fassets_execute: bool,
+    /// `[flare] network` — C3 gates (`--yes`-equivalent mainnet guard, chain id, XRPL pairing) use it.
+    pub flare_network: crate::config::FlareNetwork,
     /// `[flare.smart_accounts] expected_operator` — pinned operator for Smart Account instructions.
     pub flare_expected_operator: Option<String>,
     /// `[flare] display` — Off skips FTSO/FXRP read fetches (C3 execute URL unaffected).
@@ -965,8 +961,9 @@ mod tests {
         assert_eq!(blank.pays_currency(), FALLBACK_CURRENCY_CODE);
     }
 
-    /// TC-085: asset_display_name maps known hex codes to readable names
-    /// TC-086: asset_display_name passes through unknown values
+    /// TC-085/086: 4+ char non-standard codes decode to text; standard 160-bit codes show their
+    /// 3 letters; a non-standard code that decodes to ≤3 chars (incl. `XRP`) must not read like
+    /// the real 3-letter code; plain strings pass through.
     #[test]
     fn asset_display_name_mapping() {
         assert_eq!(
@@ -978,10 +975,25 @@ mod tests {
             "USDC"
         );
         assert_eq!(
-            asset_display_name("5553440000000000000000000000000000000000"),
+            asset_display_name("0000000000000000000000005553440000000000"),
             "USD"
         );
+        assert_eq!(
+            asset_display_name("0000000000000000000000000000000000000000"),
+            "XRP"
+        );
+        for impostor in [
+            "5553440000000000000000000000000000000000",
+            "5852500000000000000000000000000000000000",
+            "0000000000000000000000005852500000000000",
+        ] {
+            let shown = asset_display_name(impostor);
+            assert!(shown.ends_with('…'), "{impostor} -> {shown}");
+            assert_ne!(shown, "XRP");
+            assert_ne!(shown, "USD");
+        }
         assert_eq!(asset_display_name("BTC"), "BTC");
+        assert_eq!(asset_display_name("XRP"), "XRP");
         assert_eq!(asset_display_name("UNKNOWN"), "UNKNOWN");
     }
 }

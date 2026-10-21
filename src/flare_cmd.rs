@@ -11,7 +11,9 @@ use alloy::{
     providers::{Provider, ProviderBuilder},
 };
 
-use crate::flare::{self, IAssetManager, IERC20, IMasterAccountController, IMintingTagManager};
+use crate::flare::{
+    self, EvmGate, IAssetManager, IERC20, IMasterAccountController, IMintingTagManager,
+};
 
 alloy::sol! {
     struct Call {
@@ -227,15 +229,18 @@ async fn confirm(
     Ok(receipt)
 }
 
-fn wallet_provider(
+/// Wallet provider + signer address, after the chain-id / `--yes` gate: nothing is signed before it.
+async fn wallet_provider(
     rpc_url: &str,
     key: &str,
+    gate: EvmGate,
 ) -> color_eyre::Result<(impl Provider + Clone, Address)> {
     let signer = flare::parse_evm_key(key)?;
     let address = signer.address();
     let provider = ProviderBuilder::new()
         .wallet(EthereumWallet::from(signer))
         .connect_http(rpc_url.parse()?);
+    gate.check(&provider).await?;
     Ok((provider, address))
 }
 
@@ -244,13 +249,14 @@ fn wallet_provider(
 pub async fn redeem_fxrp(
     rpc_url: &str,
     key: &str,
+    gate: EvmGate,
     amount_uba: u128,
     xrpl_address: &str,
     tag: Option<u64>,
     say: impl Fn(&str),
 ) -> color_eyre::Result<String> {
     let xrpl_address = crate::signing::require_classic_address_shape("XRPL address", xrpl_address)?;
-    let (provider, me) = wallet_provider(rpc_url, key)?;
+    let (provider, me) = wallet_provider(rpc_url, key, gate).await?;
     let am_addr = flare::resolve_asset_manager_fxrp_address(provider.clone(), rpc_url).await?;
     let am = IAssetManager::new(am_addr, provider.clone());
     let fxrp = IERC20::new(am.fAsset().call().await?, provider.clone());
@@ -275,8 +281,7 @@ pub async fn redeem_fxrp(
     let pending = match tag32 {
         None => {
             let call = am.redeemAmount(amount, xrpl_address.to_string(), Address::ZERO);
-            say(&format!("simulated ok, gas {}", call.estimate_gas().await?));
-            call.send().await?
+            flare::send_capped(call, &say).await?
         }
         Some(t) => {
             let call = am.redeemWithTag(
@@ -285,8 +290,7 @@ pub async fn redeem_fxrp(
                 Address::ZERO,
                 U256::from(t),
             );
-            say(&format!("simulated ok, gas {}", call.estimate_gas().await?));
-            call.send().await?
+            flare::send_capped(call, &say).await?
         }
     };
     let receipt = confirm(pending, "redeem").await?;
@@ -330,13 +334,30 @@ async fn tag_manager<P: Provider + Clone>(
     Ok(IMintingTagManager::new(addr, provider.clone()))
 }
 
+/// The tag must be reserved and owned by `me` before anything is sent. Only a revert reads as
+/// "not reserved"; transport errors propagate.
+async fn require_tag_owner<P: Provider>(
+    manager: &IMintingTagManager::IMintingTagManagerInstance<P>,
+    tag: u64,
+    me: Address,
+) -> color_eyre::Result<()> {
+    let owner = flare::tag_owner(manager, U256::from(tag))
+        .await?
+        .ok_or_else(|| color_eyre::eyre::eyre!("tag {tag} is not reserved"))?;
+    if owner != me {
+        color_eyre::eyre::bail!("tag {tag} is owned by {owner:#x}, not by {me:#x}");
+    }
+    Ok(())
+}
+
 /// `reserve()`: pay `reservationFee` (FLR) for a new minting tag. Returns `(tx hash, tag id)`.
 pub async fn reserve_tag(
     rpc_url: &str,
     key: &str,
+    gate: EvmGate,
     say: impl Fn(&str),
 ) -> color_eyre::Result<(String, u128)> {
-    let (provider, me) = wallet_provider(rpc_url, key)?;
+    let (provider, me) = wallet_provider(rpc_url, key, gate).await?;
     let manager = tag_manager(&provider, rpc_url).await?;
     let fee = manager.reservationFee().call().await?;
     let balance = provider.get_balance(me).await?;
@@ -347,8 +368,7 @@ pub async fn reserve_tag(
         "reserve a minting tag for {fee} wei FLR from {me:#x}"
     ));
     let call = manager.reserve().value(fee);
-    say(&format!("simulated ok, gas {}", call.estimate_gas().await?));
-    let receipt = confirm(call.send().await?, "reserve").await?;
+    let receipt = confirm(flare::send_capped(call, say).await?, "reserve").await?;
     let tag = receipt
         .inner
         .logs()
@@ -377,6 +397,7 @@ pub async fn reserve_tag(
 pub async fn set_tag(
     rpc_url: &str,
     key: &str,
+    gate: EvmGate,
     tag: u64,
     recipient: Option<Address>,
     executor: Option<Address>,
@@ -390,23 +411,15 @@ pub async fn set_tag(
             color_eyre::eyre::bail!("{what} must not be the zero address");
         }
     }
-    let (provider, me) = wallet_provider(rpc_url, key)?;
+    let (provider, me) = wallet_provider(rpc_url, key, gate).await?;
     let manager = tag_manager(&provider, rpc_url).await?;
     let id = U256::from(tag);
-    let owner = manager
-        .ownerOf(id)
-        .call()
-        .await
-        .map_err(|_| color_eyre::eyre::eyre!("tag {tag} is not reserved"))?;
-    if owner != me {
-        color_eyre::eyre::bail!("tag {tag} is owned by {owner:#x}, not by {me:#x}");
-    }
+    require_tag_owner(&manager, tag, me).await?;
     let mut hashes = Vec::new();
     if let Some(r) = recipient {
         say(&format!("tag {tag}: minting recipient → {r:#x}"));
         let call = manager.setMintingRecipient(id, r);
-        say(&format!("simulated ok, gas {}", call.estimate_gas().await?));
-        let receipt = confirm(call.send().await?, "setMintingRecipient").await?;
+        let receipt = confirm(flare::send_capped(call, &say).await?, "setMintingRecipient").await?;
         hashes.push(format!("{:#x}", receipt.transaction_hash));
     }
     if let Some(e) = executor {
@@ -415,8 +428,7 @@ pub async fn set_tag(
             "tag {tag}: allowed executor → {e:#x} (active after {cooldown} s)"
         ));
         let call = manager.setAllowedExecutor(id, e);
-        say(&format!("simulated ok, gas {}", call.estimate_gas().await?));
-        let receipt = confirm(call.send().await?, "setAllowedExecutor").await?;
+        let receipt = confirm(flare::send_capped(call, &say).await?, "setAllowedExecutor").await?;
         hashes.push(format!("{:#x}", receipt.transaction_hash));
     }
     Ok(hashes)
@@ -430,9 +442,12 @@ pub async fn ensure_vault_registered(
     kind: u8,
 ) -> color_eyre::Result<Address> {
     let provider = ProviderBuilder::new().connect_http(rpc_url.parse()?);
-    let controller_addr =
-        flare::resolve_registry_contract(provider.clone(), rpc_url, "MasterAccountController")
-            .await?;
+    let controller_addr = flare::resolve_registry_contract(
+        provider.clone(),
+        rpc_url,
+        flare::MASTER_ACCOUNT_CONTROLLER_NAME,
+    )
+    .await?;
     let list = IMasterAccountController::new(controller_addr, provider)
         .getVaults()
         .call()
@@ -457,26 +472,19 @@ pub async fn ensure_vault_registered(
 pub async fn transfer_tag(
     rpc_url: &str,
     key: &str,
+    gate: EvmGate,
     tag: u64,
     to: Address,
     say: impl Fn(&str),
 ) -> color_eyre::Result<String> {
-    let (provider, me) = wallet_provider(rpc_url, key)?;
+    let (provider, me) = wallet_provider(rpc_url, key, gate).await?;
     check_tag_address("destination", to, me).map_err(|e| color_eyre::eyre::eyre!(e))?;
     let manager = tag_manager(&provider, rpc_url).await?;
     let id = U256::from(tag);
-    let owner = manager
-        .ownerOf(id)
-        .call()
-        .await
-        .map_err(|_| color_eyre::eyre::eyre!("tag {tag} is not reserved"))?;
-    if owner != me {
-        color_eyre::eyre::bail!("tag {tag} is owned by {owner:#x}, not by {me:#x}");
-    }
+    require_tag_owner(&manager, tag, me).await?;
     say(&format!("transfer tag {tag}: {me:#x} → {to:#x}"));
     let call = manager.transfer(to, id);
-    say(&format!("simulated ok, gas {}", call.estimate_gas().await?));
-    let receipt = confirm(call.send().await?, "transfer").await?;
+    let receipt = confirm(flare::send_capped(call, say).await?, "transfer").await?;
     Ok(format!("{:#x}", receipt.transaction_hash))
 }
 
@@ -484,9 +492,12 @@ pub async fn transfer_tag(
 /// one Smart Account instruction id (read-only).
 pub async fn instruction_route(rpc_url: &str, id: u8) -> color_eyre::Result<(String, u64)> {
     let provider = ProviderBuilder::new().connect_http(rpc_url.parse()?);
-    let controller_addr =
-        flare::resolve_registry_contract(provider.clone(), rpc_url, "MasterAccountController")
-            .await?;
+    let controller_addr = flare::resolve_registry_contract(
+        provider.clone(),
+        rpc_url,
+        flare::MASTER_ACCOUNT_CONTROLLER_NAME,
+    )
+    .await?;
     let controller = IMasterAccountController::new(controller_addr, provider);
     let (wallets, fee) = tokio::try_join!(
         async { Ok::<_, color_eyre::Report>(controller.getXrplProviderWallets().call().await?) },

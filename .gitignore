@@ -12,7 +12,11 @@ graphify-out
 .pi/
 .atl/
 .scratch/
-./agents/
+.claude/
+.envrc
+.DS_Store
+node_modules/
+.agents/skills/**/node_modules
 .config/lazyxrp-test/*
 !.config/lazyxrp-test/config.toml.example
 

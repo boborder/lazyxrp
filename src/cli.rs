@@ -47,13 +47,13 @@ pub struct Cli {
     #[arg(long)]
     pub self_uninstall: bool,
 
-    /// Signing seed (family seed format). Overrides XRPL_SEED env var and config.
+    /// Signing seed (family seed format). Overrides any XRPL_SEED / XRPL_MNEMONIC env and config credential.
     ///
     /// Deprecated: appears in process argv / shell history. Prefer XRPL_SEED or config.
     #[arg(long, conflicts_with = "mnemonic")]
     pub seed: Option<String>,
 
-    /// BIP39 mnemonic for XRPL secp256k1 account index 0.
+    /// BIP39 mnemonic for XRPL secp256k1 account index 0. Overrides any XRPL_SEED / XRPL_MNEMONIC env and config credential.
     ///
     /// Deprecated: appears in process argv / shell history. Prefer XRPL_MNEMONIC or config.
     #[arg(long, conflicts_with = "seed")]

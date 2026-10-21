@@ -20,12 +20,12 @@ use xrpl::models::transactions::xchain_modify_bridge::{
 };
 use xrpl::models::{Amount, Currency, IssuedCurrency, Model, XChainBridge, XRP, XRPAmount};
 
-use super::{Confirm, FieldKind, FieldSpec, Fields, TxSpec, common_fields, flag_bits, val};
+use super::{
+    Confirm, FieldKind, FieldSpec, Fields, TxSpec, common_fields, flag_bits, parse_drops, val,
+};
 use crate::signing::{parse_offer_amount, sign_blob};
 
 const FAMILY: &str = "XChain";
-/// Largest legal XRP amount in drops (100 billion XRP).
-const MAX_DROPS: u64 = 100_000_000_000_000_000;
 const MODIFY_FLAGS: &[(&str, u32)] = &[("ClearAccountCreateAmount", 0x0001_0000)];
 
 pub static SPECS: &[TxSpec] = &[
@@ -145,23 +145,16 @@ fn bridge_model(f: &Fields) -> color_eyre::Result<XChainBridge<'static>> {
 
 // ------------------------------------------------------------------ small validators
 
-fn drops_in(v: &str, min: u64) -> Result<(), String> {
-    if v.is_empty() || !v.bytes().all(|b| b.is_ascii_digit()) {
-        return Err(format!("expected integer drops {min}..={MAX_DROPS}"));
-    }
-    match v.parse::<u64>() {
-        Ok(n) if (min..=MAX_DROPS).contains(&n) => Ok(()),
-        _ => Err(format!("drops must be {min}..={MAX_DROPS}")),
-    }
-}
-
 /// Signature rewards may be zero.
 fn reward_drops(v: &str) -> Result<(), String> {
-    drops_in(v, 0)
+    parse_drops(v).map(|_| ())
 }
 
 fn positive_drops(v: &str) -> Result<(), String> {
-    drops_in(v, 1)
+    match parse_drops(v)? {
+        0 => Err("XRP drops must be greater than zero".into()),
+        _ => Ok(()),
+    }
 }
 
 /// `XChainClaimID` is a UInt64 shown in hex (`13f`); never 0.
@@ -670,6 +663,7 @@ mod tests {
     use serde_json::json;
     use xrpl::core::binarycodec::decode;
 
+    use super::super::MAX_DROPS;
     use super::*;
 
     const DOOR_A: &str = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh";
@@ -1488,6 +1482,7 @@ mod tests {
                 ("Amount", "XRP:5000000"),
             ]),
             skip_mainnet_prompt: false,
+            network: Network::Testnet,
         };
 
         // Refused before any RPC (the server expects exactly 4 requests).

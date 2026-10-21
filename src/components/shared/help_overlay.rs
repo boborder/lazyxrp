@@ -22,8 +22,14 @@ const BINDINGS: &[(&str, &str)] = &[
     ),
     (
         "t / e / s (wallet modal)",
-        "Wallet: `t` composer (1 Payment…8 OfferCancel, 9 EscrowCreate, 0 Escrows, d AMMDeposit, w AMMWithdraw); Enter/`e` edit; `s`/Ctrl-S send; Esc back",
+        "Wallet (Account tab): `t` composer (1 Payment…8 OfferCancel, 9 EscrowCreate, 0 Escrows, d AMMDeposit, w AMMWithdraw, x AccountDelete, a Smart Account, m any Transaction); Enter/`e` edit; `s`/Ctrl-S send; Esc back",
     ),
+    (
+        "g",
+        "Generate a new key pair (Account tab wallet; seed shown once)",
+    ),
+    ("x", "Burn the selected NFT (Assets tab)"),
+    ("Ctrl-n", "Cycle network (mainnet → testnet → devnet → …)"),
     ("Enter", "Transaction detail (all table panels)"),
     (
         "f",

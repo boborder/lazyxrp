@@ -123,6 +123,25 @@ pub(crate) fn val<'a>(fields: &'a Fields, name: &str) -> Option<&'a str> {
     fields.get(name).map(|v| v.trim()).filter(|v| !v.is_empty())
 }
 
+/// Largest legal XRP amount in drops (100 billion XRP).
+pub(crate) const MAX_DROPS: u64 = 100_000_000_000_000_000;
+
+/// The one strict XRP-drops grammar: decimal digits only (no sign, no whitespace), no leading
+/// zeros except `0` itself, `<=` [`MAX_DROPS`]. Zero is allowed here; callers that need a
+/// positive amount check it. The canonical `n.to_string()` is what goes on the wire.
+pub(crate) fn parse_drops(v: &str) -> Result<u64, String> {
+    if v.is_empty() || !v.bytes().all(|b| b.is_ascii_digit()) {
+        return Err("expected XRP drops (an integer of digits only)".into());
+    }
+    if v.len() > 1 && v.starts_with('0') {
+        return Err("XRP drops must not have leading zeros".into());
+    }
+    match v.parse::<u64>() {
+        Ok(n) if n <= MAX_DROPS => Ok(n),
+        _ => Err(format!("drops must be 0..={MAX_DROPS}")),
+    }
+}
+
 /// OR of the flag bits named in `names` (validated by [`FieldKind::Flags`]).
 pub(crate) fn flag_bits(table: &[(&str, u32)], names: &str) -> u32 {
     split_list(names)
@@ -494,5 +513,27 @@ mod tests {
                 .unwrap_err()
                 .contains("unknown field")
         );
+    }
+}
+
+#[cfg(test)]
+mod drops_tests {
+    use super::*;
+
+    /// One strict drops grammar for every XRP amount: digits only, canonical, `<= 1e17`.
+    #[test]
+    fn parse_drops_is_strict() {
+        assert_eq!(parse_drops("0"), Ok(0));
+        assert_eq!(parse_drops("100"), Ok(100));
+        assert_eq!(parse_drops(&MAX_DROPS.to_string()), Ok(MAX_DROPS));
+        for bad in ["", "+5", "-5", "007", "00", " 5", "5 ", "1.5", "1e3"] {
+            assert!(parse_drops(bad).is_err(), "{bad:?}");
+        }
+        assert!(parse_drops(&(MAX_DROPS + 1).to_string()).is_err());
+        assert!(parse_drops("18446744073709551616").is_err());
+        for bad in ["XRP:+5", "XRP:007", "XRP:0", "XRP:100000000000000001"] {
+            assert!(FieldKind::Amount.validate(bad).is_err(), "{bad}");
+        }
+        assert!(FieldKind::Amount.validate("XRP:5").is_ok());
     }
 }

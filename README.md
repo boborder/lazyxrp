@@ -20,7 +20,7 @@ Watch mode uses **four top-level tabs** (jump with `1`–`4`):
 | **Market** | DEX book + Path-Find routes + AMM + trust lines + XRPL oracle + Flare FTSOv2 |
 | **Assets** | NFTs + selected-NFT image preview + account_objects (Objects / Pay channels / Escrows) |
 
-**Write coverage:** **50 / 68** XRPL transaction types can be signed from the TUI and/or `-x` (hand-written: Payment, AccountSet, TrustSet, OfferCreate / Cancel, SetRegularKey, Escrow ×3, AMMDeposit / Withdraw, AccountDelete; declarative specs: NFToken ×5, Check ×3, TicketCreate, DepositPreauth, SignerListSet, Clawback, PaymentChannel ×3, AMMCreate / Vote / Bid / Delete, MPToken ×4, Credential ×3, DID ×2, Oracle ×2, PermissionedDomain ×2, XChain ×6 via the Wallet composer **Transaction** (`m`) and `-x tx`). The full per-type matrix (read / TUI / CLI / planned / unsupported) is the "XRPL coverage" table in [`ROADMAP.md`](ROADMAP.md); `lazyxrp -x coverage` prints it.
+**Write coverage:** **50 / 77** XRPL transaction types can be signed from the TUI and/or `-x` (hand-written: Payment, AccountSet, TrustSet, OfferCreate / Cancel, SetRegularKey, Escrow ×3, AMMDeposit / Withdraw, AccountDelete; declarative specs: NFToken ×5, Check ×3, TicketCreate, DepositPreauth, SignerListSet, Clawback, PaymentChannel ×3, AMMCreate / Vote / Bid / Delete, MPToken ×4, Credential ×3, DID ×2, Oracle ×2, PermissionedDomain ×2, XChain ×6 via the Wallet composer **Transaction** (`m`) and `-x tx`). The full per-type matrix (read / TUI / CLI / planned / unsupported) is the "XRPL coverage" table in [`ROADMAP.md`](ROADMAP.md); `lazyxrp -x coverage` prints it.
 
 ## Requirements
 
@@ -234,7 +234,7 @@ cargo test --locked --all-features --workspace
 cargo fmt --all --check
 cargo clippy --locked --all-targets --all-features --workspace -- -D warnings
 cargo doc --locked --no-deps --document-private-items --all-features --workspace --examples
-cargo audit --ignore RUSTSEC-2026-0235
+cargo audit
 cargo deny check
 ```
 

@@ -162,77 +162,37 @@ fn parse_validator_manifest_bytes(data: &[u8]) -> Option<ValidatorManifestMeta> 
     })
 }
 
-fn read_st_field_header(data: &[u8], off: usize) -> Option<(u8, u16, usize)> {
-    if off >= data.len() {
-        return None;
+/// XRPL field ID: `(type, code, next offset)`. One byte when both are < 16; otherwise the
+/// big one(s) follow: type ≥ 16 → `0x0c` + type byte, code ≥ 16 → `0xt0` + code byte, both →
+/// `0x00`, type, code. Extension bytes must be ≥ 16 (canonical form); truncated input is `None`.
+fn read_st_field_header(data: &[u8], off: usize) -> Option<(u16, u16, usize)> {
+    let b0 = *data.get(off)?;
+    let (hi, lo) = (u16::from(b0 >> 4), u16::from(b0 & 0x0F));
+    let ext = |i: usize| data.get(i).copied().filter(|b| *b >= 16).map(u16::from);
+    match (hi, lo) {
+        (0, 0) => Some((ext(off + 1)?, ext(off + 2)?, off + 3)),
+        (0, code) => Some((ext(off + 1)?, code, off + 2)),
+        (field_type, 0) => Some((field_type, ext(off + 1)?, off + 2)),
+        (field_type, code) => Some((field_type, code, off + 1)),
     }
-    let b0 = data[off];
-    let mut pos = off + 1;
-    let (field_type, field_code) = if (b0 & 0xF0) == 0 {
-        if pos >= data.len() {
-            return None;
-        }
-        let field_type = data[pos] >> 4;
-        let mut field_code = u16::from(b0 & 0x0F) << 8 | u16::from(data[pos] & 0x0F);
-        pos += 1;
-        if field_code == 0 {
-            if pos + 1 >= data.len() {
-                return None;
-            }
-            let _field_type = data[pos];
-            field_code = u16::from(data[pos + 1]);
-            pos += 2;
-        }
-        (field_type, field_code)
-    } else {
-        let field_type = b0 >> 4;
-        let mut field_code = u16::from(b0 & 0x0F);
-        if field_code == 0 {
-            if pos >= data.len() {
-                return None;
-            }
-            field_code = u16::from(data[pos]);
-            pos += 1;
-        }
-        (field_type, field_code)
-    };
-    Some((field_type, field_code, pos))
 }
 
+/// XRPL variable-length prefix: `0..=192` → 1 byte; `193..=240` → 2 bytes, length
+/// `193 + (b0-193)*256 + b1` (≤ 12480); `241..=254` → 3 bytes, length
+/// `12481 + (b0-241)*65536 + b1*256 + b2` (≤ 918744); `255` is invalid.
 fn read_st_vl(data: &[u8], off: usize) -> Option<(Vec<u8>, usize)> {
-    if off >= data.len() {
-        return None;
-    }
-    let b0 = data[off];
-    let mut pos = off + 1;
-    let len = if b0 <= 192 {
-        usize::from(b0)
-    } else if b0 == 193 {
-        if pos >= data.len() {
-            return None;
-        }
-        let len = 193 + usize::from(data[pos]);
-        pos += 1;
-        len
-    } else if b0 == 194 {
-        if pos + 1 >= data.len() {
-            return None;
-        }
-        let len = 193 + usize::from(data[pos]) + usize::from(data[pos + 1]) * 256;
-        pos += 2;
-        len
-    } else {
-        if pos >= data.len() {
-            return None;
-        }
-        let len = (usize::from(b0) - 195) * 256 + usize::from(data[pos]);
-        pos += 1;
-        len
+    let b0 = usize::from(*data.get(off)?);
+    let byte = |i: usize| data.get(off + i).copied().map(usize::from);
+    let (len, pos) = match b0 {
+        0..=192 => (b0, off + 1),
+        193..=240 => (193 + (b0 - 193) * 256 + byte(1)?, off + 2),
+        241..=254 => (
+            12481 + (b0 - 241) * 65536 + byte(1)? * 256 + byte(2)?,
+            off + 3,
+        ),
+        _ => return None,
     };
-    if pos + len > data.len() {
-        return None;
-    }
-    let blob = data[pos..pos + len].to_vec();
+    let blob = data.get(pos..pos.checked_add(len)?)?.to_vec();
     Some((blob, pos + len))
 }
 
@@ -394,6 +354,52 @@ mod tests {
         ] {
             let _ = parse_validator_manifest_bytes(junk);
         }
+    }
+
+    /// Field ID vectors from the XRPL serialization spec (type/code each below or above 16).
+    #[test]
+    fn field_header_matches_spec_vectors() {
+        for (bytes, want) in [
+            (&[0x24][..], (2, 4, 1)),               // type<16, code<16
+            (&[0x70, 0x12][..], (7, 18, 2)),        // code ≥ 16 (MasterSignature)
+            (&[0x03, 0x10][..], (16, 3, 2)),        // type ≥ 16 (TransactionPersistentID-style)
+            (&[0x00, 0x10, 0x11][..], (16, 17, 3)), // both ≥ 16
+            (&[0x73, 0xFF][..], (7, 3, 1)),         // trailing bytes untouched
+        ] {
+            assert_eq!(read_st_field_header(bytes, 0), Some(want), "{bytes:x?}");
+        }
+        // Truncated or non-canonical extension bytes are rejected, never panic.
+        for bad in [
+            &[][..],
+            &[0x70][..],
+            &[0x03][..],
+            &[0x00, 0x10][..],
+            &[0x70, 0x05][..],
+        ] {
+            assert_eq!(read_st_field_header(bad, 0), None, "{bad:x?}");
+        }
+    }
+
+    /// VL prefix vectors: 192 / 193 / 12480 / 12481 / 918744 boundaries, 255 invalid.
+    #[test]
+    fn vl_length_matches_spec_boundaries() {
+        let with = |prefix: &[u8], len: usize| {
+            let mut v = prefix.to_vec();
+            v.extend(vec![0xAB; len]);
+            read_st_vl(&v, 0).map(|(blob, next)| (blob.len(), next))
+        };
+        assert_eq!(with(&[0], 0), Some((0, 1)));
+        assert_eq!(with(&[192], 192), Some((192, 193)));
+        assert_eq!(with(&[193, 0], 193), Some((193, 195)));
+        assert_eq!(with(&[193, 1], 194), Some((194, 196)));
+        assert_eq!(with(&[194, 0], 449), Some((449, 451)));
+        assert_eq!(with(&[240, 255], 12480), Some((12480, 12482)));
+        assert_eq!(with(&[241, 0, 0], 12481), Some((12481, 12484)));
+        assert_eq!(with(&[254, 212, 23], 918_744), Some((918_744, 918_747)));
+        assert_eq!(with(&[255], 10), None);
+        // Declared length longer than the data / truncated prefix.
+        assert_eq!(with(&[193, 0], 192), None);
+        assert_eq!(with(&[241, 0], 0), None);
     }
 
     #[test]

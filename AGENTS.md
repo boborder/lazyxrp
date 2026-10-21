@@ -46,5 +46,5 @@ If assumptions are unavoidable, state them explicitly before proceeding.
 
 ## Detailed instructions
 
-- Graphify: [`graphify-out/GRAPH_REPORT.md`](graphify-out/GRAPH_REPORT.md) — if `HEAD` differs or `graphify-out/needs_update` exists, run `graphify update .` before structure queries.
+- Graphify (optional, local only): `graphify-out/` is gitignored and not committed — generate it with `graphify update .`, then read `graphify-out/GRAPH_REPORT.md` for structure queries; regenerate when `HEAD` differs or `graphify-out/needs_update` exists.
 - Domain skills: [`.agents/skills/xrpl-rust/`](.agents/skills/xrpl-rust/SKILL.md) · Flare: `flare-general` / `flare-ftso` / `flare-fassets` / `flare-fdc` / `flare-smart-accounts` (vendored from `flare-foundation/flare-ai-skills`; refresh with `npx skills update -p -y`, then restore any local-only `flare-fassets/scripts/_*` probes)

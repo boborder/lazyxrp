@@ -2,7 +2,7 @@
 
 **Role:** テスト設計・テストガイド（重要 TC カタログと FR/architecture へのトレース）。
 
-> Last Updated: 2026-09-21 (contract-first consolidation ×3: same-contract tests merged into table-driven tests — lib suite 300 → 237 fns incl. added TC-049 env-seed test; TC-075 (library serde) and TC-138 (f64 artifact pin) removed; TC rows resynced)
+> Last Updated: 2026-10-21 (same-contract tests are table-driven; the lib suite size is not tracked here — run `cargo test` for the live count)
 > Target: lazyxrp (Rust TUI for XRPL)
 > Catalog: important-case roster (not a 1:1 index of every `#[test]`)
 
@@ -11,7 +11,7 @@
 - This file is an **important-case roster**: a TC is added only for cross-module contracts, regression-prone logic, or user-visible behavior. Unannotated helper/unit tests are intentionally outside the catalog.
 - Reference the `TC-xxx` ID in commit messages (e.g. `test(xrpl): add NFT parse case (TC-013)`).
 - Inline `#[cfg(test)]` modules preferred; live-network cases are `#[ignore]` and run explicitly.
-- Tests live in the lib (`src/lib.rs`) and `tests/cli_smoke.rs`. `[lib] doctest = false` and `test = false` on both `[[bin]]` targets (`Cargo.toml`) skip empty test targets to keep `cargo test` rebuilds fast — put unit tests in lib modules, not `main.rs` / `bin/rp.rs`, or drop `test = false` first.
+- Tests live in the lib (`src/lib.rs`), `tests/cli_smoke.rs` (binary boundary) and `tests/testnet_e2e.rs` (opt-in, live testnet/devnet: send / offer / NFT mint → burn; `mise run e2e-testnet`, not run in CI). `[lib] doctest = false` and `test = false` on both `[[bin]]` targets (`Cargo.toml`) skip empty test targets to keep `cargo test` rebuilds fast — put unit tests in lib modules, not `main.rs` / `bin/rp.rs`, or drop `test = false` first.
 - **Traceability:** User-visible TCs should map to `docs/requirements.md` FR/NFR and/or `docs/architecture.md` §. Keys/layout TCs trace to `DESIGN.md`. See [Traceability](#traceability) for network/Flare rows.
 
 ## Commands
@@ -24,7 +24,7 @@ cargo test --locked --all-features --workspace
 cargo fmt --all --check
 cargo clippy --locked --all-targets --all-features --workspace -- -D warnings
 cargo doc --locked --no-deps --document-private-items --all-features --workspace --examples
-cargo audit --ignore RUSTSEC-2026-0235
+cargo audit
 cargo deny check
 ```
 
@@ -164,9 +164,28 @@ cargo deny check
 | TC-340 | P0 | `src/fdc.rs` | FDC proof fetch: verifier `abiEncodedRequest` must match the asked tx / proof owner / `XRPPayment` type / source id (other tx, other owner, wrong type or source, wrong length refused); voting-round arithmetic; per-network endpoint defaults, https-only overrides, no Songbird. Live (`#[ignore]`, `FDC_LIVE_TX`): mainnet registry names, `firstVotingRoundStartTs` / 90 s epoch, a finalized past round, verifier answer for a real Core Vault payment, `getRequestFee` = 20 FLR |
 | TC-341 | P0 | `src/flare_cmd.rs` | Redeem validation (zero, below `minimumRedeemAmountUBA`, above balance, tag width) and tag-address guards (zero / self). CLI smoke on mainnet with an unfunded throwaway key: no `execute` → refused, no `--yes` → refused, redeem 5 XRP → "exceeds the FXRP balance", 1 XRP → below minimum (5 XRP), `fxrp-tag-reserve` → FLR below the 100 FLR fee, `fxrp-tag-set 30` → owned by another address |
 | TC-342 | P0 | `src/flare_cmd.rs` | Vault instruction layout `[id \| wallet \| value(10) \| 2 ignored \| vaultId \| 16 ignored]`; only `0x11–0x13` / `0x21–0x23` encode, zero value refused. CLI smoke: `sa-vault upshift deposit 1 …` → "vault 1 is type 1 … not 2"; `sa-vault firelight deposit 1 1000000` prints the memo and the 0.5 XRP fee, then stops at the mainnet `--yes` gate |
-| TC-343 | P0 | `src/lib.rs` | `check_network_pair` (XRPL Mainnet ↔ Flare, Testnet ↔ Coston2; Songbird / Devnet / Xahau / crossed pairs refused) and `check_xrpl_tx_hash` (64 hex, optional `0x`; short / long / non-hex refused). Runs before the execute / key / `--yes` gates |
+| TC-343 | P0 | `src/flare.rs` / `src/lib.rs` | `check_network_pair` (in `flare.rs`; also applied to TUI C2 / Smart Account / C3, see TC-348) (XRPL Mainnet ↔ Flare, Testnet ↔ Coston2; Songbird / Devnet / Xahau / crossed pairs refused) and `check_xrpl_tx_hash` (64 hex, optional `0x`; short / long / non-hex refused). Runs before the execute / key / `--yes` gates |
 | TC-344 | P0 | `src/flare_cmd.rs` | Memo recovery layouts from upstream `MemoInstructions.sol`: `0xE0` / `0xE1` 42 B, `0xE2` 50 B, `0xD0` 30 B, `0xD1` 10 B (`[op \| walletId 0 \| fee u64 BE \| body]`); `0xE1` refuses `newNonce <= current` and a jump above `u32::MAX` (boundary tested), missing / short `--target`, zero executor; target state per op (`0xE0` / `0xE2` only while `isTransactionIdUsed` is false, `0xE1` only once true; `check_target_state`) |
 | TC-345 | P0 | `src/flare_cmd.rs` | `0xFE` user operation: `abi.encode(PackedUserOperation)` decodes back to the same sender / nonce / `executeUserOp(Call[])`, the memo is `[0xFE \| 0 \| fee u64 BE \| keccak256(userOp)]` (42 B); no calls / bad target / bad hex refused. Coston2 live: `sa-call` → payment validated → `fxrp-execute --data <userOp>` → the personal account's `FXRP.transfer` ran (recipient 5 → 6 FXRP, `getNonce` 3 → 4) |
+| TC-346 | P0 | `src/flare.rs` | Write chain gate: `expected_chain_id` per Flare network; `check_write_chain` decides the mainnet `--yes` requirement from the **reported** `eth_chainId` (mismatch refused); `tx_fee_cap` — `send_capped` refuses gas × max fee above `MAX_TX_FEE_WEI` (10 FLR). `fxrp-execute` on the wrong chain is refused before any other step |
+| TC-347 | P0 | `src/signing.rs` | `eth_address_checksum_enforced_for_mixed_case`: all-lower / all-upper accepted, mixed-case with a wrong EIP-55 checksum refused |
+| TC-348 | P0 | `src/xrpl/submit.rs` | `xrpl_writes_refuse_unpaired_flare_network`, `fxrp_execute_direct_mint_refuses_unpaired_networks`, `fxrp_execute_direct_mint_flare_mainnet_without_yes_is_rejected`: XRPL writes (C2 / Smart Account / C3) refuse crossed XRPL ↔ Flare pairs and Flare mainnet without `--yes` |
+| TC-349 | P0 | `src/lib.rs` | `direct_mint_payment_refused_when_paused_or_over_cap`: C2 Payment refused while minting is paused or the amount exceeds the cap headroom |
+| TC-350 | P0 | `src/xrpl/poll.rs` | `stale_write_refusal_on_network_switch`: a write composed on network A is refused (not sent) after the active network changed (compose-time `network` in every write param) |
+| TC-351 | P0 | `src/xrpl/client.rs` | `submit_signed_tx` is a single attempt: a lost submit reply resolves via `tx(hash)` lookup (applied success / applied failure / not found = explicit "unknown"), never replays the blob (S-014) |
+| TC-352 | P1 | `src/xrpl/client.rs` | `network_id_is_set_only_above_1024`: `NetworkID` injected into the tx (simulate and signing) only when the stored `network_id` > 1024. Live Xahau acceptance of `simulate` with `NetworkID` is **not verified** (see problems.md P-007) |
+| TC-353 | P1 | `src/xrpl/parse.rs` | `parse_submit_success_treats_terqueued_as_queued`: `terQUEUED` is a queued success |
+| TC-354 | P1 | `src/xrpl/ws.rs` | `ws_silent_socket_times_out_and_reconnects`: 30 s read timeout (shortened under `cfg(test)`) drops a silent socket and reconnects |
+| TC-355 | P1 | `src/xrpl/toml.rs` | Domain verification accepts a base58 `nH…` node key and hex, comparing decoded bytes |
+| TC-356 | P1 | `src/xrpl/dunl.rs` | dUNL VL decoding: `field_header_matches_spec_vectors` (1-/2-byte field ids) and `vl_length_matches_spec_boundaries` (1/2/3-byte lengths) |
+| TC-357 | P1 | `src/xrpl/txspec/mod.rs` | `parse_drops_is_strict`: digits only, no sign / whitespace / fraction, overflow refused |
+| TC-358 | P1 | `src/xrpl/nft_image.rs` | `client_for_url_handles_ipv6_literals`: IPv6 literal NFT URIs resolve / pin correctly |
+| TC-359 | P0 | `src/config.rs` | `keybinding_rejects_payload_and_submit_actions` (only allowlisted actions via `is_bindable`; rejected at load), `tilde_paths_expand_to_home` (`~` in `config_dir` / `data_dir` / `LAZYXRP_*`), `credential_precedence_matrix` (CLI > env > file; lower source's other kind dropped; same-level both = error) |
+| TC-360 | P0 | `src/app.rs` | Active-tab-only routing: `overview_t_key_does_not_open_hidden_composer`, `account_tab_filter_key_reaches_tx_history`, `composer_open_without_credential_stays_on_tab`; `startup_ends_when_server_info_errors` (splash ends on `server_info` error) |
+| TC-361 | P0 | `src/components/panels/wallet.rs` | Form safety: `trust_set_default_form_cannot_submit` (TrustSet starts empty), `account_set_no_freeze_requires_confirm` (typed `NOFREEZE`), `submit_guard_survives_local_errors_and_stale_results`, `stale_or_foreign_network_snapshots_refuse_to_submit` (snapshot > 300 s or other network refused), `paste_inserts_only_while_editing_without_hotkeys` (bracketed paste is edit-only) |
+| TC-362 | P2 | `src/components/panels/wallet.rs` / `wallet_keygen.rs` / `tabs/account_wallet.rs` | `keygen_works_unfunded_and_composer_is_gated`, `composer_popup_narrow_terminal_does_not_panic`, `keygen_popup_narrow_terminal_does_not_panic`, `keys_reach_focused_tx_history_pane` |
+| TC-365 | P1 | `src/components/panels/tx_history.rs` | `paste_goes_to_filter_only_while_editing`: bracketed paste is appended to the Tx History filter (control characters dropped) only while the filter is being edited, otherwise ignored |
+| TC-363 | P0 | `src/flare.rs` | `direct_mint_terms_drift_is_refused`, `smart_account_terms_drift_is_refused`: a fee bump, Core Vault change, pause, operator change or instruction-fee change between compose and sign is refused |
 | TC-300 | P0 | `src/xrpl/txspec/identity.rs` | Identity family field validation tables: CredentialType 64/65 bytes, URI 128/129, DID fields 256/257, at-least-one rules, Oracle id / provider / asset class / series 10/11, domain id (length, hex, zero hash), AcceptedCredentials 10/11 |
 | TC-301 | P0 | `src/xrpl/txspec/mpt.rs` | MPT family field validation tables: TransferFee 50000/50001, AssetScale 255/256, MaximumAmount 0 / 1 / i64::MAX / +1, metadata 1024/1025, id 47/48/49, transfer-fee / domain / lock-unlock combinations |
 | TC-302 | P0 | `src/xrpl/txspec/identity.rs` | Unsigned `tx_json` per identity type: text fields hex-encoded, `PriceDataSeries` → `PriceData` entries (decimal price → hex, scale), `AcceptedCredentials` → `Credential` entries, ids upper-cased, no Fee / LastLedgerSequence |
@@ -202,7 +221,7 @@ cargo deny check
 | TC-127 | P1 | `src/config.rs` | Config file `network = "xahau-test"` loads XahauTest (merged with TC-042 test) |
 | TC-128 | P2 | `src/components/shared/theme.rs` | DESIGN.md frontmatter `colors.*` hex values match `theme.rs` constants |
 | TC-129 | P1 | `src/components/panels/wallet.rs` | Fxrp proof preview truncates multibyte JSON by chars (byte-slice panic regression) |
-| TC-130 | P1 | `src/components/panels/wallet_keys.rs` | `payment_edit_keys` input filters — IOU currency ≤3 chars, amount digits + single dot, destination graphic ASCII |
+| TC-130 | P1 | `src/components/panels/wallet_keys.rs` | `payment_edit_keys` input filters — IOU currency row ≤40 chars (3-char code or 40-hex), amount digits + single dot, destination graphic ASCII |
 | TC-131 | P1 | `src/components/panels/wallet_keys.rs` | `account_set_edit_keys` — rows 0/1 locked, domain free text, tick/transfer digits only |
 | TC-132 | P2 | `src/components/panels/wallet_composer.rs` | Composer row nav — `[`/`]` wrap, Enter advances while editing, `e` toggles edit |
 | TC-133 | P1 | `src/components/shared/selectable_table.rs` | Selection clamps on `reset_len`, deselects at len 0, stops at ends |
@@ -249,6 +268,7 @@ cargo deny check
 | TC-176 | P1 | `src/signing.rs` | Node-chosen Fee > `MAX_NODE_FEE_DROPS` rejected before signing (cap itself accepted) |
 | TC-177 | P1 | `src/xrpl/toml.rs`, `src/xrpl/nft_image.rs` | toml domain accepts only plain hostnames; private/reserved literals (incl. `100.64/10`, `198.18/15`, `240/4`) refused with no request |
 | TC-178 | P1 | `src/components/shared/fmt.rs`, `src/xrpl/format.rs`, `src/flare.rs` | Remote multibyte strings / NaN amounts / oversized uint256 do not panic display helpers or sort |
+| TC-364 | P1 | `src/xrpl/nft_image.rs`, `src/components/tabs/nft.rs` | `ipfs_spellings_normalize_to_one_gateway_path` (`ipfs://`, `IPFS://`, `ipfs://ipfs/`, `/ipfs/`, bare CIDv0/v1 → one gateway path), `data_uri_decodes_base64_only`, `display_uri_converts_ipfs_to_public_gateway` (displayed as `https://ipfs.io/ipfs/…`, other URIs unchanged); NFT tab URI column is width-aware (wide terminal shows the whole URI, narrow one ends in `…`, TC-178 multibyte case) and `draw_strips_control_and_bidi_chars_from_uri` |
 | TC-179 | P1 | `src/xrpl/client.rs` | Chunked body over 16 MiB is rejected while streaming |
 | TC-180 | P2 | `src/xrpl/parse.rs` | Control characters stripped from submit error text and tx hash |
 | TC-181 | P2 | `src/config.rs` | Group/world-readable credential config yields a (stderr) warning; 0600 does not |

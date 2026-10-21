@@ -22,7 +22,9 @@ use xrpl::models::transactions::payment_channel_create::PaymentChannelCreate;
 use xrpl::models::transactions::payment_channel_fund::PaymentChannelFund;
 use xrpl::models::{Amount, IssuedCurrencyAmount, Model, XRPAmount};
 
-use super::{Confirm, FieldKind, FieldSpec, Fields, TxSpec, common_fields, flag_bits, val};
+use super::{
+    Confirm, FieldKind, FieldSpec, Fields, TxSpec, common_fields, flag_bits, parse_drops, val,
+};
 use crate::signing::{amm_currency, parse_amm_asset, parse_offer_amount, sign_blob};
 
 const FAMILY: &str = "Channel / AMM";
@@ -31,8 +33,6 @@ const ID_LEN: usize = 64;
 const MAX_AUTH_ACCOUNTS: usize = 4;
 /// rippled `AMM_MAX_TRADING_FEE` (1/100,000; 1000 = 1 %).
 const MAX_TRADING_FEE: u32 = 1000;
-/// Total XRP supply in drops (1e17): upper bound for any drops amount.
-const MAX_DROPS: u64 = 100_000_000_000_000_000;
 
 const CLAIM_FLAGS: &[(&str, u32)] = &[("renew", 0x0001_0000), ("close", 0x0002_0000)];
 const RENEW: u32 = 0x0001_0000;
@@ -76,18 +76,16 @@ fn no_check(_: &Fields) -> Result<(), String> {
 
 // ------------------------------------------------------------- field grammars
 
-fn parse_drops(v: &str) -> Result<u64, String> {
-    if v.is_empty() || !v.bytes().all(|b| b.is_ascii_digit()) {
-        return Err("expected XRP drops (a positive integer)".into());
-    }
-    match v.parse::<u64>() {
-        Ok(n) if (1..=MAX_DROPS).contains(&n) => Ok(n),
-        _ => Err(format!("drops must be 1..={MAX_DROPS}")),
+/// Positive drops (shared strict grammar).
+fn positive_drops(v: &str) -> Result<u64, String> {
+    match parse_drops(v)? {
+        0 => Err("XRP drops must be greater than zero".into()),
+        n => Ok(n),
     }
 }
 
 fn drops_ok(v: &str) -> Result<(), String> {
-    parse_drops(v).map(|_| ())
+    positive_drops(v).map(|_| ())
 }
 
 /// Hex string of even length, `min..=max` characters.
@@ -444,7 +442,7 @@ fn channel_claim_check(f: &Fields) -> Result<(), String> {
     }
     if let (Some(b), Some(a)) = (val(f, "Balance"), val(f, "Amount")) {
         // Both passed `drops_ok`, so the parses cannot fail.
-        if parse_drops(b)? > parse_drops(a)? {
+        if positive_drops(b)? > positive_drops(a)? {
             return Err("Balance: must not exceed Amount".into());
         }
     }
@@ -1601,6 +1599,7 @@ mod tests {
             tx_type: tx_type.into(),
             fields,
             skip_mainnet_prompt: false,
+            network: Network::Testnet,
         };
         let listener = TcpListener::bind(("127.0.0.1", 0)).await.expect("bind");
         let url = format!("http://{}", listener.local_addr().expect("addr"));

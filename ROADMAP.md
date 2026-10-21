@@ -4,7 +4,7 @@
 
 **Planning view**. Requirements → [`requirements.md`](docs/requirements.md) · System behavior → [`architecture.md`](docs/architecture.md) · UI/UX → [`DESIGN.md`](DESIGN.md).
 
-**Current version:** `Cargo.toml` → 0.7.0（0.6.1 は 2026-10-11 公開: GitHub Release + crates.io）
+**Current version:** `Cargo.toml` → 0.8.0（0.7.0 は 2026-10-16 公開）
 **Last updated:** 2026-10-20
 
 **Priority:** P0 = リリースブロッカー · P1 = 次マイルストーンの主目標 · P2 = 計画済み · P3 = 余力・需要次第。各 horizon 内は上から着手。
@@ -120,6 +120,15 @@ XRPL エコシステム（開発者・ユーザー双方）で人気の CLI/TUI 
 | Batch | – | – | – | Unsupported | no typed model in xrpl-rust 1.3.0 |
 | DelegateSet | – | – | – | Unsupported | no typed model in xrpl-rust 1.3.0 |
 | LedgerStateFix | – | – | – | Unsupported | no typed model in xrpl-rust 1.3.0 |
+| LoanBrokerSet | – | – | – | Unsupported | no typed model in xrpl-rust 1.3.0 (XLS-66 lending) |
+| LoanBrokerDelete | – | – | – | Unsupported | no typed model in xrpl-rust 1.3.0 (XLS-66 lending) |
+| LoanBrokerCoverDeposit | – | – | – | Unsupported | no typed model in xrpl-rust 1.3.0 (XLS-66 lending) |
+| LoanBrokerCoverWithdraw | – | – | – | Unsupported | no typed model in xrpl-rust 1.3.0 (XLS-66 lending) |
+| LoanBrokerCoverClawback | – | – | – | Unsupported | no typed model in xrpl-rust 1.3.0 (XLS-66 lending) |
+| LoanSet | – | – | – | Unsupported | no typed model in xrpl-rust 1.3.0 (XLS-66 lending) |
+| LoanDelete | – | – | – | Unsupported | no typed model in xrpl-rust 1.3.0 (XLS-66 lending) |
+| LoanManage | – | – | – | Unsupported | no typed model in xrpl-rust 1.3.0 (XLS-66 lending) |
+| LoanPay | – | – | – | Unsupported | no typed model in xrpl-rust 1.3.0 (XLS-66 lending) |
 | XChainAddClaimAttestation | – | – | – | Unsupported | witness-server signed attestation; cannot be authored in a form |
 | XChainAddAccountCreateAttestation | – | – | – | Unsupported | witness-server signed attestation; cannot be authored in a form |
 | ConfidentialMPTConvert | – | – | – | Unsupported | needs zero-knowledge proofs; no typed model in xrpl-rust |
@@ -129,7 +138,7 @@ XRPL エコシステム（開発者・ユーザー双方）で人気の CLI/TUI 
 | ConfidentialMPTClawback | – | – | – | Unsupported | needs zero-knowledge proofs; no typed model in xrpl-rust |
 <!-- xrpl-coverage:end -->
 
-書き込み可能 **50 / 68**（TUI または CLI で write 経路あり。残りの Planned（Vault 系）と Unsupported は表の Note 参照。新 family の追加 — 1 family = `txspec/` に 1 ファイル + `FAMILIES` に 1 行、手順は `docs/architecture.md` §2.1）。
+書き込み可能 **50 / 77**（TUI または CLI で write 経路あり。残りの Planned（Vault 系）と Unsupported は表の Note 参照。新 family の追加 — 1 family = `txspec/` に 1 ファイル + `FAMILIES` に 1 行、手順は `docs/architecture.md` §2.1）。
 
 ## Mid-term (中期) — **0.4.0: write 基盤整理 + TX 拡張**
 
@@ -149,6 +158,8 @@ XRPL エコシステム（開発者・ユーザー双方）で人気の CLI/TUI 
 ## Next (次期)
 
 中期 #1–#8 はすべて済み（0.4.0–0.4.2）。長期は F-01 AccountDelete（0.5.0）と Watch / Operate 分離（0.6.0）が済み。監査 run-2 の残り 5 件（https→http redirect・IPv6 埋め込み IPv4 / `fec0::/10` SSRF・bidi / 書式文字・tx 時刻 overflow・`install.sh` https 限定）は `[Unreleased]` で修正（TC-236–238）。残り（Action エラー型・row cache・パネル内キー設定化）は完了条件が未定義のため着手前に査定。
+
+レビュー修正バッチ（Shipped 参照）で **意図的に先送り**: `wallet.rs` / `wallet_composer.rs` の god-file 分割、`vendored-openssl` feature、install の attestation / 署名（現状は SHA-256 checksum のみ）、AccountSet GlobalFreeze / RequireAuth の確認ステップ。
 
 ## Short-term (短期) — 0.3.0 公開後の残務
 
@@ -184,6 +195,7 @@ XRPL エコシステム（開発者・ユーザー双方）で人気の CLI/TUI 
 | AccountDelete | 0.5.0 | **Done** (2026-10-11) | 長期 F-01。composer `x` + `-x account-delete`、TUI は `DELETE` 入力の確認必須（TC-232–233）。testnet で TUI / CLI validated |
 | Watch / Operate 分離 | 0.6.0 | **Done** (2026-10-11) | `--watch` 閲覧専用起動（TC-234–235） |
 | AMM no-pool 表示 + ponytail 監査 ×2 | 0.6.1 | **Done** (2026-10-11) | プールなしペアでステータスバーにエラーを出さずパネル表示に。依存 7 個削除（`config`・`signal-hook`・`tracing-error`・`strum`・`url`・`time`・build-dep `anyhow`）、挙動不変 |
+| レビュー修正バッチ（セキュリティ・正確性） | `[Unreleased]` | **Done** (2026-10-21) | Flare: `eth_chainId` 検証（`expected_chain_id` / `check_write_chain` / `verify_rpc_chain`、`--yes` 判定は報告された chain id、全 Flare サブコマンドの先頭で 1 回）、TUI C3 も Flare network で gate（`PollContext.flare_network`）、`check_network_pair` を `flare.rs` に移し TUI C2 / Smart Account / C3 に適用、`send_capped` で 10 FLR 手数料上限（`MAX_TX_FEE_WEI`）、FDC は round パラメータ確認後に支払い（tx hash + `--round` 再開ヒント）、EIP-55 強制、`tag_owner` は revert のみ未予約扱い、`sa-memo` / `sa-call` の cap 検査、oracle 未設定は `XrplOracleNotConfigured`。XRPL: write params に compose 時 `network`（`stale_write_refusal`）、`submit_signed_tx` 単発 + `tx(hash)` 照会、`terQUEUED` = queued 成功、ask 価格 1e6/q 修正、`network_id > 1024` で `NetworkID` 注入（**Xahau の simulate 受理は未検証**、problems P-007）、WS 30 s read timeout + network 切替で再接続、toml 検証の base58 / hex、activation = `account_info` 成功、dUNL VL / field-id、通貨表示規則、strict `parse_drops`、IPv6 NFT URI。設定: keybinding allowlist（`is_bindable`）、実際に読んだファイルの権限検査、`~` 展開、資格情報優先順位（CLI > env > file）、signing.rs の zeroize、release `overflow-checks = true`、RUSTSEC-2026-0235 ignore 撤去（rkyv は Cargo.lock に無い）、`install.sh` は binary install で Rust を既定導入しない（`--install-rust`）。UI: 表示中タブのみキー / paste、Overview にウォレット無し、TrustSet 空開始、NoFreeze は `NOFREEZE` 入力、Flare snapshot は NetworkChange で消去・300 s 超は拒否、IOU 通貨欄 40 文字、splash は `server_info` エラーで終了、fetch 重複排除（TC-346–362） |
 
 ## Task tracking
 

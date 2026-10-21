@@ -14,6 +14,13 @@ use crate::action::Action;
 use super::types::TxSummary;
 use super::util::{json_u32, next_backoff_secs};
 
+/// No frame for this long = dead socket (ledgers close every ~4s): drop it and reconnect.
+const WS_READ_TIMEOUT: Duration = if cfg!(test) {
+    Duration::from_secs(1)
+} else {
+    Duration::from_secs(30)
+};
+
 /// Emit one poll trigger per ledger index within a WebSocket session.
 fn should_emit_ledger_trigger(last: Option<u32>, current: u32) -> bool {
     current > 0 && last != Some(current)
@@ -48,44 +55,50 @@ async fn drive_ws_reconnect_loop(
     poll_trigger_tx: UnboundedSender<()>,
     cancel: CancellationToken,
 ) {
-    let mut current_network = *network_watch.borrow();
-    let mut ws_url = ws_url;
     let mut backoff_secs: u64 = 0;
+    let mut watching = true;
+    let mut connected = *network_watch.borrow_and_update();
     loop {
         tokio::select! {
             _ = cancel.cancelled() => return,
-            network_res = network_watch.changed() => {
-                if network_res.is_err() {
-                    continue;
-                }
-                let new_network = *network_watch.borrow();
-                if new_network != current_network {
-                    current_network = new_network;
-                    if !custom_ws {
-                        ws_url = new_network.ws_url().to_string();
-                        // force reconnect by treating this as a live-session end
-                        backoff_secs = 0;
+            network_res = network_watch.changed(), if watching => {
+                match network_res {
+                    // Sender gone: nobody can switch networks any more (and `changed` would
+                    // return immediately forever).
+                    Err(_) => watching = false,
+                    Ok(()) if !custom_ws && *network_watch.borrow_and_update() != connected => {
+                        backoff_secs = 0; // reconnect to the new network at once
                     }
+                    Ok(()) => {}
                 }
                 continue;
             }
             _ = tokio::time::sleep(Duration::from_secs(backoff_secs)) => {}
         }
 
+        connected = *network_watch.borrow_and_update();
+        let url = if custom_ws {
+            ws_url.as_str()
+        } else {
+            connected.ws_url()
+        };
         let mut subscribed = false;
         match connect_and_subscribe(
-            &ws_url,
+            url,
             &watch_address,
             &action_tx,
             &poll_trigger_tx,
             &cancel,
             &mut subscribed,
+            (!custom_ws && watching).then_some((&mut network_watch, connected)),
         )
         .await
         {
             Ok(()) => return,
             Err(e) => {
-                if subscribed {
+                if !custom_ws && *network_watch.borrow() != connected {
+                    backoff_secs = 0; // the session ended because the network switched
+                } else if subscribed {
                     // Live session ended — restart backoff from the floor.
                     backoff_secs = next_backoff_secs(0);
                 } else {
@@ -101,6 +114,8 @@ async fn drive_ws_reconnect_loop(
     }
 }
 
+/// `follow`: the network watch + the network this session connected for (`None` for a custom WS
+/// URL, which never follows network switches); a switch ends the session so the loop reconnects.
 async fn connect_and_subscribe(
     ws_url: &str,
     watch_address: &Option<String>,
@@ -108,6 +123,10 @@ async fn connect_and_subscribe(
     poll_trigger_tx: &UnboundedSender<()>,
     cancel: &CancellationToken,
     subscribed: &mut bool,
+    mut follow: Option<(
+        &mut tokio::sync::watch::Receiver<crate::network::Network>,
+        crate::network::Network,
+    )>,
 ) -> color_eyre::Result<()> {
     let parsed_url = ws_url
         .parse()
@@ -136,9 +155,30 @@ async fn connect_and_subscribe(
     loop {
         tokio::select! {
             _ = cancel.cancelled() => return Ok(()),
+            changed = async {
+                match follow.as_mut() {
+                    Some((watch, _)) => watch.changed().await.is_ok(),
+                    None => std::future::pending().await,
+                }
+            } => {
+                let Some((watch, connected)) = follow.as_mut() else { continue };
+                if !changed {
+                    // Sender gone: nobody can switch networks any more; stop watching.
+                    follow = None;
+                } else if *watch.borrow_and_update() != *connected {
+                    return Err(color_eyre::eyre::eyre!("network changed"));
+                }
+            }
             // Raw frames: `xrpl_receive` re-wraps stream messages as `XRPLResponse`, which
             // drops the top-level `type` (ledgerClosed was never seen, TC-227).
-            msg = ws.next() => {
+            // Ledgers close every few seconds: silence means a dead socket, so reconnect.
+            msg = tokio::time::timeout(WS_READ_TIMEOUT, ws.next()) => {
+                let Ok(msg) = msg else {
+                    return Err(color_eyre::eyre::eyre!(
+                        "websocket read timeout ({}s)",
+                        WS_READ_TIMEOUT.as_secs_f32()
+                    ));
+                };
                 match msg {
                     Some(Ok(text)) => {
                         let value: Value = serde_json::from_str(&text)?;
@@ -300,6 +340,59 @@ mod tests {
             assert_eq!(sub["accounts"], json!([WATCH]));
             assert_eq!(sub["streams"], json!(["ledger"]));
         }
+        cancel.cancel();
+        timeout(Duration::from_secs(5), task)
+            .await
+            .expect("task stops on cancel")
+            .expect("join");
+    }
+
+    /// A socket that goes silent (no frames, no close) is abandoned after the read timeout and
+    /// the loop reconnects — the old code waited on it forever.
+    #[tokio::test]
+    async fn ws_silent_socket_times_out_and_reconnects() {
+        use crate::action::Action;
+        use futures::{SinkExt, StreamExt};
+        use serde_json::json;
+        use std::time::Duration;
+        use tokio::{net::TcpListener, sync::mpsc, time::timeout};
+        use tokio_tungstenite::{accept_async, tungstenite::Message};
+
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.expect("bind");
+        let url = format!("ws://{}", listener.local_addr().expect("addr"));
+        let server = tokio::spawn(async move {
+            // Session 0: subscribe received, then silence (socket kept open).
+            let (tcp, _) = listener.accept().await.expect("accept");
+            let mut silent = accept_async(tcp).await.expect("handshake");
+            let _ = silent.next().await;
+            let (tcp, _) = listener.accept().await.expect("reconnect");
+            let mut ws = accept_async(tcp).await.expect("handshake");
+            let _ = ws.next().await;
+            ws.send(Message::text(
+                json!({"type": "ledgerClosed", "ledger_index": 7}).to_string(),
+            ))
+            .await
+            .expect("send");
+            (silent, ws)
+        });
+        let (_net_tx, net_rx) = tokio::sync::watch::channel(crate::network::Network::Testnet);
+        let (action_tx, mut actions) = mpsc::unbounded_channel();
+        let (trigger_tx, _triggers) = mpsc::unbounded_channel();
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let task = super::start_ws_task(
+            url,
+            true,
+            net_rx,
+            None,
+            action_tx,
+            trigger_tx,
+            cancel.clone(),
+        );
+        match timeout(Duration::from_secs(15), actions.recv()).await {
+            Ok(Some(Action::XrplLedgerClose { ledger_index, .. })) => assert_eq!(ledger_index, 7),
+            other => panic!("expected reconnect + ledger close, got {other:?}"),
+        }
+        let _sockets = server.await.expect("server");
         cancel.cancel();
         timeout(Duration::from_secs(5), task)
             .await

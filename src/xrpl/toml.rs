@@ -83,6 +83,15 @@ pub async fn fetch_xrpl_toml_with_meta(
     }
 }
 
+/// Raw key bytes of a validator public key in either form: the base58 node format
+/// (`nHB…`, as published in xrp-ledger.toml) or hex.
+fn key_bytes(key: &str) -> Option<Vec<u8>> {
+    let key = key.trim();
+    xrpl::core::addresscodec::decode_node_public_key(key)
+        .ok()
+        .or_else(|| hex::decode(key).ok())
+}
+
 /// Parse xrp-ledger.toml text and check whether `expected_pubkey`
 /// appears under `[[VALIDATORS]]`.
 pub fn parse_xrpl_toml(
@@ -104,10 +113,14 @@ pub fn parse_xrpl_toml(
 
     toml_data.validator_count = validators.len();
 
+    let expected = key_bytes(expected_pubkey);
     for v in validators {
         if let Some(table) = v.as_table()
             && let Some(key) = table.get("public_key").and_then(|k| k.as_str())
-            && key.eq_ignore_ascii_case(expected_pubkey)
+            && (key.eq_ignore_ascii_case(expected_pubkey)
+                || expected
+                    .as_ref()
+                    .is_some_and(|e| key_bytes(key).as_ref() == Some(e)))
         {
             toml_data.validator_found = true;
             toml_data.attestation = table
@@ -258,5 +271,34 @@ attestation = "other-sig"
         assert!(!data.validator_found);
         assert_eq!(data.validator_count, 0);
         assert!(data.attestation.is_none());
+    }
+}
+
+#[cfg(test)]
+mod node_key_tests {
+    use super::*;
+
+    /// xrp-ledger.toml lists validators in base58 node format (`nH…`); the expected key (hex from
+    /// a manifest) must match it, either way round. Old code only compared the strings.
+    #[test]
+    fn toml_base58_node_key_matches_hex_expected_key() {
+        const NODE_KEY: &str = "nHBidG3pZK11zQD6kpNDoAhDxH6WLGui6ZxSbUx7LSqLHsgzMPec";
+        let bytes =
+            xrpl::core::addresscodec::decode_node_public_key(NODE_KEY).expect("valid nH key");
+        let hex_key = hex::encode_upper(&bytes);
+        let toml = format!("[[VALIDATORS]]\npublic_key = \"{NODE_KEY}\"\nattestation = \"sig\"\n");
+        let found = |text: &str, key: &str| {
+            parse_xrpl_toml(text, key, "example.com")
+                .unwrap()
+                .validator_found
+        };
+        assert!(found(&toml, &hex_key));
+        assert!(found(&toml, &hex_key.to_lowercase()));
+        assert!(found(&toml, NODE_KEY));
+        let hex_toml = toml.replace(NODE_KEY, &hex_key);
+        assert!(found(&hex_toml, NODE_KEY));
+        let mut other = bytes.clone();
+        other[5] ^= 1;
+        assert!(!found(&toml, &hex::encode_upper(other)));
     }
 }

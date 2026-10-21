@@ -29,7 +29,7 @@ offer_limit = 5
 poll_interval_ms = 5000
 
 [xrpl.signing]
-# Signing seed for write operations (Phase 3 / future use).
+# Signing seed for write operations.
 # WARNING: plain text on disk. Prefer the XRPL_SEED environment variable.
 # seed = "sXXX..."
 

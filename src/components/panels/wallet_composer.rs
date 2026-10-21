@@ -21,6 +21,16 @@ use crate::{
     },
 };
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use std::time::{Duration, Instant};
+
+/// Flare reads (Core Vault, Smart Account operator/fees) refresh only while Overview is the
+/// active tab; older than this, submitting from them is refused until the user revisits it.
+const SNAPSHOT_MAX_AGE: Duration = Duration::from_secs(300);
+const SNAPSHOT_STALE: &str = "Flare data is stale (>5 min) — open Overview to refresh, then retry";
+
+fn snapshot_stale(at: Option<Instant>) -> bool {
+    at.is_some_and(|t| t.elapsed() > SNAPSHOT_MAX_AGE)
+}
 
 impl WalletPanel {
     /// Shared `e` toggle for single-row composer phases (no row navigation).
@@ -155,6 +165,7 @@ impl WalletPanel {
         Action::SetRegularKeySubmit(SetRegularKeySubmitParams {
             regular_key,
             skip_mainnet_prompt: self.skip_mainnet_prompt,
+            network: self.network,
         })
     }
 
@@ -180,6 +191,7 @@ impl WalletPanel {
             taker_gets,
             taker_pays,
             skip_mainnet_prompt: self.skip_mainnet_prompt,
+            network: self.network,
         })
     }
 
@@ -207,6 +219,7 @@ impl WalletPanel {
         Some(Action::OfferCancelSubmit(OfferCancelSubmitParams {
             offer_sequence,
             skip_mainnet_prompt: self.skip_mainnet_prompt,
+            network: self.network,
         }))
     }
 
@@ -239,6 +252,7 @@ impl WalletPanel {
             finish_after: finish_after.trim().to_string(),
             cancel_after: cancel_after.trim().to_string(),
             skip_mainnet_prompt: self.skip_mainnet_prompt,
+            network: self.network,
         };
         if let Err(e) = crate::signing::validate_escrow_create_input(
             &params.destination,
@@ -274,6 +288,7 @@ impl WalletPanel {
     /// Queue the open AMM deposit / withdraw after the same validation the poll task runs.
     pub(super) fn queue_submit_amm(&mut self) -> Option<Action> {
         let skip_mainnet_prompt = self.skip_mainnet_prompt;
+        let network = self.network;
         let queued = match &self.composer {
             Some(ComposerPhase::AmmDeposit {
                 amount, amount2, ..
@@ -282,6 +297,7 @@ impl WalletPanel {
                     amount: amount.trim().to_string(),
                     amount2: amount2.trim().to_string(),
                     skip_mainnet_prompt,
+                    network,
                 })
             }),
             Some(ComposerPhase::AmmWithdraw {
@@ -295,6 +311,7 @@ impl WalletPanel {
                     asset2: asset2.trim().to_string(),
                     lp_amount: lp_amount.trim().to_string(),
                     skip_mainnet_prompt,
+                    network,
                 })
             }),
             _ => return None,
@@ -335,6 +352,7 @@ impl WalletPanel {
         Action::AccountDeleteSubmit(AccountDeleteSubmitParams {
             destination,
             skip_mainnet_prompt: self.skip_mainnet_prompt,
+            network: self.network,
         })
     }
 
@@ -376,6 +394,7 @@ impl WalletPanel {
             tx_type: spec.tx_type.to_string(),
             fields: Self::tx_fields(spec, values),
             skip_mainnet_prompt: self.skip_mainnet_prompt,
+            network: self.network,
         })
     }
 
@@ -437,35 +456,63 @@ impl WalletPanel {
             offer_sequence: row.offer_sequence?,
             cancel,
             skip_mainnet_prompt: self.skip_mainnet_prompt,
+            network: self.network,
         }))
     }
 
+    /// Starts empty (invalid until filled): any pre-filled issuer would be a trust line the
+    /// user never chose.
     pub(super) fn open_trust_set_composer(&mut self) {
         self.composer = Some(ComposerPhase::TrustSet {
             row: 0,
-            currency: "USD".to_string(),
-            issuer: "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh".to_string(),
-            limit: "1000".to_string(),
+            currency: String::new(),
+            issuer: String::new(),
+            limit: String::new(),
         });
         self.is_form_editing = false;
     }
 
-    pub(super) fn queue_submit_trust_set(&self) -> Action {
-        let (currency, issuer, limit) = match &self.composer {
-            Some(ComposerPhase::TrustSet {
-                currency,
-                issuer,
-                limit,
-                ..
-            }) => (currency.clone(), issuer.clone(), limit.clone()),
-            _ => (String::new(), String::new(), String::new()),
+    /// Same shape checks as the poll task, so a bad form flashes instead of round-tripping.
+    pub(super) fn queue_submit_trust_set(&mut self) -> Option<Action> {
+        let Some(ComposerPhase::TrustSet {
+            currency,
+            issuer,
+            limit,
+            ..
+        }) = &self.composer
+        else {
+            return None;
         };
-        Action::TrustSetSubmit(TrustSetSubmitParams {
-            currency: currency.to_uppercase(),
+        let (currency, issuer, limit) = (
+            currency.trim().to_uppercase(),
+            issuer.trim().to_string(),
+            limit.trim().to_string(),
+        );
+        let shape_ok = (currency.len() == 3 && currency.bytes().all(|b| b.is_ascii_alphanumeric()))
+            || (currency.len() == 40 && currency.bytes().all(|b| b.is_ascii_hexdigit()));
+        let checked = if !shape_ok || currency == "XRP" {
+            Err("currency: 3 letters/digits or 40 hex chars (not XRP)".to_string())
+        } else if let Err(e) = crate::signing::require_classic_address_shape("issuer", &issuer) {
+            Err(e.to_string())
+        } else if !limit
+            .parse::<f64>()
+            .is_ok_and(|v| v.is_finite() && v >= 0.0)
+        {
+            Err("limit: expected a number ≥ 0".to_string())
+        } else {
+            Ok(())
+        };
+        if let Err(e) = checked {
+            self.set_submit_flash(SubmitFlash::Error(format!("TrustSet · {e}")));
+            return None;
+        }
+        Some(Action::TrustSetSubmit(TrustSetSubmitParams {
+            currency,
             issuer,
             limit,
             skip_mainnet_prompt: self.skip_mainnet_prompt,
-        })
+            network: self.network,
+        }))
     }
 
     pub(super) fn open_fxrp_direct_mint_composer(&mut self) {
@@ -495,6 +542,9 @@ impl WalletPanel {
         let Some(info) = &self.fxrp_direct_mint else {
             return Action::FxrpDirectMintPaymentSubmitErr("Core Vault not loaded yet".into());
         };
+        if snapshot_stale(self.fxrp_direct_mint_at) {
+            return Action::FxrpDirectMintPaymentSubmitErr(SNAPSHOT_STALE.into());
+        }
         if info.minting_paused == Some(true) || info.emergency_pause_level.is_some_and(|l| l > 0) {
             return Action::FxrpDirectMintPaymentSubmitErr(
                 "FXRP minting is paused on Flare (mintingPaused / emergency pause); not sending XRP to the Core Vault".into(),
@@ -525,6 +575,7 @@ impl WalletPanel {
             amount_xrp,
             custom_memo: None,
             skip_mainnet_prompt: self.skip_mainnet_prompt,
+            network: self.network,
         })
     }
 
@@ -546,6 +597,7 @@ impl WalletPanel {
         Action::FxrpExecuteDirectMintSubmit(FxrpExecuteDirectMintParams {
             proof_json,
             skip_mainnet_prompt: self.skip_mainnet_prompt,
+            network: self.network,
         })
     }
 
@@ -581,6 +633,9 @@ impl WalletPanel {
         let Some(info) = &self.smart_account else {
             return err("Smart Account not loaded yet".into());
         };
+        if snapshot_stale(self.smart_account_at) {
+            return err(SNAPSHOT_STALE.into());
+        }
         match &self.seed_address {
             Some(Ok(signer)) if *signer == info.xrpl_owner => {}
             _ => {
@@ -639,13 +694,29 @@ impl WalletPanel {
             fee_drops,
             vault: None,
             skip_mainnet_prompt: self.skip_mainnet_prompt,
+            network: self.network,
         })
     }
 
     pub(super) fn queue_submit_account_set(&mut self) -> Option<Action> {
         let set = Self::label_for_flag(self.set_flag_ix);
         let clr = Self::label_for_flag(self.clear_flag_ix);
-        if (set == "DisableMaster" || clr == "DisableMaster")
+        // NoFreeze can never be cleared; DisableMaster only with a regular key. GlobalFreeze /
+        // RequireAuth are reversible, so they submit directly.
+        let danger = if set == "NoFreeze" {
+            Some((
+                "NOFREEZE",
+                "NoFreeze is permanent and can never be cleared — type NOFREEZE then Enter",
+            ))
+        } else if set == "DisableMaster" || clr == "DisableMaster" {
+            Some((
+                "DISABLE",
+                "DisableMaster is irreversible without regular key — type DISABLE then Enter",
+            ))
+        } else {
+            None
+        };
+        if let Some((phrase, hint)) = danger
             && !matches!(
                 &self.composer,
                 Some(ComposerPhase::DangerConfirm {
@@ -654,11 +725,7 @@ impl WalletPanel {
                 })
             )
         {
-            self.enter_danger_confirm(
-                "DISABLE",
-                "DisableMaster is irreversible without regular key — type DISABLE then Enter",
-                DangerResume::AccountSet,
-            );
+            self.enter_danger_confirm(phrase, hint, DangerResume::AccountSet);
             return None;
         }
         Some(self.queue_submit_account_set_confirmed())
@@ -674,6 +741,7 @@ impl WalletPanel {
             tick_size: self.tick_size.clone(),
             transfer_rate: self.transfer_rate.clone(),
             skip_mainnet_prompt: self.skip_mainnet_prompt,
+            network: self.network,
         })
     }
 
@@ -701,6 +769,7 @@ impl WalletPanel {
             destination_tag: None,
             send_max: Some(send_max.trim().to_string()).filter(|s| !s.is_empty()),
             skip_mainnet_prompt: self.skip_mainnet_prompt,
+            network: self.network,
         })
     }
 
@@ -896,7 +965,7 @@ impl WalletPanel {
 
         let popup_x = area.x + (area.width.saturating_sub(popup_w)) / 2;
         let popup_y = area.y + (area.height.saturating_sub(popup_h)) / 2;
-        let popup = Rect::new(popup_x, popup_y, popup_w, popup_h);
+        let popup = Rect::new(popup_x, popup_y, popup_w, popup_h).intersection(area);
 
         frame.render_widget(Clear, popup);
         let inner_title = match phase {

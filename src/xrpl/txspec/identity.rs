@@ -1280,6 +1280,7 @@ pub(super) mod tests {
                 .map(|(k, v)| (k.to_string(), v.to_string()))
                 .collect(),
             skip_mainnet_prompt: false,
+            network: Network::Testnet,
         };
 
         submit_generic_transaction(&rpc, &Network::Testnet, params(&[]), &tx, Some(&credential))

@@ -2,14 +2,17 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Mutex, OnceLock};
 
 use alloy::{
-    network::EthereumWallet,
+    contract::{CallBuilder, CallDecoder},
+    network::{Ethereum, EthereumWallet},
     primitives::{Address, Bytes, FixedBytes, U256, address},
-    providers::{Provider, ProviderBuilder},
+    providers::{PendingTransactionBuilder, Provider, ProviderBuilder},
     signers::local::PrivateKeySigner,
     sol,
 };
 use serde_json::Value;
 
+use crate::config::FlareNetwork;
+use crate::network::Network;
 use crate::xrpl::{
     FlareFeedPrice, FlareWalletSummary, FxrpDirectMintInfo, MintLimits, SmartAccountInfo,
     SmartAccountVault,
@@ -21,39 +24,26 @@ pub const DEFAULT_FLARE_FEEDS: &[&str] = &["FXRP/USD", "FLR/USD", "BTC/USD", "ET
 const FLARE_CONTRACT_REGISTRY: Address = address!("aD67FE66660Fb8dFE9d6b1b4240d8650e30F6019");
 const ASSET_MANAGER_FXRP_NAME: &str = "AssetManagerFXRP";
 const FTSO_V2_REGISTRY_NAME: &str = "FtsoV2";
-const MASTER_ACCOUNT_CONTROLLER_NAME: &str = "MasterAccountController";
+pub(crate) const MASTER_ACCOUNT_CONTROLLER_NAME: &str = "MasterAccountController";
 /// Cap on operator wallets kept from `getXrplProviderWallets()` (display only; `[0]` is used).
 const OPERATOR_WALLET_DISPLAY_MAX: usize = 16;
 
-#[derive(Default)]
-struct FlareRegistryAddresses {
-    ftso_v2: Option<Address>,
-    asset_manager_fxrp: Option<Address>,
-    master_account_controller: Option<Address>,
-}
-
-fn flare_registry_cache() -> &'static Mutex<HashMap<String, FlareRegistryAddresses>> {
-    static CACHE: OnceLock<Mutex<HashMap<String, FlareRegistryAddresses>>> = OnceLock::new();
+fn flare_registry_cache() -> &'static Mutex<HashMap<(String, String), Address>> {
+    static CACHE: OnceLock<Mutex<HashMap<(String, String), Address>>> = OnceLock::new();
     CACHE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+/// Registry lookup, cached per `(rpc_url, contract name)`.
 pub(crate) async fn resolve_registry_contract<P: Provider + Clone>(
     provider: P,
     rpc_url: &str,
     contract_name: &str,
 ) -> color_eyre::Result<Address> {
+    let key = (rpc_url.to_string(), contract_name.to_string());
     if let Ok(guard) = flare_registry_cache().lock()
-        && let Some(entry) = guard.get(rpc_url)
+        && let Some(addr) = guard.get(&key)
     {
-        let cached = match contract_name {
-            FTSO_V2_REGISTRY_NAME => entry.ftso_v2,
-            ASSET_MANAGER_FXRP_NAME => entry.asset_manager_fxrp,
-            MASTER_ACCOUNT_CONTROLLER_NAME => entry.master_account_controller,
-            _ => None,
-        };
-        if let Some(addr) = cached {
-            return Ok(addr);
-        }
+        return Ok(*addr);
     }
 
     let registry = FlareContractRegistry::new(FLARE_CONTRACT_REGISTRY, provider);
@@ -66,13 +56,7 @@ pub(crate) async fn resolve_registry_contract<P: Provider + Clone>(
     }
 
     if let Ok(mut guard) = flare_registry_cache().lock() {
-        let entry = guard.entry(rpc_url.to_string()).or_default();
-        match contract_name {
-            FTSO_V2_REGISTRY_NAME => entry.ftso_v2 = Some(addr),
-            ASSET_MANAGER_FXRP_NAME => entry.asset_manager_fxrp = Some(addr),
-            MASTER_ACCOUNT_CONTROLLER_NAME => entry.master_account_controller = Some(addr),
-            _ => {}
-        }
+        guard.insert(key, addr);
     }
 
     Ok(addr)
@@ -102,7 +86,6 @@ sol! {
     #[sol(rpc)]
     interface IMintingTagManager {
         function reservationFee() external view returns (uint256);
-        function reservedTagsForOwner(address owner) external view returns (uint256[] memory);
         function ownerOf(uint256 tagId) external view returns (address);
         function mintingRecipient(uint256 tagId) external view returns (address);
         function allowedExecutor(uint256 tagId) external view returns (address);
@@ -510,8 +493,8 @@ pub async fn fetch_fxrp_report(
     let lot_amg = u64::try_from(settings_word(&settings, SETTINGS_LOT_SIZE_AMG_WORD)?)
         .map_err(|_| too_big("lot size"))?;
     let page_size = settings_word(&settings, SETTINGS_MAX_REDEEMED_TICKETS_WORD)?;
-    let lot_size_uba =
-        u128::from(lot_amg) * u128::try_from(granularity).map_err(|_| too_big("granularity"))?;
+    let lot_size_uba = u128::from(lot_amg)
+        .saturating_mul(u128::try_from(granularity).map_err(|_| too_big("granularity"))?);
 
     let manager = IMintingTagManager::new(manager_addr, provider.clone());
     let fee = manager.reservationFee().call().await?;
@@ -520,21 +503,11 @@ pub async fn fetch_fxrp_report(
         Some(t) => {
             let id = U256::from(t);
             // A tag that is not reserved reverts on `ownerOf`.
-            Some(match manager.ownerOf(id).call().await {
-                // Only a contract revert means "not reserved"; transport errors must surface.
-                Err(e)
-                    if e.as_revert_data().is_some()
-                        || matches!(
-                            e,
-                            alloy::contract::Error::TransportError(
-                                alloy::transports::RpcError::ErrorResp(_)
-                            )
-                        ) =>
-                {
+            Some(match tag_owner(&manager, id).await? {
+                None => {
                     serde_json::json!({ "tag": t, "reserved": false })
                 }
-                Err(e) => return Err(e.into()),
-                Ok(owner) => {
+                Some(owner) => {
                     let (recipient, executor, pending) = tokio::try_join!(
                         async {
                             Ok::<_, color_eyre::Report>(manager.mintingRecipient(id).call().await?)
@@ -788,31 +761,165 @@ async fn fetch_vault_positions<P: Provider + Clone>(
     out
 }
 
-/// The Core Vault comes from one Flare RPC answer; sign a Payment to it only when it equals the
-/// operator-pinned `[flare.fassets] expected_core_vault` (verified out of band).
-pub fn check_core_vault(fetched: &str, expected: Option<&str>) -> Result<(), String> {
+/// A value read from one Flare RPC answer is signed against only when it equals the
+/// operator-pinned config value (verified out of band). `section` / `key` name the pin.
+fn check_pinned(
+    label: &str,
+    section: &str,
+    key: &str,
+    fetched: &str,
+    expected: Option<&str>,
+) -> Result<(), String> {
     match expected.map(str::trim).filter(|e| !e.is_empty()) {
         Some(e) if e == fetched.trim() => Ok(()),
         Some(e) => Err(format!(
-            "refusing to sign: Flare RPC Core Vault {fetched} differs from expected_core_vault {e}"
+            "refusing to sign: Flare RPC {label} {fetched} differs from {key} {e}"
         )),
         None => Err(format!(
-            "refusing to sign: verify Core Vault {fetched} out of band, then set [flare.fassets] expected_core_vault"
+            "refusing to sign: verify {label} {fetched} out of band, then set [flare.{section}] {key}"
         )),
     }
+}
+
+/// The Core Vault comes from one Flare RPC answer; sign a Payment to it only when it equals the
+/// operator-pinned `[flare.fassets] expected_core_vault` (verified out of band).
+pub fn check_core_vault(fetched: &str, expected: Option<&str>) -> Result<(), String> {
+    check_pinned(
+        "Core Vault",
+        "fassets",
+        "expected_core_vault",
+        fetched,
+        expected,
+    )
 }
 
 /// The operator comes from one Flare RPC answer; sign an instruction Payment to it only when it
 /// equals the operator-pinned `[flare.smart_accounts] expected_operator` (verified out of band).
 pub fn check_operator(fetched: &str, expected: Option<&str>) -> Result<(), String> {
-    match expected.map(str::trim).filter(|e| !e.is_empty()) {
-        Some(e) if e == fetched.trim() => Ok(()),
-        Some(e) => Err(format!(
-            "refusing to sign: Flare RPC operator {fetched} differs from expected_operator {e}"
+    check_pinned(
+        "operator",
+        "smart_accounts",
+        "expected_operator",
+        fetched,
+        expected,
+    )
+}
+
+/// XRPL Mainnet ↔ Flare, XRPL Testnet ↔ Coston2; anything else is refused before any RPC.
+pub fn check_network_pair(xrpl: &Network, flare: FlareNetwork) -> Result<(), String> {
+    match (xrpl, flare) {
+        (Network::Mainnet, FlareNetwork::Flare) | (Network::Testnet, FlareNetwork::Coston2) => {
+            Ok(())
+        }
+        (x, f) => Err(format!(
+            "XRPL {x:?} does not pair with [flare] network {f:?} (Mainnet ↔ flare, Testnet ↔ coston2)"
         )),
-        None => Err(format!(
-            "refusing to sign: verify operator {fetched} out of band, then set [flare.smart_accounts] expected_operator"
-        )),
+    }
+}
+
+/// EVM chain id that `eth_chainId` must report for each configured Flare network.
+#[must_use]
+pub const fn expected_chain_id(network: FlareNetwork) -> u64 {
+    match network {
+        FlareNetwork::Flare => 14,
+        FlareNetwork::Songbird => 19,
+        FlareNetwork::Coston2 => 114,
+    }
+}
+
+/// The RPC must report the chain id of the configured network (a mis-pointed or hostile RPC
+/// would otherwise make the `[flare] network` label, and every gate built on it, a lie).
+pub fn check_chain_id(configured: FlareNetwork, reported: u64) -> Result<(), String> {
+    let expected = expected_chain_id(configured);
+    if reported == expected {
+        return Ok(());
+    }
+    Err(format!(
+        "Flare RPC reports chain id {reported}, but [flare] network {configured:?} is chain id {expected}; refusing"
+    ))
+}
+
+/// Write gate: right chain, and on Flare mainnet (decided by the *reported* chain id, not the
+/// config label) only with `--yes`.
+pub fn check_write_chain(configured: FlareNetwork, reported: u64, yes: bool) -> Result<(), String> {
+    check_chain_id(configured, reported)?;
+    if reported == expected_chain_id(FlareNetwork::Flare) && !yes {
+        return Err("Flare mainnet write: re-run with --yes to allow it".into());
+    }
+    Ok(())
+}
+
+/// Read-only chain-id check for CLI paths whose Flare reads decide where XRPL funds go.
+pub async fn verify_rpc_chain(rpc_url: &str, configured: FlareNetwork) -> color_eyre::Result<()> {
+    let provider = ProviderBuilder::new().connect_http(rpc_url.parse()?);
+    check_chain_id(configured, provider.get_chain_id().await?)
+        .map_err(|e| color_eyre::eyre::eyre!(e))
+}
+
+/// What every Flare EVM write must prove before it signs anything: which network the config
+/// names and whether `--yes` was given.
+#[derive(Debug, Clone, Copy)]
+pub struct EvmGate {
+    pub network: FlareNetwork,
+    pub yes: bool,
+}
+
+impl EvmGate {
+    /// `eth_chainId` of `provider` against [`check_write_chain`].
+    pub async fn check<P: Provider>(self, provider: &P) -> color_eyre::Result<()> {
+        check_write_chain(self.network, provider.get_chain_id().await?, self.yes)
+            .map_err(|e| color_eyre::eyre::eyre!(e))
+    }
+}
+
+/// Most one Flare EVM write may pay for gas (`gas_limit × max_fee_per_gas`): 10 FLR. A routine
+/// write costs well under 1 FLR (≈ 2 M gas at the 25 gwei floor is 0.05 FLR), so only a hostile
+/// or broken fee / gas answer can reach this. The attestation fee (`value`) is capped separately.
+pub const MAX_TX_FEE_WEI: u128 = 10_000_000_000_000_000_000;
+
+pub fn check_tx_fee(gas_limit: u64, max_fee_per_gas: u128) -> Result<(), String> {
+    let cost = u128::from(gas_limit).saturating_mul(max_fee_per_gas);
+    if cost > MAX_TX_FEE_WEI {
+        return Err(format!(
+            "refusing to send: gas {gas_limit} × max fee {max_fee_per_gas} wei = {cost} wei exceeds the {MAX_TX_FEE_WEI} wei cap"
+        ));
+    }
+    Ok(())
+}
+
+/// Simulate (`eth_estimateGas` runs the call, so a revert fails here), cap the fee, then send
+/// with the exact gas / fee fields that were checked.
+pub(crate) async fn send_capped<P: Provider, D: CallDecoder>(
+    call: CallBuilder<P, D>,
+    say: impl Fn(&str),
+) -> color_eyre::Result<PendingTransactionBuilder<Ethereum>> {
+    let gas = call.estimate_gas().await?;
+    let fees = call.provider.estimate_eip1559_fees().await?;
+    check_tx_fee(gas, fees.max_fee_per_gas).map_err(|e| color_eyre::eyre::eyre!(e))?;
+    say(&format!("simulated ok, gas {gas}"));
+    Ok(call
+        .gas(gas)
+        .max_fee_per_gas(fees.max_fee_per_gas)
+        .max_priority_fee_per_gas(fees.max_priority_fee_per_gas)
+        .send()
+        .await?)
+}
+
+/// A contract `revert` (a node answers `execution reverted`), as opposed to a transport failure.
+fn is_revert(e: &alloy::contract::Error) -> bool {
+    e.as_revert_data().is_some() || e.to_string().to_lowercase().contains("revert")
+}
+
+/// Owner of `id`, or `None` when the tag is not reserved (`ownerOf` reverts). Any other error
+/// (transport, rate limit, malformed answer) is propagated, never read as "not reserved".
+pub(crate) async fn tag_owner<P: Provider>(
+    manager: &IMintingTagManager::IMintingTagManagerInstance<P>,
+    id: U256,
+) -> color_eyre::Result<Option<Address>> {
+    match manager.ownerOf(id).call().await {
+        Ok(owner) => Ok(Some(owner)),
+        Err(e) if is_revert(&e) => Ok(None),
+        Err(e) => Err(e.into()),
     }
 }
 
@@ -943,19 +1050,19 @@ pub fn parse_fdc_payment_proof_json(
 pub async fn execute_direct_minting(
     rpc_url: &str,
     private_key_hex: &str,
+    gate: EvmGate,
     proof_json: &str,
 ) -> color_eyre::Result<(String, DirectMintOutcome)> {
-    execute_direct_minting_with(rpc_url, private_key_hex, proof_json, None).await
+    execute_direct_minting_with(rpc_url, private_key_hex, gate, proof_json, None).await
 }
 
-/// Flare EVM private key (`0x` optional) → signer.
+/// Flare EVM private key (`0x` optional) → signer, without copying the key text.
 pub(crate) fn parse_evm_key(private_key_hex: &str) -> color_eyre::Result<PrivateKeySigner> {
     let key = private_key_hex.trim();
-    let key = if key.starts_with("0x") || key.starts_with("0X") {
-        key.to_string()
-    } else {
-        format!("0x{key}")
-    };
+    let key = key
+        .strip_prefix("0x")
+        .or_else(|| key.strip_prefix("0X"))
+        .unwrap_or(key);
     key.parse()
         .map_err(|e| color_eyre::eyre::eyre!("invalid Flare EVM private key: {e}"))
 }
@@ -965,21 +1072,24 @@ pub(crate) fn parse_evm_key(private_key_hex: &str) -> color_eyre::Result<Private
 pub async fn execute_direct_minting_with(
     rpc_url: &str,
     private_key_hex: &str,
+    gate: EvmGate,
     proof_json: &str,
     data: Option<Bytes>,
 ) -> color_eyre::Result<(String, DirectMintOutcome)> {
-    let proof = parse_fdc_payment_proof_json(proof_json)?;
     let wallet = EthereumWallet::from(parse_evm_key(private_key_hex)?);
     let provider = ProviderBuilder::new()
         .wallet(wallet)
         .connect_http(rpc_url.parse()?);
+    // The chain / `--yes` gate comes before anything else is read or signed.
+    gate.check(&provider).await?;
+    let proof = parse_fdc_payment_proof_json(proof_json)?;
 
     let asset_manager_addr = resolve_asset_manager_fxrp_address(provider.clone(), rpc_url).await?;
-    let am = IAssetManager::new(asset_manager_addr, provider);
+    let am = IAssetManager::new(asset_manager_addr, &provider);
 
     let pending = match data {
-        None => am.executeDirectMinting(proof).send().await,
-        Some(d) => am.executeDirectMintingWithData(proof, d).send().await,
+        None => send_capped(am.executeDirectMinting(proof), |_| {}).await,
+        Some(d) => send_capped(am.executeDirectMintingWithData(proof, d), |_| {}).await,
     }
     .map_err(|e| {
         let hint = if e.to_string().contains("0x18dce79f") {
@@ -1141,6 +1251,93 @@ pub fn check_direct_mint_amount(
     ))
 }
 
+/// `-x sa-memo` / `sa-call` / the TUI Direct Mint send XRP to the Core Vault: refuse while FXRP
+/// minting is paused and when the amount is over the minting cap (the XRP would sit in the Core
+/// Vault until it has room).
+pub fn check_direct_mint_open(info: &FxrpDirectMintInfo, amount_xrp: &str) -> Result<(), String> {
+    if info.minting_paused == Some(true) || info.emergency_pause_level.is_some_and(|l| l > 0) {
+        return Err("FXRP minting is paused on Flare; not sending XRP to the Core Vault".into());
+    }
+    let drops = crate::xrpl::xrp_to_drops(amount_xrp.trim()).map_err(|e| format!("amount: {e}"))?;
+    if let Some(limits) = &info.limits
+        && classify_mint(u128::from(drops), limits) == MintClass::CapExceeded
+    {
+        return Err(format!(
+            "{}; the XRP would sit in the Core Vault until the cap has room",
+            MintClass::CapExceeded
+        ));
+    }
+    Ok(())
+}
+
+/// Refuse when the live Flare views differ from the composer's snapshot (a fee bump in between
+/// would mint the whole Direct Mint Payment to the fee receiver) or minting is paused / capped.
+fn compare_direct_mint_terms(
+    info: &FxrpDirectMintInfo,
+    p: &crate::xrpl::FxrpDirectMintPaymentParams,
+) -> Result<(), String> {
+    if (info.min_fee_uba, info.fee_bips, info.executor_fee_uba)
+        != (p.min_fee_uba, p.fee_bips, p.executor_fee_uba)
+    {
+        return Err("Direct Mint fees changed on Flare since the form was filled; refresh (Overview) and retry".into());
+    }
+    if info.core_vault_xrpl.trim() != p.core_vault_xrpl.trim() {
+        return Err(
+            "Core Vault address changed on Flare since the form was filled; refresh and retry"
+                .into(),
+        );
+    }
+    check_direct_mint_open(info, &p.amount_xrp)
+}
+
+/// Re-read the Direct Mint views from the Flare RPC right before the TUI signs a payment.
+pub async fn verify_direct_mint_terms(
+    rpc_url: &str,
+    p: &crate::xrpl::FxrpDirectMintPaymentParams,
+) -> Result<(), String> {
+    let info = fetch_fxrp_direct_mint_info(rpc_url)
+        .await
+        .map_err(|e| format!("Flare re-check before signing failed: {e}"))?;
+    compare_direct_mint_terms(&info, p)
+}
+
+/// Operator / `getInstructionFee` drift check. Vault instructions (`0x11`+) use other instruction
+/// ids and are not re-read here (the operator pin still applies).
+fn compare_smart_account_terms(
+    info: &SmartAccountInfo,
+    p: &crate::xrpl::SmartAccountInstructionParams,
+) -> Result<(), String> {
+    if info.operator_wallets.first().map(|s| s.trim()) != Some(p.operator_xrpl.trim()) {
+        return Err(
+            "Smart Account operator changed on Flare since the form was filled; refresh and retry"
+                .into(),
+        );
+    }
+    if p.vault.is_none() {
+        let live = if p.redeem {
+            info.redeem_fee_drops
+        } else {
+            info.transfer_fee_drops
+        };
+        if live != p.fee_drops {
+            return Err("Smart Account instruction fee changed on Flare since the form was filled; refresh and retry".into());
+        }
+    }
+    Ok(())
+}
+
+/// Re-read the Smart Account operator and fee from the Flare RPC right before signing.
+pub async fn verify_smart_account_terms(
+    rpc_url: &str,
+    xrpl_owner: &str,
+    p: &crate::xrpl::SmartAccountInstructionParams,
+) -> Result<(), String> {
+    let info = fetch_smart_account_info(rpc_url, xrpl_owner)
+        .await
+        .map_err(|e| format!("Flare re-check before signing failed: {e}"))?;
+    compare_smart_account_terms(&info, p)
+}
+
 /// Largest mint a tumbling window still lets through right now. The limiter views are stale
 /// between writes, so the window is advanced to `now` exactly like `MintingRateLimiter`; the
 /// on-chain test is `minted < limit`, so the usable headroom is one granule lower.
@@ -1153,10 +1350,10 @@ pub fn window_max_now(
     limit_uba: u128,
     size_secs: u64,
 ) -> u128 {
-    let mut used = u128::from(minted_amg) * granularity_uba;
+    let mut used = u128::from(minted_amg).saturating_mul(granularity_uba);
     if start > 0 && now >= start.saturating_add(size_secs) {
         let windows = u128::from((now - start) / size_secs);
-        used = used.saturating_sub(windows * limit_uba);
+        used = used.saturating_sub(windows.saturating_mul(limit_uba));
     }
     limit_uba
         .saturating_sub(used)
@@ -1321,11 +1518,14 @@ async fn fetch_mint_limits<P: Provider + Clone>(
         86_400,
     );
     Ok(MintLimits {
-        cap_uba: u128::from(cap_amg) * granule,
+        cap_uba: u128::from(cap_amg).saturating_mul(granule),
         supply_uba,
         // Reserved capacity has no getter, so `cap - supply` is an upper bound.
-        cap_headroom_uba: (cap_amg != 0)
-            .then(|| u128::from(cap_amg).saturating_sub(supply_uba / granule.max(1)) * granule),
+        cap_headroom_uba: (cap_amg != 0).then(|| {
+            u128::from(cap_amg)
+                .saturating_sub(supply_uba / granule.max(1))
+                .saturating_mul(granule)
+        }),
         window_max_now_uba: hourly_max.min(daily_max),
         large_threshold_uba: chk(large_threshold)?,
         large_delay_secs: u64::try_from(chk(large_delay)?).unwrap_or(u64::MAX),
@@ -1387,6 +1587,98 @@ mod tests {
                 .contains("expected_core_vault")
         );
         assert!(check_core_vault("rVault", Some("")).is_err());
+    }
+
+    fn mint_info(min_fee: u128) -> FxrpDirectMintInfo {
+        FxrpDirectMintInfo {
+            core_vault_xrpl: "rVault".into(),
+            asset_manager: String::new(),
+            min_fee_uba: min_fee,
+            fee_bips: 10,
+            executor_fee_uba: 100,
+            minting_paused: Some(false),
+            emergency_pause_level: Some(0),
+            limits: None,
+        }
+    }
+
+    fn mint_params(min_fee: u128) -> crate::xrpl::FxrpDirectMintPaymentParams {
+        crate::xrpl::FxrpDirectMintPaymentParams {
+            core_vault_xrpl: "rVault".into(),
+            min_fee_uba: min_fee,
+            fee_bips: 10,
+            executor_fee_uba: 100,
+            flare_recipient: String::new(),
+            amount_xrp: "5".into(),
+            custom_memo: None,
+            skip_mainnet_prompt: false,
+            network: crate::network::Network::Testnet,
+        }
+    }
+
+    /// A fee bump / vault change / pause between compose and sign is refused (the composer's
+    /// snapshot alone would have let the payment through and minted it all to the fee receiver).
+    #[test]
+    fn direct_mint_terms_drift_is_refused() {
+        assert!(compare_direct_mint_terms(&mint_info(1), &mint_params(1)).is_ok());
+        let e = compare_direct_mint_terms(&mint_info(9_000_000), &mint_params(1)).unwrap_err();
+        assert!(e.contains("fees changed"), "{e}");
+        let mut moved = mint_info(1);
+        moved.core_vault_xrpl = "rOther".into();
+        assert!(
+            compare_direct_mint_terms(&moved, &mint_params(1))
+                .unwrap_err()
+                .contains("Core Vault")
+        );
+        let mut paused = mint_info(1);
+        paused.minting_paused = Some(true);
+        assert!(
+            compare_direct_mint_terms(&paused, &mint_params(1))
+                .unwrap_err()
+                .contains("paused")
+        );
+    }
+
+    #[test]
+    fn smart_account_terms_drift_is_refused() {
+        let info = SmartAccountInfo {
+            xrpl_owner: String::new(),
+            controller: String::new(),
+            personal_account: String::new(),
+            deployed: true,
+            nonce: 0,
+            operator_wallets: vec!["rOperator".into()],
+            transfer_fee_drops: 200_000,
+            redeem_fee_drops: 1_500_000,
+            fxrp_decimals: 6,
+            fxrp_balance_units: 0,
+            vaults: vec![],
+        };
+        let p = crate::xrpl::SmartAccountInstructionParams {
+            redeem: false,
+            value: 1,
+            recipient: String::new(),
+            operator_xrpl: "rOperator".into(),
+            fee_drops: 200_000,
+            vault: None,
+            skip_mainnet_prompt: false,
+            network: crate::network::Network::Testnet,
+        };
+        assert!(compare_smart_account_terms(&info, &p).is_ok());
+        let mut bumped = p.clone();
+        bumped.fee_drops = 100;
+        assert!(
+            compare_smart_account_terms(&info, &bumped)
+                .unwrap_err()
+                .contains("fee changed")
+        );
+        let mut other_op = p.clone();
+        other_op.operator_xrpl = "rEvil".into();
+        assert!(
+            compare_smart_account_terms(&info, &other_op)
+                .unwrap_err()
+                .contains("operator")
+        );
     }
 
     /// TC-240: the RPC-supplied Smart Account operator is paid only when it equals the pinned
@@ -1702,22 +1994,22 @@ mod tests {
         assert!(parse_fdc_payment_proof_json(&old_shape.to_string()).is_err());
     }
 
-    /// TC-124: resolved registry addresses are cached per RPC URL — a hit never touches the
-    /// network, and another URL or another contract name is a miss (provider is unreachable).
+    /// TC-124: resolved registry addresses are cached per `(RPC URL, contract name)` — a hit never
+    /// touches the network, and another URL or another contract name is a miss (provider is
+    /// unreachable). Names outside the three hot ones (e.g. `FdcHub`) cache too.
     #[tokio::test]
     async fn registry_cache_is_keyed_by_rpc_url_and_contract() {
         let provider = ProviderBuilder::new().connect_http("http://127.0.0.1:1".parse().unwrap());
         let (url_a, url_b) = ("test://registry-cache-a", "test://registry-cache-b");
         let addr = address!("00000000000000000000000000000000000000aa");
-        flare_registry_cache().lock().unwrap().insert(
-            url_a.to_string(),
-            FlareRegistryAddresses {
-                ftso_v2: Some(addr),
-                ..Default::default()
-            },
-        );
-        let hit = resolve_registry_contract(provider.clone(), url_a, FTSO_V2_REGISTRY_NAME).await;
-        assert_eq!(hit.expect("cache hit"), addr);
+        for name in [FTSO_V2_REGISTRY_NAME, "FdcHub"] {
+            flare_registry_cache()
+                .lock()
+                .unwrap()
+                .insert((url_a.to_string(), name.to_string()), addr);
+            let hit = resolve_registry_contract(provider.clone(), url_a, name).await;
+            assert_eq!(hit.expect("cache hit"), addr, "{name}");
+        }
         for (url, name) in [
             (url_a, ASSET_MANAGER_FXRP_NAME),
             (url_b, FTSO_V2_REGISTRY_NAME),
@@ -1729,6 +2021,64 @@ mod tests {
                 "{url} {name} must miss the cache"
             );
         }
+    }
+
+    /// TC-360: chain ids are 14 / 19 / 114; a write needs the reported id to equal the configured
+    /// network's, and Flare mainnet (by reported id) needs `--yes`.
+    #[test]
+    fn write_gate_checks_reported_chain_id() {
+        use FlareNetwork::{Coston2, Flare, Songbird};
+        assert_eq!(
+            [Flare, Songbird, Coston2].map(expected_chain_id),
+            [14, 19, 114]
+        );
+        // RPC says Flare mainnet, config says coston2: refused even with --yes.
+        let err = check_write_chain(Coston2, 14, true).unwrap_err();
+        assert!(err.contains("chain id 14") && err.contains("114"), "{err}");
+        assert!(check_write_chain(Flare, 114, true).is_err());
+        assert!(check_chain_id(Songbird, 14).is_err());
+        assert!(
+            check_write_chain(Flare, 14, false)
+                .unwrap_err()
+                .contains("--yes")
+        );
+        assert!(check_write_chain(Flare, 14, true).is_ok());
+        assert!(check_write_chain(Coston2, 114, false).is_ok());
+        assert!(check_write_chain(Songbird, 19, false).is_ok());
+    }
+
+    /// TC-360: `executeDirectMinting` asks `eth_chainId` first and stops on a mismatch.
+    #[tokio::test]
+    async fn execute_direct_minting_refuses_wrong_chain_before_anything_else() {
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .expect("bind");
+        let url = format!("http://{}", listener.local_addr().expect("addr"));
+        let respond = |req: &serde_json::Value| {
+            assert_eq!(req["method"], "eth_chainId");
+            serde_json::json!({"jsonrpc": "2.0", "id": req["id"].clone(), "result": "0xe"})
+        };
+        let server = tokio::spawn(crate::test_support::rpc_mock::serve_raw(
+            listener, 1, respond,
+        ));
+        let gate = EvmGate {
+            network: FlareNetwork::Coston2,
+            yes: true,
+        };
+        let err = execute_direct_minting(&url, &"11".repeat(32), gate, REAL_DA_PROOF)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("chain id 14"), "{err}");
+        server.await.expect("join").expect("exactly one request");
+    }
+
+    /// TC-361: the gas cost cap is `gas × max fee`, saturating.
+    #[test]
+    fn tx_fee_cap() {
+        assert!(check_tx_fee(2_000_000, 100_000_000_000).is_ok());
+        assert!(check_tx_fee(10_000_000, MAX_TX_FEE_WEI / 10_000_000).is_ok());
+        assert!(check_tx_fee(10_000_001, MAX_TX_FEE_WEI / 10_000_000).is_err());
+        assert!(check_tx_fee(u64::MAX, u128::MAX).is_err());
     }
 
     #[tokio::test]

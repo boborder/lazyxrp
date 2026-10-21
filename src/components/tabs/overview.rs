@@ -24,6 +24,7 @@ pub struct OverviewTab {
     flare_wallet: FlareWalletPanel,
     focus_index: usize,
     flare_display: FlareDisplay,
+    action_tx: Option<tokio::sync::mpsc::UnboundedSender<Action>>,
 }
 
 impl OverviewTab {
@@ -37,6 +38,7 @@ impl OverviewTab {
             flare_wallet: FlareWalletPanel::default(),
             focus_index: 0,
             flare_display,
+            action_tx: None,
         }
     }
 
@@ -64,6 +66,7 @@ impl Component for OverviewTab {
         &mut self,
         action_tx: tokio::sync::mpsc::UnboundedSender<Action>,
     ) -> color_eyre::Result<()> {
+        self.action_tx = Some(action_tx.clone());
         self.server.register_action_handler(action_tx.clone())?;
         self.combined.register_action_handler(action_tx.clone())?;
         self.flare_wallet.register_action_handler(action_tx)?;
@@ -83,13 +86,12 @@ impl Component for OverviewTab {
             _ => {}
         }
 
-        if let Some(a) = self.server.update(action)? {
-            return Ok(Some(a));
-        }
-        if let Some(a) = self.flare_wallet.update(action)? {
-            return Ok(Some(a));
-        }
-        self.combined.update(action)
+        let tx = self.action_tx.as_ref();
+        crate::components::update_children(
+            &mut [&mut self.server, &mut self.flare_wallet, &mut self.combined],
+            action,
+            tx,
+        )
     }
 
     fn draw(&mut self, frame: &mut Frame, area: Rect) -> color_eyre::Result<()> {

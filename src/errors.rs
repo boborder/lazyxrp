@@ -19,6 +19,7 @@ pub fn init() -> color_eyre::Result<()> {
         // Mirror Tui::exit: leave alt screen, show cursor, then leave raw mode.
         let _ = crossterm::execute!(
             std::io::stdout(),
+            crossterm::event::DisableBracketedPaste,
             crossterm::terminal::LeaveAlternateScreen,
             crossterm::cursor::Show
         );

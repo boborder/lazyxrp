@@ -21,18 +21,23 @@ pub struct AccountWalletTab {
     tx: TxHistoryPanel,
     focus_index: usize,
     has_wallet: bool,
+    action_tx: Option<tokio::sync::mpsc::UnboundedSender<Action>>,
 }
 
 impl AccountWalletTab {
-    pub fn new(skip_mainnet_prompt: bool) -> Self {
+    /// `wallet`: the signing wallet's address (or why it has none), derived once by the app;
+    /// `None` = no wallet configured (`--watch` or no key).
+    pub fn new(skip_mainnet_prompt: bool, wallet: Option<Result<String, String>>) -> Self {
         let mut account = AccountPanel::default();
         account.is_focused = true;
+        let has_wallet = wallet.is_some();
         Self {
-            wallet: WalletPanel::new(skip_mainnet_prompt),
+            wallet: WalletPanel::new(skip_mainnet_prompt).with_seed_address(wallet),
             account,
             tx: TxHistoryPanel::default(),
             focus_index: 0,
-            has_wallet: false,
+            has_wallet,
+            action_tx: None,
         }
     }
 
@@ -58,6 +63,7 @@ impl Component for AccountWalletTab {
         &mut self,
         action_tx: tokio::sync::mpsc::UnboundedSender<Action>,
     ) -> color_eyre::Result<()> {
+        self.action_tx = Some(action_tx.clone());
         self.wallet.register_action_handler(action_tx.clone())?;
         self.account.register_action_handler(action_tx.clone())?;
         self.tx.register_action_handler(action_tx)?;
@@ -65,8 +71,6 @@ impl Component for AccountWalletTab {
     }
 
     fn register_config_handler(&mut self, config: Arc<Config>) -> color_eyre::Result<()> {
-        self.has_wallet = config.xrpl.signing.secret_seed.is_some()
-            || config.xrpl.signing.secret_mnemonic.is_some();
         self.wallet.register_config_handler(Arc::clone(&config))?;
         self.account.register_config_handler(Arc::clone(&config))?;
         self.tx.register_config_handler(config)?;
@@ -92,15 +96,16 @@ impl Component for AccountWalletTab {
             _ => {}
         }
 
-        if let Some(a) = self.wallet.update(action)? {
-            return Ok(Some(a));
+        let tx = self.action_tx.as_ref();
+        if self.has_wallet {
+            crate::components::update_children(&mut [&mut self.wallet, &mut self.tx], action, tx)
+        } else {
+            crate::components::update_children(
+                &mut [&mut self.wallet, &mut self.account, &mut self.tx],
+                action,
+                tx,
+            )
         }
-        if !self.has_wallet
-            && let Some(a) = self.account.update(action)?
-        {
-            return Ok(Some(a));
-        }
-        self.tx.update(action)
     }
 
     fn draw(&mut self, frame: &mut Frame, area: Rect) -> color_eyre::Result<()> {
@@ -117,10 +122,17 @@ impl Component for AccountWalletTab {
         Ok(())
     }
 
+    /// Keys and paste go to the focused pane only (wallet composer / tx history filter).
     fn on_event(&mut self, event: Option<&Event>) -> color_eyre::Result<Option<Action>> {
         match event {
             Some(Event::Key(key)) if self.has_wallet && self.wallet.is_focused => {
                 self.wallet.on_key_event(*key)
+            }
+            Some(Event::Key(key)) => self.tx.on_key_event(*key),
+            Some(Event::Paste(text)) => {
+                self.wallet.paste(text);
+                self.tx.paste(text);
+                Ok(None)
             }
             _ => Ok(None),
         }
@@ -133,11 +145,18 @@ mod tests {
     use secrecy::SecretString;
 
     fn tab_with_signing(seed: Option<&str>, mnemonic: Option<&str>) -> AccountWalletTab {
-        let mut tab = AccountWalletTab::new(false);
-        let mut config = Config::default();
-        config.xrpl.signing.secret_seed = seed.map(|s| SecretString::from(s.to_string()));
-        config.xrpl.signing.secret_mnemonic = mnemonic.map(|m| SecretString::from(m.to_string()));
-        tab.register_config_handler(Arc::new(config)).unwrap();
+        let secrets = crate::config::Secrets {
+            seed: seed.map(|s| SecretString::from(s.to_string())),
+            mnemonic: mnemonic.map(|m| SecretString::from(m.to_string())),
+            flare_evm_key: None,
+        };
+        let wallet = secrets
+            .credential()
+            .unwrap()
+            .map(|c| c.address().map_err(|e| e.to_string()));
+        let mut tab = AccountWalletTab::new(false, wallet);
+        tab.register_config_handler(Arc::new(Config::default()))
+            .unwrap();
         tab
     }
 
@@ -173,5 +192,35 @@ mod tests {
                 "{desc}"
             );
         }
+    }
+
+    fn key_event(c: char) -> Event {
+        Event::Key(crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Char(c),
+            crossterm::event::KeyModifiers::empty(),
+        ))
+    }
+
+    /// With a wallet configured, keys reach the focused pane: the wallet first, then (after
+    /// FocusNext) Tx History — `f` starts the filter and `m` pages.
+    #[test]
+    fn keys_reach_focused_tx_history_pane() {
+        let mut tab = tab_with_signing(Some("sEdSkooMk31MeTjbHVE7vLvgCpEMAdB"), None);
+        let marker = serde_json::json!({ "ledger": 1, "seq": 2 });
+        tab.update(&Action::XrplTxHistory(vec![], Some(marker.clone())))
+            .unwrap();
+
+        // Wallet focused: `m` is not a Tx History key.
+        assert_eq!(tab.on_event(Some(&key_event('m'))).unwrap(), None);
+
+        tab.update(&Action::FocusNext).unwrap();
+        assert_eq!(
+            tab.on_event(Some(&key_event('m'))).unwrap(),
+            Some(Action::RefreshTxHistoryMore(Some(marker)))
+        );
+        assert_eq!(
+            tab.on_event(Some(&key_event('f'))).unwrap(),
+            Some(Action::SetKeymapSuppression(true))
+        );
     }
 }

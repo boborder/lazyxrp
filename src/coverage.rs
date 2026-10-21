@@ -95,6 +95,42 @@ const UNSUPPORTED: &[(&str, &str)] = &[
     ("DelegateSet", "no typed model in xrpl-rust 1.3.0"),
     ("LedgerStateFix", "no typed model in xrpl-rust 1.3.0"),
     (
+        "LoanBrokerSet",
+        "no typed model in xrpl-rust 1.3.0 (XLS-66 lending)",
+    ),
+    (
+        "LoanBrokerDelete",
+        "no typed model in xrpl-rust 1.3.0 (XLS-66 lending)",
+    ),
+    (
+        "LoanBrokerCoverDeposit",
+        "no typed model in xrpl-rust 1.3.0 (XLS-66 lending)",
+    ),
+    (
+        "LoanBrokerCoverWithdraw",
+        "no typed model in xrpl-rust 1.3.0 (XLS-66 lending)",
+    ),
+    (
+        "LoanBrokerCoverClawback",
+        "no typed model in xrpl-rust 1.3.0 (XLS-66 lending)",
+    ),
+    (
+        "LoanSet",
+        "no typed model in xrpl-rust 1.3.0 (XLS-66 lending)",
+    ),
+    (
+        "LoanDelete",
+        "no typed model in xrpl-rust 1.3.0 (XLS-66 lending)",
+    ),
+    (
+        "LoanManage",
+        "no typed model in xrpl-rust 1.3.0 (XLS-66 lending)",
+    ),
+    (
+        "LoanPay",
+        "no typed model in xrpl-rust 1.3.0 (XLS-66 lending)",
+    ),
+    (
         "XChainAddClaimAttestation",
         "witness-server signed attestation; cannot be authored in a form",
     ),

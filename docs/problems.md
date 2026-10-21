@@ -21,6 +21,11 @@
 - 症状: `src/config.rs` は約 1200 行（defaults / file / env / keybindings / styles / Flare network+display+wallet / paths / test helpers）
 - 対応: 約 1500 行を超えたら `config/defaults.rs`, `config/keybindings.rs`, `config/styles.rs` に分割
 
+### P-007: Xahau `NetworkID` の simulate 受理は未検証
+
+- `network_id > 1024` のネットワーク（Xahau など）では write 時に `NetworkID` を tx へ注入する（simulate は `ensure_network` が保存した id、署名は `signing::with_network_id` のスレッドローカル scope）。
+- Xahau の `simulate` が `NetworkID` 付き tx を受理するかは **実機未検証**（単体テスト TC-352 は注入条件のみ）。Xahau への write は live 確認が済むまで未保証。
+
 ## 運用メモ
 
 - macOS の `ld: ... built for newer 'macOS' version ...` は、現状は警告扱い

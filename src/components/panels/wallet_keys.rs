@@ -82,7 +82,8 @@ impl WalletPanel {
                 let accept = if is_dest {
                     c.is_ascii_graphic()
                 } else if is_iou_text && row == 1 {
-                    c.is_ascii_alphabetic() && target_row.len() < 3
+                    // 3-char code or 40-hex; shape is validated by `validate_payment_input`.
+                    c.is_ascii_alphanumeric() && target_row.len() < 40
                 } else if is_iou_text && row == 2 {
                     c.is_ascii_graphic()
                 } else if !is_iou_text {
@@ -172,8 +173,8 @@ mod tests {
     }
 
     /// TC-130: payment_edit_keys filter table — destination is ascii_graphic
-    /// only, IOU currency caps at 3 alphabetic chars, amounts accept digits and
-    /// at most one '.' (row 3 in IOU mode).
+    /// only, IOU currency takes up to 40 alphanumerics (3-char code or 40-hex),
+    /// amounts accept digits and at most one '.' (row 3 in IOU mode).
     #[test]
     fn payment_edit_keys_filter_table() {
         // (field, is_iou, row, key, initial, expected_accept, expected_after)
@@ -185,9 +186,27 @@ mod tests {
             ("amt", false, 1, 'x', "", false, ""),
             ("amt", false, 1, '.', "1.", false, "1."),
             ("cur", true, 1, 'U', "", true, "U"),
-            ("cur", true, 1, '4', "", false, ""),
+            ("cur", true, 1, '4', "", true, "4"),
             ("cur", true, 1, 'd', "US", true, "USd"),
-            ("cur", true, 1, 'd', "USD", false, "USD"),
+            (
+                "cur",
+                true,
+                1,
+                'F',
+                "0123456789ABCDEF0123456789ABCDEF0123456",
+                true,
+                "0123456789ABCDEF0123456789ABCDEF0123456F",
+            ),
+            (
+                "cur",
+                true,
+                1,
+                'F',
+                "0123456789ABCDEF0123456789ABCDEF01234567",
+                false,
+                "0123456789ABCDEF0123456789ABCDEF01234567",
+            ),
+            ("cur", true, 1, '-', "", false, ""),
             ("iss", true, 2, 'r', "", true, "r"),
             ("iss", true, 2, ' ', "", false, ""),
             ("amt", true, 3, '.', "1.", false, "1."),

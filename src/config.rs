@@ -62,7 +62,8 @@ fn default_flare_evm_key_env() -> String {
 fn take_secret_env(name: &str, trim: fn(&str) -> &str) -> Option<secrecy::SecretString> {
     use secrecy::zeroize::Zeroize;
     let mut raw = env::var(name).ok()?;
-    // SAFETY: called only from `Config::new()` before any task that reads the env is spawned.
+    // SAFETY: called only from `Config::new()` before any task is spawned; the (idle) runtime
+    // worker threads already exist, but nothing reads the env concurrently.
     unsafe { env::remove_var(name) };
     let t = trim(&raw);
     let secret = (!t.is_empty()).then(|| secrecy::SecretString::from(t.to_string()));
@@ -165,17 +166,47 @@ pub struct Config {
     pub flare: FlareConfig,
     /// Flare executor key taken from `[flare.fassets] evm_key_env` by `Config::new()`; the env
     /// var is removed at startup so no later `remove_var` runs while async tasks read the env.
+    /// `run()` moves it out with [`Config::take_secrets`] before the config is shared.
     #[serde(skip)]
     pub flare_evm_key: Option<secrecy::SecretString>,
 }
 
+/// Every secret `Config::new()` collects, moved out of [`Config`] by [`Config::take_secrets`] so
+/// the shared `Arc<Config>` (panels, status bar, splash) never holds one. Only the code paths that
+/// sign (poll / submit / `flare_cmd`) receive it.
+#[derive(Default)]
+pub struct Secrets {
+    pub seed: Option<secrecy::SecretString>,
+    pub mnemonic: Option<secrecy::SecretString>,
+    pub flare_evm_key: Option<secrecy::SecretString>,
+}
+
+impl fmt::Debug for Secrets {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let set = |s: &Option<secrecy::SecretString>| s.as_ref().map(|_| "[REDACTED]");
+        f.debug_struct("Secrets")
+            .field("seed", &set(&self.seed))
+            .field("mnemonic", &set(&self.mnemonic))
+            .field("flare_evm_key", &set(&self.flare_evm_key))
+            .finish()
+    }
+}
+
+impl Secrets {
+    /// The XRPL signing credential (family seed **or** mnemonic); `Err` when both or invalid.
+    pub fn credential(&self) -> color_eyre::Result<Option<crate::signing::SigningCredential>> {
+        crate::signing::credential_from_secrets(self.seed.as_ref(), self.mnemonic.as_ref())
+    }
+}
+
 /// Raw signing config as read from `[xrpl.signing]` in config.toml.
-/// After `Config::new()`, plaintext `seed`/`mnemonic` are cleared; use `secret_seed` / `secret_mnemonic`.
+/// After `Config::new()`, plaintext `seed`/`mnemonic` are cleared into `secret_seed` /
+/// `secret_mnemonic`; `run()` then moves those out with [`Config::take_secrets`].
 #[derive(Clone, Default, Deserialize)]
 pub struct RawSigningConfig {
     /// Signing seed (family seed format, e.g. `sXXX...`).
     /// ⚠️  Plain text on disk — prefer the `XRPL_SEED` env var instead.
-    /// After `Config::new()` this is cleared to `None`; use [`Self::secret_seed`] instead.
+    /// After `Config::new()` this is cleared to `None`; the value lives in [`Self::secret_seed`].
     #[serde(default)]
     pub seed: Option<String>,
     /// Memory-masked seed (set by `Config::new()` from env/file/CLI).
@@ -268,7 +299,8 @@ pub struct LedgerConfig {
     /// Custom WebSocket endpoint. Overrides the network preset when set.
     #[serde(default)]
     pub ws_server: Option<String>,
-    /// Raw signing config. After `Config::new()`, read `secret_seed` / `secret_mnemonic`.
+    /// Raw signing config. After `Config::new()` the credentials sit in `secret_seed` /
+    /// `secret_mnemonic` until [`Config::take_secrets`] moves them out.
     #[serde(default)]
     pub signing: RawSigningConfig,
     /// Oracle identifiers for `get_aggregate_price`.
@@ -327,10 +359,19 @@ pub const XRPL_RPC_SERVER_ENV: &str = "XRPL_RPC_SERVER";
 /// WebSocket JSON-RPC endpoint override. Same merge rules as [`XRPL_RPC_SERVER_ENV`].
 pub const XRPL_WS_SERVER_ENV: &str = "XRPL_WS_SERVER";
 
+/// Expand a leading `~` / `~/` to the home directory (TOML/env values never pass through a shell).
+fn expand_tilde(path: PathBuf) -> PathBuf {
+    match (path.strip_prefix("~"), directories::BaseDirs::new()) {
+        (Ok(rest), Some(base)) => base.home_dir().join(rest),
+        _ => path,
+    }
+}
+
 fn env_data_folder() -> Option<PathBuf> {
     env::var(format!("{}_DATA", PROJECT_NAME.to_uppercase()))
         .ok()
         .map(PathBuf::from)
+        .map(expand_tilde)
         .and_then(validated_path)
 }
 
@@ -338,6 +379,7 @@ fn env_config_folder() -> Option<PathBuf> {
     env::var(format!("{}_CONFIG", PROJECT_NAME.to_uppercase()))
         .ok()
         .map(PathBuf::from)
+        .map(expand_tilde)
         .and_then(validated_path)
 }
 
@@ -349,7 +391,20 @@ fn non_empty_path_or(path: &Path, fallback: impl FnOnce() -> PathBuf) -> PathBuf
     if path.as_os_str().is_empty() {
         fallback()
     } else {
-        path.to_path_buf()
+        expand_tilde(path.to_path_buf())
+    }
+}
+
+type Credentials = (Option<secrecy::SecretString>, Option<secrecy::SecretString>);
+
+/// Priority layering: if `high` sets either credential kind it replaces `low` entirely (so a
+/// lower-priority source can never add the other kind). Both kinds inside one layer are kept
+/// and rejected later by `credential_from_secrets`.
+fn layer_credentials(low: Credentials, high: Credentials) -> Credentials {
+    if high.0.is_some() || high.1.is_some() {
+        high
+    } else {
+        low
     }
 }
 
@@ -362,6 +417,39 @@ impl Config {
     /// Effective config directory after merging embedded defaults, env keys, and config file.
     pub fn resolved_config_dir(&self) -> PathBuf {
         non_empty_path_or(&self.paths.config_dir, config_dir)
+    }
+
+    /// Apply `--seed` / `--mnemonic` (highest priority: CLI > env > file). A non-empty value
+    /// replaces every lower-priority credential of both kinds; an empty value just clears that
+    /// kind. Both kinds on the CLI together stay set so `credential_from_secrets` rejects them.
+    pub fn apply_cli_credentials(&mut self, seed: Option<&str>, mnemonic: Option<&str>) {
+        let secret = |v: Option<&str>| {
+            v.map(str::trim)
+                .filter(|t| !t.is_empty())
+                .map(|t| secrecy::SecretString::from(t.to_string()))
+        };
+        let signing = &mut self.xrpl.signing;
+        (signing.secret_seed, signing.secret_mnemonic) = layer_credentials(
+            (signing.secret_seed.take(), signing.secret_mnemonic.take()),
+            (secret(seed), secret(mnemonic)),
+        );
+        if seed.is_some_and(|s| s.trim().is_empty()) {
+            signing.secret_seed = None;
+        }
+        if mnemonic.is_some_and(|s| s.trim().is_empty()) {
+            signing.secret_mnemonic = None;
+        }
+    }
+
+    /// Move every secret out of the config (leaving `None`) so what gets shared as `Arc<Config>`
+    /// carries none. Call after `apply_cli_credentials`, before the config is shared.
+    pub fn take_secrets(&mut self) -> Secrets {
+        let signing = &mut self.xrpl.signing;
+        Secrets {
+            seed: signing.secret_seed.take(),
+            mnemonic: signing.secret_mnemonic.take(),
+            flare_evm_key: self.flare_evm_key.take(),
+        }
     }
 
     pub fn new() -> color_eyre::Result<Self> {
@@ -389,35 +477,40 @@ impl Config {
             }
         };
 
-        // Security (S-003): if a signing credential is present in config, warn about file permissions
-        // BEFORE we move it out of the plain-text fields.
-        let resolved_cfg_dir = config.resolved_config_dir();
+        // Security (S-003): warn about permissions of the file actually read, BEFORE the
+        // credential leaves the plain-text fields.
         if config.xrpl.signing.seed.is_some() || config.xrpl.signing.mnemonic.is_some() {
-            let path = resolved_cfg_dir.join("config.toml");
-            if path.exists() {
-                warn_if_config_world_readable(&path);
-            }
+            warn_if_config_world_readable(&config_file);
         }
 
-        // Security: promote any plain-text seed (from config file) into secret_seed
-        // and wipe the field so Arc<Config> never carries an unmasked credential.
-        // Must happen BEFORE the env-var merge so env (XRPL_SEED) can override file.
-        if let Some(plain) = config.xrpl.signing.seed.take() {
-            config.xrpl.signing.secret_seed = Some(secrecy::SecretString::from(plain));
-        }
-        if let Some(plain) = config.xrpl.signing.mnemonic.take() {
-            config.xrpl.signing.secret_mnemonic = Some(secrecy::SecretString::from(plain));
-        }
+        // Security: promote any plain-text credential (from config file) into the masked
+        // fields and wipe the plain ones so Arc<Config> never carries an unmasked credential.
+        let file_creds = (
+            config
+                .xrpl
+                .signing
+                .seed
+                .take()
+                .map(secrecy::SecretString::from),
+            config
+                .xrpl
+                .signing
+                .mnemonic
+                .take()
+                .map(secrecy::SecretString::from),
+        );
 
         // Env secrets win over the file. Taken once here, before the poll/UI tasks start; no
         // later `remove_var` runs while tasks may read the env. On Linux `remove_var` does not
         // rewrite the initial `/proc/self/environ` block (same-uid readers still see it).
-        if let Some(s) = take_secret_env(crate::signing::SEED_ENV, str::trim) {
-            config.xrpl.signing.secret_seed = Some(s);
-        }
-        if let Some(s) = take_secret_env(crate::signing::MNEMONIC_ENV, str::trim) {
-            config.xrpl.signing.secret_mnemonic = Some(s);
-        }
+        let env_creds = (
+            take_secret_env(crate::signing::SEED_ENV, str::trim),
+            take_secret_env(crate::signing::MNEMONIC_ENV, str::trim),
+        );
+        (
+            config.xrpl.signing.secret_seed,
+            config.xrpl.signing.secret_mnemonic,
+        ) = layer_credentials(file_creds, env_creds);
         config.flare_evm_key = take_secret_env(&config.flare.fassets.evm_key_env, str::trim);
 
         if let Ok(v) = env::var(XRPL_NETWORK_ENV)
@@ -515,6 +608,33 @@ fn project_directory() -> Option<ProjectDirs> {
     ProjectDirs::from("com", "kdheepak", env!("CARGO_PKG_NAME"))
 }
 
+/// Keys may only trigger payload-free navigation/refresh actions. Anything carrying data
+/// (incl. every `*Submit` write) must come from a UI flow with its own confirmation.
+fn is_bindable(action: &Action) -> bool {
+    matches!(
+        action,
+        Action::Quit
+            | Action::Suspend
+            | Action::ClearScreen
+            | Action::Render
+            | Action::Help
+            | Action::RefreshAccount
+            | Action::RefreshBook
+            | Action::RefreshNfts
+            | Action::RefreshLines
+            | Action::RefreshTxHistory
+            | Action::RefreshLedgerObjects
+            | Action::TabNext
+            | Action::TabPrev
+            | Action::FocusNext
+            | Action::FocusPrev
+            | Action::SelectNext
+            | Action::SelectPrev
+            | Action::NetworkSwitchCycle
+            | Action::TxDetailToggle
+    )
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct KeyBindings(pub HashMap<Vec<KeyEvent>, Action>);
 
@@ -533,6 +653,12 @@ impl<'de> Deserialize<'de> for KeyBindings {
             .unwrap_or_default();
         let mut keybindings = HashMap::new();
         for (key_str, cmd) in inner_map {
+            if !is_bindable(&cmd) {
+                return Err(D::Error::custom(format!(
+                    "keybinding \"{key_str}\": action {cmd:?} cannot be bound to a key \
+                     (only payload-free navigation/refresh actions are allowed)"
+                )));
+            }
             let seq = parse_key_sequence(&key_str).map_err(D::Error::custom)?;
             keybindings.insert(seq, cmd);
         }
@@ -1251,5 +1377,138 @@ network = "mainnet"
         );
         _test_env.set("LAZYXRP_CONFIG", "/tmp/lazyxrp-ok/cfg");
         assert_eq!(config_dir(), PathBuf::from("/tmp/lazyxrp-ok/cfg"));
+    }
+
+    /// Keybindings may only bind payload-free safe actions; write/payload variants are
+    /// rejected at load.
+    #[test]
+    fn keybinding_rejects_payload_and_submit_actions() {
+        let bad = r#"[keybindings.Splash]
+"<x>" = { AccountDeleteSubmit = { destination = "rEvil", skip_mainnet_prompt = true, network = "mainnet" } }
+"#;
+        let err = toml::from_str::<Config>(bad).expect_err("submit action must be rejected");
+        assert!(err.to_string().contains("cannot be bound"), "{err}");
+        let bad_unit = "[keybindings.Splash]\n\"<x>\" = \"NftBurnStart\"\n";
+        assert!(toml::from_str::<Config>(bad_unit).is_err());
+        let ok = "[keybindings.Splash]\n\"<x>\" = \"Quit\"\n";
+        let c: Config = toml::from_str(ok).unwrap();
+        assert_eq!(
+            c.keybindings.0.get(&parse_key_sequence("<x>").unwrap()),
+            Some(&Action::Quit)
+        );
+    }
+
+    /// A leading `~` in env / file directory settings resolves to HOME.
+    #[test]
+    fn tilde_paths_expand_to_home() {
+        let _env_lock = env_lock();
+        let _test_env = TestEnvGuard::new(&["HOME", "LAZYXRP_CONFIG", "LAZYXRP_DATA"]);
+        let home = std::env::temp_dir().join(format!("lazyxrp-tilde-{}", std::process::id()));
+        _test_env.set("HOME", home.to_str().unwrap());
+        _test_env.set("LAZYXRP_CONFIG", "~/cfg/lazyxrp");
+        assert_eq!(config_dir(), home.join("cfg/lazyxrp"));
+        let mut c = Config::default();
+        c.paths.data_dir = PathBuf::from("~/data/lazyxrp");
+        assert_eq!(c.resolved_data_dir(), home.join("data/lazyxrp"));
+        c.paths.config_dir = PathBuf::from("~");
+        assert_eq!(c.resolved_config_dir(), home);
+        c.paths.config_dir = PathBuf::from("~other/x");
+        assert_eq!(c.resolved_config_dir(), PathBuf::from("~other/x"));
+    }
+
+    /// Credential precedence: the highest-priority source wins; the other kind from lower
+    /// sources is dropped. Same-level seed+mnemonic stays set (rejected by the caller).
+    #[test]
+    fn credential_precedence_matrix() -> color_eyre::Result<()> {
+        use secrecy::ExposeSecret;
+        let _env_lock = env_lock();
+        let _test_env = TestEnvGuard::new(&[
+            "LAZYXRP_CONFIG",
+            "XDG_CONFIG_HOME",
+            crate::signing::SEED_ENV,
+            crate::signing::MNEMONIC_ENV,
+            "FLARE_EVM_KEY",
+        ]);
+        let toml = format!(
+            "{}\n[xrpl.signing]\nmnemonic = \"file words\"\n",
+            sample_xrpl_config_toml(5_000)
+        );
+        let (root, _guard) = write_config_dir("cred-prec", &toml)?;
+        _test_env.remove("XDG_CONFIG_HOME");
+        _test_env.set("LAZYXRP_CONFIG", root.to_str().unwrap());
+        let kinds = |c: &Config| {
+            (
+                c.xrpl
+                    .signing
+                    .secret_seed
+                    .as_ref()
+                    .map(|s| s.expose_secret().to_string()),
+                c.xrpl
+                    .signing
+                    .secret_mnemonic
+                    .as_ref()
+                    .map(|s| s.expose_secret().to_string()),
+            )
+        };
+        _test_env.remove(crate::signing::SEED_ENV);
+        _test_env.remove(crate::signing::MNEMONIC_ENV);
+        _test_env.remove("FLARE_EVM_KEY");
+        // file only
+        assert_eq!(kinds(&Config::new()?), (None, Some("file words".into())));
+        // env seed beats file mnemonic (file mnemonic dropped)
+        _test_env.set(crate::signing::SEED_ENV, "sEnv");
+        assert_eq!(kinds(&Config::new()?), (Some("sEnv".into()), None));
+        // env seed + env mnemonic: same level, both kept
+        _test_env.set(crate::signing::SEED_ENV, "sEnv");
+        _test_env.set(crate::signing::MNEMONIC_ENV, "env words");
+        assert_eq!(
+            kinds(&Config::new()?),
+            (Some("sEnv".into()), Some("env words".into()))
+        );
+        // CLI mnemonic beats env seed
+        _test_env.set(crate::signing::SEED_ENV, "sEnv");
+        _test_env.remove(crate::signing::MNEMONIC_ENV);
+        let mut c = Config::new()?;
+        c.apply_cli_credentials(None, Some(" cli words "));
+        assert_eq!(kinds(&c), (None, Some("cli words".into())));
+        // CLI seed beats env mnemonic; empty CLI value only clears its own kind
+        _test_env.set(crate::signing::MNEMONIC_ENV, "env words");
+        _test_env.remove(crate::signing::SEED_ENV);
+        let mut c = Config::new()?;
+        c.apply_cli_credentials(Some("sCli"), None);
+        assert_eq!(kinds(&c), (Some("sCli".into()), None));
+        _test_env.set(crate::signing::MNEMONIC_ENV, "env words");
+        let mut c = Config::new()?;
+        c.apply_cli_credentials(Some(""), None);
+        assert_eq!(kinds(&c), (None, Some("env words".into())));
+        Ok(())
+    }
+
+    /// `take_secrets` moves seed, mnemonic and Flare EVM key out of the config; neither the
+    /// emptied `Config` nor `Secrets` leaks a value through `Debug`.
+    #[test]
+    fn take_secrets_empties_config_and_debug_does_not_leak() {
+        use secrecy::ExposeSecret;
+        let secret = |v: &str| Some(secrecy::SecretString::from(v.to_string()));
+        let mut c = Config::default();
+        c.xrpl.signing.secret_seed = secret("sSeedLeakMarker");
+        c.xrpl.signing.secret_mnemonic = secret("mnemonic leak marker");
+        c.flare_evm_key = secret("0xEvmLeakMarker");
+
+        let secrets = c.take_secrets();
+        assert!(c.xrpl.signing.secret_seed.is_none());
+        assert!(c.xrpl.signing.secret_mnemonic.is_none());
+        assert!(c.flare_evm_key.is_none());
+        assert_eq!(
+            secrets.seed.as_ref().map(|s| s.expose_secret()),
+            Some("sSeedLeakMarker")
+        );
+        assert!(secrets.mnemonic.is_some() && secrets.flare_evm_key.is_some());
+
+        let dump = format!("{c:?}{secrets:?}");
+        for marker in ["LeakMarker", "leak marker"] {
+            assert!(!dump.contains(marker), "{dump}");
+        }
+        assert!(dump.contains("[REDACTED]"));
     }
 }

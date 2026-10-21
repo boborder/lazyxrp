@@ -36,6 +36,17 @@ pub struct TxHistoryPanel {
 }
 
 impl TxHistoryPanel {
+    /// Bracketed paste into the filter while it is being edited (control characters dropped);
+    /// ignored otherwise so pasted text never acts as hotkeys.
+    pub fn paste(&mut self, text: &str) {
+        if !self.is_focused || self.detail.visible || !self.is_filter_mode {
+            return;
+        }
+        self.filter_input
+            .extend(text.chars().filter(|c| !c.is_control()));
+        self.reapply_filter();
+    }
+
     fn reapply_filter(&mut self) {
         if self.filter_input.is_empty() {
             self.filtered = None;
@@ -114,15 +125,18 @@ impl Component for TxHistoryPanel {
         if !self.is_focused || self.detail.visible {
             return Ok(None);
         }
+        // Typing a filter must not reach the global keymap (`q` quits, digits switch tabs).
         if self.is_filter_mode {
             match key.code {
                 KeyCode::Enter => {
                     self.is_filter_mode = false;
+                    return Ok(Some(Action::SetKeymapSuppression(false)));
                 }
                 KeyCode::Esc => {
                     self.is_filter_mode = false;
                     self.filter_input.clear();
                     self.reapply_filter();
+                    return Ok(Some(Action::SetKeymapSuppression(false)));
                 }
                 KeyCode::Char(c) => {
                     self.filter_input.push(c);
@@ -144,7 +158,7 @@ impl Component for TxHistoryPanel {
             self.is_filter_mode = true;
             self.filter_input.clear();
             self.reapply_filter();
-            return Ok(None);
+            return Ok(Some(Action::SetKeymapSuppression(true)));
         }
         Ok(None)
     }
@@ -322,6 +336,19 @@ mod tests {
             ))
             .unwrap();
         panel
+    }
+
+    /// A pasted tx hash lands in the filter only while it is being edited; otherwise it is dropped.
+    #[test]
+    fn paste_goes_to_filter_only_while_editing() {
+        let mut panel = panel_with_payment_rows();
+        panel.paste("ignored");
+        assert!(panel.filter_input.is_empty());
+        panel
+            .on_key_event(KeyEvent::from(KeyCode::Char('f')))
+            .unwrap();
+        panel.paste("AB\r\nCD\u{1b}");
+        assert_eq!(panel.filter_input, "ABCD");
     }
 
     fn apply_payment_filter(panel: &mut TxHistoryPanel) {

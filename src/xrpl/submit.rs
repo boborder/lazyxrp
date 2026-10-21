@@ -152,7 +152,9 @@ pub(super) async fn finalize_simulate_sign_submit<E, FO, FS>(
             }
         };
 
-    let blob = match sign_blob(sequence, fee_drops, last_ledger_sequence) {
+    let blob = match signing::with_network_id(rpc.network_id(), || {
+        sign_blob(sequence, fee_drops, last_ledger_sequence)
+    }) {
         Ok(b) => b,
         Err(e) => {
             send_action(action_tx, submit_err(format!("sign: {e}")));
@@ -160,15 +162,17 @@ pub(super) async fn finalize_simulate_sign_submit<E, FO, FS>(
         }
     };
 
-    match tokio::time::timeout(RPC_TIMEOUT, rpc.submit_signed_tx(&blob)).await {
-        Ok(Ok(tx)) => {
+    // No outer timeout: each request is already bounded, and cutting the call short would
+    // hide the post-submit hash lookup that resolves an ambiguous outcome.
+    match rpc.submit_signed_tx(&blob).await {
+        Ok(tx) => {
             // Show the node-chosen (simulate) fee that was signed next to the hash.
-            for action in on_ok(format!("{} · fee {fee_drops} drops", tx.hash)) {
+            let queued = if tx.queued { " · queued" } else { "" };
+            for action in on_ok(format!("{} · fee {fee_drops} drops{queued}", tx.hash)) {
                 send_action(action_tx, action);
             }
         }
-        Ok(Err(e)) => send_submit_failure(action_tx, submit_err, format!("submit: {e}")),
-        Err(_) => send_submit_failure(action_tx, submit_err, "submit: timeout".into()),
+        Err(e) => send_submit_failure(action_tx, submit_err, format!("submit: {e}")),
     }
 }
 
@@ -1239,12 +1243,17 @@ pub(super) async fn submit_payment_transaction(
 pub(super) async fn submit_fxrp_direct_mint_payment(
     rpc: &RpcClient,
     network: &Network,
+    flare_network: crate::config::FlareNetwork,
     params: FxrpDirectMintPaymentParams,
     expected_core_vault: Option<&str>,
     action_tx: &UnboundedSender<Action>,
     signing_credential: Option<&crate::signing::SigningCredential>,
 ) {
     let submit_err = Action::FxrpDirectMintPaymentSubmitErr;
+    if let Err(e) = crate::flare::check_network_pair(network, flare_network) {
+        send_action(action_tx, submit_err(e));
+        return;
+    }
     let memo = match &params.custom_memo {
         Some(m) => m.clone(),
         None => {
@@ -1407,6 +1416,7 @@ pub(super) async fn submit_fxrp_direct_mint_payment(
 pub async fn run_direct_mint_payment(
     rpc_url: &str,
     network: &Network,
+    flare_network: crate::config::FlareNetwork,
     params: FxrpDirectMintPaymentParams,
     expected_core_vault: Option<&str>,
     signing_credential: Option<&crate::signing::SigningCredential>,
@@ -1416,6 +1426,7 @@ pub async fn run_direct_mint_payment(
     submit_fxrp_direct_mint_payment(
         &rpc,
         network,
+        flare_network,
         params,
         expected_core_vault,
         &tx,
@@ -1440,12 +1451,17 @@ pub async fn run_direct_mint_payment(
 pub(super) async fn submit_smart_account_instruction(
     rpc: &RpcClient,
     network: &Network,
+    flare_network: crate::config::FlareNetwork,
     params: SmartAccountInstructionParams,
     expected_operator: Option<&str>,
     action_tx: &UnboundedSender<Action>,
     signing_credential: Option<&crate::signing::SigningCredential>,
 ) {
     let submit_err = Action::SmartAccountInstructionSubmitErr;
+    if let Err(e) = crate::flare::check_network_pair(network, flare_network) {
+        send_action(action_tx, submit_err(e));
+        return;
+    }
     // Wallet id 0: "use 0 if unassigned" (Flare Smart Accounts docs).
     let reference = if let Some(v) = params.vault {
         signing::encode_vault_instruction(v.instruction_id, 0, params.value, v.vault_id)
@@ -1597,6 +1613,7 @@ pub(super) async fn submit_smart_account_instruction(
 pub async fn run_smart_account_instruction(
     rpc_url: &str,
     network: &Network,
+    flare_network: crate::config::FlareNetwork,
     params: SmartAccountInstructionParams,
     expected_operator: Option<&str>,
     signing_credential: Option<&crate::signing::SigningCredential>,
@@ -1606,6 +1623,7 @@ pub async fn run_smart_account_instruction(
     submit_smart_account_instruction(
         &rpc,
         network,
+        flare_network,
         params,
         expected_operator,
         &tx,
@@ -1665,9 +1683,9 @@ pub(super) async fn quote_payment(
 pub(super) async fn submit_fxrp_execute_direct_mint(
     flare_rpc_url: Option<&str>,
     flare_fassets_execute: bool,
+    flare_network: crate::config::FlareNetwork,
     flare_evm_key_env: &str,
     flare_evm_key: Option<&secrecy::SecretString>,
-    network: &Network,
     params: FxrpExecuteDirectMintParams,
     action_tx: &UnboundedSender<Action>,
 ) {
@@ -1676,14 +1694,8 @@ pub(super) async fn submit_fxrp_execute_direct_mint(
         send_action(action_tx, submit_err(format!("{e}")));
         return;
     }
-    if network.is_production() && !params.skip_mainnet_prompt {
-        send_action(
-            action_tx,
-            submit_err(
-                "production network: restart lazyxrp with --yes to allow Flare executeDirectMinting writes"
-                    .into(),
-            ),
-        );
+    if let Err(e) = crate::flare::check_network_pair(&params.network, flare_network) {
+        send_action(action_tx, submit_err(e));
         return;
     }
     if params.proof_json.trim().is_empty() {
@@ -1703,9 +1715,14 @@ pub(super) async fn submit_fxrp_execute_direct_mint(
         );
         return;
     };
+    let gate = crate::flare::EvmGate {
+        network: flare_network,
+        yes: params.skip_mainnet_prompt,
+    };
     match crate::flare::execute_direct_minting(
         rpc,
         secrecy::ExposeSecret::expose_secret(key),
+        gate,
         &params.proof_json,
     )
     .await
@@ -1815,6 +1832,7 @@ mod tests {
                 destination_tag: None,
                 send_max: None,
                 skip_mainnet_prompt: false,
+                network: Network::Testnet,
             },
             &tx,
             Some(&credential),
@@ -1841,6 +1859,7 @@ mod tests {
             OfferCancelSubmitParams {
                 offer_sequence: 42,
                 skip_mainnet_prompt: false,
+                network: Network::Testnet,
             },
             &tx,
             Some(&credential),
@@ -1871,6 +1890,7 @@ mod tests {
             OfferCancelSubmitParams {
                 offer_sequence: 42,
                 skip_mainnet_prompt: false,
+                network: Network::Testnet,
             },
             &tx,
             Some(&credential),
@@ -1959,6 +1979,7 @@ mod tests {
                 finish_after: "1h".into(),
                 cancel_after: "2h".into(),
                 skip_mainnet_prompt: false,
+                network: Network::Testnet,
             },
             &tx,
             Some(&credential),
@@ -1975,6 +1996,7 @@ mod tests {
                 offer_sequence: 30,
                 cancel: false,
                 skip_mainnet_prompt: false,
+                network: Network::Testnet,
             },
             &tx,
             Some(&credential),
@@ -2060,6 +2082,7 @@ mod tests {
                 amount: "XRP:1000000".into(),
                 amount2: format!("USD:{ISS}:10"),
                 skip_mainnet_prompt: false,
+                network: Network::Testnet,
             },
             &tx,
             Some(&credential),
@@ -2080,6 +2103,7 @@ mod tests {
                 asset2: format!("USD:{ISS}"),
                 lp_amount: "5".into(),
                 skip_mainnet_prompt: false,
+                network: Network::Testnet,
             },
             &tx,
             Some(&credential),
@@ -2168,6 +2192,7 @@ mod tests {
             AccountDeleteSubmitParams {
                 destination: format!(" {xaddr} "),
                 skip_mainnet_prompt: false,
+                network: Network::Testnet,
             },
             &tx,
             Some(&credential),
@@ -2252,6 +2277,7 @@ mod tests {
                 destination_tag: None,
                 send_max: None,
                 skip_mainnet_prompt: false,
+                network: Network::Testnet,
             },
             &tx,
             Some(&credential),
@@ -2285,6 +2311,7 @@ mod tests {
             fee_drops,
             vault: None,
             skip_mainnet_prompt: false,
+            network: Network::Testnet,
         }
     }
 
@@ -2340,6 +2367,7 @@ mod tests {
             submit_smart_account_instruction(
                 &rpc,
                 &Network::Testnet,
+                crate::config::FlareNetwork::Coston2,
                 params,
                 Some(SA_GENESIS),
                 &tx,
@@ -2485,6 +2513,7 @@ mod tests {
             submit_smart_account_instruction(
                 &rpc,
                 &Network::Testnet,
+                crate::config::FlareNetwork::Coston2,
                 params,
                 pin,
                 &tx,
@@ -2515,6 +2544,7 @@ mod tests {
             submit_smart_account_instruction(
                 &rpc,
                 &Network::Testnet,
+                crate::config::FlareNetwork::Coston2,
                 params,
                 Some(&operator),
                 &tx,
@@ -2559,6 +2589,7 @@ mod tests {
                                 tick_size: String::new(),
                                 transfer_rate: String::new(),
                                 skip_mainnet_prompt: false,
+                                network: Network::Mainnet,
                             },
                             &tx,
                             None,
@@ -2582,6 +2613,7 @@ mod tests {
                                 destination_tag: None,
                                 send_max: None,
                                 skip_mainnet_prompt: false,
+                                network: Network::Mainnet,
                             },
                             &tx,
                             None,
@@ -2602,6 +2634,7 @@ mod tests {
                                 issuer: GENESIS.into(),
                                 limit: "1000".into(),
                                 skip_mainnet_prompt: false,
+                                network: Network::Mainnet,
                             },
                             &tx,
                             None,
@@ -2621,6 +2654,7 @@ mod tests {
                                 taker_gets: "XRP:1000000".into(),
                                 taker_pays: format!("USD:{GENESIS}:10"),
                                 skip_mainnet_prompt: false,
+                                network: Network::Mainnet,
                             },
                             &tx,
                             None,
@@ -2642,6 +2676,7 @@ mod tests {
                                 finish_after: "1h".into(),
                                 cancel_after: String::new(),
                                 skip_mainnet_prompt: false,
+                                network: Network::Mainnet,
                             },
                             &tx,
                             None,
@@ -2662,6 +2697,7 @@ mod tests {
                                 offer_sequence: 1,
                                 cancel: true,
                                 skip_mainnet_prompt: false,
+                                network: Network::Mainnet,
                             },
                             &tx,
                             None,
@@ -2680,6 +2716,7 @@ mod tests {
                             OfferCancelSubmitParams {
                                 offer_sequence: 1,
                                 skip_mainnet_prompt: false,
+                                network: Network::Mainnet,
                             },
                             &tx,
                             None,
@@ -2698,6 +2735,7 @@ mod tests {
                             SetRegularKeySubmitParams {
                                 regular_key: GENESIS.into(),
                                 skip_mainnet_prompt: false,
+                                network: Network::Mainnet,
                             },
                             &tx,
                             None,
@@ -2713,6 +2751,7 @@ mod tests {
                         submit_fxrp_direct_mint_payment(
                             rpc,
                             &Network::Mainnet,
+                            crate::config::FlareNetwork::Flare,
                             FxrpDirectMintPaymentParams {
                                 core_vault_xrpl: GENESIS.into(),
                                 min_fee_uba: 0,
@@ -2722,6 +2761,7 @@ mod tests {
                                     .into(),
                                 amount_xrp: "1".into(),
                                 skip_mainnet_prompt: false,
+                                network: Network::Mainnet,
                                 custom_memo: None,
                             },
                             None,
@@ -2739,6 +2779,7 @@ mod tests {
                         submit_smart_account_instruction(
                             rpc,
                             &Network::Mainnet,
+                            crate::config::FlareNetwork::Flare,
                             sa_params(false, 1_000_000, 200_000),
                             None,
                             &tx,
@@ -2759,6 +2800,7 @@ mod tests {
                                 amount: "XRP:1000000".into(),
                                 amount2: format!("USD:{GENESIS}:1"),
                                 skip_mainnet_prompt: false,
+                                network: Network::Mainnet,
                             },
                             &tx,
                             None,
@@ -2779,6 +2821,7 @@ mod tests {
                                 asset2: format!("USD:{GENESIS}"),
                                 lp_amount: String::new(),
                                 skip_mainnet_prompt: false,
+                                network: Network::Mainnet,
                             },
                             &tx,
                             None,
@@ -2797,6 +2840,7 @@ mod tests {
                             AccountDeleteSubmitParams {
                                 destination: GENESIS.into(),
                                 skip_mainnet_prompt: false,
+                                network: Network::Mainnet,
                             },
                             &tx,
                             None,
@@ -2865,32 +2909,125 @@ mod tests {
     }
 
     /// TC-088: the Flare executeDirectMinting path has its own gate (different signature, so it
-    /// sits outside the table above): enabled execute + mainnet without `--yes` is refused.
+    /// sits outside the table above): Flare mainnet, as reported by the RPC's chain id, without
+    /// `--yes` is refused.
     #[tokio::test]
-    async fn fxrp_execute_direct_mint_mainnet_without_yes_is_rejected() {
+    async fn fxrp_execute_direct_mint_flare_mainnet_without_yes_is_rejected() {
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .expect("bind");
+        let url = format!("http://{}", listener.local_addr().expect("addr"));
+        let server = tokio::spawn(crate::test_support::rpc_mock::serve_raw(
+            listener,
+            1,
+            |req: &Value| {
+                assert_eq!(req["method"], "eth_chainId");
+                serde_json::json!({"jsonrpc": "2.0", "id": req["id"].clone(), "result": "0xe"})
+            },
+        ));
+        let key = secrecy::SecretString::from("11".repeat(32));
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-        let params = FxrpExecuteDirectMintParams {
-            proof_json: "{}".into(),
-            skip_mainnet_prompt: false,
-        };
         submit_fxrp_execute_direct_mint(
-            Some("https://flare-api.flare.network/ext/C/rpc"),
+            Some(&url),
             true,
+            crate::config::FlareNetwork::Flare,
             "FLARE_EVM_KEY",
-            None,
-            &Network::Mainnet,
-            params,
+            Some(&key),
+            FxrpExecuteDirectMintParams {
+                proof_json: "{}".into(),
+                skip_mainnet_prompt: false,
+                network: Network::Mainnet,
+            },
             &tx,
         )
         .await;
         match rx.try_recv() {
-            Ok(Action::FxrpExecuteDirectMintSubmitErr(m)) => {
-                assert!(
-                    m.contains("production network") && m.contains("--yes"),
-                    "{m}"
-                );
-            }
+            Ok(Action::FxrpExecuteDirectMintSubmitErr(m)) => assert!(m.contains("--yes"), "{m}"),
             other => panic!("expected submit error, got {other:?}"),
+        }
+        server
+            .await
+            .expect("join")
+            .expect("one eth_chainId request");
+    }
+
+    /// TC-364: the Flare write is gated on the XRPL ↔ Flare pairing, not on the XRPL network
+    /// alone: Testnet with `[flare] network = flare` used to sail through unguarded.
+    #[tokio::test]
+    async fn fxrp_execute_direct_mint_refuses_unpaired_networks() {
+        use crate::config::FlareNetwork::{Coston2, Flare};
+        let key = secrecy::SecretString::from("11".repeat(32));
+        for (xrpl, flare) in [(Network::Testnet, Flare), (Network::Mainnet, Coston2)] {
+            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+            submit_fxrp_execute_direct_mint(
+                Some("http://127.0.0.1:1"),
+                true,
+                flare,
+                "FLARE_EVM_KEY",
+                Some(&key),
+                FxrpExecuteDirectMintParams {
+                    proof_json: "{}".into(),
+                    skip_mainnet_prompt: true,
+                    network: xrpl,
+                },
+                &tx,
+            )
+            .await;
+            match rx.try_recv() {
+                Ok(Action::FxrpExecuteDirectMintSubmitErr(m)) => {
+                    assert!(m.contains("does not pair"), "{xrpl:?}/{flare:?}: {m}");
+                }
+                other => panic!("{xrpl:?}/{flare:?}: expected submit error, got {other:?}"),
+            }
+        }
+    }
+
+    /// TC-364: the Direct Mint Payment and Smart Account instruction paths refuse an unpaired
+    /// XRPL / Flare network before any XRPL RPC call.
+    #[tokio::test]
+    async fn xrpl_writes_refuse_unpaired_flare_network() {
+        use crate::config::FlareNetwork::{Coston2, Flare};
+        let rpc = RpcClient::connect("http://127.0.0.1:1").expect("rpc client");
+        for (xrpl, flare) in [(Network::Testnet, Flare), (Network::Mainnet, Coston2)] {
+            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+            submit_smart_account_instruction(
+                &rpc,
+                &xrpl,
+                flare,
+                sa_params(false, 1, 200_000),
+                Some("rOperator"),
+                &tx,
+                None,
+            )
+            .await;
+            assert!(
+                matches!(rx.try_recv(), Ok(Action::SmartAccountInstructionSubmitErr(m)) if m.contains("does not pair")),
+                "{xrpl:?}/{flare:?}"
+            );
+            submit_fxrp_direct_mint_payment(
+                &rpc,
+                &xrpl,
+                flare,
+                FxrpDirectMintPaymentParams {
+                    core_vault_xrpl: "rVault".into(),
+                    min_fee_uba: 0,
+                    fee_bips: 0,
+                    executor_fee_uba: 0,
+                    flare_recipient: String::new(),
+                    amount_xrp: "1".into(),
+                    custom_memo: None,
+                    skip_mainnet_prompt: true,
+                    network: xrpl,
+                },
+                Some("rVault"),
+                &tx,
+                None,
+            )
+            .await;
+            assert!(
+                matches!(rx.try_recv(), Ok(Action::FxrpDirectMintPaymentSubmitErr(m)) if m.contains("does not pair")),
+                "{xrpl:?}/{flare:?}"
+            );
         }
     }
 
@@ -2900,13 +3037,14 @@ mod tests {
         let params = FxrpExecuteDirectMintParams {
             proof_json: r#"{"proof":["0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],"response":"0xbb"}"#.into(),
             skip_mainnet_prompt: true,
+            network: Network::Testnet,
         };
         submit_fxrp_execute_direct_mint(
             Some("https://flare-api.flare.network/ext/C/rpc"),
             false,
+            crate::config::FlareNetwork::Coston2,
             "FLARE_EVM_KEY",
             None,
-            &Network::Testnet,
             params,
             &tx,
         )
@@ -2950,6 +3088,7 @@ mod tests {
                                 destination_tag: None,
                                 send_max: None,
                                 skip_mainnet_prompt: true,
+                                network: Network::Mainnet,
                             },
                             &tx,
                             None,
@@ -2968,6 +3107,7 @@ mod tests {
                             SetRegularKeySubmitParams {
                                 regular_key: String::new(), // clear
                                 skip_mainnet_prompt: true,
+                                network: Network::Mainnet,
                             },
                             &tx,
                             None,
@@ -3005,6 +3145,7 @@ mod tests {
                 .map(|(k, v)| (k.to_string(), v.to_string()))
                 .collect(),
             skip_mainnet_prompt: skip,
+            network: Network::Testnet,
         }
     }
 

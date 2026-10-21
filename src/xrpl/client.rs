@@ -9,6 +9,7 @@ use super::dunl::{
 };
 use super::format::drops_to_xrp;
 pub use super::format::{path_find_snapshot, xrp_to_drops};
+pub use super::parse::SubmitOutcome;
 pub(crate) use super::parse::empty_account_tx_page_on_not_found;
 use super::parse::{
     book_currency, book_offer_best_price, escrow_offer_sequence_from_tx, is_not_found_error,
@@ -21,11 +22,14 @@ use super::parse::{
 use super::types::{
     AccountOfferRow, AccountSummary, AccountTxPage, AggregatePrice, AmmSummary, BookMidPrice,
     DunlSummary, EscrowRow, FeeSummary, LedgerObjectRow, NftRow, OfferRow, OracleId,
-    RipplePathFindResult, ServerInfoSummary, SimulateResult, TrustLineRow, TxRow, TxSummary,
+    RipplePathFindResult, ServerInfoSummary, SimulateResult, TrustLineRow, TxRow,
 };
 use super::util::{json_str, json_u32};
 
 pub(crate) const RPC_TIMEOUT: Duration = Duration::from_secs(20);
+/// Post-submit `tx` lookups after an ambiguous transport failure (spaced, not retried blindly).
+const SUBMIT_LOOKUP_TRIES: usize = 3;
+const SUBMIT_LOOKUP_INTERVAL: Duration = Duration::from_secs(3);
 /// Hard cap for JSON-RPC / dUNL response bodies (DoS guard).
 pub(crate) const MAX_RPC_BODY_BYTES: usize = 16 * 1024 * 1024;
 
@@ -49,6 +53,7 @@ fn retry_delay_ms(attempt: usize, message: &str) -> u64 {
 pub struct RpcClient {
     client: AsyncJsonRpcClient,
     http: reqwest::Client,
+    network_id: std::sync::atomic::AtomicU32,
 }
 
 pub(crate) async fn read_response_text_capped(
@@ -87,6 +92,7 @@ pub(crate) async fn read_response_text_capped(
 impl RpcClient {
     pub fn connect(rpc_url: &str) -> color_eyre::Result<Self> {
         Ok(Self {
+            network_id: std::sync::atomic::AtomicU32::new(0),
             client: AsyncJsonRpcClient::connect(rpc_url.parse()?),
             // No redirects: an https endpoint must not bounce `submit` (signed blob) elsewhere.
             http: reqwest::Client::builder()
@@ -96,37 +102,36 @@ impl RpcClient {
         })
     }
 
-    async fn rpc_value(&self, method: &str, params: Value) -> color_eyre::Result<Value> {
+    /// One request/response, no retry (a `submit` must not be replayed blindly).
+    async fn rpc_once(&self, method: &str, params: &Value) -> color_eyre::Result<Value> {
         let url = self.client.get_host().to_string();
+        let req_json = json!({ "method": method, "params": [params] });
+        let resp = tokio::time::timeout(RPC_TIMEOUT, self.http.post(&url).json(&req_json).send())
+            .await
+            .map_err(|_| color_eyre::eyre::eyre!("{method} timeout"))?
+            .map_err(|e| color_eyre::eyre::eyre!("{method} request error: {e}"))?;
+        let status = resp.status();
+        let text = read_response_text_capped(resp, method).await?;
+        if status.as_u16() == 429 {
+            let preview: String = text.chars().take(120).collect();
+            return Err(color_eyre::eyre::eyre!(
+                "{method} Rate limited (HTTP 429); body={preview:?}"
+            ));
+        }
+        let value = serde_json::from_str::<Value>(&text).map_err(|e| {
+            let preview: String = text.chars().take(120).collect();
+            color_eyre::eyre::eyre!(
+                "{method} JSON parse error: {e}; status={status}; body={preview:?}"
+            )
+        })?;
+        ensure_no_xrpl_rpc_error(&value)?;
+        Ok(value)
+    }
+
+    async fn rpc_value(&self, method: &str, params: Value) -> color_eyre::Result<Value> {
         let mut last_error = None;
         for attempt in 0..3 {
-            let req_json = json!({ "method": method, "params": [params.clone()] });
-            let result = async {
-                let resp =
-                    tokio::time::timeout(RPC_TIMEOUT, self.http.post(&url).json(&req_json).send())
-                        .await
-                        .map_err(|_| color_eyre::eyre::eyre!("{method} timeout"))?
-                        .map_err(|e| color_eyre::eyre::eyre!("{method} request error: {e}"))?;
-                let status = resp.status();
-                let text = read_response_text_capped(resp, method).await?;
-                if status.as_u16() == 429 {
-                    let preview: String = text.chars().take(120).collect();
-                    return Err(color_eyre::eyre::eyre!(
-                        "{method} Rate limited (HTTP 429); body={preview:?}"
-                    ));
-                }
-                let value = serde_json::from_str::<Value>(&text).map_err(|e| {
-                    let preview: String = text.chars().take(120).collect();
-                    color_eyre::eyre::eyre!(
-                        "{method} JSON parse error: {e}; status={status}; body={preview:?}"
-                    )
-                })?;
-                ensure_no_xrpl_rpc_error(&value)?;
-                Ok(value)
-            }
-            .await;
-
-            match result {
+            match self.rpc_once(method, &params).await {
                 Ok(value) => return Ok(value),
                 Err(e) if attempt < 2 && is_retryable_rpc_error(&format!("{e}")) => {
                     let message = format!("{e}");
@@ -172,7 +177,16 @@ impl RpcClient {
         let reported = value["result"]["info"]["network_id"]
             .as_u64()
             .map(|n| u32::try_from(n).unwrap_or(u32::MAX));
-        network.check_endpoint_network_id(reported)
+        network.check_endpoint_network_id(reported)?;
+        self.network_id
+            .store(network.network_id(), std::sync::atomic::Ordering::Relaxed);
+        Ok(())
+    }
+
+    /// `network_id` of the network last verified by [`Self::ensure_network`] (0 before that);
+    /// signing and simulate put it in `NetworkID` when > 1024.
+    pub fn network_id(&self) -> u32 {
+        self.network_id.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     pub async fn fetch_xrplf_dunl(&self) -> color_eyre::Result<DunlSummary> {
@@ -499,9 +513,11 @@ impl RpcClient {
         })
     }
 
+    /// Whether `address` exists on the ledger: a successful `account_info` is activation
+    /// (the reserve is not a balance threshold — an account may hold less than the reserve).
     pub async fn fetch_account_activation_status(&self, address: &str) -> color_eyre::Result<bool> {
         match self.account_info(address).await {
-            Ok(account) => Ok(account.balance_xrp.parse::<f64>().unwrap_or(0.0) >= 10.0),
+            Ok(_) => Ok(true),
             Err(e) if is_not_found_error(&format!("{e}")) => Ok(false),
             Err(e) => Err(e),
         }
@@ -512,14 +528,48 @@ impl RpcClient {
         self.rpc_value("tx", json!({ "transaction": hash })).await
     }
 
-    /// Submit a signed blob. The returned hash is computed from the blob, not taken from the node.
-    pub async fn submit_signed_tx(&self, signed_tx_blob: &str) -> color_eyre::Result<TxSummary> {
+    /// Submit a signed blob exactly once; the hash is computed from the blob, not taken from the
+    /// node. A node-side rejection is final. A transport failure is ambiguous (the node may have
+    /// applied it), so the locally computed hash is looked up: found → real outcome, not found →
+    /// an explicit "unknown" error that names the hash.
+    pub async fn submit_signed_tx(
+        &self,
+        signed_tx_blob: &str,
+    ) -> color_eyre::Result<SubmitOutcome> {
         let hash = crate::signing::tx_hash_from_blob(signed_tx_blob)?;
-        let value = self
-            .rpc_value("submit", json!({ "tx_blob": signed_tx_blob }))
-            .await?;
-        parse_submit_success(&value)?;
-        Ok(TxSummary { hash })
+        let cause = match self
+            .rpc_once("submit", &json!({ "tx_blob": signed_tx_blob }))
+            .await
+        {
+            Ok(value) => {
+                let accepted = parse_submit_success(&value)?;
+                return Ok(SubmitOutcome { hash, ..accepted });
+            }
+            Err(e) if format!("{e}").starts_with("[XRPL-") => return Err(e),
+            Err(e) => e,
+        };
+        for attempt in 0..SUBMIT_LOOKUP_TRIES {
+            if attempt > 0 && !cfg!(test) {
+                tokio::time::sleep(SUBMIT_LOOKUP_INTERVAL).await;
+            }
+            let Ok(found) = self.rpc_once("tx", &json!({ "transaction": hash })).await else {
+                continue;
+            };
+            let result = &found["result"];
+            return match result["meta"]["TransactionResult"].as_str() {
+                Some(code) if !code.starts_with("tes") => Err(color_eyre::eyre::eyre!(
+                    "submit reply lost ({cause}); transaction {hash} was applied with {}",
+                    super::util::sanitize_remote(code)
+                )),
+                _ => Ok(SubmitOutcome {
+                    hash,
+                    queued: result["validated"].as_bool() != Some(true),
+                }),
+            };
+        }
+        Err(color_eyre::eyre::eyre!(
+            "submit outcome unknown ({cause}); transaction {hash} not found on the node yet — check hash {hash} before resending"
+        ))
     }
 
     /// Dry-run an unsigned transaction via the `simulate` RPC.
@@ -530,6 +580,11 @@ impl RpcClient {
         // xrpl-rust serializes some unset fields (e.g. `Memo.MemoFormat`) as `null`; rippled
         // rejects those as "bad type" (the signed binary omits them).
         drop_nulls(&mut tx_json);
+        // Networks with id > 1024 (Xahau) require `NetworkID` in every tx.
+        let network_id = self.network_id();
+        if network_id > 1024 && tx_json.get("NetworkID").is_none() {
+            tx_json["NetworkID"] = json!(network_id);
+        }
         let value = self
             .rpc_value("simulate", json!({ "tx_json": tx_json }))
             .await?;
@@ -929,5 +984,172 @@ mod tests {
         let sent = &requests[0]["params"][0]["tx_json"];
         assert!(!sent.to_string().contains("null"), "{sent}");
         assert_eq!(sent["Memos"][0]["Memo"]["MemoData"], json!(memo));
+    }
+}
+
+#[cfg(test)]
+mod submit_tests {
+    use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    /// Local node: `submit` connections are dropped without a reply (lost response), `tx` gets
+    /// `tx_reply`; every received method is recorded.
+    async fn lossy_node(
+        tx_reply: Value,
+    ) -> (
+        String,
+        tokio::task::JoinHandle<()>,
+        std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    ) {
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let log = seen.clone();
+        let server = tokio::spawn(async move {
+            while let Ok((mut stream, _)) = listener.accept().await {
+                let mut buf = vec![0_u8; 8192];
+                let n = stream.read(&mut buf).await.unwrap_or(0);
+                let text = String::from_utf8_lossy(&buf[..n]).to_string();
+                let method = if text.contains("\"submit\"") {
+                    "submit"
+                } else {
+                    "tx"
+                };
+                log.lock().unwrap().push(method.to_string());
+                if method == "tx" {
+                    let body = json!({"result": tx_reply}).to_string();
+                    let _ = stream
+                        .write_all(
+                            format!(
+                                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                                body.len()
+                            )
+                            .as_bytes(),
+                        )
+                        .await;
+                }
+            }
+        });
+        (url, server, seen)
+    }
+
+    /// `NetworkID` is carried only when the network id is > 1024: mainnet/testnet omit it,
+    /// Xahau / Xahau-testnet sign 21337 / 21338 into the blob and into the simulate request.
+    #[tokio::test]
+    async fn network_id_is_set_only_above_1024() {
+        use crate::network::Network;
+        use crate::test_support::rpc_mock;
+        let cred = crate::signing::SigningCredential::from_bip39_mnemonic(
+            "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+        )
+        .unwrap();
+        let wallet = cred.wallet().unwrap();
+        for (net, expect) in [
+            (Network::Mainnet, None),
+            (Network::Testnet, None),
+            (Network::Xahau, Some(21337)),
+            (Network::XahauTest, Some(21338)),
+        ] {
+            let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+                .await
+                .unwrap();
+            let url = format!("http://{}", listener.local_addr().unwrap());
+            let id = net.network_id();
+            let server = tokio::spawn(rpc_mock::serve_raw(listener, 2, move |req| {
+                json!({"result": match req["method"].as_str() {
+                    Some("server_info") => json!({"info": {"network_id": id}}),
+                    _ => json!({"engine_result": "tesSUCCESS", "tx_json": {}}),
+                }})
+            }));
+            let rpc = RpcClient::connect(&url).unwrap();
+            rpc.ensure_network(&net).await.unwrap();
+            rpc.simulate_tx(json!({"TransactionType": "OfferCancel", "OfferSequence": 1}))
+                .await
+                .unwrap();
+            let requests = server.await.unwrap().unwrap();
+            assert_eq!(
+                requests[1]["params"][0]["tx_json"].get("NetworkID"),
+                expect.map(|n: u32| json!(n)).as_ref(),
+                "{net:?} simulate"
+            );
+            let blob = crate::signing::with_network_id(rpc.network_id(), || {
+                crate::signing::create_and_sign_offer_cancel(
+                    &wallet,
+                    &wallet.classic_address,
+                    1,
+                    2,
+                    12,
+                    99,
+                )
+            })
+            .unwrap();
+            let decoded = xrpl::core::binarycodec::decode(&blob).unwrap();
+            assert_eq!(
+                decoded.get("NetworkID").cloned(),
+                expect.map(|n: u32| json!(n)),
+                "{net:?} blob"
+            );
+        }
+    }
+
+    /// Lost submit reply: one submit attempt only, then the local hash is looked up and the
+    /// real outcome reported (old code replayed the blob 3×).
+    #[tokio::test]
+    async fn lost_submit_reply_resolves_via_tx_lookup_without_replaying() {
+        let (url, server, seen) = lossy_node(json!({"validated": true,
+            "meta": {"TransactionResult": "tesSUCCESS"}}))
+        .await;
+        let rpc = RpcClient::connect(&url).unwrap();
+        let out = rpc.submit_signed_tx("120000").await.unwrap();
+        assert_eq!(
+            out.hash,
+            "DC71B939905587CDF8410B02ACA9CC5E2BED966CC46C2D524EA08B62E2437A7D"
+        );
+        assert!(!out.queued);
+        assert_eq!(*seen.lock().unwrap(), ["submit", "tx"]);
+        server.abort();
+    }
+
+    /// Applied with a failure code after the reply was lost → error naming the code.
+    #[tokio::test]
+    async fn lost_submit_reply_reports_applied_failure() {
+        let (url, server, _) = lossy_node(json!({"validated": true,
+            "meta": {"TransactionResult": "tecUNFUNDED_PAYMENT"}}))
+        .await;
+        let rpc = RpcClient::connect(&url).unwrap();
+        let err = rpc
+            .submit_signed_tx("120000")
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("tecUNFUNDED_PAYMENT"), "{err}");
+        server.abort();
+    }
+
+    /// Not found after the lookups → explicit unknown-outcome error carrying the hash.
+    #[tokio::test]
+    async fn lost_submit_reply_not_found_is_explicit_unknown() {
+        let (url, server, seen) = lossy_node(json!({"error": "txnNotFound", "error_code": 29,
+                "error_message": "Transaction not found."}))
+        .await;
+        let rpc = RpcClient::connect(&url).unwrap();
+        let err = rpc
+            .submit_signed_tx("120000")
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("outcome unknown"), "{err}");
+        assert!(err.contains("DC71B939905587CD"), "{err}");
+        assert_eq!(
+            seen.lock()
+                .unwrap()
+                .iter()
+                .filter(|m| *m == "submit")
+                .count(),
+            1
+        );
+        server.abort();
     }
 }

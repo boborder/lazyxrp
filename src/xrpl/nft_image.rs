@@ -110,18 +110,91 @@ pub(crate) async fn fetch_via(
     unreachable!("redirect loop returns on every iteration")
 }
 
-/// Public IPFS gateways, tried in order: a single one routinely answers 429/5xx.
-const IPFS_GATEWAYS: [&str; 2] = [
+/// Public IPFS gateways, tried in order: a single one routinely answers 429/5xx or refuses
+/// content it does not host.
+const IPFS_GATEWAYS: [&str; 3] = [
     "https://ipfs.io/ipfs/",
     "https://gateway.pinata.cloud/ipfs/",
+    "https://dweb.link/ipfs/",
 ];
+
+/// Display form of an NFT URI: `ipfs://…` (and the other spellings `ipfs_path` accepts) become
+/// the first public gateway URL so it can be opened in a browser; anything else is unchanged.
+pub(crate) fn display_uri(uri: &str) -> String {
+    match ipfs_path(uri) {
+        Some(path) => format!("{}{path}", IPFS_GATEWAYS[0]),
+        None => uri.trim().to_owned(),
+    }
+}
+
+/// Gateway path (`<cid>[/sub/path][?query]`) of an IPFS reference. Accepts `ipfs://<cid>`,
+/// the doubled `ipfs://ipfs/<cid>`, `/ipfs/<cid>` and a bare CID (`Qm…` / `baf…`); scheme is
+/// case-insensitive. `None` for anything else.
+fn ipfs_path(uri: &str) -> Option<&str> {
+    let uri = uri.trim();
+    let rest = if uri
+        .get(..7)
+        .is_some_and(|s| s.eq_ignore_ascii_case("ipfs://"))
+    {
+        &uri[7..]
+    } else if let Some(rest) = uri.strip_prefix("/ipfs/") {
+        rest
+    } else if looks_like_cid(uri) {
+        uri
+    } else {
+        return None;
+    };
+    let rest = rest.trim_start_matches('/');
+    let rest = rest.strip_prefix("ipfs/").unwrap_or(rest);
+    (!rest.is_empty()).then_some(rest)
+}
+
+/// CIDv0 (`Qm` + 44 base58) or CIDv1 base32 (`baf…`) as the first path segment.
+fn looks_like_cid(uri: &str) -> bool {
+    let cid = uri.split(['/', '?', '#']).next().unwrap_or("");
+    let alnum = cid.bytes().all(|b| b.is_ascii_alphanumeric());
+    alnum
+        && ((cid.len() == 46 && cid.starts_with("Qm"))
+            || (cid.len() >= 50
+                && cid.starts_with("baf")
+                && cid.bytes().all(|b| !b.is_ascii_uppercase())))
+}
+
+/// `data:<mime>;base64,<payload>` (self-contained on-chain metadata / images). Other `data:`
+/// forms are refused.
+fn decode_data_uri(uri: &str) -> color_eyre::Result<(Vec<u8>, Option<String>)> {
+    use base64::Engine;
+    let body = &uri[5..];
+    let (meta, payload) = body
+        .split_once(',')
+        .ok_or_else(|| color_eyre::eyre::eyre!("data: URI has no payload"))?;
+    let mime = meta
+        .strip_suffix(";base64")
+        .ok_or_else(|| color_eyre::eyre::eyre!("only base64 data: URIs are supported"))?;
+    if payload.len() > MAX_RESPONSE_BYTES / 3 * 4 + 4 {
+        return Err(color_eyre::eyre::eyre!(
+            "data: URI exceeds {} MiB limit",
+            MAX_RESPONSE_BYTES / (1024 * 1024)
+        ));
+    }
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(payload.trim())
+        .map_err(|_| color_eyre::eyre::eyre!("data: URI is not valid base64"))?;
+    Ok((bytes, (!mime.is_empty()).then(|| mime.to_owned())))
+}
 
 async fn fetch_resource(uri: &str) -> color_eyre::Result<(Vec<u8>, Option<String>)> {
     let uri = uri.trim();
-    let candidates: Vec<String> = match uri.strip_prefix("ipfs://") {
+    if uri
+        .get(..5)
+        .is_some_and(|s| s.eq_ignore_ascii_case("data:"))
+    {
+        return decode_data_uri(uri);
+    }
+    let candidates: Vec<String> = match ipfs_path(uri) {
         Some(path) => IPFS_GATEWAYS
             .iter()
-            .map(|gateway| format!("{gateway}{}", path.trim_start_matches('/')))
+            .map(|gateway| format!("{gateway}{path}"))
             .collect(),
         None => vec![uri.to_owned()],
     };
@@ -155,7 +228,9 @@ pub(crate) async fn client_for_url(url: &Url) -> color_eyre::Result<reqwest::Cli
         .host_str()
         .ok_or_else(|| color_eyre::eyre::eyre!("URL has no host"))?;
     let port = url.port_or_known_default().unwrap_or(443);
-    let addresses: Vec<SocketAddr> = if let Ok(ip) = host.parse::<IpAddr>() {
+    // `host_str` keeps the brackets of an IPv6 literal ("[::1]"); they are not part of the address.
+    let bare_host = host.trim_start_matches('[').trim_end_matches(']');
+    let addresses: Vec<SocketAddr> = if let Ok(ip) = bare_host.parse::<IpAddr>() {
         vec![SocketAddr::new(ip, port)]
     } else {
         tokio::net::lookup_host((host, port)).await?.collect()
@@ -180,8 +255,8 @@ pub(crate) async fn client_for_url(url: &Url) -> color_eyre::Result<reqwest::Cli
 
 fn resolve_uri(uri: &str) -> color_eyre::Result<Url> {
     let uri = uri.trim();
-    let normalized = if let Some(path) = uri.strip_prefix("ipfs://") {
-        format!("{}{}", IPFS_GATEWAYS[0], path.trim_start_matches('/'))
+    let normalized = if let Some(path) = ipfs_path(uri) {
+        format!("{}{path}", IPFS_GATEWAYS[0])
     } else if let Some(path) = uri.strip_prefix("ar://") {
         format!("https://arweave.net/{}", path.trim_start_matches('/'))
     } else {
@@ -286,6 +361,56 @@ fn find_image_uri(value: &Value) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Real-world IPFS spellings all reach the same gateway path (the doubled `ipfs://ipfs/`
+    /// form used to produce `/ipfs/ipfs/<cid>` and a 404).
+    #[test]
+    fn ipfs_spellings_normalize_to_one_gateway_path() {
+        let cid = "QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG";
+        let v1 = "bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi";
+        for uri in [
+            format!("ipfs://{cid}/1.png"),
+            format!("IPFS://{cid}/1.png"),
+            format!("ipfs://ipfs/{cid}/1.png"),
+            format!("/ipfs/{cid}/1.png"),
+            format!("{cid}/1.png"),
+        ] {
+            assert_eq!(
+                ipfs_path(&uri),
+                Some(format!("{cid}/1.png").as_str()),
+                "{uri}"
+            );
+        }
+        assert_eq!(ipfs_path(v1), Some(v1));
+        assert_eq!(ipfs_path("ipfs://"), None);
+        assert_eq!(ipfs_path("https://example.com/Qm"), None);
+        assert_eq!(ipfs_path("QmShort"), None);
+        assert_eq!(ipfs_path("ipfs://日本語"), Some("日本語"));
+    }
+
+    #[test]
+    fn display_uri_converts_ipfs_to_public_gateway() {
+        assert_eq!(
+            display_uri("ipfs://QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG/1.json"),
+            "https://ipfs.io/ipfs/QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG/1.json"
+        );
+        assert_eq!(
+            display_uri("https://example.com/a.png"),
+            "https://example.com/a.png"
+        );
+    }
+
+    #[test]
+    fn data_uri_decodes_base64_only() {
+        let (bytes, mime) = decode_data_uri("data:image/png;base64,aGk=").unwrap();
+        assert_eq!(
+            (bytes.as_slice(), mime.as_deref()),
+            (b"hi".as_slice(), Some("image/png"))
+        );
+        assert!(decode_data_uri("data:image/svg+xml,<svg/>").is_err());
+        assert!(decode_data_uri("data:image/png;base64,!!").is_err());
+        assert!(decode_data_uri("data:nocomma").is_err());
+    }
 
     #[test]
     fn resolves_ipfs_and_ar_uris() {
@@ -643,5 +768,19 @@ mod tests {
         let url = Url::parse("http://localhost:80/x.png").unwrap();
         let err = client_for_url(&url).await.expect_err("localhost refused");
         assert!(err.to_string().contains("private host"), "{err}");
+    }
+
+    /// IPv6 literals keep their brackets in `host_str`: a private one is refused as private (not
+    /// a DNS failure) and a public one passes the guard without any lookup.
+    #[tokio::test]
+    async fn client_for_url_handles_ipv6_literals() {
+        for private in ["http://[::1]/x.png", "http://[fd00::1]/x.png"] {
+            let err = client_for_url(&Url::parse(private).unwrap())
+                .await
+                .expect_err(private);
+            assert!(err.to_string().contains("private host"), "{private}: {err}");
+        }
+        let public = Url::parse("http://[2606:4700:4700::1111]/x.png").unwrap();
+        assert!(client_for_url(&public).await.is_ok());
     }
 }

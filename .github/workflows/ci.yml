@@ -9,6 +9,9 @@ on:
   schedule:
     - cron: "0 0 * * 1"
 
+permissions:
+  contents: read
+
 # Fast main pushes (e.g. version bump followed by Cargo.lock sync) queue
 # redundant full test matrices; supersede the older run on the same ref.
 # The weekly schedule gets its own group: sharing refs/heads/main would let it
@@ -28,6 +31,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
       - name: Compare Cargo.toml and Cargo.lock versions
         run: |
           set -euo pipefail
@@ -50,6 +55,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # v1
         with:
@@ -67,6 +74,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # v1
         with:
@@ -82,6 +91,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # v1
         with:
@@ -98,6 +109,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # v1
         with:
@@ -114,6 +127,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # v1
         with:
@@ -132,6 +147,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # v1
         with:
@@ -142,19 +159,56 @@ jobs:
           cargo install cargo-audit --locked
           cargo install cargo-deny --locked
       - name: cargo audit
-        # RUSTSEC-2026-0235 (rkyv 0.7.46): locked via rust_decimal's optional
-        # rkyv feature, which no workspace member enables — rkyv never compiles.
-        # No patched 0.7.x exists; upstream fix needs rkyv 0.8 (rust_decimal
-        # not migrated). See docs/security.md.
-        run: cargo audit --ignore RUSTSEC-2026-0235
+        run: cargo audit
       - name: cargo deny
         run: cargo deny check
 
   # Cargo.toml version bump on main → tag → CD (GitHub Release + crates.io).
   # Path filter intentionally omitted: real releases always touch src/ and Cargo.lock.
+
+  # Packaged crate (what crates.io users build) must compile from the include allowlist.
+  package:
+    name: Package (cargo package --locked)
+    needs: [release-gate]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # v1
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - name: Verify package
+        run: cargo package --locked
+
+  # Release targets include macOS and Windows; compile-check them on every push.
+  check-os:
+    name: Check (${{ matrix.os }})
+    needs: [release-gate]
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # v1
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - name: Check
+        run: cargo check --locked --all-targets
+
   auto-tag:
     name: Auto Tag Release
-    needs: [test, msrv, rustfmt, clippy, docs, security-advisories]
+    needs: [test, msrv, rustfmt, clippy, docs, security-advisories, package, check-os]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
