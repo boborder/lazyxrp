@@ -1,6 +1,8 @@
 # references.md
 
-**Role:** 参考文献・サンプルコード（外部ドキュメントとプロジェクト内リンク集）。
+[日本語](references-ja.md)
+
+**Role:** References and sample code (external documentation and in-project links).
 
 ## Rust / Async
 
@@ -33,14 +35,14 @@
 - [xrpl-rust crate docs](https://docs.rs/xrpl-rust/latest/xrpl/)
 - [XRPL WebSocket API Reference](https://xrpl.org/docs/references/http-websocket-apis/public-api-methods/)
 
-## 設定 / エラー / ロギング
+## Config / Errors / Logging
 
 - [tracing crate docs](https://docs.rs/tracing/latest/tracing/)
 - [tracing-subscriber crate docs](https://docs.rs/tracing-subscriber/latest/tracing_subscriber/)
 - [secrecy crate docs](https://docs.rs/secrecy/latest/secrecy/)
 - [color-eyre crate docs](https://docs.rs/color-eyre/latest/color_eyre/)
 
-## examples
+## Examples
 
 - [tokio::spawn](https://docs.rs/tokio/latest/tokio/task/fn.spawn.html)
 - [JoinSet](https://docs.rs/tokio/latest/tokio/task/struct.JoinSet.html)
@@ -48,7 +50,7 @@
 - [book_offers](https://xrpl.org/docs/references/http-websocket-apis/public-api-methods/path-and-order-book-methods/book_offers)
 - [server_info](https://xrpl.org/docs/references/http-websocket-apis/public-api-methods/server-methods/server_info)
 
-## このプロジェクト内の関連ドキュメント
+## Related documents in this project
 
 - [`docs/requirements.md`](requirements.md)
 - [`docs/architecture.md`](architecture.md)

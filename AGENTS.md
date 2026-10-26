@@ -24,6 +24,8 @@
 
 When shipping behavior: update root `ROADMAP.md` and `docs/` (`architecture.md`, `test.md`, …) in the same change.
 
+**Bilingual docs:** every `docs/*.md` and `ROADMAP.md` is English and canonical; its Japanese twin is `*-ja.md` (e.g. `docs/architecture-ja.md`, `ROADMAP-ja.md`). Change both in the same change and keep the ID sets (TC / FR / NFR / S / R / I / P / F) identical. The `ROADMAP.md` coverage table exists only in the English file (`src/coverage.rs` TC-248 reads it). `DESIGN.md`, `README.md`, `AGENTS.md` and `CHANGELOG.md` have a single version.
+
 ## Execution contract
 
 1. Missing **target**, **reproduction**, or **completion criteria** → ask **1–2** focused questions before implementing.
