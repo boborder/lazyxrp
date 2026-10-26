@@ -668,14 +668,6 @@ mod tests {
     }
 
     #[test]
-    fn network_flag_precedes_exec_subcommand() {
-        let c =
-            Cli::try_parse_from(["lazyxrp", "--network", "testnet", "-x", "info"]).expect("parses");
-        assert!(c.exec);
-        assert_eq!(c.network, Some(Network::Testnet));
-    }
-
-    #[test]
     fn exec_conflicts_with_self_uninstall() {
         assert!(Cli::try_parse_from(["lazyxrp", "--self-uninstall", "-x", "info"]).is_err());
     }

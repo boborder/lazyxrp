@@ -1417,7 +1417,7 @@ mod tests {
     }
 
     #[test]
-    fn payment_composer_defaults_amount_1_and_i_toggles_iou_then_clears_fields_on_xrp() {
+    fn payment_composer_i_toggles_iou_and_clears_iou_fields_back_on_xrp() {
         let mut panel = WalletPanel::new(false);
         panel.is_focused = true;
         panel.open_payment_composer();

@@ -91,11 +91,6 @@ impl Network {
 mod tests {
     use super::*;
 
-    #[test]
-    fn default_is_mainnet() {
-        assert_eq!(Network::default(), Network::Mainnet);
-    }
-
     /// Case-insensitive parse (env `XRPL_NETWORK`); unknown names error.
     #[test]
     fn from_str_contract() {

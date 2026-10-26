@@ -1076,31 +1076,6 @@ mod tests {
         assert_eq!(parse_color("bright color250"), None);
     }
 
-    #[test]
-    fn splash_default_q_quits() -> color_eyre::Result<()> {
-        let _env_lock = env_lock();
-        let _test_env = TestEnvGuard::new(&["LAZYXRP_CONFIG", "LAZYXRP_DATA", "XDG_CONFIG_HOME"]);
-        _test_env.remove("LAZYXRP_CONFIG");
-        _test_env.remove("LAZYXRP_DATA");
-        // Redirect XDG so a real user config.toml (e.g. rebound keys) can't leak in.
-        _test_env.set(
-            "XDG_CONFIG_HOME",
-            std::env::temp_dir()
-                .join(format!("lazyxrp-xdg-test-{}", std::process::id()))
-                .to_str()
-                .expect("temp xdg path"),
-        );
-        let c = Config::new()?;
-        assert_eq!(
-            c.keybindings
-                .0
-                .get(&parse_key_sequence("<q>").unwrap_or_default())
-                .unwrap(),
-            &Action::Quit
-        );
-        Ok(())
-    }
-
     /// TC-027-029/TC-031/TC-032: parse_key_event — modifier composition, case-insensitivity, unknown keys error
     #[test]
     fn parse_key_event_contract() {

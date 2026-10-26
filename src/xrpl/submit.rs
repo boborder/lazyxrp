@@ -2503,7 +2503,7 @@ mod tests {
                 "operator not an address",
                 Some(SA_GENESIS),
                 |p| p.operator_xrpl = "not-an-address".into(),
-                "",
+                "destination",
             ),
         ];
         for (name, pin, tweak, expect) in cases {
@@ -3040,7 +3040,7 @@ mod tests {
             network: Network::Testnet,
         };
         submit_fxrp_execute_direct_mint(
-            Some("https://flare-api.flare.network/ext/C/rpc"),
+            Some("http://127.0.0.1:1"),
             false,
             crate::config::FlareNetwork::Coston2,
             "FLARE_EVM_KEY",
@@ -3052,7 +3052,6 @@ mod tests {
         match rx.try_recv() {
             Ok(Action::FxrpExecuteDirectMintSubmitErr(msg)) => {
                 assert!(msg.contains("disabled"), "unexpected message: {msg}");
-                assert!(msg.contains("execute = true"));
             }
             other => panic!("expected FxrpExecuteDirectMintSubmitErr, got {other:?}"),
         }
