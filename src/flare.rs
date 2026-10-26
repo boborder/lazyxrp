@@ -635,6 +635,20 @@ pub async fn read_memo_state(
     })
 }
 
+/// `MasterAccountController.isTransactionIdUsed(tx)`: whether a Smart Account direct-mint payment
+/// (memo instruction) was already finalized on Flare. Plain recipient-memo mints are not tracked
+/// by this view.
+pub async fn smart_account_tx_used(rpc_url: &str, tx: [u8; 32]) -> color_eyre::Result<bool> {
+    let provider = ProviderBuilder::new().connect_http(rpc_url.parse()?);
+    let controller_addr =
+        resolve_registry_contract(provider.clone(), rpc_url, MASTER_ACCOUNT_CONTROLLER_NAME)
+            .await?;
+    Ok(IMasterAccountController::new(controller_addr, provider)
+        .isTransactionIdUsed(tx.into())
+        .call()
+        .await?)
+}
+
 /// Resolve `MasterAccountController` and read one XRPL owner's Smart Account state (read-only):
 /// personal account (+ deployed?), nonce, operator wallets, FXRP transfer / redeem instruction
 /// fees and the personal account's FXRP balance.

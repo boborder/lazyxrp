@@ -515,6 +515,20 @@ impl WalletPanel {
         }))
     }
 
+    /// The signing account's own Smart Account personal account from the last Flare read. A read
+    /// that is stale or for another account (watch / switched) never counts as the signer's.
+    fn own_personal_account(&self) -> Option<&str> {
+        let info = self.smart_account.as_ref()?;
+        match &self.seed_address {
+            Some(Ok(signer))
+                if *signer == info.xrpl_owner && !snapshot_stale(self.smart_account_at) =>
+            {
+                Some(&info.personal_account)
+            }
+            _ => None,
+        }
+    }
+
     pub(super) fn open_fxrp_direct_mint_composer(&mut self) {
         if self.fxrp_direct_mint.is_none() {
             self.set_submit_flash(SubmitFlash::Error(
@@ -522,9 +536,12 @@ impl WalletPanel {
             ));
             return;
         }
+        // XRP-only users have no other Flare address: default to the personal account the
+        // Smart Account instructions (composer `a`) spend from. Still editable.
+        let flare_recipient = self.own_personal_account().unwrap_or_default().to_string();
         self.composer = Some(ComposerPhase::FxrpDirectMint {
             row: 0,
-            flare_recipient: String::new(),
+            flare_recipient,
             amount_xrp: "1".to_string(),
         });
         self.is_form_editing = false;
@@ -1441,6 +1458,13 @@ impl WalletPanel {
                 } else {
                     ""
                 };
+                let own_note = self
+                    .own_personal_account()
+                    .filter(|p| p.eq_ignore_ascii_case(flare_recipient.trim()))
+                    .map(|_| {
+                        "= your Smart Account personal account (a Flare RPC answer: check it on an explorer). FXRP then shows as SA FXRP on Overview"
+                    })
+                    .unwrap_or_default();
                 Paragraph::new(vec![
                     Line::from(Span::styled(
                         format!("Core Vault {vault}{net_note}"),
@@ -1474,6 +1498,7 @@ impl WalletPanel {
                         "Memo = DIRECT_MINTING + recipient (32 bytes)",
                         theme::dim_style(),
                     )),
+                    Line::from(Span::styled(own_note, theme::dim_style())),
                     Line::from(Span::styled(
                         format!("e edit · Tab rows · s/Ctrl-S send · Esc back{net_note}"),
                         theme::secondary_style(),

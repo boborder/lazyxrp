@@ -135,8 +135,9 @@ rc book --base XRP --quote USD --issuer <r-issuer>
 | `fxrp-redeem <XRP> <ADDR> [--tag N]` | Burn FXRP and have an agent pay XRP to the classic address `ADDR` (`redeemAmount`; `redeemWithTag` with `--tag`). Checks `minimumRedeemAmountUBA` and your FXRP balance, estimates gas first. Same gating as `fxrp-execute` |
 | `fxrp-tag-reserve` · `fxrp-tag-set <TAG> [--recipient A] [--executor A]` · `fxrp-tag-transfer <TAG> <TO>` | Minting tags: reserve one (pays the reservation fee in FLR), set its recipient / allowed executor (owner only; executor changes activate after the cooldown), or transfer it (irreversible). Same gating as `fxrp-execute` |
 | `sa-vault <firelight\|upshift> <deposit\|request-redeem\|claim> <VAULT_ID> <VALUE>` | Smart Account vault instruction as an XRPL Payment to the operator (pinned by `[flare.smart_accounts] expected_operator`; simulate first; `--yes` on mainnet). `VALUE` is the instruction's value field verbatim; per upstream `Instructions.sol`: deposit = FXRP base units (6 decimals), redeem = vault shares, claim = Firelight period / Upshift `YYYYMMDD`. The memo hex is printed first |
-| `sa-memo <ignore-memo\|set-nonce\|replace-fee\|set-executor\|remove-executor> <XRP> [--fee UBA] [--target TX] [--nonce N] [--new-fee UBA] [--executor ADDR]` | Smart Account memo instruction (`0xE0` / `0xE1` / `0xE2` / `0xD0` / `0xD1`) as a Direct Mint Payment to the Core Vault (needs `[flare.fassets] expected_core_vault`; the amount must leave a positive net mint; simulate first; `--yes` on mainnet). An executor then finalizes it: `fxrp-execute <tx> --data 0x` |
-| `sa-call <XRP> --call TARGET:0xDATA [--call …] [--fee UBA]` | Smart Account custom instruction `0xFE`: contract calls run from your personal account (value 0). Sends the 42-byte memo (keccak256 of the user operation) as a Direct Mint Payment to the Core Vault, prints the user-operation bytes; finalize with `fxrp-execute <tx> --data 0x<userOp>`. Same gating as `sa-memo` |
+| `sa-memo <ignore-memo\|set-nonce\|replace-fee\|set-executor\|remove-executor> <XRP> [--fee UBA] [--target TX] [--nonce N] [--new-fee UBA] [--executor ADDR]` | Smart Account memo instruction (`0xE0` / `0xE1` / `0xE2` / `0xD0` / `0xD1`) as a Direct Mint Payment to the Core Vault (needs `[flare.fassets] expected_core_vault`; the amount must leave a positive net mint; simulate first; `--yes` on mainnet). Every op mints the net amount to your personal account and has a precondition or side effect (executor pin / nonce). After it validates, waits up to 5 min (`--no-wait` skips) for a public executor to finalize it; otherwise `fxrp-execute <tx> --data 0x` finalizes it yourself |
+| `sa-call <XRP> --call TARGET:0xDATA [--call …] [--fee UBA]` | Smart Account custom instruction `0xFE`: contract calls run from your personal account (value 0). Sends the 42-byte memo (keccak256 of the user operation) as a Direct Mint Payment to the Core Vault and prints the user-operation bytes. A public executor cannot finalize it (it needs those bytes): run `fxrp-execute <tx> --data 0x<userOp>` yourself or hand them to an executor you trust. Same gating as `sa-memo` |
+| `sa-status <TXHASH>` | Read-only: has that Smart Account payment (`sa-memo` / `sa-call`, or a `sa-vault` instruction) been finalized on Flare (`isTransactionIdUsed`)? Plain recipient-memo mints (TUI composer `6`) are not tracked by this view (checked on Coston2) |
 
 Writes (`send`, `offer-create`, `offer-cancel`, `amm-deposit`, `amm-withdraw`, `account-delete`, `tx`, `nft-mint`, `nft-burn`, `sa-vault`, `sa-memo`, `sa-call`) wait until the transaction is validated and exit non-zero unless the final result is `tes…` (`--no-wait` returns right after submit). Flare EVM writes (`fxrp-execute`, `fxrp-redeem`, `fxrp-tag-*`) estimate gas, send, then wait for the receipt and exit non-zero on any error or a reverted receipt. `fxrp-execute` / `fxrp-redeem` / `sa-vault` / `sa-memo` / `sa-call` also require the XRPL / Flare networks to pair (mainnet ↔ flare, testnet ↔ coston2). Before signing, the endpoint's `network_id` must match `--network`: a mainnet `XRPL_RPC_SERVER` under `--network testnet` is refused.
 
@@ -179,6 +180,8 @@ Flare panels: `[flare] display = full | compact | off` in config (see [`docs/arc
 
 Flare Smart Accounts: the Overview FXRP panel shows your XRPL address's Flare personal account (FXRP balance, nonce, operator, instruction fees); Wallet composer `a` sends an FXRP transfer / redeem instruction as an XRPL Payment to the operator. Writes are signed only when `getXrplProviderWallets()[0]` equals the operator you pin out of band in `[flare.smart_accounts] expected_operator`.
 
+**XRPL key only, or also a Flare EVM key?** The XRPL seed alone covers every read, the Smart Account instructions (`0x01` transfer, `0x02` redeem, `sa-vault`) and the XRP → FXRP payment itself (composer `6`, recipient prefilled with your personal account; `sa-memo` / `sa-call`). The Flare side of a mint is then finalized by an *executor*: in a 50-day mainnet sample (2026-10-24) public executors finalized 905 plain and 1000+ Smart Account mints, 95–177 s after the XRPL ledger validated (8 samples), but whether one picks up *your* low-fee payment is unmeasured (an executor fee floor may exist), and `sa-call` / `0xFE` payments cannot be finalized by them at all. If nobody does, the XRP waits in the Core Vault until you finalize it yourself, which needs `FLARE_EVM_KEY`, `[flare.fassets] execute = true` and FLR (about 20 FLR attestation fee on mainnet plus gas). `fxrp-redeem` and `fxrp-tag-*` also sign with that EVM key. No Flare write has been sent on mainnet yet; see [`ROADMAP.md`](ROADMAP.md).
+
 ## Configuration
 
 Config lookup follows the XDG Base Directory spec:
@@ -204,7 +207,7 @@ cp .config/lazyxrp/config.toml "${XDG_CONFIG_HOME:-$HOME/.config}/lazyxrp/config
 | `FLARE_RPC_URL` | Flare FTSOv2 RPC (default: Flare mainnet). `https://` only unless `--allow-insecure-rpc`; never used for signing over `http://` |
 | `FLARE_FEEDS` | Flare feeds for Overview / Market (e.g. `FXRP/USD,FLR/USD`) |
 | `FLARE_FEED` | Legacy single-feed override |
-| `FLARE_EVM_KEY` | Flare executor key for FXRP C3 (`[flare.fassets] execute=true` only) |
+| `FLARE_EVM_KEY` | Flare EVM key (`[flare.fassets] execute=true` only): finalizes mints (`fxrp-execute`, composer `7`), `fxrp-redeem`, `fxrp-tag-*`. Not needed for reads, Smart Account instructions or sending the XRP |
 | `LAZYXRP_CONFIG` | Override config directory (`..` rejected) |
 | `LAZYXRP_DATA` | Override data directory |
 | `LAZYXRP_LOG_LEVEL` | Default file log filter (`tracing` `EnvFilter`) |
@@ -245,9 +248,9 @@ See [`AGENTS.md`](./AGENTS.md).
 
 ## Documentation
 
-Product docs live under [`docs/`](./docs/). Reading order: [`AGENTS.md`](./AGENTS.md).
+Product docs live under [`docs/`](./docs/) — each is English (`*.md`) with a Japanese twin (`*-ja.md`). Reading order: [`AGENTS.md`](./AGENTS.md).
 
-Planning: [`ROADMAP.md`](./ROADMAP.md).
+Planning: [`ROADMAP.md`](./ROADMAP.md) ([日本語](./ROADMAP-ja.md)).
 
 ## References
 

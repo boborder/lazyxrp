@@ -1,155 +1,168 @@
 # requirements.md
 
-**Role:** 要件定義・ゴール設計（FR/NFR の SSOT）。
+[日本語](requirements-ja.md)
+
+**Role:** requirements definition and goal design (SSOT for FR/NFR).
 
 Product **requirements** (what). Behavioral design: [`architecture.md`](architecture.md). Interaction & visuals: [`DESIGN.md`](../DESIGN.md). Plan: [`ROADMAP.md`](../ROADMAP.md).
 
-## 1. 目的
+## 1. Purpose
 
-- XRPL の状態を TUI で継続監視し、取引判断に必要な情報を素早く確認できるようにする。
-- 個人運用で使える実用性と、公開プロジェクトとして再利用しやすい構成を両立する。
+- Continuously monitor XRPL state in a TUI so the information needed for trading decisions can be checked quickly.
+- Be practical for personal operation while keeping a structure that is easy to reuse as a public project.
 
-## 2. 対象ユーザー
+## 2. Target users
 
-- 主対象: 開発者本人（自分の運用で日常利用）
-- 副対象: 公開リポジトリを使う外部ユーザー
+- Primary: the developer (daily use in their own operations)
+- Secondary: external users of the public repository
 
-## 3. 機能要件（Functional Requirements）
+## 3. Functional Requirements
 
-### FR-01: 監視モード
+### FR-01: Monitor mode
 
-- `lazyxrp`（引数なし）で TUI を起動し、XRPL 情報を継続表示すること。
-- 既定では設定ファイルのアカウントを監視し、`--account` で上書きできること。
+- `lazyxrp` (no arguments) starts the TUI and keeps displaying XRPL information.
+- By default it monitors the account in the config file; `--account` overrides it.
 
-### FR-02: サーバー情報取得
+### FR-02: Server info retrieval
 
-- RPC 経由で `server_info` / `fee` を定期取得し、画面に反映すること。
+- Periodically fetch `server_info` / `fee` via RPC and reflect them on screen.
 
-### FR-03: アカウント情報取得
+### FR-03: Account info retrieval
 
-- 監視対象アカウントの `account_info` を取得し、残高や状態を表示すること。
-- 手動更新アクションで即時再取得できること。
+- Fetch `account_info` of the monitored account and show balance and status.
+- A manual refresh action re-fetches immediately.
 
-### FR-04: 板情報取得
+### FR-04: Order book retrieval
 
-- 指定通貨ペアの `book_offers` を取得し、画面に反映すること。
-- 手動更新アクションで即時再取得できること。
+- Fetch `book_offers` for the specified currency pair and reflect it on screen.
+- A manual refresh action re-fetches immediately.
 
-### FR-05: WebSocket サブスクライブ
+### FR-05: WebSocket subscribe
 
-- WebSocket 接続で対象アカウントのストリームを購読し、受信イベントを画面へ反映すること。
+- Subscribe to the target account's stream over a WebSocket connection and reflect received events on screen.
 
-### FR-06: CLI コマンド実行
+### FR-06: CLI command execution
 
-- `info` / `account` / `book` / `summary` の各コマンドを **`lazyxrp -x`**（または alias `rc`）でサポートし、TUI 非起動でも取得結果を出力できること。
+- Support the `info` / `account` / `book` / `summary` commands via **`lazyxrp -x`** (or alias `rc`), so results can be printed without starting the TUI.
 
-### FR-07: 設定読み込み
+### FR-07: Config loading
 
-- 設定はファイルから読み込み、未指定時は既定値を利用すること。
-- 設定ファイル探索先は `$XDG_CONFIG_HOME/lazyxrp/config.toml` を優先し、未設定時は `~/.config/lazyxrp/config.toml` を利用すること。
-- キーバインド（グローバル既定は `config.json5`、詳細は [`DESIGN.md`](../DESIGN.md)）と XRPL 接続情報（RPC/WS、通貨、issuer、poll 間隔）を扱えること。
+- Settings are loaded from a file; defaults are used when unspecified.
+- The config file is looked up at `$XDG_CONFIG_HOME/lazyxrp/config.toml` first, and at `~/.config/lazyxrp/config.toml` when that is unset.
+- Key bindings (global defaults in `config.json5`, details in [`DESIGN.md`](../DESIGN.md)) and XRPL connection settings (RPC/WS, currency, issuer, poll interval) are supported.
 
-## 4. 非機能要件（Non-Functional Requirements）
+## 4. Non-Functional Requirements
 
-### NFR-01: 応答性
+### NFR-01: Responsiveness
 
-- 既定設定で描画と入力が途切れず、監視中に操作不能にならないこと。
+- With default settings, rendering and input do not stall, and the app never becomes unresponsive while monitoring.
 
-### NFR-02: 信頼性
+### NFR-02: Reliability
 
-- RPC/WS の一時失敗時にプロセス全体が即時異常終了しないこと。
-- 終了時にバックグラウンド処理をキャンセルし、TUI を正常終了できること。
+- A transient RPC/WS failure does not abort the whole process immediately.
+- On exit, background tasks are cancelled and the TUI terminates cleanly.
 
-### NFR-03: 可観測性
+### NFR-03: Observability
 
-- 主要イベントとエラーをログ出力できること。
+- Major events and errors can be logged.
 
-### NFR-04: 可搬性
+### NFR-04: Portability
 
-- 開発環境（macOS arm64）でビルド可能であること。
+- Buildable on the development environment (macOS arm64).
 
-## 5. 制約
+## 5. Constraints
 
-- 実装言語は Rust（Edition 2024）。
-- 非同期実行基盤は Tokio。
-- UI ライブラリは Ratatui + Crossterm。
-- XRPL 通信は `xrpl-rust` を利用する。
+- Implementation language is Rust (Edition 2024).
+- Async runtime is Tokio.
+- UI libraries are Ratatui + Crossterm.
+- XRPL communication uses `xrpl-rust`.
 
-### FR-08: NFT 情報取得
+### FR-08: NFT info retrieval
 
-- `account_nfts` で監視アカウントの NFT 一覧を取得し表示すること。
-- TUI の Assets タブで選択中 NFT の対応画像 URI（HTTP(S) / IPFS / Arweave）を取得し、対応 terminal protocol または halfblocks fallback で preview 表示すること。
-- CLI コマンド `nfts <address>` でも出力できること。
+- Fetch and show the monitored account's NFT list with `account_nfts`.
+- In the TUI Assets tab, fetch the image URI (HTTP(S) / IPFS / Arweave) of the selected NFT and show a preview using a supported terminal protocol or the halfblocks fallback.
+- Also available via the CLI command `nfts <address>`.
 
-### FR-09: TrustLine 情報取得
+### FR-09: TrustLine info retrieval
 
-- `account_lines` で監視アカウントの TrustLine 一覧を取得し表示すること。
-- CLI コマンド `lines <address>` でも出力できること。
+- Fetch and show the monitored account's TrustLine list with `account_lines`.
+- Also available via the CLI command `lines <address>`.
 
-### FR-10: AMM プール情報取得
+### FR-10: AMM pool info retrieval
 
-- `amm_info` で指定通貨ペアの AMM プール状態を取得し表示すること。
-- CLI コマンド `amm --asset1 <currency> --asset2 <currency> [--issuer1 <r-addr>] [--issuer2 <r-addr>]` でも出力できること。
+- Fetch and show the AMM pool state of the specified currency pair with `amm_info`.
+- Also available via the CLI command `amm --asset1 <currency> --asset2 <currency> [--issuer1 <r-addr>] [--issuer2 <r-addr>]`.
 
-### FR-11: Tx 履歴取得
+### FR-11: Tx history retrieval
 
-- `account_tx` で監視アカウントの最新 N 件のトランザクション履歴を取得し表示すること。
-- CLI コマンド `tx-history <address> [--limit N]` でも出力できること。
+- Fetch and show the latest N transactions of the monitored account with `account_tx`.
+- Also available via the CLI command `tx-history <address> [--limit N]`.
 
-### FR-14: アカウント ledger objects（読み取り）
+### FR-14: Account ledger objects (read)
 
-- `account_objects` で監視アカウントに紐づくオブジェクト（Check / Ticket / MPT / DID / Payment Channel / Escrow 等）を取得し、TUI の **Assets** タブ（上段: misc、下段: channel/escrow）で種別に応じて表示すること。
-- 手動リフレッシュ（既定キー `o`）で即時再取得できること。
+- Fetch objects tied to the monitored account (Check / Ticket / MPT / DID / Payment Channel / Escrow, etc.) with `account_objects` and show them by type in the TUI **Assets** tab (upper pane: misc, lower pane: channel/escrow).
+- A manual refresh (default key `o`) re-fetches immediately.
 
-### FR-12: ネットワーク選択
+### FR-12: Network selection
 
-- `--network mainnet|testnet|devnet|xahau|xahau-test` で接続先を切り替えられること。
-- 未指定時は `mainnet` を使用すること。
-- 環境変数 `XRPL_NETWORK` および `config.toml` の `[xrpl] network` でも指定できること。
-- 優先順位: CLI フラグ > 環境変数 > config.toml > デフォルト（mainnet）。
-- TUI セッション内で `<Ctrl-n>` によりネットワークを循環切替できること（設定ファイルへは永続化しない）。カスタム RPC 指定時はエンドポイントを維持すること。
-- `xahau` は本番チェーンとして mainnet 書き込みガード（`--yes`）が適用されること。
+- The target can be switched with `--network mainnet|testnet|devnet|xahau|xahau-test`.
+- `mainnet` is used when unspecified.
+- It can also be set by the environment variable `XRPL_NETWORK` and by `[xrpl] network` in `config.toml`.
+- Precedence: CLI flag > environment variable > config.toml > default (mainnet).
+- Within a TUI session, `<Ctrl-n>` cycles networks (not persisted to the config file). A custom RPC endpoint is kept when specified.
+- `xahau` is treated as a production chain, so the mainnet write guard (`--yes`) applies.
 
-### FR-15: Flare 表示レベル
+### FR-15: Flare display level
 
-- `[flare] display` で `full` / `compact` / `off` を選択できること（既定 `full`）。
-- `off` 時は Overview / Market の Flare パネル省略および FTSO/FXRP 読み取りポーリングをスキップすること（C3 execute 用 RPC URL は維持）。
-- `compact` 時は Oracle テーブルを維持し FTSO/FXRP は一行サマリー表示すること。
+- `[flare] display` selects `full` / `compact` / `off` (default `full`).
+- When `off`, the Flare panels on Overview / Market are omitted and FTSO/FXRP read polling is skipped (the RPC URL for C3 execute is kept).
+- When `compact`, the Oracle table is kept and FTSO/FXRP are shown as a one-line summary.
 
-### FR-16: Flare ウォレット読み取りパネル
+### FR-16: Flare wallet read panel
 
-- `[flare.wallet] address` に有効な EVM アドレスを設定した場合、Overview に読み取り専用パネルを表示すること（native FLR 残高、FXRP ERC20 残高、`[flare.fassets] execute` 状態、executor 用 env キー設定有無）。
-- アドレス未設定時はセットアップガイダンスを表示すること（Flare への書き込みは行わない）。
-- ポーリングは Overview タブ表示中のみ行うこと。
+- When `[flare.wallet] address` is set to a valid EVM address, Overview shows a read-only panel (native FLR balance, FXRP ERC20 balance, `[flare.fassets] execute` state, whether the executor env key is set).
+- When the address is unset, setup guidance is shown (nothing is written to Flare).
+- Polling happens only while the Overview tab is shown.
 
-### FR-17: Flare Smart Account（proof-based instruction flow）
+### FR-17: Flare Smart Account (proof-based instruction flow)
 
-- XRPL アドレス（署名アカウント、なければ watch アカウント）の Flare パーソナルアカウントを TUI のみで確認・操作できること。
-- 読み取り（Flare RPC、読み取り専用）: `MasterAccountController`（FlareContractRegistry 解決）の `getPersonalAccount` / `getNonce` / `getXrplProviderWallets` / `getInstructionFee(1)`（FXRP transfer）/ `getInstructionFee(2)`（FXRP redeem、いずれも XRP drops）、パーソナルアカウントの FXRP `balanceOf`（トークンの最小単位）、FXRP トークンの `decimals()`（18 超は拒否）、デプロイ済みか（code 有無）。FXRP / Flare パネル（FXRP Direct Mint）に表示し（残高は `decimals()` で整形）、`[flare] display = off` と Overview タブ限定は FTSO / FXRP と同じ扱いとすること。
-- 書き込み: Wallet composer `a` で `0x01` FXRP transfer（value = FXRP の最小単位。composer は 10 進の FXRP 額を、読み取った `decimals()` を使い整数演算のみで最小単位に変換する。小数桁数超過・`decimals` 未取得は拒否、受取先 = 0x EVM アドレス）と `0x02` FXRP redeem（value = lots）を XRPL `Payment`（operator 宛、`DestinationTag` なし、`Amount` = `getInstructionFee`（XRP drops）、32-byte Memo）で送れること。実行（FDC 証明 + `executeInstruction`）は operator が Flare 上で行う。
-- operator は Flare RPC の単一応答のため、`[flare.smart_accounts] expected_operator`（運用者が別経路で確認）と一致しない場合は署名を拒否すること（未設定も拒否）。mainnet は `--yes` 必須、simulate 前に署名・送信しないこと。
-- 対象外（ROADMAP）: カスタム instruction `0xFE` / `0xFF`、`executeDirectMintingWithData`、vault（Firelight / Upshift）instruction、FDC proof 取得。
+- The Flare personal account of an XRPL address (the signing account, or the watch account if none) can be inspected and operated from the TUI alone.
+- Read (Flare RPC, read-only): `MasterAccountController` (resolved via FlareContractRegistry) `getPersonalAccount` / `getNonce` / `getXrplProviderWallets` / `getInstructionFee(1)` (FXRP transfer) / `getInstructionFee(2)` (FXRP redeem; both in XRP drops), the personal account's FXRP `balanceOf` (in the token's smallest unit), the FXRP token's `decimals()` (values above 18 are rejected), and whether it is deployed (code present or not). Shown in the FXRP / Flare panel (FXRP Direct Mint) (balance formatted using `decimals()`); `[flare] display = off` and Overview-tab-only polling are treated the same as FTSO / FXRP.
+- Write: from Wallet composer `a`, send `0x01` FXRP transfer (value = FXRP smallest unit; the composer converts a decimal FXRP amount to the smallest unit with integer arithmetic only, using the fetched `decimals()`; excess fractional digits or unfetched `decimals` are rejected; recipient = 0x EVM address) and `0x02` FXRP redeem (value = lots) as an XRPL `Payment` (to the operator, no `DestinationTag`, `Amount` = `getInstructionFee` (XRP drops), 32-byte Memo). Execution (FDC proof + `executeInstruction`) is done by the operator on Flare.
+- Because the operator comes from a single Flare RPC response, signing is refused unless it matches `[flare.smart_accounts] expected_operator` (which the operator verifies through another channel); unset is also refused. Mainnet requires `--yes`; nothing is signed or submitted before simulate.
+- The recipient of C2 (FXRP Mint composer) defaults to the signing account's own personal account (only when the read belongs to the signing account and is within 300 seconds; another account's or a stale read leaves it blank). The composer shows the recipient in full, states that the personal account is a Flare RPC response, and prompts a check against an explorer. "XRP → FXRP in my own personal account" can be completed with an XRPL signature alone (no other Flare address is required).
+- Implemented (CLI only): vault instruction (`-x sa-vault`), memo instructions `0xE0` / `0xE1` / `0xE2` / `0xD0` / `0xD1` (`-x sa-memo`), custom instruction `0xFE` (`-x sa-call`), and FDC proof retrieval + `executeDirectMinting[WithData]` (`-x fxrp-execute`, requires a Flare EVM key). After verification, `sa-memo` waits up to 5 minutes for a public executor to finalize (skip with `--no-wait`) and, if not finished, shows how to finalize it yourself. The wait happens after the payment is validated, so a Flare read failure does not fail the command (it prints how to re-check with `sa-status` to stderr, exit 0). When an executor is pinned, `0xE0` / `0xE1` / `0xE2` do not wait and point to finalizing from the pinned executor. `-x sa-status <tx>` only reads `isTransactionIdUsed` (plain recipient memo mints are out of scope; confirmed on Coston2). `sa-call` (`0xFE`) can only be finalized by an executor holding the userOp bytes, so it does not wait for a public executor and states this together with the procedure.
+- Finalize depends on a third party on Flare (the executor). That a public executor is running on mainnet (read-only survey on 2026-10-24) does not guarantee that the small, low-fee payment lazyxrp sends will be picked up (the executor's minimum fee is unmeasured). If it is not picked up, the XRP stays in the Core Vault, and finalizing yourself needs an EVM key and FLR (about 20 FLR for mainnet attestation + gas).
+- Smart Account state is not persisted. Nothing about the Smart Account is stored. Everything shown (personal account, nonce, operator wallets, instruction fees, FXRP balance, vault positions) is read from Flare on each Overview poll and kept in memory only (`SmartAccountInfo`; a snapshot older than 300 s or from another network is refused, and `verify_*_terms` re-reads the views right before signing — TC-363). `getPersonalAccount(xrplAddress)` is deterministic, so there is nothing to remember, and a stored copy would only go stale (balance, nonce, operator and fees change) while bypassing those guards. The one datum worth persisting would be a user-verified `[flare.smart_accounts] expected_personal_account` pin (like `expected_operator`) to close S-019; it is not implemented (ROADMAP F5-b, P3). lazyxrp persists only the user-written config file and logs; it keeps no wallet, Smart Account or history cache.
+- Out of scope (ROADMAP): `0xFF` (userOp inside the memo; the only custom instruction a public executor can relay, so its priority rises for XRPL-signature-only use), and a TUI for `sa-memo` / `sa-call`.
 
-### FR-18: 宣言的 TX spec による書き込みと coverage 管理
+### FR-18: Write via declarative TX spec, and coverage tracking
 
-- XRPL トランザクション種別を `TxSpec`（フィールド仕様・検証・unsigned `tx_json`・型付き署名）として宣言的に追加でき、1 つの共通経路（TUI composer「Transaction」`m`・`-x tx <TYPE> Field=value…`・`-x nft-mint` / `-x nft-burn`）で書き込めること。共通経路は既存の書き込みガード（network 照合・mainnet `--yes`・simulate `tesSUCCESS` 必須かつ要求への束縛・Fee 上限・submit 直列化・`--watch` 拒否）を重複実装せず再利用すること。
-- NFT 5 種（NFTokenMint / Burn / CreateOffer / AcceptOffer / CancelOffer）を対象とする。URI は平文 ≤ 256 bytes を hex 化、TransferFee は 0..=50000（0 超は transferable 必須）、id は 64 hex、金額は `XRP:drops` / `CUR:issuer:value`。不可逆な操作（Burn・AcceptOffer）は composer で型付き確認（`BURN` / `ACCEPT`）を必須とすること。Assets タブ `x` で選択 NFT の Burn composer を NFTokenID 入力済みで開けること。
-- 対応状況は `src/coverage.rs` を SSOT として、種別ごとの read / TUI write / CLI write / status（Existing・Spec・Planned・Unsupported）を管理し、ROADMAP.md「XRPL coverage」表および README の件数と自動テストで一致を強制すること（`lazyxrp -x coverage` が表を出力）。
+- XRPL transaction types can be added declaratively as a `TxSpec` (field spec, validation, unsigned `tx_json`, typed signing) and written through one common path (TUI composer "Transaction" `m`, `-x tx <TYPE> Field=value…`, `-x nft-mint` / `-x nft-burn`). The common path reuses the existing write guards (network check, mainnet `--yes`, simulate `tesSUCCESS` required and bound to the request, Fee cap, submit serialization, `--watch` rejection) instead of reimplementing them.
+- Targets the 5 NFT types (NFTokenMint / Burn / CreateOffer / AcceptOffer / CancelOffer). URI is plain text ≤ 256 bytes, hex-encoded; TransferFee is 0..=50000 (above 0 requires transferable); id is 64 hex; amounts are `XRP:drops` / `CUR:issuer:value`. Irreversible operations (Burn, AcceptOffer) require typed confirmation in the composer (`BURN` / `ACCEPT`). Assets tab `x` opens the Burn composer for the selected NFT with the NFTokenID pre-filled.
+- Support status is managed with `src/coverage.rs` as the SSOT, tracking per type read / TUI write / CLI write / status (Existing, Spec, Planned, Unsupported), and automated tests enforce that it matches the ROADMAP.md "XRPL coverage" table and the counts in the README (`lazyxrp -x coverage` prints the table).
 
-### FR-13: シークレット管理（Phase 3 準備基盤）
+### FR-13: Secret management (Phase 3 groundwork)
 
-- 署名用資格情報は以下の優先順位で読み込めること：
+- Signing credentials can be loaded with the following precedence:
   1. CLI `--seed` / `--mnemonic`
-  2. 対応する環境変数 `XRPL_SEED` / `XRPL_MNEMONIC`
-  3. 設定ファイル `~/.config/lazyxrp/config.toml` の `[xrpl.signing] seed` / `mnemonic`
-- BIP39 mnemonic は secp256k1、BIP44 account index 0 に対応すること。family seed の既存動作を維持すること。
-- 設定ファイルに平文保存する場合のリスクをドキュメントに明記すること。
-- 資格情報が設定されていない状態で書き込み系コマンドを実行した場合、明示的なエラーメッセージを返すこと。
-- mainnet で資格情報を利用する書き込み系操作は、実行前に確認プロンプトを表示すること。
-- 資格情報から導出したアドレスのアカウント情報を TUI の Account タブに表示すること（未設定時は案内、無効時はエラー表示）。
+  2. The matching environment variables `XRPL_SEED` / `XRPL_MNEMONIC`
+  3. `[xrpl.signing] seed` / `mnemonic` in the config file `~/.config/lazyxrp/config.toml`
+- BIP39 mnemonics support secp256k1, BIP44 account index 0. Existing family seed behavior is preserved.
+- The risk of storing credentials in plain text in the config file is documented explicitly.
+- Running a write command with no credentials configured returns an explicit error message.
+- Write operations using credentials on mainnet show a confirmation prompt before execution.
+- The account info of the address derived from the credentials is shown in the TUI Account tab (guidance when unset, an error when invalid).
 
-## 6. 開発ステータス
+## 6. Development status
 
-- Phase 1（読み取り拡張）+ Phase 2（ネットワーク抽象化 + Xahau / Flare multichain）: **実装完了**
-- Phase 3（書き込み系 TX）: **実装済み** — TUI コンポーザー + CLI で Payment / AccountSet / SetRegularKey / OfferCreate / OfferCancel / TrustSet / FXRP Mint / FXRP Execute / AMMDeposit（two-asset）/ AMMWithdraw（全額 or LP 量）/ AccountDelete（TUI は `DELETE` 入力の確認必須）に対応。EscrowCreate / EscrowFinish / EscrowCancel は TUI コンポーザーのみ（時間条件のみ、crypto-condition 非対応）。残りは本番動作確認とエッジケース対応。
-- Phase 3b（宣言的 TX spec、FR-18）: **NFT 5 種を実装** — 共通経路（composer `m` / `-x tx`）。以降の family（Check / Ticket / DepositPreauth / SignerList / PaymentChannel / AMM）は `txspec/` に 1 ファイル + `FAMILIES` に 1 行で追加（`architecture.md` §2.1）。
+- Phase 1 (read expansion) + Phase 2 (network abstraction + Xahau / Flare multichain): **implemented**
+- Phase 3 (write TX): **implemented**: supports Payment / AccountSet / SetRegularKey / OfferCreate / OfferCancel / TrustSet / FXRP Mint / FXRP Execute / AMMDeposit (two-asset) / AMMWithdraw (full or LP amount) / AccountDelete (the TUI requires typing `DELETE` to confirm) in the TUI composer + CLI. EscrowCreate / EscrowFinish / EscrowCancel are TUI composer only (time conditions only, no crypto-conditions). What remains is production verification and edge-case handling.
+- Phase 3b (declarative TX spec, FR-18): **5 NFT types implemented**, common path (composer `m` / `-x tx`). Later families (Check / Ticket / DepositPreauth / SignerList / PaymentChannel / AMM) are added with one file under `txspec/` plus one row in `FAMILIES` (`architecture.md` §2.1).
+
+## 7. Scope notes: not yet supported / planned
+
+Pointers only; no new requirements. The ROADMAP is authoritative.
+
+- XRPL transaction types that are not writable: Planned: the Vault* family; Unsupported: types with no `xrpl-rust` typed model, XLS-66 Loan*, witness attestations, ConfidentialMPT*. See ROADMAP "XRPL coverage" (the table SSOT is `ROADMAP.md`, generated by `lazyxrp -x coverage`).
+- Flare items deferred: `0xFF`, a TUI for `sa-memo` / `sa-call`, FCC/PMW, OFT, and an own executor bot. See the Flare section of [`ROADMAP.md`](../ROADMAP.md).

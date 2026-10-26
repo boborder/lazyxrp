@@ -1,41 +1,45 @@
 # maintenance.md
 
-**Role:** 運用 — リリース・公開フロー。開発コマンドは [`tech.md`](tech.md) §5、アプリ動作は [`architecture.md`](architecture.md)、脅威は [`security.md`](security.md)。
+[日本語](maintenance-ja.md)
 
-## 1. 公開（リリース）フロー
+**Role:** Operations — release and publishing flow. Development commands are in [`tech.md`](tech.md) §5, app behavior in [`architecture.md`](architecture.md), threats in [`security.md`](security.md).
 
-公開は tag 駆動の自動リリース。`Cargo.toml` の `version` が SSOT。
+## 1. Publishing (release) flow
 
-**CI による `Cargo.toml` version 検知（[ci.yml](../.github/workflows/ci.yml)、2 か所）:**
+Publishing is a tag-driven automated release. `version` in `Cargo.toml` is the SSOT.
 
-- `release-gate`（Version & Lock Consistency）: 全 push / PR で `Cargo.toml` と `Cargo.lock` の `version` 一致を検査し、不一致ならフルテストマトリクス実行前に fail-fast。**version bump は `Cargo.lock` 同期と同一コミット**で push すること。
-- `auto-tag`（Auto Tag Release）: `main` push で test / msrv / rustfmt / clippy / docs / security-advisories / package / check-os 全ジョブ緑の後、`Cargo.toml` の `version` を最新 `v*` タグと比較し、上がっていれば `v<version>` タグを作成・push。GITHUB_TOKEN のタグ push は他 workflow を発火させないため、続けて `gh workflow run CD --ref v<version>` で CD を明示 dispatch する（workflow 内コメントに記載の既知挙動）。
-- `package`: `cargo package --locked`（`include` allowlist だけで crates.io 配布物がビルドできることを PR 段階で検証）。`check-os`: macOS / Windows で `cargo check --locked --all-targets`（リリース対象 OS のコンパイル確認）。どちらも auto-tag の `needs`。
-- ワークフローは top-level `permissions` を最小（`contents: read`、cd.yml は `actions: read` も）にし、書き込みが必要な job（auto-tag / publish-github-release / trigger-benchmark）だけが個別に昇格する。push しない checkout は `persist-credentials: false`。
-- `msrv`: `cargo +1.94.1 check --locked --all-targets`。`Cargo.toml` の `rust-version` を上げるときはこの job も同時に更新する。
+**`Cargo.toml` version detection by CI ([ci.yml](../.github/workflows/ci.yml), two places):**
 
-**CD（公開、[cd.yml](../.github/workflows/cd.yml) — tag push / workflow_dispatch で起動）:**
+- `release-gate` (Version & Lock Consistency): on every push / PR, checks that `version` in `Cargo.toml` and `Cargo.lock` match, and fails fast before the full test matrix runs if they differ. **Push a version bump in the same commit as the `Cargo.lock` sync.**
+- `auto-tag` (Auto Tag Release): on a `main` push, after all of test / msrv / rustfmt / clippy / docs / security-advisories / package / check-os are green, compares `version` in `Cargo.toml` with the latest `v*` tag and, if it is higher, creates and pushes the `v<version>` tag. A tag pushed with GITHUB_TOKEN does not trigger other workflows, so it then dispatches CD explicitly with `gh workflow run CD --ref v<version>` (known behavior, noted in a comment in the workflow).
+- `package`: `cargo package --locked` (verifies at PR time that the crates.io distribution builds from the `include` allowlist alone). `check-os`: `cargo check --locked --all-targets` on macOS / Windows (compile check for the release target OSes). Both are `needs` of auto-tag.
+- Workflows keep top-level `permissions` minimal (`contents: read`; cd.yml also `actions: read`), and only the jobs that need to write (auto-tag / publish-github-release / trigger-benchmark) escalate individually. Checkouts that do not push use `persist-credentials: false`.
+- `msrv`: `cargo +1.94.1 check --locked --all-targets`. When raising `rust-version` in `Cargo.toml`, update this job at the same time.
 
-| Job | 内容 |
+**CD (publishing, [cd.yml](../.github/workflows/cd.yml) — triggered by tag push / workflow_dispatch):**
+
+| Job | What it does |
 |---|---|
-| `ci-gate` | タグ付きコミットの CI run を完了まで監視し、非緑ならリリース中止 |
-| `build-binaries` | 6 ターゲット（macOS x86_64/arm64、Linux x86_64/aarch64/i686、Windows x86_64 MSVC）を `--locked --release` でビルド。`lazyxrp-<tag>-<os>-<arch>.tar.gz` + `.sha256`（`rp` 同梱） |
-| `publish-github-release` | tarball 一式を GitHub Release へ添付。本文 = 前タグからのコミット件名（`git log`）+ GitHub 生成ノート（`.github/release.yml` の PR ラベル分類） |
-| `publish-cargo` | `cargo package --locked`（token なしで検証）→ `cargo publish --locked --no-verify`（crates.io、`CARGO_REGISTRY_TOKEN`）。アーカイブ内容は `Cargo.toml` の `include`（crates.io allowlist）が決定 |
-| `trigger-benchmark` | リリース成功後、Benchmark workflow を `gh workflow run Benchmark -R "$GITHUB_REPOSITORY" --ref v<version>` で dispatch（checkout 無しの job なので `-R` 明示）。`workflow_run` 待ち受けは使わない: GITHUB_TOKEN 由来の CD では 5 回連続（v0.2.3–v0.2.7）で発火しなかった |
+| `ci-gate` | Watches the CI run of the tagged commit until it completes; aborts the release if it is not green |
+| `build-binaries` | Builds 6 targets (macOS x86_64/arm64, Linux x86_64/aarch64/i686, Windows x86_64 MSVC) with `--locked --release`. `lazyxrp-<tag>-<os>-<arch>.tar.gz` + `.sha256` (bundles `rp`) |
+| `publish-github-release` | Attaches the full set of tarballs to the GitHub Release. Body = commit subjects since the previous tag (`git log`) + GitHub-generated notes (PR label categories in `.github/release.yml`) |
+| `publish-cargo` | `cargo package --locked` (verification without the token) → `cargo publish --locked --no-verify` (crates.io, `CARGO_REGISTRY_TOKEN`). The archive contents are determined by `include` in `Cargo.toml` (the crates.io allowlist) |
+| `trigger-benchmark` | After a successful release, dispatches the Benchmark workflow with `gh workflow run Benchmark -R "$GITHUB_REPOSITORY" --ref v<version>` (`-R` is explicit because this job has no checkout). It does not wait on `workflow_run`: it failed to fire 5 times in a row (v0.2.3–v0.2.7) for a GITHUB_TOKEN-originated CD |
 
-**手動フォールバック:** 自動経路不調時のみ `mise run tag-push`（lint / test / doc / audit の 4 ゲート → `v<version>` タグ作成・push。tag push 自体で `cd.yml` が起動する）。
+**Manual fallback:** only when the automated path is broken, `mise run tag-push` (the 4 gates lint / test / doc / audit → create and push the `v<version>` tag; the tag push itself starts `cd.yml`).
 
-**リリース前（write 経路を変えた場合は必須）:** `mise run e2e-testnet`（`tests/testnet_e2e.rs`、公開 faucet + testnet で send / offer-create / offer-cancel / NFT mint → burn を validated まで確認、2 テストは `--test-threads=1` で直列、約 40 秒）。testnet の open-ledger fee が高騰すると simulate が `exceeds the requested tx limit` で落ちる。`fee` RPC で確認し（`ctx_execute` の fetch）、`LAZYXRP_E2E_NETWORK=devnet mise run e2e-testnet` で代替する（docs/test.md の run note）。CI では実行しない。0.3.0 では mock と実ノードの `simulate` 応答の差で全 write が壊れていた（TC-200）。
+**Before a release (required if you changed the write path):** `mise run e2e-testnet` (`tests/testnet_e2e.rs`; confirms send / offer-create / offer-cancel / NFT mint → burn through to validated using the public faucet + testnet; the 2 tests run serially with `--test-threads=1`, about 40 s). If the testnet open-ledger fee spikes, simulate fails with `exceeds the requested tx limit`. Check with the `fee` RPC (fetch via `ctx_execute`) and substitute `LAZYXRP_E2E_NETWORK=devnet mise run e2e-testnet` (run note in docs/test.md). Not run in CI. In 0.3.0, every write was broken by a difference between mock and real-node `simulate` responses (TC-200).
 
-**Benchmark:** `benchmark.sh`（`--json` / `--ci` / `--fast`、`mise run bench` / `bench-fast` / `bench-ci`）がビルド・check・test・clippy・doc・起動時間（hyperfine）・バイナリサイズ（cargo-bloat）・`cargo --timings` を個別 timeout で独立実行する（1 件の失敗が他を止めるのは `--ci` のときだけ）。`.github/workflows/benchmark.yml` は `workflow_dispatch` のみ（main push / PR では走らせない）。手動 dispatch の `strict=true` は `--ci` を渡す。成果物 `benchmark-results`（`benchmark-summary.json`・`benchmark.log`・`target/bloat-report.txt`・`target/timings-report.html`）。`--json` は `{benchmarks:[{name,result,value,unit,message}], summary:{pass,fail,skip,timestamp}, cache_comparison}`、`result` は `PASS` / `FAIL` / `TIMEOUT` / `SKIP`。
+**Benchmark:** `benchmark.sh` (`--json` / `--ci` / `--fast`; `mise run bench` / `bench-fast` / `bench-ci`) runs build, check, test, clippy, doc, startup time (hyperfine), binary size (cargo-bloat) and `cargo --timings` independently, each with its own timeout (one failure stops the others only with `--ci`). `.github/workflows/benchmark.yml` is `workflow_dispatch` only (not run on main push / PR). `strict=true` on a manual dispatch passes `--ci`. Artifact `benchmark-results` (`benchmark-summary.json`, `benchmark.log`, `target/bloat-report.txt`, `target/timings-report.html`). `--json` is `{benchmarks:[{name,result,value,unit,message}], summary:{pass,fail,skip,timestamp}, cache_comparison}`, with `result` one of `PASS` / `FAIL` / `TIMEOUT` / `SKIP`.
 
-**変更履歴:** 利用者に見える変更は、その変更のコミットで `CHANGELOG.md` の `## [Unreleased]` に追記する。
+**Changelog:** for user-visible changes, add an entry under `## [Unreleased]` in `CHANGELOG.md` in the same commit as the change.
 
-**通常リリース手順:** `mise run release <x.y.z>`（main・clean worktree・未使用タグ・`[Unreleased]` に項目があることを検査 → `Cargo.toml` bump + `Cargo.lock` 同期 + `CHANGELOG.md` の `[Unreleased]` を `[x.y.z] - 日付` に確定し compare リンク更新 → lint / test → `chore: release <x.y.z>` を 1 コミット。push はしない）→ `git push` → CI 全緑 → auto-tag がタグ作成 → CD 公開（目安: push から crates.io まで約 11 分。内訳は CI 約 1 分、ビルド 4〜6.5 分、crates.io 公開 約 3.5 分）。手動タグは auto-tag が重複を検知して skip するため原則不要。
+**Docs are bilingual:** every `docs/*.md` and `ROADMAP.md` has a Japanese twin `*-ja.md`; the English file is canonical for agents. Any change to one must be made to the other in the same change, and the ID sets (TC/FR/NFR/S/R/I/P/F) must match. There is no automated check; compare the ID sets of `X.md` and `X-ja.md` when editing (e.g. `grep -o "TC-[0-9]*"` on both).
 
-**crates.io パッケージ:** `Cargo.toml` の `include` が allowlist（`src/`、`tests/`、`build.rs`、`config.json5`、`DESIGN.md`（TC-128 が読む）、`CHANGELOG.md`、`SECURITY.md`、`LICENSE`、`README.md`、`ROADMAP.md`（TC-248 が読む）、`.env.example`）。`docs/` は GitHub のみ。確認: `cargo package --list`（警告 0 であること）。
+**Normal release procedure:** `mise run release <x.y.z>` (checks main, clean worktree, unused tag, and that `[Unreleased]` has entries → `Cargo.toml` bump + `Cargo.lock` sync + finalizes `[Unreleased]` in `CHANGELOG.md` as `[x.y.z] - date` and updates the compare links → lint / test → one `chore: release <x.y.z>` commit. It does not push) → `git push` → all CI green → auto-tag creates the tag → CD publishes (rule of thumb: about 11 minutes from push to crates.io; CI about 1 min, build 4–6.5 min, crates.io publish about 3.5 min). A manual tag is generally unnecessary because auto-tag detects the duplicate and skips.
 
-**定期 CI:** 毎週月曜 00:00 UTC に CI 全体を実行し、yanked crate や新しい advisory を push 前に検出する（2026-10-03 の yanked `yoke-derive` は push 時に初めて落ちた）。auto-tag は push 時のみ動く。
+**crates.io package:** `include` in `Cargo.toml` is the allowlist (`src/`, `tests/`, `build.rs`, `config.json5`, `DESIGN.md` (read by TC-128), `CHANGELOG.md`, `SECURITY.md`, `LICENSE`, `README.md`, `ROADMAP.md` (read by TC-248), `.env.example`). `docs/` is on GitHub only. Check: `cargo package --list` (must show 0 warnings).
 
-**依存更新:** [`.github/dependabot.yml`](../.github/dependabot.yml) が週次で PR を作る。GitHub Actions はコミット SHA 固定（`# vN` コメント付き）なので、その更新もこの PR 経由。cargo は minor/patch をまとめた 1 PR、major は個別。例外: `tokio-tungstenite >=0.25` は dependabot で ignore、かつ `deny.toml` の `[bans] deny`（`tungstenite` / `tokio-tungstenite` `>=0.25`）で fail — xrpl-rust の 0.24 ツリーとの二重化を防ぐ。xrpl-rust が上げたら両方外す。
+**Scheduled CI:** runs the whole CI every Monday 00:00 UTC to catch yanked crates and new advisories before a push (the yanked `yoke-derive` on 2026-10-03 first failed at push time). auto-tag runs only on push.
+
+**Dependency updates:** [`.github/dependabot.yml`](../.github/dependabot.yml) opens PRs weekly. GitHub Actions are pinned to commit SHAs (with `# vN` comments), so their updates also come through these PRs. Cargo gets one PR grouping minor/patch; majors are separate. Exception: `tokio-tungstenite >=0.25` is ignored by dependabot and also fails via `[bans] deny` in `deny.toml` (`tungstenite` / `tokio-tungstenite` `>=0.25`), which prevents duplicating the xrpl-rust 0.24 tree. Remove both once xrpl-rust moves up.

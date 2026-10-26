@@ -1,40 +1,51 @@
 # problems.md
 
-**Role:** 注意点・落とし穴（P-xxx 既知問題と運用メモ）。
+[日本語](problems-ja.md)
 
-## 既知の問題
+**Role:** Pitfalls and gotchas (P-xxx known issues and operational notes).
 
-### P-002: `critical-section` 未解決シンボルによるリンク失敗
+## Known issues
 
-- 症状: `Undefined symbols for architecture arm64: __critical_section_1_0_acquire/release`
-- 原因: `embassy-sync` などの依存経路で `critical-section` が必要だが、`std` 実装が有効でない構成だとリンク失敗する
-- 対応: `Cargo.toml` で `critical-section = { version = "1.2.0", features = ["std"] }` を追加
-- 注意: ソース内に直接の利用がなくても、この依存は `std` 実装の有効化に必要。未使用依存として削除しない
-- 検証: `cargo check` / `cargo build --bins` を連続実行して再発有無を確認する
+### P-002: Link failure from unresolved `critical-section` symbols
 
-### ~~P-003: EscrowCreate composer/poll still unwired~~ → 解決（2026-10-11）
+- Symptom: `Undefined symbols for architecture arm64: __critical_section_1_0_acquire/release`
+- Cause: a dependency path such as `embassy-sync` needs `critical-section`, and linking fails when the `std` implementation is not enabled
+- Fix: add `critical-section = { version = "1.2.0", features = ["std"] }` to `Cargo.toml`
+- Note: even though nothing in the source uses it directly, this dependency is required to enable the `std` implementation. Do not remove it as an unused dependency
+- Verification: run `cargo check` and `cargo build --bins` back to back and confirm the failure does not recur
 
-- 実態は signing も未実装で、poll の `_ => {}` が `EscrowCreateSubmit` を黙って捨てていた。signing / `submit_escrow_*` / composer（`9` Create・`0` Finish/Cancel）を追加し、poll の `PollCommand` match から catch-all を外した（新しい command の取りこぼしはコンパイルエラーになる）。TC-215–221、testnet E2E は `docs/test.md`。
+### ~~P-003: EscrowCreate composer/poll still unwired~~ → resolved (2026-10-11)
+
+- In fact signing was also unimplemented, and the `_ => {}` arm in poll silently dropped `EscrowCreateSubmit`. Added signing / `submit_escrow_*` / composer (`9` Create, `0` Finish/Cancel) and removed the catch-all from the poll `PollCommand` match (a missed new command is now a compile error). TC-215–221; testnet E2E is in `docs/test.md`.
 
 ### P-005: `config.rs` remains one file
 
-- 症状: `src/config.rs` は約 1200 行（defaults / file / env / keybindings / styles / Flare network+display+wallet / paths / test helpers）
-- 対応: 約 1500 行を超えたら `config/defaults.rs`, `config/keybindings.rs`, `config/styles.rs` に分割
+- Symptom: `src/config.rs` is about 1200 lines (defaults / file / env / keybindings / styles / Flare network+display+wallet / paths / test helpers)
+- Fix: once it exceeds about 1500 lines, split into `config/defaults.rs`, `config/keybindings.rs`, `config/styles.rs`
 
-### P-007: Xahau `NetworkID` の simulate 受理は未検証
+### P-007: Xahau `NetworkID` acceptance by simulate is unverified
 
-- `network_id > 1024` のネットワーク（Xahau など）では write 時に `NetworkID` を tx へ注入する（simulate は `ensure_network` が保存した id、署名は `signing::with_network_id` のスレッドローカル scope）。
-- Xahau の `simulate` が `NetworkID` 付き tx を受理するかは **実機未検証**（単体テスト TC-352 は注入条件のみ）。Xahau への write は live 確認が済むまで未保証。
+- On networks with `network_id > 1024` (Xahau etc.), writes inject `NetworkID` into the tx (simulate uses the id stored by `ensure_network`; signing uses the thread-local scope of `signing::with_network_id`).
+- Whether Xahau's `simulate` accepts a tx carrying `NetworkID` is **not verified on a live node** (unit test TC-352 covers only the injection condition). Writes to Xahau are not guaranteed until a live check is done.
 
-## 運用メモ
+### P-008: Public-executor dependency of FXRP mint finalization
 
-- macOS の `ld: ... built for newer 'macOS' version ...` は、現状は警告扱い
-- ビルド安定化の完了条件は、`cargo check` に加えて `cargo build --bins` が成功すること（リンクエラーは `check` だけでは検出できない）
+- A mainnet read-only scan (2026-10-24) shows public executors exist (905 plain + 1000+ Smart Account mints in ~50 days, 95–177 s after XRPL validation, 8 samples), but their fee floor is unmeasured and no Flare write has been sent on mainnet.
+- If nobody picks a payment up, the XRP waits in the Core Vault, and self-finalizing needs an EVM key + ~20 FLR (ROADMAP F4-d, security.md 2026-10-24).
 
-## 解消済み（履歴）
+### P-009: Bilingual docs can drift
 
-- ~~P-001: Rust の既知制限 (`issue #100013`) による lifetime bound エラー~~ → `start_poll_task` / `start_ws_task` の構成整理で解消
-- ~~W-001: `SplashScreen` コンポーネント未使用警告~~ → `App` の `splash` フィールドに組み込み済み
-- ~~W-002: Phase 3 関連の未使用警告~~ → `create_payment_tx` 削除済み。`create_and_sign_payment` の `#[allow(dead_code)]` と “Phase 3” コメントも除去済み（本番経路: `poll.rs` / `cli_exec.rs`、2026-09-12）
-- ~~P-004: Submit validation split across layers~~ → `signing::validate_payment_input` を composer（preview / submit / quote）と poll `PaymentSubmit` で共有（TC-197–198、2026-10-10）
-- ~~P-006: live `simulate` omits `LastLedgerSequence`~~ → rippled 3.x autofills Fee/Sequence only; every write (TUI + CLI) failed on testnet. `parse_simulate_result` fills `ledger_index + 20` when absent (TC-200、2026-10-10)
+- There is no automated check. When editing, compare the ID sets (TC/FR/S/R/P) of `X.md` vs `X-ja.md` (see maintenance.md).
+
+## Operational notes
+
+- The macOS `ld: ... built for newer 'macOS' version ...` message is currently treated as a warning
+- Build stability is complete only when `cargo build --bins` succeeds in addition to `cargo check` (link errors cannot be detected by `check` alone)
+
+## Resolved (history)
+
+- ~~P-001: lifetime bound error from a known Rust limitation (`issue #100013`)~~ → resolved by restructuring `start_poll_task` / `start_ws_task`
+- ~~W-001: unused warning for the `SplashScreen` component~~ → integrated into the `splash` field of `App`
+- ~~W-002: unused warnings related to Phase 3~~ → `create_payment_tx` removed. The `#[allow(dead_code)]` on `create_and_sign_payment` and the "Phase 3" comment were also removed (production paths: `poll.rs` / `cli_exec.rs`, 2026-09-12)
+- ~~P-004: Submit validation split across layers~~ → `signing::validate_payment_input` is now shared by the composer (preview / submit / quote) and poll `PaymentSubmit` (TC-197–198, 2026-10-10)
+- ~~P-006: live `simulate` omits `LastLedgerSequence`~~ → rippled 3.x autofills Fee/Sequence only; every write (TUI + CLI) failed on testnet. `parse_simulate_result` fills `ledger_index + 20` when absent (TC-200, 2026-10-10)

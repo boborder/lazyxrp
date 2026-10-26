@@ -1,25 +1,27 @@
 # security.md
 
-**Role:** セキュリティ設計・機密管理（S-xxx / R-xxx、I-1〜I-11 のレビュー記録）。
+[日本語](security-ja.md)
+
+**Role:** Security design and secret handling (review records for S-xxx / R-xxx and I-1 to I-11).
 
 Generated: 2026-05-01 | Scope: Full codebase (`src/`, `install.sh`, `docs/`)
 
-This file tracks **security review findings (S-xxx)** and **implementation risks (R-xxx)** (table below). Invariant IDs (I-1〜I-11) are referenced across `docs/` and the code:
+This file tracks **security review findings (S-xxx)** and **implementation risks (R-xxx)** (table below). Invariant IDs (I-1 to I-11) are referenced across `docs/` and the code:
 
 | ID | Invariant | Enforced in |
 |----|-----------|-------------|
-| I-1 | 平文 `seed` / `mnemonic` は `Config::new()` で `None` に消し、`SecretString` のみ残す。`lib.rs::run` が `Config::take_secrets()` で `Secrets`（seed / mnemonic / Flare EVM 鍵）へ移してから `Arc<Config>` を共有する（共有 config は秘密を持たない） | `config.rs` / `lib.rs` |
-| I-2 | mainnet（`Network::is_production()`）の write は `--yes` または `skip_mainnet_prompt: true` が必須 | `poll.rs` / `submit.rs` の各 submit |
-| I-3 | write は必ず simulate → `tesSUCCESS` → `Sequence`/`Fee` 取得 → sign → submit。simulate なしで署名しない | `poll.rs` / `submit.rs` |
-| I-4 | `XRPL_SEED` / `XRPL_MNEMONIC` は `Config::new()` が poll / UI タスクを spawn する前に一度だけ取り出して env から除去（`take_secret_env`）。以降 `remove_var` は走らない。Linux では起動時の `/proc/self/environ` ブロックは書き換わらず、同一 uid の読み手には見え続ける（既知の限界） | `config.rs` |
-| I-5 | 設定優先順位: CLI > env > user `config.toml` > 組み込み `config.json5`。資格情報は上位ソースが seed / mnemonic のどちらかを設定したら下位ソースの両方を破棄（同一階層で両方設定は `credential_from_secrets` がエラー） | `lib.rs` resolve 関数 + `config.rs` (`layer_credentials`, `apply_cli_credentials`) |
-| I-6 | 定期 poll は `MIN_POLL_INTERVAL`（10 s）未満にしない | `poll.rs` `drive_poll_loop` |
-| I-7 | `account_tx` の not-found は空リスト（エラーにしない） | `poll.rs` |
-| I-8 | `Tui::drop` は端末を復元し、drop 中に panic しない | `tui.rs` |
-| I-9 | `TAB_TITLES` とパネルの数・順序が一致（TC-060）。パネル追加時は同じ変更で更新 | `app.rs` |
-| I-10 | `TxRow` の `ArcValue` JSON を `Arc::make_mut` しない | `xrpl/types.rs`（規約） |
-| I-11 | 全 RPC は `tokio::time::timeout(RPC_TIMEOUT, …)` で包む | `poll.rs` / `client.rs` |
-| — | 署名は family seed **または** BIP39 mnemonic（`credential_from_secrets`）。mnemonic を seed に変換しない | `signing.rs` |
+| I-1 | Plaintext `seed` / `mnemonic` are cleared to `None` in `Config::new()`, leaving only `SecretString`. `lib.rs::run` moves them via `Config::take_secrets()` into `Secrets` (seed / mnemonic / Flare EVM key) before sharing the `Arc<Config>` (the shared config holds no secrets) | `config.rs` / `lib.rs` |
+| I-2 | A write on mainnet (`Network::is_production()`) requires `--yes` or `skip_mainnet_prompt: true` | each submit in `poll.rs` / `submit.rs` |
+| I-3 | A write always goes simulate → `tesSUCCESS` → fetch `Sequence`/`Fee` → sign → submit. Never sign without simulating | `poll.rs` / `submit.rs` |
+| I-4 | `XRPL_SEED` / `XRPL_MNEMONIC` are taken out once by `Config::new()` before the poll / UI tasks are spawned, and removed from the env (`take_secret_env`). `remove_var` never runs afterwards. On Linux the startup `/proc/self/environ` block is not rewritten and stays visible to readers with the same uid (known limitation) | `config.rs` |
+| I-5 | Config precedence: CLI > env > user `config.toml` > built-in `config.json5`. For credentials, once a higher source sets either seed or mnemonic, both from lower sources are discarded (setting both at the same level is an error in `credential_from_secrets`) | resolve functions in `lib.rs` + `config.rs` (`layer_credentials`, `apply_cli_credentials`) |
+| I-6 | The periodic poll never goes below `MIN_POLL_INTERVAL` (10 s) | `poll.rs` `drive_poll_loop` |
+| I-7 | `account_tx` not-found is an empty list (not an error) | `poll.rs` |
+| I-8 | `Tui::drop` restores the terminal and does not panic during drop | `tui.rs` |
+| I-9 | `TAB_TITLES` matches the panels in count and order (TC-060). When adding a panel, update it in the same change | `app.rs` |
+| I-10 | Never `Arc::make_mut` the `ArcValue` JSON of a `TxRow` | `xrpl/types.rs` (convention) |
+| I-11 | Every RPC is wrapped in `tokio::time::timeout(RPC_TIMEOUT, …)` | `poll.rs` / `client.rs` |
+| — | Signing uses a family seed **or** a BIP39 mnemonic (`credential_from_secrets`). A mnemonic is never converted into a seed | `signing.rs` |
 
 ## S-xxx ↔ R-xxx cross-reference
 
@@ -39,6 +41,7 @@ This file tracks **security review findings (S-xxx)** and **implementation risks
 | S-016 | R-015 | Issuer and financial input validation |
 | S-017 | R-016 | Endpoint network ≠ selected network at signing time |
 | S-018 | R-017 | Smart Account operator (payment destination) and fee come from one Flare RPC answer |
+| S-019 | R-019 | FXRP Mint recipient prefilled from a Flare RPC answer (`getPersonalAccount`) |
 
 Risks without a matching S entry (e.g. R-006 mainnet guard bypass, R-008 RPC 429) are tracked in the R-xxx table below and [`test.md`](test.md).
 
@@ -63,102 +66,112 @@ Risks without a matching S entry (e.g. R-006 mainnet guard bypass, R-008 RPC 429
 | R-015 | S-016 | Unvalidated issuer and financial numeric inputs (**mitigated**) |
 | R-016 | S-017 | Custom endpoint on another network bypasses the `--yes` guard (**mitigated**, TC-203) |
 | R-017 | S-018 | Smart Account instruction Payment to an RPC-supplied operator / fee (**mitigated**, TC-240 / TC-243) |
+| R-019 | S-019 | C2 recipient default = RPC-supplied personal account (**accepted**: shown in full, editable, user checks it; TC-367) |
 | R-018 | — | Spec'd (generic) write path: guards live only in shared helpers; irreversible types must set `confirm` (**mitigated**, TC-088 table / TC-252–255) |
 
-## 2026-10-16 宣言的 TX spec の書き込み面（NFT family、R-018）
+## 2026-10-16 Declarative TX spec write surface (NFT family, R-018)
 
-- **新しい書き込み面**: `Action::GenericTxSubmit` → `PollCommand::GenericTx` → `submit_generic_transaction`（`-x tx` / `nft-mint` / `nft-burn` は `cli_exec` 経由で同じ `simulate_confirm_submit`）。全 spec'd 種別がこの 1 経路を通るため、ガードは種別ごとに複製せず共有ヘルパだけに置く: `TxSpec::prepare`（フィールド検証・未知フィールド拒否・`Time` を絶対秒に 1 回だけ確定）→ mainnet `--yes`（`run_submit` / `resolve_submit_wallet`）→ `ensure_network` → `account_info` → simulate `tesSUCCESS` かつ要求への束縛（`check_simulate_bound_to_request`）→ Fee 上限 → 署名 → submit、すべて poll の `submit_lock` 下。`--watch` は `Cmd::signs` で拒否。
-- **不可逆操作の確認規則**: 不可逆（NFTokenBurn = NFT 破棄、NFTokenAcceptOffer = 資産移転と支払い）な種別は `TxSpec::confirm` に確認フレーズ（`BURN` / `ACCEPT`）を持ち、TUI composer は `s` で直接 queue せず AccountDelete と同じ type-to-confirm（`DangerConfirm`）を必ず挟む（部分入力は拒否、Esc でフォーム復帰）。CLI は mainnet の確認プロンプト / `--yes` と simulate 結果の表示。**今後の family で不可逆な種別を追加するときは `confirm` を必ず設定する**（設定しない種別は 1 キーで署名まで進む）。
-- **入力の信頼境界**: URI は平文を hex 化するため任意バイト列にならない（≤ 256 bytes）。id は 64 hex・アドレスは checksum・金額は既存の `parse_offer_amount`（0・非有限は拒否）で検証し、composer と poll で同じ `TxSpec::validate` を使う。Assets タブ `x` の prefill は表示中の NFT 行（ノード由来）の `nft_id` だが、フォームの確認と simulate を必ず通る。
-- **残余**: NFT 一覧は watch アカウントのもので署名アカウントとは限らない（所有者が違えば simulate が `tec*` で拒否）。`tfMutable` mint・0 価格オファーは未対応（crate / 共通パーサの制約）。
-- **Account objects family（Check / Ticket / DepositPreauth / SignerListSet / Clawback）**: 資産移転・不可逆・ロックアウトの恐れがある CheckCash（`CASH`）/ SignerListSet（`SIGNERS`：誤った list + master key 無効でアカウントがロック）/ Clawback（`CLAWBACK`）は型付き確認フレーズ必須。SignerEntries は `addr:weight` を検証（≤ 8 件・重み 1..65535・重複なし・quorum ≤ 重み合計）。DepositPreauth の credentials・Clawback の MPT は未対応。
-- **XChain family（XChainCreateBridge / Commit / Claim / AccountCreateCommit）**: ブリッジ新設（削除 tx なし）・資産ロック／バーンを伴う Commit・Claim・AccountCreateCommit は型付き確認（`BRIDGE` / `COMMIT` / `CLAIM`）必須。`XChainBridge` は 4 要素の flat 文字列を厳格検証（checksum・door 相違・XRP/IOU 混在拒否）し、Commit / Claim の Amount は bridge の issue と一致必須。witness attestation は署名を form で作れないため未対応。
-- **Channel / AMM family（PaymentChannelCreate / Fund / Claim、AMMCreate / Bid / Delete）**: XRP ロック・資産移転・LP トークン消費・不可逆な種別は型付き確認（`LOCK` / `FUND` / `CLAIM` / `CREATE` / `BID` / `DELETE`）必須、AMMVote のみ確認なし。Claim の `Signature` / `PublicKey` は貼り付け入力の hex 検証のみで、署名はローカルで生成しない（`CredentialIDs` は未対応）。drops は 1..=1e17 の整数、AuthAccounts は ≤ 4 件・重複なし・署名者自身は拒否。AMMCreate は owner reserve 相当の特別 Fee を burn するため Fee 上限ガード（共通経路）が効く。
-- **MPT / Identity family（MPTokenIssuanceDestroy、CredentialDelete、DIDDelete、OracleDelete、PermissionedDomainDelete）**: 不可逆な削除系は型付き確認（`DESTROY` / `DELETE`）必須。Credential / DID / Oracle の blob は平文を hex 化（任意バイト列を直接入れない）、価格は decimal u64 のみ、Domain ID はゼロハッシュ拒否。MPT の確認不要な Set（lock / unlock）・Authorize は可逆。Vault* と MPT mutation / confidential 系は未対応（`coverage.rs` に理由）。
+- **New write surface**: `Action::GenericTxSubmit` → `PollCommand::GenericTx` → `submit_generic_transaction` (`-x tx` / `nft-mint` / `nft-burn` go through `cli_exec` to the same `simulate_confirm_submit`). Every spec'd type goes through this single path, so the guards live only in shared helpers instead of being duplicated per type: `TxSpec::prepare` (field validation, rejection of unknown fields, `Time` fixed once to absolute seconds) → mainnet `--yes` (`run_submit` / `resolve_submit_wallet`) → `ensure_network` → `account_info` → simulate `tesSUCCESS` and binding to the request (`check_simulate_bound_to_request`) → Fee cap → sign → submit, all under the poll's `submit_lock`. `--watch` is rejected by `Cmd::signs`.
+- **Confirmation rule for irreversible operations**: irreversible types (NFTokenBurn = destroys the NFT, NFTokenAcceptOffer = asset transfer and payment) carry a confirmation phrase (`BURN` / `ACCEPT`) in `TxSpec::confirm`. The TUI composer does not queue directly on `s`; it always goes through the same type-to-confirm (`DangerConfirm`) as AccountDelete (partial input is rejected, Esc returns to the form). The CLI uses the mainnet confirmation prompt / `--yes` and shows the simulate result. **When adding an irreversible type in a future family, always set `confirm`** (a type without it goes to signing with one key press).
+- **Input trust boundary**: a URI is hex-encoded from plaintext, so it cannot be arbitrary bytes (≤ 256 bytes). ids are 64 hex, addresses are checksummed, amounts are validated by the existing `parse_offer_amount` (0 and non-finite are rejected), and the composer and poll use the same `TxSpec::validate`. The Assets-tab `x` prefill is the `nft_id` of the displayed NFT row (node-derived), but it always passes the form confirmation and simulate.
+- **Residual**: the NFT list belongs to the watched account, which is not necessarily the signing account (if the owner differs, simulate rejects with `tec*`). `tfMutable` mint and 0-price offers are unsupported (crate / shared parser limitation).
+- **Account objects family (Check / Ticket / DepositPreauth / SignerListSet / Clawback)**: CheckCash (`CASH`), which can transfer assets, SignerListSet (`SIGNERS`: a wrong list plus a disabled master key locks the account) and Clawback (`CLAWBACK`), which are irreversible or risk lockout, require a typed confirmation phrase. SignerEntries validates `addr:weight` (≤ 8 entries, weight 1..65535, no duplicates, quorum ≤ total weight). DepositPreauth credentials and Clawback MPT are unsupported.
+- **XChain family (XChainCreateBridge / Commit / Claim / AccountCreateCommit)**: creating a bridge (there is no delete tx) and Commit / Claim / AccountCreateCommit, which lock or burn assets, require a typed confirmation (`BRIDGE` / `COMMIT` / `CLAIM`). `XChainBridge` strictly validates a flat 4-element string (checksum, distinct doors, XRP/IOU mix rejected), and the Commit / Claim Amount must match the bridge's issue. Witness attestation is unsupported because the form cannot produce the signature.
+- **Channel / AMM family (PaymentChannelCreate / Fund / Claim, AMMCreate / Bid / Delete)**: types that lock XRP, transfer assets, consume LP tokens or are irreversible require a typed confirmation (`LOCK` / `FUND` / `CLAIM` / `CREATE` / `BID` / `DELETE`); only AMMVote has no confirmation. Claim's `Signature` / `PublicKey` are only hex-validated pasted input and no signature is generated locally (`CredentialIDs` is unsupported). drops is an integer in 1..=1e17, AuthAccounts is ≤ 4 entries with no duplicates and the signer itself is rejected. AMMCreate burns a special Fee equal to the owner reserve, so the Fee cap guard (shared path) applies.
+- **MPT / Identity family (MPTokenIssuanceDestroy, CredentialDelete, DIDDelete, OracleDelete, PermissionedDomainDelete)**: irreversible deletions require a typed confirmation (`DESTROY` / `DELETE`). Credential / DID / Oracle blobs are hex-encoded from plaintext (arbitrary bytes cannot be entered directly), prices are decimal u64 only, and a zero-hash Domain ID is rejected. MPT Set (lock / unlock), which needs no confirmation, and Authorize are reversible. Vault* and MPT mutation / confidential types are unsupported (reasons in `coverage.rs`).
 
-## 2026-10-20 Flare EVM 書き込み面の拡張と FDC proof 取得（ユーザー承認済みの方針転換）
+## 2026-10-24 C2 recipient default and waiting for finalize (S-019 / R-019)
 
-- **新しい書き込み面**（Flare EVM key）: `-x fxrp-execute`（FDC 手数料 + `executeDirectMinting`）/ `fxrp-redeem`（FXRP を burn）/ `fxrp-tag-reserve` / `fxrp-tag-set` / `fxrp-tag-transfer`。TUI には出さず CLI のみ。ガードは全て共通: `[flare.fassets] execute = true`（既定 false）→ 起動時に取り込んだ EVM key → https の Flare RPC → Flare mainnet は `--yes`。`--watch` は key を落とすので拒否される。各書き込みは前提を on-chain で読んでから `estimate_gas`（revert ならここで止まる）→ 送信。
-- **FDC proof 取得は lazyxrp の外、という roadmap-log の方針を覆した**。新しい外部 HTTP 面は verifier と DA layer の 2 つ。対策: https 限定（`FDC_VERIFIER_URL` / `FDC_DA_URL` の上書きも）、redirect 無効、応答 1 MiB 上限、30 s timeout、verifier の `abiEncodedRequest` を tx hash / `proofOwner` / 型 / source id と byte 照合してから手数料を払う（偽の request に手数料を払わせない）、手数料上限 100 FLR（実測 20 FLR）、DA 応答は実行前に proof parser で形を検査。proof の正否は contract が Merkle 検証するため、DA / verifier が偽造できるのは手数料の浪費まで。proof は署名鍵の address に束縛される（他者は使えない）。
-- **残るリスク**: 手数料（約 20 FLR）は round が finalize しない / DA が応答しない場合に戻らない。`fxrp-tag-transfer` は取り消せない。`sa-vault` の `value` は生値で受ける（単位は upstream `Instructions.sol` で確認: deposit = FXRP 最小単位、redeem = shares、claim = period / `YYYYMMDD`）ため、桁の取り違えは利用者側の責任で、メモ hex を事前表示する。`fxrp-execute` / `fxrp-redeem` / `sa-vault` は XRPL と Flare の network 対（mainnet ↔ flare、testnet ↔ coston2）を RPC 前に強制する。**実送信の確認状況**: Coston2 では `fxrp-redeem`（`redeemAmount` / `redeemWithTag`）、`sa-vault`、`sa-memo`、`sa-call`、`fxrp-execute` を実送信で確認済み（ROADMAP F3-b〜F3-d、TC-345）。Flare mainnet への書き込みと `fxrp-tag-reserve` / `fxrp-tag-set` / `fxrp-tag-transfer` は実送信していない（拒否経路のみ実測、ROADMAP F3-a）。
+- **New trust boundary (S-019)**: to complete "XRP → FXRP in my own personal account" with only an XRPL signature, the FXRP Mint composer fills the recipient with the signing account's personal account (the `getPersonalAccount` answer). This value is a single Flare RPC answer with no pin like the Core Vault / operator has, so a malicious / compromised RPC can return an attacker's address and take over the mint destination (the Core Vault is pinned so the XRP destination does not change, but the FXRP recipient does). **Mitigation**: the value is prefilled only when the read belongs to the signing account and is within 300 seconds, all digits are shown with an explicit note "this is a Flare RPC answer; check it in an explorer", it is editable, and `verify_direct_mint_terms` right before sending is unchanged. **Residual (accepted)**: trusting the RPC itself is the same premise as S-015; there is no cross-check against a second independent source and no pin (`expected_personal_account`). If concerned, type the recipient by hand or use a trusted RPC (`FLARE_RPC_URL`). The only mitigation beyond display + user check that was considered is an optional `[flare.smart_accounts] expected_personal_account` pin, which is not implemented (ROADMAP F5-b, P3).
+- **Smart Account data is not persisted**: nothing about the Smart Account is stored. Everything shown (personal account, nonce, operator wallets, instruction fees, FXRP balance, vault positions) is read from Flare on each Overview poll and kept in memory only (`SmartAccountInfo`; a snapshot older than 300 s or from another network is refused, and `verify_*_terms` re-reads the views right before signing — TC-363).
+- **Finalize is a third party's transaction**: the Flare side of a mint (`executeDirectMinting[WithData]`) is performed by an executor. A mainnet read-only investigation (2026-10-24, `docs/test.md`) found public executors running (normally 905 txs / 10 parties, Smart Account 1000+ txs / 8 parties, 95–177 s after XRPL finality), but there is no guarantee that a low-fee payment will be picked up (the fee floor is unmeasured). If it is not picked up, the XRP stays in the Core Vault, and finalizing it yourself needs an EVM key and FLR (mainnet attestation about 20 FLR + gas). If the Smart Account's `executeDirectMintingWithData` reverts, FXRP is also not minted and the XRP does not return automatically (`0xE0` recovery procedure).
+- **`sa-memo` waiting and `sa-status`**: `isTransactionIdUsed` is read-only and is not used to allow or refuse signing (display only). After the payment is validated, the command never fails whatever happens: a Flare read failure prints the re-check procedure (`sa-status`) to stderr and exits 0 (a non-zero exit would invite a re-run and a second payment to the Core Vault). When an executor is pinned, `0xE0` / `0xE1` / `0xE2` can only be finalized by the pinned executor, so it does not wait and says so (`0xD0` / `0xD1` bypass the pin). `sa-call` (`0xFE`) does not wait because public executors do not hold the userOp bytes. This view does not track a plain recipient-memo mint (C2) (on Coston2, a C2 tx finalized by a public executor was confirmed to be `false`). The guards (Core Vault pin, network pairing, simulate, `--yes`) are unchanged.
+- **Unverified**: no write to Flare mainnet has ever actually been sent (see the 2026-10-20 section above). Passing `0xD1` (executor release without pin) on mainnet is also unverified.
 
-## 2026-10-16 Smart Account operator pin（S-018）
+## 2026-10-20 Flare EVM write surface expansion and FDC proof retrieval (user-approved policy reversal)
 
-- **新しい信頼境界**: Flare Smart Accounts の instruction Payment の宛先（`MasterAccountController.getXrplProviderWallets()[0]`）と `Amount`（`getInstructionFee(id)`）は Flare RPC の単一の応答で決まる。悪意ある / 侵害された RPC は自分の XRPL アドレスを operator として返し、ユーザーの XRP と FXRP 操作の意図（32-byte memo）を横取りできる。Core Vault（C2）と同じ構造。
-- **対応**: `[flare.smart_accounts] expected_operator`（運用者が別経路で確認した値）と `flare::check_operator` で完全一致したときのみ署名。未設定・不一致は署名前に拒否（RPC 前、TC-240 / TC-243）。fee は `signing::check_smart_account_fee` で `1..=10 XRP` に限定（0 や桁違いの応答を拒否）。Payment は classic 宛先・`DestinationTag` なし（tag があると direct minting 経路で tag 保有者に credit される）、operator ≠ 署名アカウント。mainnet は `--yes`（TC-088 表に追加）、simulate `tesSUCCESS` 後のみ署名。
-- **残余**: pin は運用者の責任（誤った値を設定すれば誤った宛先に送る）。operator の実行（FDC 証明 + `executeInstruction`）は XRPL 外で、lazyxrp は結果を検証しない（TUI は「personal account の FXRP 残高を確認」と案内）。`getPersonalAccount` / 残高は表示用で署名可否には使わない（残高超過の transfer だけ composer で拒否）。
-- **単位（FXRP の `decimals()`）**: transfer の value は FXRP の最小単位そのもの（コントラクトは換算せず `transfer(to, value)` に渡す）。composer は 10 進の額を、同じ Flare RPC から読んだ `decimals()` で整数演算のみで変換する（桁数超過・`decimals > 18`・未取得は拒否、TC-247）。**残余**: `decimals()` と残高は operator と同じ単一 RPC の応答なので、悪意ある RPC は桁をずらした額を送らせうる。ただし送金額はユーザー自身の personal account の FXRP に限られ、宛先はユーザーが入力した受取先で、operator だけが pin で固定される（RPC の `decimals()` / 残高は pin 対象外。信頼する RPC を選ぶ前提は S-015 と同じ）。
+- **New write surface** (Flare EVM key): `-x fxrp-execute` (FDC fee + `executeDirectMinting`) / `fxrp-redeem` (burns FXRP) / `fxrp-tag-reserve` / `fxrp-tag-set` / `fxrp-tag-transfer`. CLI only, not exposed in the TUI. All guards are shared: `[flare.fassets] execute = true` (default false) → the EVM key taken in at startup → https Flare RPC → `--yes` on Flare mainnet. `--watch` is rejected because it drops the key. Each write reads its preconditions on-chain, then `estimate_gas` (a revert stops here), then sends.
+- **The roadmap-log policy that FDC proof retrieval stays outside lazyxrp was reversed.** There are two new external HTTP surfaces: the verifier and the DA layer. Mitigations: https only (including overrides of `FDC_VERIFIER_URL` / `FDC_DA_URL`), redirects disabled, 1 MiB response cap, 30 s timeout, the verifier's `abiEncodedRequest` is byte-compared against the tx hash / `proofOwner` / type / source id before paying the fee (a fake request cannot make us pay), fee cap 100 FLR (measured 20 FLR), and the DA response's shape is checked by the proof parser before execution. The contract Merkle-verifies the proof, so all a forged DA / verifier can do is waste the fee. The proof is bound to the signing key's address (others cannot use it).
+- **Remaining risks**: the fee (about 20 FLR) is not returned if the round does not finalize / the DA does not respond. `fxrp-tag-transfer` cannot be undone. `sa-vault`'s `value` is accepted raw (units confirmed in upstream `Instructions.sol`: deposit = FXRP smallest unit, redeem = shares, claim = period / `YYYYMMDD`), so mistaking the magnitude is the user's responsibility, and the memo hex is shown beforehand. `fxrp-execute` / `fxrp-redeem` / `sa-vault` enforce the XRPL–Flare network pairing (mainnet ↔ flare, testnet ↔ coston2) before any RPC. **Status of real sends**: on Coston2, `fxrp-redeem` (`redeemAmount` / `redeemWithTag`), `sa-vault`, `sa-memo`, `sa-call` and `fxrp-execute` were confirmed with real sends (ROADMAP F3-b to F3-d, TC-345). Writes to Flare mainnet and `fxrp-tag-reserve` / `fxrp-tag-set` / `fxrp-tag-transfer` have not been sent (only the rejection paths were measured, ROADMAP F3-a).
 
-## 2026-10-11 endpoint network 照合（S-017）
+## 2026-10-16 Smart Account operator pin (S-018)
 
-- **症状**: `XRPL_RPC_SERVER`（`rpc_server` / `--server` も同じ）は `--network` の preset より優先される（architecture §6.2）。mainnet endpoint を指したまま `--network testnet` で書き込むと、`--yes` ガードは testnet 扱いで外れ、署名・送信は mainnet に届いた。TUI の `<Ctrl-n>` も custom endpoint を維持するため同様。testnet E2E 中に、mainnet の `XRPL_RPC_SERVER` と `XRPL_SEED` が設定されたシェルで判明（その回の write は env を外していたため mainnet 送信なし）。
-- **対応**: 署名前に `RpcClient::ensure_network` で `server_info.network_id` を照合し、不一致なら拒否（mainnet は `network_id` 省略 = 0、testnet 1、devnet 2、xahau 21337、xahau-test 21338 を実測）。TUI 全 XRPL submit（`fetch_account_summary_for_submit`）と CLI `send` / `offer-create` / `offer-cancel` が対象。write 1 回につき RPC が 1 回増える。
-- **残余**: 照合はノードの自己申告。悪意ある endpoint は偽の `network_id` を返せる（信頼する endpoint を選ぶ前提は S-015 と同じ）。
+- **New trust boundary**: the destination (`MasterAccountController.getXrplProviderWallets()[0]`) and `Amount` (`getInstructionFee(id)`) of a Flare Smart Accounts instruction Payment are decided by a single Flare RPC answer. A malicious / compromised RPC can return its own XRPL address as the operator and intercept the user's XRP and the FXRP operation intent (32-byte memo). Same structure as the Core Vault (C2).
+- **Mitigation**: sign only on an exact match between `[flare.smart_accounts] expected_operator` (a value the operator verified through another channel) and `flare::check_operator`. Unset or mismatched is rejected before signing (before any RPC, TC-240 / TC-243). The fee is limited to `1..=10 XRP` by `signing::check_smart_account_fee` (a 0 or order-of-magnitude-off answer is rejected). The Payment has a classic destination and no `DestinationTag` (with a tag, direct minting credits the tag holder), and operator ≠ signing account. Mainnet needs `--yes` (added to the TC-088 table), and signing happens only after simulate `tesSUCCESS`.
+- **Residual**: the pin is the operator's responsibility (setting a wrong value sends to the wrong destination). Operator execution (FDC proof + `executeInstruction`) happens outside XRPL and lazyxrp does not verify the result (the TUI says "check the personal account's FXRP balance"). `getPersonalAccount` / balance are for display and are not used to allow Smart Account instruction signing (only a transfer exceeding the balance is rejected in the composer). **Exception**: the default recipient of the FXRP Mint composer (C2) (S-019 / R-019, 2026-10-24 above).
+- **Units (FXRP `decimals()`)**: the transfer value is FXRP's smallest unit itself (the contract does not convert and passes it to `transfer(to, value)`). The composer converts a decimal amount with integer arithmetic only, using `decimals()` read from the same Flare RPC (excess digits, `decimals > 18` and not-fetched are rejected, TC-247). **Residual**: `decimals()` and the balance are answers from the same single RPC as the operator, so a malicious RPC can make the user send an amount shifted by orders of magnitude. However, the amount sent is limited to FXRP in the user's own personal account, the destination is the recipient the user typed, and only the operator is fixed by the pin (RPC `decimals()` / balance are outside the pin; trusting the RPC you choose is the same premise as S-015).
 
-## 2026-08-06 再レビュー対応
+## 2026-10-11 Endpoint network check (S-017)
 
-- **S-012 NFT外部URIのDNS SSRF**: 修正済み。`src/xrpl/nft_image.rs` は各URIのDNS応答を全件検査し、private/loopback/link-local/unique-local に加え unspecified (`0.0.0.0`)・`0.0.0.0/8`・broadcast・site-local `fec0::/10`、IPv6 に埋め込まれた IPv4（mapped `::ffff:`・compatible `::a.b.c.d`・NAT64 `64:ff9b::/96`・6to4 `2002::/16`）も中身の IPv4 で判定して拒否する。自動redirectを無効化し、redirectごとに解決・検査・接続先固定を行う (上限6ホップ・4 MiB — TC-146/147)。https → http の redirect は拒否（TC-237）。
-- **S-013 NFT metadata再帰DoS**: 修正済み。metadata探索に深さ32・ノード数10,000の上限を設けた。レスポンス上限4 MiBも維持。
-- **S-014 ウォレット同時送信**: 修正済み。poll task内の `account_info → simulate → sign → submit` を `PollContext.submit_lock` で直列化。blind retryは追加していない。submit失敗後は次操作でaccount_infoを再取得する。
-- **S-015 insecure RPCでの署名**: 修正済み。署名seed保持中に `http://` または `ws://` endpointを使用すると起動を拒否する。読み取り専用利用はseed未設定時に限り許可。
-- **S-016 取引入力のissuer・数値検証**: 修正済み。TrustSet、RegularKey、OfferCreateのclassic address checksum、IOU currency形式、有限かつ正数のIOU値、正のXRP dropsを検証する。
+- **Symptom**: `XRPL_RPC_SERVER` (`rpc_server` / `--server` too) takes precedence over the `--network` preset (architecture §6.2). Writing with `--network testnet` while pointing at a mainnet endpoint made the `--yes` guard treat it as testnet and drop, and the signing / submission reached mainnet. The TUI `<Ctrl-n>` also keeps the custom endpoint, so the same applies. Found during testnet E2E in a shell with mainnet `XRPL_RPC_SERVER` and `XRPL_SEED` set (that run's writes had the env removed, so nothing was sent to mainnet).
+- **Mitigation**: before signing, `RpcClient::ensure_network` checks `server_info.network_id` and rejects a mismatch (measured: mainnet omits `network_id` = 0, testnet 1, devnet 2, xahau 21337, xahau-test 21338). It covers all TUI XRPL submits (`fetch_account_summary_for_submit`) and CLI `send` / `offer-create` / `offer-cancel`. This adds one RPC per write.
+- **Residual**: the check is the node's self-report. A malicious endpoint can return a fake `network_id` (trusting the endpoint you choose is the same premise as S-015).
 
-未完了の構造課題（`poll.rs`分割、Actionエラー型移行、fake RPC/WebSocket統合試験、Watch/Operate UI分離）は今回の安全修正の範囲外。次回変更ではlive testを補助扱いにし、ローカルfixtureを追加する。
+## 2026-08-06 Re-review fixes
 
-## 2026-10-04 セキュリティ監査対応（ソース監査 → 局所再現 → 修正）
+- **S-012 NFT external URI DNS SSRF**: fixed. `src/xrpl/nft_image.rs` inspects every DNS answer for each URI and rejects private/loopback/link-local/unique-local plus unspecified (`0.0.0.0`), `0.0.0.0/8`, broadcast, site-local `fec0::/10`, and IPv4 embedded in IPv6 (mapped `::ffff:`, compatible `::a.b.c.d`, NAT64 `64:ff9b::/96`, 6to4 `2002::/16`) judged by the inner IPv4. Automatic redirects are disabled, and each redirect is resolved, inspected and connection-pinned (limit 6 hops, 4 MiB — TC-146/147). https → http redirects are rejected (TC-237).
+- **S-013 NFT metadata recursion DoS**: fixed. Metadata traversal has a depth limit of 32 and a node limit of 10,000. The 4 MiB response cap is kept.
+- **S-014 Concurrent wallet submission**: fixed. `account_info → simulate → sign → submit` in the poll task is serialized by `PollContext.submit_lock`. No blind retry was added. After a submit failure, the next operation re-fetches account_info.
+- **S-015 Signing over insecure RPC**: fixed. Using an `http://` or `ws://` endpoint while holding a signing seed refuses startup. Read-only use is allowed only when no seed is set.
+- **S-016 Issuer and numeric validation of transaction input**: fixed. TrustSet, RegularKey and OfferCreate validate the classic address checksum, IOU currency format, finite positive IOU values and positive XRP drops.
 
-ソース監査のリード 14 件を順に確認し、以下を修正した（各テストは `docs/test.md` TC-175〜TC-182）。
+The open structural issues (splitting `poll.rs`, migrating the Action error type, fake RPC/WebSocket integration tests, separating the Watch/Operate UI) are outside the scope of this safety fix. In the next change, treat live tests as auxiliary and add local fixtures.
 
-- **Flare RPC の https 強制・署名拒否（S-015 拡張, R-014）**: `FLARE_RPC_URL` / preset を `lib.rs::check_flare_endpoint` で検査。`http://` は `--allow-insecure-rpc` なしで拒否、署名資格情報（XRPL seed/mnemonic または Flare EVM 鍵 env）がある場合は `--allow-insecure-rpc` でも拒否。Core Vault 宛先は Flare RPC の応答が決めるため、2026-10-11 から `[flare.fassets] expected_core_vault`（運用者が別経路で確認した値）と一致しない限り署名しない（`flare::check_core_vault`、未設定も拒否）。
-- **node が決める Fee の上限**: `signing::MAX_NODE_FEE_DROPS`（2 XRP = 2,000,000 drops）超の Fee は署名前に拒否（TUI・CLI `Send` とも simulate 経路の `sequence_fee_ledger_from_simulate`）。CLI `Send` も simulate 必須（`tesSUCCESS` 以外は署名しない）、残高検査は `amount + fee` を `checked_add`。2026-10-11 から `parse::check_simulate_bound_to_request`（全 write 共通の `simulate_tx_requiring_tes_success` 内）で simulate の `Sequence` が要求値と一致し、`LastLedgerSequence` が `ledger_index` 超 `+ MAX_LLS_WINDOW`（100）以下であることも検査。残余: 窓は node 自身の `ledger_index` 基準。
-- **`xrp-ledger.toml` 取得（S-012 拡張）**: manifest 由来 domain を ASCII ホスト名のみに制限し、NFT 画像と同じガード付き取得（`nft_image::fetch_via`/`client_for_url`: private/loopback 拒否・DNS 固定・redirect 毎に再検査・上限 1 MiB）を使用。
-- **proxy 経由の DNS 固定バイパス**: `client_for_url` は `.no_proxy()`。**HTTP(S)_PROXY 必須環境では NFT 画像・toml の取得は失敗する（fail closed）**。private 判定に `100.64/10`・`192.0.0.0/24`・`198.18/15`・`240/4` を追加。
-- **`--watch`（閲覧専用起動、2026-10-11、TC-234–235）**: `lib::enter_watch_mode` が起動直後に `Secrets`（`take_secrets()` で `Config` から移した seed / mnemonic / `flare_evm_key`）を空にし、アドレスだけを表示用に残す。TUI は Wallet（composer・鍵生成）を出さず、poll task に credential が渡らない。`-x` の署名系サブコマンドは RPC 前に拒否。
-- **クラッシュ系**: 遠隔文字列のバイトスライス（`short_hex` / tx hash / path address）を文字単位に、Flare の `U256::to::<T>()` を `saturating_to` / `try_into` に、`ripple_path_find` のソートを `f64::total_cmp`（非有限値は末尾）に変更。panic hook は `process::exit(1)` のため、これらはすべて遠隔入力で TUI を終了させ得た。
-- **RPC 本文上限**: 16 MiB を `Content-Length` 事前検査に加えて chunk 読み込み中にも強制。
-- **リモート文字列の制御・不可視文字**: `error_message` / `engine_result(_message)` / tx hash（`util::sanitize_remote`）と Server パネルの host / version（`sanitize_text`）から制御文字・bidi override・zero-width 書式文字を除去（TC-236）。
-- **S-003**: 警告は `Config::new()`（`logging::init` より前）で出るため `tracing` ではなく `eprintln!`。
-- **`install.sh`**: GitHub token を curl `-K -`(stdin) / wget `--config`(fd) 経由にして argv から除去。想定外文字を含む token は無視。curl は `--proto '=https' --proto-redir '=https'`（redirect 先も https のみ）、README のワンライナーも `--proto '=https' --tlsv1.2`。wget フォールバックは scheme 制限なし（`--https-only` は再帰時のみ有効）。
-- **`cd.yml`**: `cargo package --locked`（token なし）で検証ビルドし、token 付きは `cargo publish --locked --no-verify`。
+## 2026-10-04 Security audit response (source audit → local reproduction → fix)
 
-調査して**修正しなかった**もの（同一オペレーター内の操作 / ハードニング）: Ctrl-N 後のネットワーク表示と接続先のずれ、URL に入れた provider token のログ出力、dUNL 署名未検証（表示専用）、NFT デコードの寸法上限、CD の ref/environment 制約（GitHub 側 ruleset で担保）。二重送信は 2026-10-11 に対応（TUI: 同一 params の write は結果 Ok/Err 到着まで拒否、TC-228）。config の keybindings からの Action 束縛は後日修正: `config::is_bindable` の許可リスト（payload なしのナビ/リフレッシュ系のみ）外はロード時エラー（`*Submit` 等は束縛不可）。
+14 leads from the source audit were checked in order and the following were fixed (tests in `docs/test.md` TC-175 to TC-182).
 
-## 2026-10-11 セキュリティ監査 run-2 対応
+- **Flare RPC https enforcement and signing refusal (S-015 extension, R-014)**: `FLARE_RPC_URL` / the preset are checked by `lib.rs::check_flare_endpoint`. `http://` is rejected without `--allow-insecure-rpc`, and if signing credentials exist (XRPL seed/mnemonic or the Flare EVM key env) it is rejected even with `--allow-insecure-rpc`. Because the Flare RPC answer decides the Core Vault destination, since 2026-10-11 nothing is signed unless it matches `[flare.fassets] expected_core_vault` (a value the operator verified through another channel) (`flare::check_core_vault`; unset is also rejected).
+- **Cap on node-decided Fee**: a Fee above `signing::MAX_NODE_FEE_DROPS` (2 XRP = 2,000,000 drops) is rejected before signing (`sequence_fee_ledger_from_simulate` on the simulate path, for both the TUI and CLI `Send`). CLI `Send` also requires simulate (nothing is signed unless `tesSUCCESS`), and the balance check uses `checked_add` for `amount + fee`. Since 2026-10-11, `parse::check_simulate_bound_to_request` (inside `simulate_tx_requiring_tes_success`, common to all writes) also checks that the simulate `Sequence` equals the requested value and that `LastLedgerSequence` is at most `ledger_index + MAX_LLS_WINDOW` (100). Residual: the window is based on the node's own `ledger_index`.
+- **`xrp-ledger.toml` fetching (S-012 extension)**: the manifest-derived domain is restricted to ASCII hostnames only, and the same guarded fetch as NFT images is used (`nft_image::fetch_via`/`client_for_url`: private/loopback rejected, DNS pinned, re-inspected on each redirect, 1 MiB cap).
+- **DNS-pinning bypass via proxy**: `client_for_url` uses `.no_proxy()`. **In an environment that requires HTTP(S)_PROXY, fetching NFT images and toml fails (fail closed)**. The private check gained `100.64/10`, `192.0.0.0/24`, `198.18/15` and `240/4`.
+- **`--watch` (view-only startup, 2026-10-11, TC-234–235)**: `lib::enter_watch_mode` empties `Secrets` (the seed / mnemonic / `flare_evm_key` moved from `Config` by `take_secrets()`) right after startup, leaving only the address for display. The TUI shows no Wallet (composer, key generation), and no credential is passed to the poll task. `-x` signing subcommands are rejected before any RPC.
+- **Crash class**: byte slicing of remote strings (`short_hex` / tx hash / path address) was changed to per-character, Flare `U256::to::<T>()` to `saturating_to` / `try_into`, and the `ripple_path_find` sort to `f64::total_cmp` (non-finite last). Since the panic hook calls `process::exit(1)`, all of these could terminate the TUI via remote input.
+- **RPC body cap**: 16 MiB, enforced during chunk reading in addition to the `Content-Length` pre-check.
+- **Control / invisible characters in remote strings**: control characters, bidi overrides and zero-width format characters are stripped from `error_message` / `engine_result(_message)` / tx hash (`util::sanitize_remote`) and the Server panel host / version (`sanitize_text`) (TC-236).
+- **S-003**: the warning is emitted in `Config::new()` (before `logging::init`), so it uses `eprintln!` rather than `tracing`.
+- **`install.sh`**: the GitHub token goes through curl `-K -` (stdin) / wget `--config` (fd) and is removed from argv. A token containing unexpected characters is ignored. curl uses `--proto '=https' --proto-redir '=https'` (redirect targets are https only), and the README one-liner also uses `--proto '=https' --tlsv1.2`. The wget fallback has no scheme restriction (`--https-only` is effective only when recursive).
+- **`cd.yml`**: verification build with `cargo package --locked` (no token), and the token-bearing step uses `cargo publish --locked --no-verify`.
 
-needs_validation 4 件（Core Vault ピン・simulate の Sequence/LLS 照合・quote 通貨照合・simulate 文字列 sanitize）は上の 2026-10-04 節の各項目を参照。以下はハードニング（テストは `docs/test.md` TC-204〜214）。
+Investigated but **not fixed** (same-operator actions / hardening): mismatch between the network display and the connection target after Ctrl-N, logging of a provider token placed in a URL, dUNL signature not verified (display only), NFT decode dimension cap, CD ref/environment constraints (covered by GitHub-side rulesets). Double submission was handled on 2026-10-11 (TUI: a write with the same params is rejected until the result Ok/Err arrives, TC-228). Binding Actions from config keybindings was fixed later: anything outside the `config::is_bindable` allowlist (only payload-less navigation/refresh actions) is a load-time error (`*Submit` etc. cannot be bound).
 
-- **env 秘密の取得**: `XRPL_SEED` / `XRPL_MNEMONIC` / Flare EVM 鍵（`[flare.fassets] evm_key_env`）は `config::take_secret_env` が `Config::new()` で一度だけ取り出して env から削除し、`SecretString` で保持、生 `String` は zeroize。`lib.rs::run` は CLI 資格情報の適用直後に `Config::take_secrets()` で seed / mnemonic / EVM 鍵を `Config` から `Secrets` へ移し（`Config` 側は `None`）、`Arc<Config>` を共有する panel / status bar / splash には秘密が渡らない。`Secrets` は署名経路（`App` → poll task、`run_flare_command`）だけが受け取り、UI には `App::new` が一度だけ導出した address（`AccountWalletTab::new` → `WalletPanel`）だけが渡る。EVM 鍵は以前は初回 execute 時に poll task 内で `remove_var`（他タスクが env を読み得る実行中の変更、失敗すると以後使えない）だった。**Linux では `remove_var` は初期 `/proc/self/environ` を書き換えない**（同一 uid からは読める）— env 渡しは引き続き同一ユーザー内の信頼が前提。
-- **JSON-RPC client は redirect を追わない**（`client.rs`、`Policy::none()`）。https endpoint が `submit`（署名済み blob）を http へ 307 で転送する経路を閉じた。system proxy はそのまま（運用者の選択）。faucet も redirect なし + 本文上限。
-- **tx hash** は署名済み blob からローカル計算。TUI の送信結果に simulate 由来の署名済み Fee を表示（`<hash> · fee N drops`）。署名前の確認ステップは無い（Fee 上限 `MAX_NODE_FEE_DROPS` が担保）。
-- **入力**: `XRP:100:tail` のような余分な区切りを拒否。CLI `send` も composer と同じ `validate_payment_input`（amount > 0 など）を RPC 前に実行。
-- **鍵生成 popup / faucet**: `GeneratedWalletKeys` は drop 時に seed を zeroize、popup は Network 切替で消去（表示は「Esc to dismiss · g new key」）。`-x faucet` の生成 seed は `SecretString`。
-- **CI**: 全 GitHub Actions をコミット SHA に固定（タグはコメント）、`cross@0.2.5` 固定。
+## 2026-10-11 Security audit run-2 response
 
-## 2026-09-17 依存監査対応（`mise run audit` 整備で検知）
+The 4 needs_validation items (Core Vault pin, simulate Sequence/LLS check, quote currency check, simulate string sanitize) are covered by the items in the 2026-10-04 section above. The following are hardening (tests in `docs/test.md` TC-204 to 214).
 
-- **RUSTSEC-2026-0253: lru 0.16.4 `LruCache::pop()` unsound（use-after-free）**: `alloy-provider` → `lru` の実行時依存。0.16.x 系に修正版が無く、alloy 1.8.3（1.x 最終）も古い lru のままだったため **alloy 1.8.3 → 2.4.2 にメジャーアップ**（`Cargo.toml` `alloy = "2"`）。API 使用面は primitives + `ProviderBuilder` + `EthereumWallet` のみで変更不要。alloy 2.4.2 の MSRV に合わせ `rust-version` 1.91 → 1.94.1 — **`rust-version` を 1.94.1 未満へ戻すと lru 0.16.4 が復活するので戻さない**。`cargo tree -i lru` = 単一 0.18.4。
-- **RUSTSEC-2026-0285: rustls 0.23.44 TLS 1.3 handshake 暗号化レベル検証不備（2026-09-14 公表, Medium）**: `cargo update -p rustls` で **0.23.45** に更新（0.23.x 系内パッチ）。
-- いずれも ignore 追加ではなく依存更新で解決。`mise run audit`（cargo-audit + cargo-deny）が CI の security-advisories と同一基準でローカル検知できるようになった初回実行で発見。
+- **Taking env secrets**: `XRPL_SEED` / `XRPL_MNEMONIC` / the Flare EVM key (`[flare.fassets] evm_key_env`) are taken out exactly once by `config::take_secret_env` in `Config::new()` and removed from the env, held as `SecretString`, and the raw `String` is zeroized. Right after applying CLI credentials, `lib.rs::run` moves the seed / mnemonic / EVM key from `Config` into `Secrets` via `Config::take_secrets()` (`None` on the `Config` side), so no secret reaches the panels / status bar / splash that share the `Arc<Config>`. `Secrets` is received only by the signing paths (`App` → poll task, `run_flare_command`), and the UI receives only the address derived once by `App::new` (`AccountWalletTab::new` → `WalletPanel`). The EVM key was previously `remove_var`ed inside the poll task at first execute (a mutation while running, during which other tasks may read the env, and if it failed the key was unusable afterwards). **On Linux `remove_var` does not rewrite the initial `/proc/self/environ`** (readable from the same uid): passing via env still assumes trust within the same user.
+- **The JSON-RPC client does not follow redirects** (`client.rs`, `Policy::none()`). This closes the path where an https endpoint forwards `submit` (the signed blob) to http via 307. The system proxy is left as is (the operator's choice). The faucet also has no redirects plus a body cap.
+- **The tx hash** is computed locally from the signed blob. The TUI submit result shows the signed Fee from simulate (`<hash> · fee N drops`). There is no confirmation step before signing (the Fee cap `MAX_NODE_FEE_DROPS` covers it).
+- **Input**: extra separators such as `XRP:100:tail` are rejected. CLI `send` also runs the same `validate_payment_input` as the composer (amount > 0 etc.) before any RPC.
+- **Key generation popup / faucet**: `GeneratedWalletKeys` zeroizes the seed on drop, and the popup is cleared on Network switch (shown as "Esc to dismiss · g new key"). The seed generated by `-x faucet` is a `SecretString`.
+- **CI**: all GitHub Actions pinned to commit SHAs (tag in a comment), `cross@0.2.5` pinned.
 
-## 未対応・確認事項
+## 2026-09-17 Dependency audit response (detected by setting up `mise run audit`)
 
-### S-009: `--self-uninstall`（ユーザー主導でバイナリと設定データを削除）
+- **RUSTSEC-2026-0253: lru 0.16.4 `LruCache::pop()` unsound (use-after-free)**: a runtime dependency via `alloy-provider` → `lru`. There was no fixed 0.16.x and alloy 1.8.3 (last 1.x) still used the old lru, so **alloy was bumped a major version, 1.8.3 → 2.4.2** (`Cargo.toml` `alloy = "2"`). The API surface used is only primitives + `ProviderBuilder` + `EthereumWallet`, so no change was needed. `rust-version` went 1.91 → 1.94.1 to match alloy 2.4.2's MSRV: **do not lower `rust-version` below 1.94.1, as lru 0.16.4 would return**. `cargo tree -i lru` = a single 0.18.4.
+- **RUSTSEC-2026-0285: rustls 0.23.44 TLS 1.3 handshake encryption-level validation flaw (published 2026-09-14, Medium)**: updated to **0.23.45** with `cargo update -p rustls` (a patch within 0.23.x).
+- Both were resolved by dependency updates, not by adding ignores. They were found on the first run in which `mise run audit` (cargo-audit + cargo-deny) became able to detect locally at the same standard as CI's security-advisories.
+- **RUSTSEC-2026-0387: crypto-bigint 0.5.5 timing variability in constant-time operations**: pulled by `k256`/`ecdsa` 0.16 (`xrpl-rust`, `kobe-xrpl`, `alloy-signer`); the fix is 0.7.6, which is semver-incompatible, so `cargo update` cannot reach it. Ignored in `deny.toml` and `.cargo/audit.toml` until upstream moves to the `elliptic-curve` 0.14 line; remove both entries then (`unused-ignored-advisory = "deny"` will flag a stale one in deny).  Impact: `k256` signing runs locally on the user's machine (no remote timing oracle), but this is a residual risk on shared hosts.
 
-- `std::env::current_exe()` のファイルと `.bak` を削除し、`Config` で解決した config/data ディレクトリを `remove_dir_all` する。
-- 既定は一覧表示のあと標準入力で `yes` を要求。`--yes` で確認省略。
-- **Cargo が保持するインストールメタデータは削除しない**。`cargo install` 済み環境では、必要ならユーザーが **`cargo uninstall lazyxrp`** を別途実行する。
+## Open items and notes
 
-## 対応済み（履歴）
+### S-009: `--self-uninstall` (user-driven removal of the binary and config data)
 
-| ID | 内容 | 修正 |
+- Deletes the `std::env::current_exe()` file and the `.bak`, and `remove_dir_all`s the config/data directories resolved by `Config`.
+- By default it lists the targets and then requires `yes` on stdin. `--yes` skips the confirmation.
+- **Cargo's install metadata is not removed**. In a `cargo install`ed environment, the user separately runs **`cargo uninstall lazyxrp`** if needed.
+
+## Resolved (history)
+
+| ID | Description | Fix |
 | --- | --- | --- |
-| S-001 | `RawSigningConfig` の `Debug` derive がシードを平文でログ出力 | `impl fmt::Debug` で `[REDACTED]` にマスク |
-| S-002 | `Config::new()` が環境変数を読み取り後に削除しない | `unsafe { env::remove_var(SEED_ENV) }` で除去 |
-| S-003 | 設定ファイルに署名資格情報（seed / mnemonic）が保存される場合のファイル権限チェックなし | Unix でグループ/ワールド読取時に **stderr へ** 警告（`warn_if_config_world_readable`。`logging::init` 前に走るため `tracing` は不可） |
-| S-004 | env var 経由のパスに対するパス検証なし | `validated_path` で `..` を拒否。`canonicalize()` + ホーム外拒否は Phase 3 前に推奨 |
-| S-006 | `tui.rs` の `Drop` 実装で `unwrap()` を使用 | `if let Err(e) = self.exit() { eprintln!(...) }` |
-| S-007 | 組み込み設定のパース | ビルド時 `expect` で開発時検知 |
-| S-008 | tracing ログのデフォルトレベルが INFO | S-001 対処後に問題なし |
-| S-005 | `install.sh` で `NO_VERIFY=1` の警告が不十分 | `usage()` / ヘッダに加え、`NO_VERIFY=1` 実行時にも MITM リスクの赤字警告バナーを表示 |
-| S-010 | `Config` が平文 `seed` を `Arc<Config>` として継続保持 | `RawSigningConfig` に `secret_seed: Option<SecretString>` を追加し、`Config::new()` で平文をクリア。さらに `lib.rs::run` が `Config::take_secrets()` で秘密を `Secrets` へ移してから `Arc<Config>` を共有 |
-| S-011 | CLI `--seed` がプロセス引数に残り `ps` から閲覧可能 | `README.md` 警告 + 起動時 `eprintln!` 警告 + `--help` に非推奨注記 |
+| S-001 | The `Debug` derive on `RawSigningConfig` logged the seed in plaintext | `impl fmt::Debug` masks it as `[REDACTED]` |
+| S-002 | `Config::new()` did not delete the env var after reading it | removed with `unsafe { env::remove_var(SEED_ENV) }` |
+| S-003 | No file permission check when the config file stores signing credentials (seed / mnemonic) | On Unix, warn **to stderr** when group/world readable (`warn_if_config_world_readable`; it runs before `logging::init`, so `tracing` is not possible) |
+| S-004 | No path validation for paths from env vars | `validated_path` rejects `..`. `canonicalize()` + rejecting paths outside home is recommended before Phase 3 |
+| S-006 | `Drop` in `tui.rs` used `unwrap()` | `if let Err(e) = self.exit() { eprintln!(...) }` |
+| S-007 | Parsing of the built-in config | `expect` at build time for detection during development |
+| S-008 | Default tracing log level was INFO | No problem after S-001 was addressed |
+| S-005 | Insufficient warning for `NO_VERIFY=1` in `install.sh` | In addition to `usage()` / the header, a red MITM-risk warning banner is also shown when running with `NO_VERIFY=1` |
+| S-010 | `Config` kept the plaintext `seed` inside an `Arc<Config>` | Added `secret_seed: Option<SecretString>` to `RawSigningConfig` and cleared the plaintext in `Config::new()`. Furthermore `lib.rs::run` moves the secrets into `Secrets` via `Config::take_secrets()` before sharing the `Arc<Config>` |
+| S-011 | CLI `--seed` stays in process arguments and is visible via `ps` | `README.md` warning + startup `eprintln!` warning + a deprecation note in `--help` |

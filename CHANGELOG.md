@@ -4,6 +4,23 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-10-26
+
+### Added
+
+- FXRP Mint composer (`6`) prefills `Flare recipient` with your own Smart Account personal account (full address shown; only when the Overview Flare read is for the signing account and under 300 s old), so an XRPL-key-only user needs no other Flare address. The personal account is a Flare RPC answer with no pin: the composer says so and asks you to check it on an explorer (security.md S-019 / R-019).
+- `-x sa-status <XRPL tx hash>`: read-only; has a Smart Account payment (`sa-memo` / `sa-call` / `sa-vault`) been finalized on Flare (`isTransactionIdUsed`; a plain C2 mint is not tracked)? `-x sa-memo` now waits up to 5 minutes (`--no-wait` skips) for a public executor and, if none finalizes it, prints the `sa-status` / `fxrp-execute <tx> --data 0x` follow-up. The wait never fails the command (the Payment is already validated): a Flare read error is reported with the re-check hint and the exit stays 0. With an executor pinned, `0xE0` / `0xE1` / `0xE2` do not wait (only the pinned executor can finalize). `sa-call` does not wait: a public executor lacks the user-operation bytes.
+
+### Changed
+
+- The TUI message after an FXRP Mint payment no longer implies the next step is C3: it says a public executor usually finalizes within minutes (not guaranteed; no fee floor is known) and how to finalize it yourself (EVM key, FLR).
+- Docs: every `docs/*.md` is now English with a Japanese twin `*-ja.md`; `ROADMAP.md` (English, holds the coverage table that TC-248 reads) and `ROADMAP-ja.md` are reorganised by area (XRPL / UI-UX / Flare / quality) with an at-a-glance board, grouped unsupported transaction types, a verification-debt table and explicit proposals (F5-a/b/c). Smart Account data is documented as never persisted (architecture §6.9). Rule in `AGENTS.md`: change both languages together.
+- Docs: Flare requirements / README / architecture / DESIGN / security / test / ROADMAP updated for the XRPL-only vs EVM-key split. A read-only mainnet scan found public executors (905 plain + 1000+ Smart Account mints in about 50 days, 95–177 s after XRPL validation); whether one picks up a low-fee payment is unmeasured, and no Flare write has been sent on mainnet.
+
+### Security
+
+- `RUSTSEC-2026-0387` (`crypto-bigint` 0.5.5, timing variability) is ignored in `deny.toml` and the new `.cargo/audit.toml`: it is pinned by `k256` / `ecdsa` 0.16 (xrpl-rust, kobe-xrpl, alloy) and the fixed 0.7.6 is semver-incompatible. Remove both entries once upstream moves to `elliptic-curve` 0.14 (security.md).
+
 ## [0.8.0] - 2026-10-21
 
 ### Added
@@ -186,7 +203,8 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 See [GitHub Releases](https://github.com/boborder/lazyxrp/releases) for 0.2.11 and older.
 
-[Unreleased]: https://github.com/boborder/lazyxrp/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/boborder/lazyxrp/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/boborder/lazyxrp/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/boborder/lazyxrp/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/boborder/lazyxrp/compare/v0.6.1...v0.7.0
 [0.6.1]: https://github.com/boborder/lazyxrp/compare/v0.4.1...v0.6.1

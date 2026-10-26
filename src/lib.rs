@@ -250,7 +250,8 @@ pub async fn run() -> color_eyre::Result<()> {
             | Cmd::FxrpTagTransfer { .. }
             | Cmd::SaVault { .. }
             | Cmd::SaMemo { .. }
-            | Cmd::SaCall { .. }),
+            | Cmd::SaCall { .. }
+            | Cmd::SaStatus { .. }),
         ) => {
             let evm_key = secrets.flare_evm_key.as_ref();
             run_flare_command(cmd, &config, &args, &rpc_url, &network, credential, evm_key).await?
@@ -317,7 +318,11 @@ async fn run_flare_command(
     // EVM writes: opt-in + key. The key is borrowed from the caller's `Secrets`, never copied.
     let key: &str = if matches!(
         cmd,
-        Cmd::Fxrp { .. } | Cmd::SaVault { .. } | Cmd::SaMemo { .. } | Cmd::SaCall { .. }
+        Cmd::Fxrp { .. }
+            | Cmd::SaVault { .. }
+            | Cmd::SaMemo { .. }
+            | Cmd::SaCall { .. }
+            | Cmd::SaStatus { .. }
     ) {
         ""
     } else {
@@ -336,6 +341,19 @@ async fn run_flare_command(
         Cmd::Fxrp { tag } => {
             let report = flare::fetch_fxrp_report(&url, tag).await?;
             println!("{}", serde_json::to_string_pretty(&report)?);
+        }
+        Cmd::SaStatus { tx_hash } => {
+            check_xrpl_tx_hash(&tx_hash)?;
+            let used =
+                flare::smart_account_tx_used(&url, flare_cmd::parse_tx_id(&tx_hash)?).await?;
+            println!(
+                "{}",
+                if used {
+                    "finalized"
+                } else {
+                    "not finalized (a payment pinned to another executor, or one nobody picked up, stays pending)"
+                }
+            );
         }
         Cmd::FxrpExecute {
             tx_hash,
@@ -507,6 +525,20 @@ async fn run_flare_command(
             .await
             .map_err(|e| color_eyre::eyre::eyre!(e))?;
             println!("{hash}");
+            // Only a pinned executor can finalize E0 / E1 / E2 (0xD0 / 0xD1 bypass the pin), so a
+            // public executor is not worth waiting for then.
+            let pinned_blocks = state.executor != alloy::primitives::Address::ZERO
+                && !matches!(op, cli::MemoOp::SetExecutor | cli::MemoOp::RemoveExecutor);
+            if pinned_blocks {
+                say(&format!(
+                    "executor {:#x} is pinned: only it can finalize this payment — run \
+                     `lazyxrp -x fxrp-execute {hash} --data 0x` from that key (needs \
+                     [flare.fassets] execute, FLARE_EVM_KEY and FLR)",
+                    state.executor
+                ));
+            } else {
+                flare_cmd::await_public_executor(&url, &hash, !args.no_wait, say).await;
+            }
         }
         Cmd::SaCall { amount, calls, fee } => {
             let info = flare::fetch_fxrp_direct_mint_info(&url).await?;
@@ -557,6 +589,11 @@ async fn run_flare_command(
             .await
             .map_err(|e| color_eyre::eyre::eyre!(e))?;
             println!("{hash}");
+            say(
+                "a public executor cannot finalize this: it needs the user-operation bytes above. \
+                 Hand them to an executor you trust, or run fxrp-execute yourself (needs \
+                 [flare.fassets] execute, FLARE_EVM_KEY and FLR)",
+            );
         }
         _ => color_eyre::eyre::bail!("not a Flare subcommand"),
     }

@@ -1,0 +1,64 @@
+# references.md
+
+[English](references.md)
+
+**Role:** 参考文献・サンプルコード（外部ドキュメントとプロジェクト内リンク集）。
+
+## Rust / Async
+
+- [The Rust Programming Language](https://doc.rust-lang.org/book/)
+- [The Cargo Book](https://doc.rust-lang.org/cargo/)
+- [Tokio Documentation](https://docs.rs/tokio/latest/tokio/)
+- [Rust issue #100013: lifetime bound not satisfied (known limitation)](https://github.com/rust-lang/rust/issues/100013)
+
+## TUI / CLI
+
+- [Ratatui Official Site](https://ratatui.rs/)
+- [Ratatui crate docs](https://docs.rs/ratatui/latest/ratatui/)
+- [Crossterm crate docs](https://docs.rs/crossterm/latest/crossterm/)
+- [Clap crate docs](https://docs.rs/clap/latest/clap/)
+
+## Flare / FAssets
+
+- [Flare network RPC endpoints](https://dev.flare.network/network/overview)
+- [FTSOv2](https://dev.flare.network/ftso/overview)
+- [FAssets operational parameters](https://dev.flare.network/fassets/operational-parameters)
+- [Direct minting (tag)](https://dev.flare.network/fassets/developer-guides/fassets-direct-minting-tag)
+- [Direct minting (memo)](https://dev.flare.network/fassets/developer-guides/fassets-direct-minting)
+- [Smart Accounts overview](https://dev.flare.network/smart-accounts/overview)
+- **ローカルスナップショット:** Flare スキル — [`.agents/skills/flare-fassets/`](../.agents/skills/flare-fassets/SKILL.md)（Mainnet チェックリスト、mint ジョブ監視ランブック）
+
+## XRPL
+
+- [Xahau network](https://xahau.network/)
+- [XRP Ledger Documentation](https://xrpl.org/docs/)
+- [xrpl-rust crate docs](https://docs.rs/xrpl-rust/latest/xrpl/)
+- [XRPL WebSocket API Reference](https://xrpl.org/docs/references/http-websocket-apis/public-api-methods/)
+
+## 設定 / エラー / ロギング
+
+- [tracing crate docs](https://docs.rs/tracing/latest/tracing/)
+- [tracing-subscriber crate docs](https://docs.rs/tracing-subscriber/latest/tracing_subscriber/)
+- [secrecy crate docs](https://docs.rs/secrecy/latest/secrecy/)
+- [color-eyre crate docs](https://docs.rs/color-eyre/latest/color_eyre/)
+
+## 例
+
+- [tokio::spawn](https://docs.rs/tokio/latest/tokio/task/fn.spawn.html)
+- [JoinSet](https://docs.rs/tokio/latest/tokio/task/struct.JoinSet.html)
+- [account_info](https://xrpl.org/docs/references/http-websocket-apis/public-api-methods/account-methods/account_info)
+- [book_offers](https://xrpl.org/docs/references/http-websocket-apis/public-api-methods/path-and-order-book-methods/book_offers)
+- [server_info](https://xrpl.org/docs/references/http-websocket-apis/public-api-methods/server-methods/server_info)
+
+## このプロジェクト内の関連ドキュメント
+
+- [`docs/requirements-ja.md`](requirements-ja.md)
+- [`docs/architecture-ja.md`](architecture-ja.md)
+- [`docs/tech-ja.md`](tech-ja.md)
+- [`docs/maintenance-ja.md`](maintenance-ja.md)
+- [`docs/test-ja.md`](test-ja.md)
+- [`docs/directory-ja.md`](directory-ja.md)
+- [`docs/problems-ja.md`](problems-ja.md)
+- [`docs/security-ja.md`](security-ja.md)
+- [`DESIGN.md`](../DESIGN.md)
+- [`ROADMAP-ja.md`](../ROADMAP-ja.md)

@@ -1,6 +1,8 @@
 # Test Strategy & Registry
 
-**Role:** テスト設計・テストガイド（重要 TC カタログと FR/architecture へのトレース）。
+[日本語](test-ja.md)
+
+**Role:** Test design and test guide (catalog of important TCs with traces to FR / architecture).
 
 > Last Updated: 2026-10-21 (same-contract tests are table-driven; the lib suite size is not tracked here — run `cargo test` for the live count)
 > Target: lazyxrp (Rust TUI for XRPL)
@@ -13,6 +15,7 @@
 - Inline `#[cfg(test)]` modules preferred; live-network cases are `#[ignore]` and run explicitly.
 - Tests live in the lib (`src/lib.rs`), `tests/cli_smoke.rs` (binary boundary) and `tests/testnet_e2e.rs` (opt-in, live testnet/devnet: send / offer / NFT mint → burn; `mise run e2e-testnet`, not run in CI). `[lib] doctest = false` and `test = false` on both `[[bin]]` targets (`Cargo.toml`) skip empty test targets to keep `cargo test` rebuilds fast — put unit tests in lib modules, not `main.rs` / `bin/rp.rs`, or drop `test = false` first.
 - **Traceability:** User-visible TCs should map to `docs/requirements.md` FR/NFR and/or `docs/architecture.md` §. Keys/layout TCs trace to `DESIGN.md`. See [Traceability](#traceability) for network/Flare rows.
+- **Bilingual docs:** every `docs/*.md` and `ROADMAP.md` has a Japanese twin `*-ja.md` (this file: `test-ja.md`). The English file is canonical for agents; any change to one MUST be made to the other in the same change, and the ID sets (TC / FR / NFR / S / R / I / P / F) must match.
 
 ## Commands
 
@@ -186,6 +189,8 @@ cargo deny check
 | TC-362 | P2 | `src/components/panels/wallet.rs` / `wallet_keygen.rs` / `tabs/account_wallet.rs` | `keygen_works_unfunded_and_composer_is_gated`, `composer_popup_narrow_terminal_does_not_panic`, `keygen_popup_narrow_terminal_does_not_panic`, `keys_reach_focused_tx_history_pane` |
 | TC-365 | P1 | `src/components/panels/tx_history.rs` | `paste_goes_to_filter_only_while_editing`: bracketed paste is appended to the Tx History filter (control characters dropped) only while the filter is being edited, otherwise ignored |
 | TC-363 | P0 | `src/flare.rs` | `direct_mint_terms_drift_is_refused`, `smart_account_terms_drift_is_refused`: a fee bump, Core Vault change, pause, operator change or instruction-fee change between compose and sign is refused |
+| TC-366 | P1 | `src/flare_cmd.rs`, `src/cli.rs` | `wait_finalized_polls_until_true_then_gives_up`: the finalize wait returns as soon as the check is true, gives `false` (not an error) once the limit passes, and surfaces a failed read as an error (`await_public_executor` turns that into a stderr hint + exit 0). `spec_subcommands_parse`: `sa-status` is read-only (not refused under `--watch`), `sa-memo` signs. Live smoke (read-only, 2026-10-24): mainnet `lazyxrp --watch -x sa-status <tx>` → `finalized` for a recent Smart Account mint id from `DirectMintingExecutedToSmartAccount`, `not finalized` for an unused hash; Coston2 `sa-status FB8556…` (the plain C2 mint of docs/test.md "FXRP C2 + C3", finalized by a public executor) → `not finalized`, i.e. the view does not cover plain C2 mints |
+| TC-367 | P0 | `src/components/panels/wallet.rs` | `fxrp_mint_composer_prefills_own_personal_account_only`: the FXRP Mint composer prefills the signer's own personal account and renders it in full with the "your Smart Account personal account" note; a read for another XRPL account or one older than 300 s leaves the recipient empty (R-019 / S-019) |
 | TC-300 | P0 | `src/xrpl/txspec/identity.rs` | Identity family field validation tables: CredentialType 64/65 bytes, URI 128/129, DID fields 256/257, at-least-one rules, Oracle id / provider / asset class / series 10/11, domain id (length, hex, zero hash), AcceptedCredentials 10/11 |
 | TC-301 | P0 | `src/xrpl/txspec/mpt.rs` | MPT family field validation tables: TransferFee 50000/50001, AssetScale 255/256, MaximumAmount 0 / 1 / i64::MAX / +1, metadata 1024/1025, id 47/48/49, transfer-fee / domain / lock-unlock combinations |
 | TC-302 | P0 | `src/xrpl/txspec/identity.rs` | Unsigned `tx_json` per identity type: text fields hex-encoded, `PriceDataSeries` → `PriceData` entries (decimal price → hex, scale), `AcceptedCredentials` → `Credential` entries, ids upper-cased, no Fee / LastLedgerSequence |
@@ -356,6 +361,7 @@ cargo deny check
 | R-001 seed priority chain | TC-045/046/049 `credential_from_secrets` + env override | `src/signing.rs`, `src/config.rs` |
 | R-016 endpoint network ≠ selected network | TC-203 `endpoint_network_id_must_match` + CLI/TUI refusal | `src/network.rs`, `src/xrpl/cli_exec.rs`, `src/xrpl/submit.rs` |
 | R-017 Smart Account operator / fee from one RPC answer | TC-240, TC-243 (`check_operator`, `smart_account_instruction_refusals_never_reach_rpc`); mainnet gate TC-088 | `src/flare.rs`, `src/xrpl/submit.rs` |
+| R-019 C2 recipient prefilled from an RPC-supplied personal account | TC-367 (prefill only for the signer's own, fresh read; shown in full) — residual accepted, security.md S-019 | `src/components/panels/wallet_composer.rs` |
 
 ## Testnet E2E
 
@@ -376,6 +382,8 @@ cargo deny check
 | 5 XRP payment with a 48-byte memo (executor = ours, throwaway xrpl.js) → proof (verifier `prepareRequest` with the Flare-published testnet key, `FdcHub.requestAttestation`, DA `proof-by-request-round`; throwaway viem script) → TUI `7` C3 | `executeDirectMinting` succeeded; FXRP 9.8 → 14.7 (4.9 = 5 − 0.1 min fee; executor fee to ourselves) | XRPL `C0FC83E57C37BC4782B48E4CB4EB0123829137B52A4C1CC8B6F57E38B548AE6A`, Flare `0x1460dc9ae36bbe58beb4a8fd1a6d6bd358d4fd3f5a315583646cd31d111e5f02` |
 
 Before the fix, C3 called a selector the contract does not have (`0x548cddd4`, `bytes data`); the deployed one is `0x78d0299e` (decoded `IXRPPayment.Response`) → TC-231.
+
+**Mainnet executor observation (read-only, 2026-10-24):** `eth_getLogs` is capped below 30 blocks on the public RPC, so the AssetManagerFXRP (`0x2a3f…b6a8`, from the registry) logs came from the Flare explorer API (`module=logs`, ~2.4M blocks ≈ 50 days; 1000 results per query). `DirectMintingExecuted`: 905 events, 10 distinct executors, executor ≠ recipient in all 905. `DirectMintingExecutedToSmartAccount`: 1000 (the query cap, so ≥ 1000), 8 distinct executors. Newest event < 1 h old. XRPL validated → Flare executed: 118, 163, 95, 117, 154, 104, 177, 120 s (8 Smart Account events, XRPL `tx` date vs Flare block time). **What this does not show:** that an executor finalizes a payment with lazyxrp's low `--fee` / the protocol minimum executor fee (the executors' fee floor is unmeasured), who runs these executors, or that a Smart Account `0xFE` payment is finalized by a third party (they lack the user-operation bytes). Nothing was sent on mainnet.
 
 **AccountDelete (manual, 2026-10-11, testnet):** two fresh `-x faucet` accounts (funded at ledger 21,447,697), destination = account B `rLo2…dnJ`.
 
@@ -407,7 +415,7 @@ First run failed every write with `simulate tx_json missing LastLedgerSequence` 
 | Composer `4` OfferCreate `XRP:1000000` → `USD:B:100` (no cross) | offer `#21432418` listed in `8` | `3FDB2522AC0E8A698C01D5C49BF962BFC0F8C958AE8A91E5B668215D519C6F6E` |
 | Composer `8` → `s` | offer gone (`(no open offers)`) | `DB7A79BDFCB81373FB98BDD40886A9593A986D2FC3F11D0EDE6833297CAF4EA8` |
 
-Notes: the first quote returned "no payment path found" — correct, the issuer lacked DefaultRipple (`simulate` = `tecPATH_DRY`). **S-017** found here: a mainnet `XRPL_RPC_SERVER` in the shell silently overrode `--network testnet` (reads hit mainnet) → TC-203; live check: mainnet endpoint + `--network testnet` refused (exit 1), testnet endpoint validated `868477854FBAD38A1B22629659BA4A98DC945E994422728DE99805BBF43B6209`.
+Notes: the first quote returned "no payment path found"; correct, the issuer lacked DefaultRipple (`simulate` = `tecPATH_DRY`). **S-017** found here: a mainnet `XRPL_RPC_SERVER` in the shell silently overrode `--network testnet` (reads hit mainnet) → TC-203; live check: mainnet endpoint + `--network testnet` refused (exit 1), testnet endpoint validated `868477854FBAD38A1B22629659BA4A98DC945E994422728DE99805BBF43B6209`.
 
 **2026-10-11 TUI escrow (PTY driven, pyte screen)** — owner `rGyZL1VDvkzBUWY7rwJ4BaiXRaxH85wHAR`, destination `rLo2GiHSRivGN17CZhJGFpBbYGXEACpdnJ` (both `-x faucet`). All `tesSUCCESS` in Tx History.
 
@@ -421,5 +429,5 @@ Notes: the first quote returned "no payment path found" — correct, the issuer 
 
 Remaining gaps (unimplemented by design — low priority):
 
-- **R-002** submit channel-close observability: `send_action` は warn ログのみ。永続化は未実装。
-- **R-003** `ArcValue` 共有 JSON 不変性: 規約のみ。違反時は視覚破損で検知。
+- **R-002** submit channel-close observability: `send_action` only emits a warn log. Persistence is not implemented.
+- **R-003** `ArcValue` shared-JSON immutability: convention only. A violation is detected as visual corruption.
