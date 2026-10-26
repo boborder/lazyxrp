@@ -1,2 +1,4 @@
+# Mirror of deny.toml. cargo-audit never reports an ignore that is no longer needed: when
+# deny.toml flags RUSTSEC-2026-0387 as unused, delete it here too or it hides a returning advisory.
 [advisories]
 ignore = ["RUSTSEC-2026-0387"]
