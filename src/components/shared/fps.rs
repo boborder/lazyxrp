@@ -95,14 +95,6 @@ impl Component for FpsCounter {
 
 #[cfg(test)]
 impl FpsCounter {
-    pub(crate) fn recorded_frames(&self) -> u32 {
-        self.frame_count
-    }
-
-    pub(crate) fn recorded_tick_rate(&self) -> f64 {
-        self.ticks_per_second
-    }
-
     /// Seed an elapsed tick window so rate calculation is deterministic offline.
     pub(crate) fn seed_tick_window(&mut self, elapsed: std::time::Duration, pending_ticks: u32) {
         self.last_tick_update = Instant::now() - elapsed;
@@ -119,9 +111,9 @@ mod tests {
     fn render_counts_frames_but_tick_alone_does_not() {
         let mut fps = FpsCounter::default();
         assert!(!fps.note_action(&Action::Tick));
-        assert_eq!(fps.recorded_frames(), 0);
+        assert_eq!(fps.frame_count, 0);
         assert!(!fps.note_frame());
-        assert_eq!(fps.recorded_frames(), 1);
+        assert_eq!(fps.frame_count, 1);
     }
 
     /// TC-104: tick-rate label refreshes after a one-second measurement window.
@@ -130,6 +122,6 @@ mod tests {
         let mut fps = FpsCounter::default();
         fps.seed_tick_window(std::time::Duration::from_secs(2), 7);
         assert!(fps.note_action(&Action::Tick));
-        assert!((fps.recorded_tick_rate() - 4.0).abs() < 0.01);
+        assert!((fps.ticks_per_second - 4.0).abs() < 0.01);
     }
 }

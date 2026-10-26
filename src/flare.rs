@@ -302,7 +302,7 @@ pub fn bips_to_percent_display(bips: u64) -> String {
     format!("{whole}.{frac:02}%")
 }
 
-async fn fetch_from_rpc(
+pub async fn fetch_ftso_prices(
     rpc_url: &str,
     feeds: &[String],
 ) -> color_eyre::Result<Vec<FlareFeedPrice>> {
@@ -366,13 +366,6 @@ async fn fetch_from_rpc(
     }
 
     Ok(out)
-}
-
-pub async fn fetch_ftso_prices(
-    rpc_url: &str,
-    feeds: &[String],
-) -> color_eyre::Result<Vec<FlareFeedPrice>> {
-    fetch_from_rpc(rpc_url, feeds).await
 }
 
 /// Read native FLR + FXRP ERC20 balances for the Overview wallet panel.
