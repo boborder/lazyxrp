@@ -5,7 +5,7 @@
 rust = "stable"
 # cargo backend: the prebuilt GitHub asset resolves to x86_64 on arm64 macOS (no Rosetta → "Bad CPU type").
 "cargo:hyperfine" = "latest"
-# CI security-advisories parity (`.github/workflows/ci.yml`): cargo-audit and cargo-deny (ignores in deny.toml).
+# CI security-advisories parity (`.github/workflows/ci.yml`): cargo-audit and cargo-deny (ignores in deny.toml and .cargo/audit.toml).
 "cargo:cargo-audit" = "latest"
 "cargo:cargo-deny" = "latest"
 # benchmark.sh --full runs cargo bloat; without it that step SKIPs.
@@ -52,7 +52,7 @@ env = { RUSTDOCFLAGS = "-D warnings" }
 run = "cargo doc --locked --no-deps --document-private-items --all-features --workspace --examples"
 
 [tasks.audit]
-description = "CI Security Advisories gate: cargo-audit + cargo-deny (ignores in deny.toml)"
+description = "CI Security Advisories gate: cargo-audit + cargo-deny (ignores in deny.toml and .cargo/audit.toml)"
 run = "cargo audit && cargo deny check"
 
 [tasks.update]

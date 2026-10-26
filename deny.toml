@@ -6,6 +6,7 @@ unused-ignored-advisory = "deny"
 ignore = [
   { id = "RUSTSEC-2023-0089", reason = "atomic-polyfill is transitive through xrpl-rust; no safe upstream upgrade" },
   { id = "RUSTSEC-2024-0436", reason = "paste is transitive through Alloy; no compatible replacement in current dependency graph" },
+  { id = "RUSTSEC-2026-0387", reason = "crypto-bigint 0.5.5 is pinned by k256/ecdsa 0.16 (xrpl-rust, kobe-xrpl, alloy); fix needs 0.7.6, so wait for an upstream bump. Mirrored in .cargo/audit.toml" },
 ]
 
 [licenses]
