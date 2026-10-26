@@ -314,11 +314,13 @@ pub struct LedgerConfig {
 
 impl LedgerConfig {
     /// Quote currency code for the order book: the explicit `currency_code` when set,
-    /// otherwise `currency` as a 3-letter code or zero-padded 160-bit hex.
+    /// otherwise `currency` as is when it is already a code (3 letters, or 40 hex), else a
+    /// symbol of up to 20 bytes as zero-padded 160-bit hex. Anything longer is passed through
+    /// unchanged so the node rejects it instead of the book silently following another token.
     pub fn quote_code(&self) -> String {
         match self.currency_code.as_deref().map(str::trim) {
             Some(code) if !code.is_empty() => code.to_string(),
-            _ if self.currency.len() == 3 => self.currency.clone(),
+            _ if self.currency.len() == 3 || self.currency.len() > 20 => self.currency.clone(),
             _ => format!("{:0<40}", hex::encode_upper(&self.currency)),
         }
     }
@@ -937,6 +939,14 @@ mod tests {
         assert_eq!(cfg.quote_code(), "524C555344000000000000000000000000000000");
         cfg.currency = "USD".into();
         assert_eq!(cfg.quote_code(), "USD");
+        let hex40 = "524C555344000000000000000000000000000000";
+        cfg.currency = hex40.into();
+        assert_eq!(
+            cfg.quote_code(),
+            hex40,
+            "an existing 160-bit code is not encoded twice"
+        );
+        cfg.currency = "USD".into();
         cfg.currency_code = Some("03AABB".into());
         assert_eq!(cfg.quote_code(), "03AABB");
         cfg.currency_code = Some("  ".into());
