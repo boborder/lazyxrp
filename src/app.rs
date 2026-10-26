@@ -286,7 +286,7 @@ impl App {
         let book_pair = BookPair {
             base: "XRP".to_string(),
             quote: self.config.xrpl.currency.clone(),
-            quote_code: self.config.xrpl.currency_code.clone(),
+            quote_code: self.config.xrpl.quote_code(),
             issuer: if self.config.xrpl.issuer.trim().is_empty() {
                 crate::config::FALLBACK_ISSUER.to_string()
             } else {

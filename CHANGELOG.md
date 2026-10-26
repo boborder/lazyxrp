@@ -4,6 +4,10 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ## [Unreleased]
 
+### Changed
+
+- `xrpl.currency_code` is now optional: unset, the order-book quote code is derived from `xrpl.currency` (3-letter code as is, otherwise zero-padded 160-bit hex), so changing `currency` no longer leaves the book on the old token. Set it only for a code that cannot be derived, e.g. an AMM LP token. An existing `currency_code` keeps taking precedence.
+
 ## [0.9.0] - 2026-10-26
 
 ### Added

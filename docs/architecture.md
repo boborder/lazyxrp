@@ -159,7 +159,7 @@ WebSocket ledger close coalesces poll triggers (`MIN_POLL_INTERVAL`). Scheduled 
 - Paths: `$XDG_CONFIG_HOME/lazyxrp/config.toml` → `~/.config/lazyxrp/config.toml`
 - Fields: `network`, `account`, `issuer`, `currency`, `currency_code`, `offer_limit`, `poll_interval_ms` (default 5000; raise for 24/7 dashboards), `slippage_bps` (Payment quote, default 100 = 1%), `oracles`, `oracle_pairs`, `[xrpl.signing]`, optional `rpc_server` / `ws_server`
 - Default issuer fallback (mainnet Bitstamp USD): `rvYAfWj5gh67oV6fW32ZzP3Aw4Eubs59B`
-- `currency_code`: 160-bit hex for `book_offers` (default display `"USD"`)
+- `currency_code`: optional; 160-bit hex (or 3-letter ISO) for `book_offers`. Unset = derived from `currency` (`quote_code()`); set it only when the code cannot be derived, e.g. an AMM LP token (`03…`)
 
 ### Flare (`[flare]`)
 

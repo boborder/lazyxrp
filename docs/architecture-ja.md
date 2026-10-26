@@ -159,7 +159,7 @@ WebSocket の ledger close は poll トリガーを集約する（`MIN_POLL_INTE
 - パス: `$XDG_CONFIG_HOME/lazyxrp/config.toml` → `~/.config/lazyxrp/config.toml`
 - フィールド: `network`、`account`、`issuer`、`currency`、`currency_code`、`offer_limit`、`poll_interval_ms`（既定 5000。24/7 ダッシュボードでは上げる）、`slippage_bps`（Payment quote、既定 100 = 1%）、`oracles`、`oracle_pairs`、`[xrpl.signing]`、任意の `rpc_server` / `ws_server`
 - 既定 issuer のフォールバック（mainnet Bitstamp USD）: `rvYAfWj5gh67oV6fW32ZzP3Aw4Eubs59B`
-- `currency_code`: `book_offers` 用の 160 ビット hex（表示の既定は `"USD"`）
+- `currency_code`: 任意。`book_offers` 用の 160 ビット hex（または 3 文字 ISO）。未指定なら `currency` から導出（`quote_code()`）。AMM の LP トークン（`03…`）など導出できない場合のみ指定する
 
 ### Flare（`[flare]`）
 

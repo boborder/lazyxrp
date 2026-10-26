@@ -239,10 +239,6 @@ impl fmt::Debug for RawSigningConfig {
 pub const FALLBACK_CURRENCY_CODE: &str = "USD";
 pub const FALLBACK_ISSUER: &str = "rvYAfWj5gh67oV6fW32ZzP3Aw4Eubs59B";
 
-fn fallback_currency_code() -> String {
-    FALLBACK_CURRENCY_CODE.to_string()
-}
-
 fn fallback_issuer() -> String {
     FALLBACK_ISSUER.to_string()
 }
@@ -286,8 +282,10 @@ pub struct LedgerConfig {
     #[serde(default = "fallback_issuer")]
     pub issuer: String,
     pub currency: String,
-    #[serde(default = "fallback_currency_code")]
-    pub currency_code: String,
+    /// 160-bit hex (or 3-letter ISO) for `book_offers`. Only needed when it cannot be derived
+    /// from `currency` (e.g. an AMM LP token); unset means derive.
+    #[serde(default)]
+    pub currency_code: Option<String>,
     pub offer_limit: u16,
     pub poll_interval_ms: u64,
     /// Network preset (mainnet / testnet / devnet). Determines default RPC/WS endpoints.
@@ -314,13 +312,25 @@ pub struct LedgerConfig {
     pub slippage_bps: u32,
 }
 
+impl LedgerConfig {
+    /// Quote currency code for the order book: the explicit `currency_code` when set,
+    /// otherwise `currency` as a 3-letter code or zero-padded 160-bit hex.
+    pub fn quote_code(&self) -> String {
+        match self.currency_code.as_deref().map(str::trim) {
+            Some(code) if !code.is_empty() => code.to_string(),
+            _ if self.currency.len() == 3 => self.currency.clone(),
+            _ => format!("{:0<40}", hex::encode_upper(&self.currency)),
+        }
+    }
+}
+
 impl Default for LedgerConfig {
     fn default() -> Self {
         Self {
             account: "r3kmLJN5D28dHuH8vZNUZpMC43pEHpaocV".to_string(),
             issuer: "rMxCKbEDwqr76QuheSUMdEGf4B9xJ8m5De".to_string(),
             currency: "RLUSD".to_string(),
-            currency_code: "524C555344000000000000000000000000000000".to_string(),
+            currency_code: None,
             offer_limit: 5,
             poll_interval_ms: 5_000,
             network: Network::default(),
@@ -918,6 +928,24 @@ fn parse_color(s: &str) -> Option<Color> {
 mod tests {
     use super::*;
     use crate::test_support::{TempRootGuard, TestEnvGuard, env_lock};
+
+    /// The quote code follows `currency` unless `currency_code` overrides it: a 3-letter code
+    /// stays as is, a longer symbol becomes zero-padded hex, and an explicit LP-token code wins.
+    #[test]
+    fn quote_code_derives_from_currency_unless_overridden() {
+        let mut cfg = LedgerConfig::default();
+        assert_eq!(cfg.quote_code(), "524C555344000000000000000000000000000000");
+        cfg.currency = "USD".into();
+        assert_eq!(cfg.quote_code(), "USD");
+        cfg.currency_code = Some("03AABB".into());
+        assert_eq!(cfg.quote_code(), "03AABB");
+        cfg.currency_code = Some("  ".into());
+        assert_eq!(
+            cfg.quote_code(),
+            "USD",
+            "blank override falls back to derivation"
+        );
+    }
 
     /// S-003: a group/world-readable credential-bearing config yields a warning (shown on
     /// stderr, since it runs before the tracing subscriber exists); a 0600 file does not.
