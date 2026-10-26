@@ -283,17 +283,7 @@ impl App {
         drop(self.test_poll_rx.take());
         let cancel = CancellationToken::new();
 
-        let book_pair = BookPair {
-            base: "XRP".to_string(),
-            quote: self.config.xrpl.currency.clone(),
-            quote_code: self.config.xrpl.quote_code(),
-            issuer: if self.config.xrpl.issuer.trim().is_empty() {
-                crate::config::FALLBACK_ISSUER.to_string()
-            } else {
-                self.config.xrpl.issuer.clone()
-            },
-            limit: self.config.xrpl.offer_limit,
-        };
+        let book_pair = BookPair::from_config(&self.config.xrpl);
         start_ws_task(
             self.ws_server.clone(),
             self.custom_ws,

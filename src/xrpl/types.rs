@@ -551,6 +551,21 @@ pub struct BookPair {
 }
 
 impl BookPair {
+    /// The XRP/quote book the TUI watches, as configured.
+    pub fn from_config(cfg: &crate::config::LedgerConfig) -> Self {
+        Self {
+            base: "XRP".to_string(),
+            quote: cfg.currency.clone(),
+            quote_code: cfg.quote_code(),
+            issuer: if cfg.issuer.trim().is_empty() {
+                crate::config::FALLBACK_ISSUER.to_string()
+            } else {
+                cfg.issuer.clone()
+            },
+            limit: cfg.offer_limit,
+        }
+    }
+
     /// Base currency is what the taker gets (offer maker pays).
     pub fn gets_currency(&self) -> &str {
         &self.base
@@ -923,6 +938,23 @@ pub struct XrplTomlData {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A config with no `currency_code` still asks the node for the RLUSD book by its 160-bit
+    /// code; changing `currency` moves the book with it, and an explicit code wins.
+    #[test]
+    fn book_pair_from_config_follows_currency_unless_code_is_set() {
+        let mut cfg = crate::config::LedgerConfig::default();
+        assert!(cfg.currency_code.is_none());
+        let pair = BookPair::from_config(&cfg);
+        assert_eq!(
+            pair.pays_currency(),
+            "524C555344000000000000000000000000000000"
+        );
+        cfg.currency = "USD".into();
+        assert_eq!(BookPair::from_config(&cfg).pays_currency(), "USD");
+        cfg.currency_code = Some("03AABB".into());
+        assert_eq!(BookPair::from_config(&cfg).pays_currency(), "03AABB");
+    }
 
     /// TC-070: issued quote uses currency_code (160-bit), not display symbol
     #[test]
