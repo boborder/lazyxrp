@@ -4,6 +4,8 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-10-26
+
 ### Changed
 
 - `xrpl.currency_code` is now optional: unset, the order-book quote code is derived from `xrpl.currency` (3-letter code as is, otherwise zero-padded 160-bit hex), so changing `currency` no longer leaves the book on the old token. Set it only for a code that cannot be derived, e.g. an AMM LP token. An existing `currency_code` keeps taking precedence.
@@ -207,7 +209,8 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 See [GitHub Releases](https://github.com/boborder/lazyxrp/releases) for 0.2.11 and older.
 
-[Unreleased]: https://github.com/boborder/lazyxrp/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/boborder/lazyxrp/compare/v0.9.1...HEAD
+[0.9.1]: https://github.com/boborder/lazyxrp/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/boborder/lazyxrp/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/boborder/lazyxrp/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/boborder/lazyxrp/compare/v0.6.1...v0.7.0
