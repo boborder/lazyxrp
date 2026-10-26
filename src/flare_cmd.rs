@@ -137,6 +137,75 @@ pub fn parse_tx_id(t: &str) -> color_eyre::Result<[u8; 32]> {
     })
 }
 
+/// Poll interval / limit while waiting for a public executor to finalize a memo payment. A
+/// mainnet sample of 8 Smart Account mints took 95–177 s after the XRPL ledger validated them.
+pub const FINALIZE_POLL: std::time::Duration = std::time::Duration::from_secs(10);
+pub const FINALIZE_LIMIT: std::time::Duration = std::time::Duration::from_secs(300);
+
+/// Poll `check` every `interval` until it reports true or `limit` has passed. `Ok(false)` means
+/// "not finalized yet"; a failed read ends the wait with that error, never as `false`.
+pub async fn wait_finalized<F, Fut>(
+    mut check: F,
+    interval: std::time::Duration,
+    limit: std::time::Duration,
+) -> color_eyre::Result<bool>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = color_eyre::Result<bool>>,
+{
+    let deadline = std::time::Instant::now() + limit;
+    loop {
+        if check().await? {
+            return Ok(true);
+        }
+        if std::time::Instant::now() + interval > deadline {
+            return Ok(false);
+        }
+        tokio::time::sleep(interval).await;
+    }
+}
+
+/// After a `sa-memo` payment validated: wait for a public executor to finalize it (all memo ops
+/// take `--data 0x`, so nobody needs private bytes), else say how to finish or re-check. Public
+/// executors set their own fee floor (not measured here), so a low `--fee` may never be picked up.
+/// The payment already succeeded, so nothing here may fail the command (a re-run would send a
+/// second Core Vault payment): a failed read is reported with the re-check hint instead.
+pub async fn await_public_executor(rpc_url: &str, tx_hash: &str, wait: bool, say: impl Fn(&str)) {
+    let recheck = format!("re-check: lazyxrp -x sa-status {tx_hash}");
+    let Ok(tx) = parse_tx_id(tx_hash) else {
+        say(&format!(
+            "cannot check finalization (bad tx hash); {recheck}"
+        ));
+        return;
+    };
+    if !wait {
+        say(&format!("not waiting; {recheck}"));
+        return;
+    }
+    say(&format!(
+        "waiting up to {} s for a public executor to finalize {tx_hash}…",
+        FINALIZE_LIMIT.as_secs()
+    ));
+    let outcome = wait_finalized(
+        || flare::smart_account_tx_used(rpc_url, tx),
+        FINALIZE_POLL,
+        FINALIZE_LIMIT,
+    )
+    .await;
+    say(&match outcome {
+        Ok(true) => "finalized on Flare".to_string(),
+        Ok(false) => format!(
+            "not finalized after {} s ({recheck}); to finalize it yourself: lazyxrp -x \
+             fxrp-execute {tx_hash} --data 0x (needs [flare.fassets] execute, FLARE_EVM_KEY and \
+             FLR for the attestation fee + gas)",
+            FINALIZE_LIMIT.as_secs()
+        ),
+        Err(e) => {
+            format!("the payment is validated, but the finalization check failed: {e}; {recheck}")
+        }
+    });
+}
+
 /// Per-op state of the target payment (SKILL.md recovery flow): `0xE0` skip-memo and `0xE2`
 /// replace-fee only help while the target is NOT yet minted; `0xE1` fast-forward only after it IS.
 pub fn check_target_state(op: crate::cli::MemoOp, used: Option<bool>) -> color_eyre::Result<()> {
@@ -639,5 +708,70 @@ mod tests {
         assert!(build_user_operation(personal, 0, &["0x12:0x".into()], 0).is_err());
         assert!(build_user_operation(personal, 0, &[format!("{target}:zz")], 0).is_err());
         assert!(build_user_operation(personal, 0, &[target], 0).is_err());
+    }
+}
+
+#[cfg(test)]
+mod finalize_wait_tests {
+    use std::{cell::Cell, time::Duration};
+
+    use super::wait_finalized;
+
+    /// TC-366: the wait returns as soon as the check turns true, reports "not yet" (not an
+    /// error) once the limit passes, and surfaces a failed read instead of hiding it as "not yet".
+    #[tokio::test]
+    async fn wait_finalized_polls_until_true_then_gives_up() {
+        let calls = Cell::new(0);
+        let on_third = || {
+            calls.set(calls.get() + 1);
+            let done = calls.get() == 3;
+            async move { Ok(done) }
+        };
+        let tick = Duration::from_millis(1);
+        assert!(
+            wait_finalized(on_third, tick, Duration::from_secs(5))
+                .await
+                .unwrap()
+        );
+        assert_eq!(calls.get(), 3);
+
+        let never = || async { Ok(false) };
+        assert!(!wait_finalized(never, tick, Duration::ZERO).await.unwrap());
+
+        let broken = || async { Err(color_eyre::eyre::eyre!("rpc down")) };
+        let e = wait_finalized(broken, tick, Duration::from_secs(5))
+            .await
+            .unwrap_err();
+        assert!(e.to_string().contains("rpc down"));
+    }
+}
+
+#[cfg(test)]
+mod await_executor_tests {
+    use std::cell::RefCell;
+
+    /// TC-366: a Flare read failure after the XRPL payment validated is only reported (with the
+    /// `sa-status` re-check hint) — the function returns `()`, so it cannot fail the command and
+    /// invite a second Core Vault payment. A bad hash and `--no-wait` are reported the same way.
+    #[tokio::test]
+    async fn await_public_executor_reports_instead_of_failing() {
+        let hash = "ab".repeat(32);
+        let lines = RefCell::new(Vec::<String>::new());
+        let say = |m: &str| lines.borrow_mut().push(m.to_string());
+        super::await_public_executor("http://127.0.0.1:1", &hash, true, say).await;
+        super::await_public_executor("http://127.0.0.1:1", &hash, false, say).await;
+        super::await_public_executor("http://127.0.0.1:1", "zz", true, say).await;
+        let lines = lines.into_inner();
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.contains("check failed") && l.contains("sa-status")),
+            "{lines:?}"
+        );
+        assert!(
+            lines.iter().any(|l| l.starts_with("not waiting")),
+            "{lines:?}"
+        );
+        assert!(lines.iter().any(|l| l.contains("bad tx hash")), "{lines:?}");
     }
 }

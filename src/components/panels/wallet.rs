@@ -407,7 +407,7 @@ impl Component for WalletPanel {
             Action::FxrpDirectMintPaymentSubmitOk(hash) => {
                 return self.submit_ok(
                     format!(
-                        "FXRP Direct Mint Payment · {hash} · next: composer [7] Execute if flare.fassets.execute=true"
+                        "FXRP Direct Mint Payment · {hash} · a public executor usually finalizes it within minutes (not guaranteed; no fee floor is known). Check the recipient's FXRP on Overview, or finalize it yourself: composer [7] / `-x fxrp-execute` (needs flare.fassets.execute=true, an EVM key and FLR)"
                     ),
                     matches!(&self.composer, Some(ComposerPhase::FxrpDirectMint { .. })),
                 );
@@ -2769,6 +2769,54 @@ mod tests {
             panel.queue_submit_fxrp_direct_mint(),
             Action::FxrpDirectMintPaymentSubmitErr(m) if m.contains("cap")
         ));
+    }
+
+    /// TC-367: the FXRP Mint composer prefills the signer's own personal account (so an XRP-only
+    /// user needs no other Flare address) and shows it in full; a read for another account or a
+    /// stale read leaves the recipient empty.
+    #[test]
+    fn fxrp_mint_composer_prefills_own_personal_account_only() {
+        let mut panel = smart_account_panel();
+        panel.fxrp_direct_mint = Some(crate::xrpl::FxrpDirectMintInfo {
+            core_vault_xrpl: "rVault".into(),
+            asset_manager: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
+            min_fee_uba: 100_000,
+            fee_bips: 10,
+            executor_fee_uba: 200_000,
+            minting_paused: Some(false),
+            emergency_pause_level: Some(0),
+            limits: None,
+        });
+        let recipient = |p: &WalletPanel| match &p.composer {
+            Some(ComposerPhase::FxrpDirectMint {
+                flare_recipient, ..
+            }) => flare_recipient.clone(),
+            other => panic!("composer not open: {other:?}"),
+        };
+        panel.open_fxrp_direct_mint_composer();
+        assert_eq!(
+            recipient(&panel),
+            "0x1234567890abcdef1234567890abcdef12345678"
+        );
+        let out = drawn(&mut panel, 160, 24);
+        assert!(
+            out.contains("0x1234567890abcdef1234567890abcdef12345678"),
+            "full address shown: {out}"
+        );
+        assert!(out.contains("your Smart Account personal account"), "{out}");
+
+        panel.seed_address = Some(Ok("rSomeoneElse".into()));
+        panel.open_fxrp_direct_mint_composer();
+        assert_eq!(
+            recipient(&panel),
+            "",
+            "read for another account never prefills"
+        );
+
+        panel.seed_address = Some(Ok("rOwner".into()));
+        panel.smart_account_at = Instant::now().checked_sub(std::time::Duration::from_secs(301));
+        panel.open_fxrp_direct_mint_composer();
+        assert_eq!(recipient(&panel), "", "stale read never prefills");
     }
 
     fn drawn(panel: &mut WalletPanel, w: u16, h: u16) -> String {

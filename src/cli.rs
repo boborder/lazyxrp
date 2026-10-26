@@ -175,7 +175,7 @@ pub enum Cmd {
         #[arg(long, default_value_t = 10)]
         limit: u32,
     },
-    /// Check if an account is activated (has XRP balance >= 10 XRP)
+    /// Check whether an account exists on the ledger (has been funded)
     AccountStatus {
         address: String,
     },
@@ -336,7 +336,8 @@ pub enum Cmd {
     },
     /// Smart Account memo instruction (recovery / executor pin): a Direct Mint Payment to the
     /// Core Vault carrying the 10–50 byte memo. The payment must mint a positive net amount
-    /// (fee-only direct mints revert); an executor then finalizes it with
+    /// (fee-only direct mints revert). After it validates this waits (up to 5 min, `--no-wait`
+    /// skips) for a public executor to finalize it; otherwise finalize it yourself with
     /// `fxrp-execute <tx> --data 0x`. No destination tag.
     SaMemo {
         #[arg(value_enum)]
@@ -372,6 +373,13 @@ pub enum Cmd {
         /// Executor fee in UBA (drops) written into the memo header
         #[arg(long, default_value_t = 0)]
         fee: u64,
+    },
+    /// Read-only: has a Smart Account payment (`sa-memo` / `sa-call`, or an operator instruction
+    /// such as `sa-vault`) been finalized on Flare? (`MasterAccountController.isTransactionIdUsed`;
+    /// plain recipient-memo mints are not tracked — checked on Coston2.)
+    SaStatus {
+        /// XRPL transaction hash of the Direct Mint Payment (64 hex)
+        tx_hash: String,
     },
 }
 
@@ -453,6 +461,7 @@ impl Cmd {
             Cmd::SaVault { .. } => "sa-vault",
             Cmd::SaMemo { .. } => "sa-memo",
             Cmd::SaCall { .. } => "sa-call",
+            Cmd::SaStatus { .. } => "sa-status",
         }
     }
 
@@ -649,6 +658,8 @@ mod tests {
             (vec!["nft-mint"], true),
             (vec!["nft-burn", "AB"], true),
             (vec!["coverage"], false),
+            (vec!["sa-status", "AB"], false),
+            (vec!["sa-memo", "remove-executor", "1"], true),
         ] {
             let c = Cli::try_parse_from(["lazyxrp", "-x"].into_iter().chain(argv.clone()))
                 .expect("parses");
