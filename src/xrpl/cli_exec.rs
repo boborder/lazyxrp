@@ -1084,7 +1084,8 @@ mod tests {
                 ]
             );
             let xrp = json!({"currency": "XRP"});
-            let rlusd = json!({"currency": "RLUSD", "issuer": RLUSD_ISSUER});
+            // `RLUSD` goes on the wire as its 160-bit code (TC-368); the node rejects the raw symbol.
+            let rlusd = json!({"currency": "524C555344000000000000000000000000000000", "issuer": RLUSD_ISSUER});
             let book = &requests[2]["params"][0];
             assert_eq!(
                 (&book["taker_gets"], &book["taker_pays"], &book["limit"]),

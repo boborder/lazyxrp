@@ -4,6 +4,12 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ## [Unreleased]
 
+### Fixed
+
+- TUI: keystrokes were randomly lost (roughly 1 in 3 runs). The terminal event stream started before the NFT image picker queried the terminal, so the picker missed its replies and left a thread reading stdin that stole keys. The event stream now starts after every component's `init`.
+- `-x book` / `-x amm` accept a currency symbol such as `RLUSD` (sent as its 160-bit code, same rule as `xrpl.currency`); before, anything that was not a 3-letter or hex code failed with `bad currency`.
+- DESIGN.md: TX detail / validator overlays close with `Enter` (`Esc` was documented but is not bound).
+
 ## [0.9.1] - 2026-10-26
 
 ### Changed

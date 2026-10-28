@@ -125,6 +125,10 @@ impl Tui {
         }
         Ok(())
     }
+    /// Raw mode + alternate screen only. Call [`Tui::start`] afterwards: components may query
+    /// the terminal over stdin during `init` (ratatui-image `Picker::from_query_stdio`), and a
+    /// running `EventStream` would steal those replies, leaving the picker's reader thread
+    /// blocked on stdin, where it later swallows user keystrokes.
     pub fn enter(&mut self) -> color_eyre::Result<()> {
         crossterm::terminal::enable_raw_mode()?;
         crossterm::execute!(
@@ -133,7 +137,6 @@ impl Tui {
             EnableBracketedPaste,
             cursor::Hide
         )?;
-        self.start();
         Ok(())
     }
 
@@ -171,6 +174,7 @@ impl Tui {
 
     pub fn resume(&mut self) -> color_eyre::Result<()> {
         self.enter()?;
+        self.start();
         Ok(())
     }
 

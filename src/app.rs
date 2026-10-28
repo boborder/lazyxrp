@@ -276,6 +276,7 @@ impl App {
         self.splash
             .register_config_handler(Arc::clone(&self.config))?;
         self.splash.init(tui.terminal.size()?)?;
+        tui.start();
 
         let (poll_tx, poll_rx) = mpsc::unbounded_channel();
         let (poll_trigger_tx, poll_trigger_rx) = mpsc::unbounded_channel();

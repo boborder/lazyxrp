@@ -314,14 +314,11 @@ pub struct LedgerConfig {
 
 impl LedgerConfig {
     /// Quote currency code for the order book: the explicit `currency_code` when set,
-    /// otherwise `currency` as is when it is already a code (3 letters, or 40 hex), else a
-    /// symbol of up to 20 bytes as zero-padded 160-bit hex. Anything longer is passed through
-    /// unchanged so the node rejects it instead of the book silently following another token.
+    /// otherwise [`currency_code_for`](crate::xrpl::currency_code_for) of `currency`.
     pub fn quote_code(&self) -> String {
         match self.currency_code.as_deref().map(str::trim) {
             Some(code) if !code.is_empty() => code.to_string(),
-            _ if self.currency.len() == 3 || self.currency.len() > 20 => self.currency.clone(),
-            _ => format!("{:0<40}", hex::encode_upper(&self.currency)),
+            _ => crate::xrpl::currency_code_for(&self.currency),
         }
     }
 }

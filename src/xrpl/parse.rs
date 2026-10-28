@@ -573,7 +573,7 @@ pub(crate) fn book_currency(currency: &str, issuer: Option<&str>) -> Value {
         json!({ "currency": "XRP" })
     } else {
         json!({
-            "currency": currency,
+            "currency": super::util::currency_code_for(currency),
             "issuer": issuer.unwrap_or("")
         })
     }
@@ -1418,5 +1418,20 @@ mod tests {
         assert_eq!(price.entire_set.mean, "1.0");
         assert!(price.trimmed_set.is_none());
         assert_eq!(price.time, 0);
+    }
+
+    /// TC-368: CLI book / AMM assets accept a symbol like the TUI config does — `RLUSD`
+    /// goes on the wire as its 160-bit code; 3-letter and 40-hex codes pass unchanged, and
+    /// input that is not plain alphanumeric is never encoded into a lookalike code.
+    #[test]
+    fn book_currency_encodes_long_symbols() {
+        let rlusd = "524C555344000000000000000000000000000000";
+        assert_eq!(book_currency("RLUSD", Some("rI"))["currency"], rlusd);
+        assert_eq!(book_currency(rlusd, Some("rI"))["currency"], rlusd);
+        assert_eq!(book_currency("USD", Some("rI"))["currency"], "USD");
+        assert_eq!(book_currency("xrp", None), json!({ "currency": "XRP" }));
+        for raw in ["USD ", "US D", "RL-USD", "USD\u{a0}"] {
+            assert_eq!(book_currency(raw, Some("rI"))["currency"], raw, "{raw:?}");
+        }
     }
 }

@@ -8,6 +8,19 @@ pub(crate) fn next_backoff_secs(current: u64) -> u64 {
     }
 }
 
+/// Wire currency code for a user-typed symbol: only a 4–20 character ASCII alphanumeric
+/// symbol (`RLUSD`) becomes zero-padded 160-bit hex. Anything else — a 3-letter or 40-hex
+/// code, or input with spaces, punctuation, control or non-ASCII bytes — is returned
+/// unchanged, so validation or the node refuses it: encoding `"USD "` would sign for a
+/// lookalike token instead of `USD`.
+pub(crate) fn currency_code_for(symbol: &str) -> String {
+    if (4..=20).contains(&symbol.len()) && symbol.bytes().all(|b| b.is_ascii_alphanumeric()) {
+        format!("{:0<40}", hex::encode_upper(symbol))
+    } else {
+        symbol.to_string()
+    }
+}
+
 /// Strip control, bidi-override and invisible format characters (and cap length) from
 /// remote-supplied text, so a hostile node cannot inject escape sequences or visually
 /// reorder / hide text (Trojan Source style) in the TUI, error reports or CLI output.
