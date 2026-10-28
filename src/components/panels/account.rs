@@ -180,7 +180,6 @@ impl Component for AccountPanel {
         ];
         frame.render_widget(Paragraph::new(balance_lines), balance_area);
 
-        // Reserve usage gauge
         let usage_ratio: f64 = if balance_xrp > 0.0 {
             (required_reserve_xrp / balance_xrp).clamp(0.0, 1.0)
         } else {

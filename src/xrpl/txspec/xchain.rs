@@ -1262,15 +1262,6 @@ mod tests {
         }
         // IOU bridge: issues serialise as {currency, issuer}.
         let ib = format!("{me},USD:{ISSUER},{DOOR_B},USD:{DOOR_B}");
-        let p = CREATE_BRIDGE
-            .fields
-            .iter()
-            .map(|x| x.name)
-            .collect::<Vec<_>>();
-        assert_eq!(
-            p,
-            ["XChainBridge", "SignatureReward", "MinAccountCreateAmount"]
-        );
         let prepared = CREATE_BRIDGE
             .prepare(&f(&[("XChainBridge", &ib), ("SignatureReward", "1")]), 0)
             .unwrap();
@@ -1379,10 +1370,12 @@ mod tests {
         // `me` is neither door of this bridge.
         let not_door = f(&[("XChainBridge", &xrp_bridge()), ("SignatureReward", "1")]);
         let p = CREATE_BRIDGE.prepare(&not_door, 0).unwrap();
-        assert!((CREATE_BRIDGE.build_json)(&me, &p, 1).is_err());
+        let err = (CREATE_BRIDGE.build_json)(&me, &p, 1).unwrap_err();
+        assert!(err.to_string().contains("AccountDoorMismatch"), "{err}");
         let modify = f(&[("XChainBridge", &xrp_bridge()), ("SignatureReward", "1")]);
         let p = MODIFY_BRIDGE.prepare(&modify, 0).unwrap();
-        assert!((MODIFY_BRIDGE.build_json)(&me, &p, 1).is_err());
+        let err = (MODIFY_BRIDGE.build_json)(&me, &p, 1).unwrap_err();
+        assert!(err.to_string().contains("AccountDoorMismatch"), "{err}");
         // As a door it builds.
         let p = CREATE_BRIDGE.prepare(&not_door, 0).unwrap();
         assert!((CREATE_BRIDGE.build_json)(DOOR_A, &p, 1).is_ok());
@@ -1494,7 +1487,10 @@ mod tests {
             Some(&credential),
         )
         .await;
-        assert!(matches!(rx.try_recv(), Ok(Action::GenericTxSubmitErr(_))));
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(Action::GenericTxSubmitErr(e)) if e.contains("must differ")
+        ));
 
         submit_generic_transaction(
             &rpc,

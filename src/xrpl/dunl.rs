@@ -77,9 +77,7 @@ pub(crate) struct ValidatorManifestMeta {
     master_public_key: Option<String>,
 }
 
-/// Decode XRPL validator manifest (base64) for domain / sequence / master key.
-///
-/// Results are memoized by raw base64 (dUNL entries rarely change between polls).
+/// Decoded manifests memoized by raw base64 (dUNL entries rarely change between polls).
 fn manifest_decode_cache() -> &'static Mutex<HashMap<String, Option<ValidatorManifestMeta>>> {
     static MANIFEST_DECODE_CACHE: OnceLock<Mutex<HashMap<String, Option<ValidatorManifestMeta>>>> =
         OnceLock::new();
@@ -93,6 +91,7 @@ fn manifest_decode_cache_clear() {
     }
 }
 
+/// Decode an XRPL validator manifest (base64) for domain / sequence / master key.
 pub fn parse_validator_manifest_b64(b64: &str) -> Option<ValidatorManifestMeta> {
     if let Ok(guard) = manifest_decode_cache().lock()
         && let Some(hit) = guard.get(b64)
@@ -252,7 +251,7 @@ pub(crate) fn parse_xrplf_dunl_json(text: &str) -> color_eyre::Result<DunlSummar
 }
 
 fn base64_decode(input: &str) -> color_eyre::Result<Vec<u8>> {
-    // Mirror the old decoder's leniency: skip ASCII whitespace before padding.
+    // Lenient: ASCII whitespace (e.g. line-wrapped base64) is skipped.
     let cleaned: Vec<u8> = input.bytes().filter(|b| !b.is_ascii_whitespace()).collect();
     base64::engine::general_purpose::STANDARD
         .decode(&cleaned)
@@ -405,14 +404,12 @@ mod tests {
     #[test]
     fn parse_validator_manifest_extracts_domain_and_seq() {
         let _guard = ManifestDecodeCacheGuard;
-        let manifest_b64 = MANIFEST_B64;
-        let meta = parse_validator_manifest_b64(manifest_b64).expect("manifest");
+        let meta = parse_validator_manifest_b64(MANIFEST_B64).expect("manifest");
         assert_eq!(meta.domain.as_deref(), Some("xrp.vet"));
         assert_eq!(meta.sequence, Some(1));
-        assert!(
-            meta.master_public_key
-                .as_ref()
-                .is_some_and(|k| k.starts_with("ED"))
+        assert_eq!(
+            meta.master_public_key.as_deref(),
+            Some("ED13AAFCB6A87BCB5D093C2EF37F04431C291126D674293305152D9776C6ABA4D6")
         );
     }
 

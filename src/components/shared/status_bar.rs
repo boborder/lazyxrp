@@ -89,7 +89,6 @@ pub struct StatusBar {
     /// `SystemTime` of the dUNL manifest data itself (from `DunlSummary`), so
     /// the age label stays truthful while stale-on-error re-serves the cache.
     dunl_data_wall: Option<SystemTime>,
-    // state cache
     cached_state_display: Option<String>,
 }
 
@@ -218,7 +217,6 @@ impl Component for StatusBar {
                 self.last_error = None;
                 self.cached_error_display = None;
                 self.cached_state_display = None;
-                // Precompute price spans
                 self.cached_price_spans = vec![
                     Span::raw("  "),
                     Span::styled("XRP/RLUSD", theme::dim_style()),
@@ -267,7 +265,6 @@ impl Component for StatusBar {
         // Hoist: flare_state() needs an immutable self borrow, which conflicts
         // with the mutable cached_state_display borrow held by `spans` below.
         let flr_state = self.flare_state();
-        // Cache state display string
         let state_display = self
             .cached_state_display
             .get_or_insert_with(|| format!(" {} {} ", state.icon(), state.label()));
@@ -334,7 +331,6 @@ impl Component for StatusBar {
         if let Some(t) = self.last_any_update_wall {
             spans.push(Span::raw("  "));
             spans.push(Span::styled("@", label_style));
-            // Cache wall-time string until last_any_update_wall changes
             if self.cached_wall_for != Some(t) {
                 self.cached_wall_for = Some(t);
                 self.cached_wall_time = Some(fmt::fmt_local_hms(t));

@@ -25,7 +25,7 @@ pub fn init() -> color_eyre::Result<()> {
         );
         let _ = crossterm::terminal::disable_raw_mode();
 
-        eprintln!("{}", panic_hook.panic_report(panic_info)); // color-eyre report to stderr
+        eprintln!("{}", panic_hook.panic_report(panic_info));
         error!("Error: {panic_info}");
 
         std::process::exit(1);

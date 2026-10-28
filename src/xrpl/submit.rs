@@ -40,7 +40,7 @@ pub(crate) async fn simulate_tx_requiring_tes_success(
     }
 }
 
-/// Mainnet guard, then load seed + wallet for AccountSet / Payment submit.
+/// Production-network guard, then the signing wallet — the first step of every XRPL write.
 pub(super) fn resolve_submit_wallet<E>(
     network: &Network,
     skip_mainnet_prompt: bool,
@@ -1412,7 +1412,7 @@ pub(super) async fn submit_fxrp_direct_mint_payment(
     .await;
 }
 
-/// CLI entry (`-x sa-memo`): one Direct Mint Payment (custom memo) through the C2 pipeline.
+/// CLI entry (`-x sa-memo` / `sa-call`): one Direct Mint Payment (custom memo) through the C2 pipeline.
 pub async fn run_direct_mint_payment(
     rpc_url: &str,
     network: &Network,
@@ -2315,17 +2315,6 @@ mod tests {
         }
     }
 
-    fn sa_credential() -> crate::signing::SigningCredential {
-        crate::signing::credential_from_secrets(
-            Some(&secrecy::SecretString::from(
-                "sEdSkooMk31MeTjbHVE7vLvgCpEMAdB",
-            )),
-            None,
-        )
-        .expect("credential")
-        .expect("seed set")
-    }
-
     /// TC-242: Smart Account transfer and redeem (local JSON-RPC): simulate precedes submit, and
     /// the signed blob is a Payment to the pinned operator for exactly the instruction fee, with
     /// no DestinationTag and one Memo whose MemoData is the 32-byte instruction.
@@ -2357,7 +2346,7 @@ mod tests {
         let url = format!("http://{}", listener.local_addr().expect("addr"));
         let server = tokio::spawn(rpc_mock::serve(listener, 8, result_for));
         let rpc = RpcClient::connect(&url).expect("rpc client");
-        let credential = sa_credential();
+        let credential = test_credential();
         let (tx, mut rx) = mpsc::unbounded_channel();
 
         for params in [
@@ -2379,7 +2368,6 @@ mod tests {
                 matches!(&got, Ok(Action::SmartAccountInstructionSubmitOk(m)) if m.ends_with("fee 12 drops")),
                 "{got:?}"
             );
-            // Follow-ups after a successful write: account + history refresh.
             assert!(matches!(rx.try_recv(), Ok(Action::RefreshAccount)));
             assert!(matches!(rx.try_recv(), Ok(Action::RefreshTxHistory)));
         }
@@ -2447,7 +2435,7 @@ mod tests {
     #[tokio::test]
     async fn smart_account_instruction_refusals_never_reach_rpc() {
         let rpc = RpcClient::connect("http://127.0.0.1:1").expect("rpc client");
-        let credential = sa_credential();
+        let credential = test_credential();
         let signer = credential.address().expect("address");
         let xaddr =
             xrpl::core::addresscodec::classic_address_to_xaddress(SA_GENESIS, Some(1), true)
@@ -2908,9 +2896,9 @@ mod tests {
         }
     }
 
-    /// TC-088: the Flare executeDirectMinting path has its own gate (different signature, so it
-    /// sits outside the table above): Flare mainnet, as reported by the RPC's chain id, without
-    /// `--yes` is refused.
+    /// TC-088 / TC-348: the Flare executeDirectMinting path has its own gate (different signature,
+    /// so it sits outside the table above): Flare mainnet, as reported by the RPC's chain id,
+    /// without `--yes` is refused.
     #[tokio::test]
     async fn fxrp_execute_direct_mint_flare_mainnet_without_yes_is_rejected() {
         let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
@@ -2951,8 +2939,8 @@ mod tests {
             .expect("one eth_chainId request");
     }
 
-    /// TC-364: the Flare write is gated on the XRPL ↔ Flare pairing, not on the XRPL network
-    /// alone: Testnet with `[flare] network = flare` used to sail through unguarded.
+    /// TC-348: the Flare write is gated on the XRPL ↔ Flare pairing, not on the XRPL network
+    /// alone (Testnet with `[flare] network = flare` is refused).
     #[tokio::test]
     async fn fxrp_execute_direct_mint_refuses_unpaired_networks() {
         use crate::config::FlareNetwork::{Coston2, Flare};
@@ -2982,7 +2970,7 @@ mod tests {
         }
     }
 
-    /// TC-364: the Direct Mint Payment and Smart Account instruction paths refuse an unpaired
+    /// TC-348: the Direct Mint Payment and Smart Account instruction paths refuse an unpaired
     /// XRPL / Flare network before any XRPL RPC call.
     #[tokio::test]
     async fn xrpl_writes_refuse_unpaired_flare_network() {
@@ -3058,7 +3046,7 @@ mod tests {
     }
 
     /// Mainnet submit paths with `--yes` bypass the production-write guard and
-    /// then fail on the missing seed, not on the guard.
+    /// then fail on the missing signing credential, not on the guard.
     #[tokio::test]
     async fn mainnet_submit_with_yes_skips_guard_across_tx_types() {
         let rpc = RpcClient::connect("http://127.0.0.1:1").expect("rpc client");

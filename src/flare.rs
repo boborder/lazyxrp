@@ -106,7 +106,7 @@ sol! {
         function calculateFeeByIds(bytes21[] _feedIds) external view returns (uint256 fee);
     }
 
-    /// Minimal IAssetManager surface for FXRP Direct Mint (C1 reads + C3 execute).
+    /// Minimal IAssetManager surface: Direct Mint reads / execute, redeem, minting tags, queue.
     #[sol(rpc)]
     interface IAssetManager {
         function directMintingPaymentAddress() external view returns (string memory);
@@ -1810,7 +1810,8 @@ mod tests {
             .await
             .expect("bind");
         let url = format!("http://{}", listener.local_addr().expect("addr"));
-        // 2 registry + getPersonalAccount + fAsset + nonce/wallets/2 fees/balance/decimals/code.
+        // 2 registry + getPersonalAccount + fAsset + nonce/wallets/2 fees/balance/decimals/code
+        // + getVaults + vault shares / assets.
         let server = tokio::spawn(crate::test_support::rpc_mock::serve_raw(
             listener, 14, respond,
         ));
@@ -1995,7 +1996,7 @@ mod tests {
         assert!(parse_fdc_payment_proof_json("not-json").is_err());
         let empty_proof = REAL_DA_PROOF.replace(r#""proof":["#, r#""proof":[],"x":["#);
         assert!(parse_fdc_payment_proof_json(&empty_proof).is_err());
-        // Only the response is wrong (valid 32-byte proof entry): the old pasted ABI-bytes shape.
+        // Only the response is wrong (valid 32-byte proof entry): ABI bytes instead of decoded JSON.
         let mut old_shape: serde_json::Value = serde_json::from_str(REAL_DA_PROOF).unwrap();
         old_shape["response"] = serde_json::json!("0xbb");
         assert!(parse_fdc_payment_proof_json(&old_shape.to_string()).is_err());

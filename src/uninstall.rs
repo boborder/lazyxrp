@@ -219,7 +219,7 @@ mod tests {
         std::fs::create_dir_all(&other).expect("create unrelated dir");
         assert!(!is_safe_uninstall_dir(&other));
 
-        // Basename contract, including the / and /tmp guard branches.
+        // Basename contract; `/tmp` and `/` lack a lazyxrp basename (`/` also has no parent).
         assert!(is_safe_uninstall_dir(Path::new("/tmp/lazyxrp")));
         assert!(is_safe_uninstall_dir(Path::new(
             "/tmp/com.kdheepak.lazyxrp"

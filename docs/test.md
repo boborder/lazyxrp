@@ -15,7 +15,7 @@
 - Inline `#[cfg(test)]` modules preferred; live-network cases are `#[ignore]` and run explicitly.
 - Tests live in the lib (`src/lib.rs`), `tests/cli_smoke.rs` (binary boundary) and `tests/testnet_e2e.rs` (opt-in, live testnet/devnet: send / offer / NFT mint → burn; `mise run e2e-testnet`, not run in CI). `[lib] doctest = false` and `test = false` on both `[[bin]]` targets (`Cargo.toml`) skip empty test targets to keep `cargo test` rebuilds fast — put unit tests in lib modules, not `main.rs` / `bin/rp.rs`, or drop `test = false` first.
 - **Traceability:** User-visible TCs should map to `docs/requirements.md` FR/NFR and/or `docs/architecture.md` §. Keys/layout TCs trace to `DESIGN.md`. See [Traceability](#traceability) for network/Flare rows.
-- **Bilingual docs:** every `docs/*.md` and `ROADMAP.md` has a Japanese twin `*-ja.md` (this file: `test-ja.md`). The English file is canonical for agents; any change to one MUST be made to the other in the same change, and the ID sets (TC / FR / NFR / S / R / I / P / F) must match.
+- **Bilingual docs:** this file has a Japanese twin `test-ja.md`; rule in [`AGENTS.md`](../AGENTS.md) (keep the TC ID sets identical).
 
 ## Commands
 
@@ -47,18 +47,17 @@ cargo deny check
 | TC-017 | P1 | `src/xrpl/parse.rs` | book_offers — parse response into OfferRow vec |
 | TC-018 | P2 | `src/xrpl/parse.rs` | server_info/fee — parse response into summary structs |
 | TC-019-022 | P2 | `src/config.rs` | parse_style — empty yields default, foreground/background mapping, modifiers combined, gray==grey |
-| TC-023 | P2 | `src/config.rs` | extract_color_and_modifiers — extracts modifiers and color |
+| TC-023 | P2 | `src/config.rs` | extract_color_and_modifiers — exercised through `parse_style_spec_mapping` (TC-019-022); no dedicated test |
 | TC-024-025 | P2 | `src/config.rs` | parse_color — RGB shorthand; unknown returns None; out-of-range `rgb`/`grayNN`/`bright colorNN` return None (no u8 overflow) |
-| TC-026 | P0 | `src/config.rs` | Config::new — loads default keybindings |
+| TC-026 | P0 | `src/config.rs` | Config::new — loads default keybindings (untouched `<q>` → Quit asserted in `user_keybindings_override_and_extend_defaults`, TC-195) |
 | TC-027-029,031-032 | P1 | `src/config.rs` | parse_key_event — modifier composition, case insensitivity, invalid keys error |
 | TC-033-035, TC-092 | P1 | `src/config.rs` | Config source precedence — file overrides default, `XRPL_RPC_SERVER` env overrides file, XDG resolution, `~/.config` fallback |
 | TC-036 | P2 | `src/config.rs` | Config validation — invalid key sequence format |
-| TC-037 | P0 | `src/network.rs` | Network::default — is Mainnet |
+| TC-037 | P0 | `src/network.rs` | Network::default — is Mainnet (`#[default]` on the enum; no dedicated test) |
 | TC-038-040 | P0 | `src/network.rs` | Network::from_str — roundtrip mainnet/testnet/devnet, case-insensitive, unknown errors |
 | TC-041 | P1 | `src/network.rs` | Network::is_production — correct boolean |
 | TC-042 | P0 | `src/config.rs` | `XRPL_NETWORK` overrides the file's network in `Config::new`; unparsable / `" testnet"` values are ignored |
-| TC-043 | P0 | `src/lib.rs` | resolve_rpc_url/resolve_ws_url — precedence CLI > env > config file > network default |
-| TC-044 | P1 | `src/lib.rs` | resolve_ws_url — CLI --ws-server is top priority |
+| TC-043/TC-044 | P0 | `src/lib.rs` | resolve_rpc_url/resolve_ws_url — precedence CLI > env > config file > network default (CLI `--ws-server` beats env) |
 | TC-045-046 | P1 | `src/signing.rs` | credential_from_secrets — none / seed / mnemonic / both-rejected outcome matrix |
 | TC-047 | P1 | `src/signing.rs` | prompt_production_confirmation — testnet/devnet skips |
 | TC-048 | P2 | `src/signing.rs` | prompt_production_confirmation — --yes skips on mainnet |
@@ -88,7 +87,7 @@ cargo deny check
 | TC-080-082 | P2 | `src/xrpl/parse.rs` | ripple_path_find — alternatives, empty alternatives, `source_amount` as XRP drops string |
 | TC-083 | P2 | `src/xrpl/format.rs` | summarize_paths_computed — hop chain abbreviation |
 | TC-084 | P2 | `src/xrpl/format.rs` | path_find_rows_from — display rows; cheapest-first ordering |
-| TC-085-086 | P2 | `src/xrpl/types.rs` | asset_display_name — known hex codes; unknown passthrough |
+| TC-085-086 | P2 | `src/xrpl/types.rs` | asset_display_name — known hex codes; unknown passthrough; lookalike codes (would display as `USD`/`XRP`) shown as hex + `…` |
 | TC-087 | P2 | `src/xrpl/poll.rs` | Poll trigger — coalesces rapid bursts |
 | TC-088 | P0 | `src/xrpl/submit.rs` | Mainnet guard: all submit paths reject without `--yes` (R-006); table includes Smart Account instruction |
 | TC-089/TC-144 | P0 | `src/xrpl/parse.rs`, `src/xrpl/poll.rs` | account_tx result mapping — not-found → empty history (I-7); action follows append flag (Ok/Err × append matrix) |
@@ -124,7 +123,7 @@ cargo deny check
 | TC-247 | P0 | `src/components/panels/wallet.rs` | Smart Account composer follows the read `decimals()` (8 and 0, not an assumed 6): `12.5` → 1_250_000_000 units at 8 decimals; exact balance accepted, balance + 1 unit refused; more fraction digits than decimals refused; decimals > 18 and no read → never queues |
 | TC-104 | P1 | `src/xrpl/parse.rs`, `src/components/shared/fps.rs` | account_tx marker survives parsing; tick-rate label refreshes after 1s |
 | TC-105 | P2 | `src/xrpl/client.rs` | Local HTTP 429 retried before success |
-| TC-248 | P0 | `src/coverage.rs` | XRPL coverage drift: the ROADMAP.md table between the `xrpl-coverage` markers equals `rows()` (type, family, read, TUI, CLI, status) and README states `**N / M**` writable / total; registry consistent (no type listed twice, every Spec type has a tx_detail parser, Existing rows are wired) |
+| TC-248 | P0 | `src/coverage.rs` | XRPL coverage drift: the ROADMAP.md table between the `xrpl-coverage` markers equals `rows()` (type, read, TUI, CLI, status) and README states `**N / M**` writable / total; registry consistent (no type listed twice, every Spec type has a tx_detail parser, no parser for an unlisted type) |
 | TC-249 | P0 | `src/xrpl/txspec/{mod,nft}.rs` | Field validation tables per NFT type (accept / reject; TransferFee 50000 ok / 50001 reject and needs transferable; URI 256 / 257 bytes incl. multibyte; ids 63 / 64 / 65 hex; taxon u32 max; 500 / 501 offers; sell / buy Owner rules; BrokerFee needs both offers; unknown field / flag); registry well-formed; CLI `Field=value` parsing; relative `Time` resolved once in `prepare` |
 | TC-250 | P0 | `src/xrpl/txspec/nft.rs` | Unsigned `tx_json` shape per NFT type (hex URI, flags bits, Amount drops / IOU object, Account / Sequence) |
 | TC-251 | P0 | `src/xrpl/txspec/nft.rs` | Signed blob per NFT type decodes with distinct Sequence 41 / Fee 13 / LastLedgerSequence 987654 (swapped args fail); builder applies the crate's model rules |
@@ -171,7 +170,7 @@ cargo deny check
 | TC-344 | P0 | `src/flare_cmd.rs` | Memo recovery layouts from upstream `MemoInstructions.sol`: `0xE0` / `0xE1` 42 B, `0xE2` 50 B, `0xD0` 30 B, `0xD1` 10 B (`[op \| walletId 0 \| fee u64 BE \| body]`); `0xE1` refuses `newNonce <= current` and a jump above `u32::MAX` (boundary tested), missing / short `--target`, zero executor; target state per op (`0xE0` / `0xE2` only while `isTransactionIdUsed` is false, `0xE1` only once true; `check_target_state`) |
 | TC-345 | P0 | `src/flare_cmd.rs` | `0xFE` user operation: `abi.encode(PackedUserOperation)` decodes back to the same sender / nonce / `executeUserOp(Call[])`, the memo is `[0xFE \| 0 \| fee u64 BE \| keccak256(userOp)]` (42 B); no calls / bad target / bad hex refused. Coston2 live: `sa-call` → payment validated → `fxrp-execute --data <userOp>` → the personal account's `FXRP.transfer` ran (recipient 5 → 6 FXRP, `getNonce` 3 → 4) |
 | TC-346 | P0 | `src/flare.rs` | Write chain gate: `expected_chain_id` per Flare network; `check_write_chain` decides the mainnet `--yes` requirement from the **reported** `eth_chainId` (mismatch refused); `tx_fee_cap` — `send_capped` refuses gas × max fee above `MAX_TX_FEE_WEI` (10 FLR). `fxrp-execute` on the wrong chain is refused before any other step |
-| TC-347 | P0 | `src/signing.rs` | `eth_address_checksum_enforced_for_mixed_case`: all-lower / all-upper accepted, mixed-case with a wrong EIP-55 checksum refused |
+| TC-347 | P0 | `src/signing.rs` | `eth_address_checksum_enforced_for_mixed_case`: all-lowercase skips the checksum; any uppercase letter must match EIP-55 (all-uppercase or wrong mixed case refused) |
 | TC-348 | P0 | `src/xrpl/submit.rs` | `xrpl_writes_refuse_unpaired_flare_network`, `fxrp_execute_direct_mint_refuses_unpaired_networks`, `fxrp_execute_direct_mint_flare_mainnet_without_yes_is_rejected`: XRPL writes (C2 / Smart Account / C3) refuse crossed XRPL ↔ Flare pairs and Flare mainnet without `--yes` |
 | TC-349 | P0 | `src/lib.rs` | `direct_mint_payment_refused_when_paused_or_over_cap`: C2 Payment refused while minting is paused or the amount exceeds the cap headroom |
 | TC-350 | P0 | `src/xrpl/poll.rs` | `stale_write_refusal_on_network_switch`: a write composed on network A is refused (not sent) after the active network changed (compose-time `network` in every write param) |
@@ -198,7 +197,7 @@ cargo deny check
 | TC-304 | P0 | `src/xrpl/txspec/identity.rs` | Signed blobs of all 9 identity types decode with distinct Sequence / Fee / LastLedgerSequence and a signature |
 | TC-305 | P0 | `src/xrpl/txspec/mpt.rs` | Signed blobs of all 4 MPT types decode with distinct Sequence / Fee / LastLedgerSequence and a signature |
 | TC-306 | P0 | `src/xrpl/txspec/identity.rs`, `src/xrpl/txspec/mpt.rs` | Typed confirm phrases: `DELETE` on CredentialDelete / DIDDelete / OracleDelete / PermissionedDomainDelete, `DESTROY` on MPTokenIssuanceDestroy; none on the other types |
-| TC-307 | P1 | `src/xrpl/txspec/identity.rs`, `src/xrpl/txspec/mpt.rs` | Builder applies the crate model rules: OracleSet without a series refused; MPTokenIssuanceSet / MPTokenAuthorize `Holder` = signer refused |
+| TC-307 | P1 | `src/xrpl/txspec/identity.rs`, `src/xrpl/txspec/mpt.rs` | Builder applies the crate model rules: empty DIDSet refused; OracleSet without a series refused (our `required()` check, error names `PriceDataSeries`); MPTokenIssuanceSet / MPTokenAuthorize `Holder` = signer refused |
 | TC-308 | P1 | `src/xrpl/txspec/identity.rs` | Flat grammars: `BASE/QUOTE=price@scale` (delete form, u64 bounds, scale 20/21, duplicate / base = quote) and `rIssuer:Type` credentials (hex-encoded type, duplicates, bad issuer, size) |
 | TC-309 | P0 | `src/xrpl/txspec/identity.rs` | Generic submit of DIDSet vs local RPC mock: empty form never reaches RPC; `server_info` → `account_info` → `simulate` → `submit`, hex-encoded URI in simulate request and signed blob |
 | TC-310 | P0 | `src/xrpl/txspec/mpt.rs` | Generic submit of MPTokenIssuanceCreate vs local RPC mock: transfer fee without canTransfer never reaches RPC; flags / metadata / Sequence / Fee / LastLedgerSequence in simulate request and signed blob |
@@ -322,8 +321,6 @@ cargo deny check
 | TC-224 | P2 | `src/xrpl/parse.rs` | `amm_info` LP token identity (`lp_token` or `LPToken`) → `(currency, AMM account)` |
 | TC-225 | P1 | `src/components/panels/wallet.rs` | AMM composers — `d` / `w` open; invalid form flashes `AMM ·`; valid forms queue trimmed params; empty LP = withdraw all; Esc → picker rows 10 / 11 |
 | TC-226 | P1 | `src/xrpl/submit.rs` | AMM paths vs local JSON-RPC — deposit simulates `tfTwoAsset`; withdraw by LP calls `amm_info` before simulate and signs `LPTokenIn` with its currency / issuer |
-
-
 
 ## Traceability
 

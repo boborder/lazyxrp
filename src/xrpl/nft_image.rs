@@ -362,8 +362,8 @@ fn find_image_uri(value: &Value) -> Option<String> {
 mod tests {
     use super::*;
 
-    /// Real-world IPFS spellings all reach the same gateway path (the doubled `ipfs://ipfs/`
-    /// form used to produce `/ipfs/ipfs/<cid>` and a 404).
+    /// Real-world IPFS spellings (including the doubled `ipfs://ipfs/`) all reach the same
+    /// gateway path.
     #[test]
     fn ipfs_spellings_normalize_to_one_gateway_path() {
         let cid = "QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG";
@@ -426,10 +426,15 @@ mod tests {
 
     #[test]
     fn rejects_unsafe_or_unsupported_uris() {
-        assert!(resolve_uri("file:///tmp/image.png").is_err());
-        assert!(resolve_uri("http://127.0.0.1/image.png").is_err());
-        assert!(resolve_uri("http://localhost/image.png").is_err());
-        assert!(resolve_uri("http://[::ffff:127.0.0.1]/image.png").is_err());
+        let err = |uri: &str| resolve_uri(uri).unwrap_err().to_string();
+        assert!(err("file:///tmp/image.png").contains("scheme"));
+        for uri in [
+            "http://127.0.0.1/image.png",
+            "http://localhost/image.png",
+            "http://[::ffff:127.0.0.1]/image.png",
+        ] {
+            assert!(err(uri).contains("private host"), "{uri}");
+        }
         for ip in [
             "10.0.0.1",
             "169.254.1.1",
@@ -527,7 +532,7 @@ mod tests {
         assert!(find_image_uri(&value).is_none());
     }
 
-    /// Serve one scripted HTTP response per accepted connection (client.rs:535 pattern).
+    /// Serve one scripted HTTP response per accepted connection.
     async fn serve_scripted_responses(
         listener: tokio::net::TcpListener,
         respond: impl Fn(usize) -> Vec<u8> + Send + 'static,

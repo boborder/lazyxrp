@@ -1208,11 +1208,14 @@ pub(super) mod tests {
         }
     }
 
-    /// TC-307: the crate's own model rules run when the unsigned JSON is built, before any RPC
-    /// (an oracle price entry without a scale cannot be expressed; a zero-length series is refused).
+    /// TC-307: the unsigned JSON builder runs the crate's model rules before any RPC (an empty
+    /// DIDSet reaching the builder past `check` is refused by the model) and refuses an OracleSet
+    /// without a series.
     #[test]
     fn builder_applies_model_rules() {
         let account = wallet().classic_address.clone();
+        let err = (DID_SET.build_json)(&account, &f(&[]), 1).unwrap_err();
+        assert!(format!("{err:?}").contains("AtLeastOne"), "{err:?}");
         let ok = spec("OracleSet")
             .prepare(
                 &f(&[
@@ -1226,7 +1229,8 @@ pub(super) mod tests {
         assert!((ORACLE_SET.build_json)(&account, &ok, 1).is_ok());
         let mut missing = ok.clone();
         missing.remove("PriceDataSeries");
-        assert!((ORACLE_SET.build_json)(&account, &missing, 1).is_err());
+        let err = (ORACLE_SET.build_json)(&account, &missing, 1).unwrap_err();
+        assert!(err.to_string().contains("PriceDataSeries"), "{err}");
     }
 
     /// TC-309: the generic submit path carries this family end to end against a local RPC mock —

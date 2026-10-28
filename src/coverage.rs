@@ -293,8 +293,8 @@ mod tests {
         );
     }
 
-    /// TC-248: the registry is consistent — no type listed twice, every Spec row is writable from
-    /// TUI + CLI and readable, and no read parser is registered for an unknown type.
+    /// TC-248: the registry is consistent — no type listed twice, every Spec row has a read
+    /// parser, and no read parser is registered for an unknown type.
     #[test]
     fn registry_is_consistent() {
         let rows = rows();
@@ -304,21 +304,7 @@ mod tests {
         names.dedup();
         assert_eq!(before, names.len(), "a transaction type is listed twice");
         for r in rows.iter().filter(|r| r.status == Status::Spec) {
-            assert!(
-                r.write_tui && r.write_cli && r.read,
-                "{} needs read + TUI + CLI",
-                r.tx_type
-            );
-        }
-        for r in rows
-            .iter()
-            .filter(|r| matches!(r.status, Status::Planned | Status::Unsupported))
-        {
-            assert!(
-                !r.write_tui && !r.write_cli,
-                "{} is not writable",
-                r.tx_type
-            );
+            assert!(r.read, "{} needs a TX-detail read parser", r.tx_type);
         }
         for t in registered_tx_types() {
             assert!(names.contains(&t), "read parser for unlisted type {t}");

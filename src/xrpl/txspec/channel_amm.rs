@@ -1357,10 +1357,6 @@ mod tests {
         ]
     }
 
-    fn lp_json() -> Value {
-        json!({"currency": LP, "issuer": ACCOUNT_C})
-    }
-
     /// TC-283: unsigned `tx_json` per type — Sequence set, no Fee / LastLedgerSequence, drops as
     /// strings, ids / keys upper-cased, claim flag bits, Asset objects, nested AuthAccounts.
     #[test]
@@ -1431,11 +1427,11 @@ mod tests {
                 other => panic!("sample for {other} is not asserted"),
             }
         }
-        // Claim without flags: no signature fields, Flags 0; renew sets only tfRenew.
-        let close_only = spec("PaymentChannelClaim")
+        // Renew-only claim: Flags is tfRenew alone; no Balance / Signature fields.
+        let renew_only = spec("PaymentChannelClaim")
             .prepare(&f(&[("Channel", ID_A), ("Flags", "renew")]), 0)
             .unwrap();
-        let j = (CHANNEL_CLAIM.build_json)(&account, &close_only, 1).unwrap();
+        let j = (CHANNEL_CLAIM.build_json)(&account, &renew_only, 1).unwrap();
         assert_eq!(j["Flags"], 0x0001_0000);
         assert!(j.get("Balance").is_none() && j.get("Signature").is_none());
         // BidMin alone, no AuthAccounts / BidMax.
@@ -1450,7 +1446,7 @@ mod tests {
             )
             .unwrap();
         let j = (AMM_BID.build_json)(&account, &min_only, 1).unwrap();
-        assert_eq!(j["BidMin"]["issuer"], lp_json()["issuer"]);
+        assert_eq!(j["BidMin"]["issuer"], ACCOUNT_C);
         assert!(j.get("BidMax").is_none() && j.get("AuthAccounts").is_none());
     }
 
@@ -1522,8 +1518,8 @@ mod tests {
         }
     }
 
-    /// Builder-time rules: the sender may not be its own AuthAccount; the crate model's
-    /// own checks run before any RPC.
+    /// Builder-time rule: the sender may not be its own AuthAccount (only the builder knows the
+    /// sender, so field validation cannot catch it).
     #[test]
     fn builder_rules() {
         let account = wallet().classic_address.clone();

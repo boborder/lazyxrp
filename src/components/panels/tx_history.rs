@@ -262,7 +262,7 @@ mod tests {
     #[test]
     #[allow(clippy::type_complexity)]
     fn history_filter_matches_by_field_and_empty_shows_all() {
-        /// Some(hashes) = expected displayed rows in order; None = filtered cache stays empty
+        /// Rows = expected displayed hashes in order; NoFilter = filtered cache stays empty
         enum Expected {
             Rows(&'static [&'static str]),
             NoFilter,

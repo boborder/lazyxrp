@@ -170,8 +170,7 @@ async fn connect_and_subscribe(
                 }
             }
             // Raw frames: `xrpl_receive` re-wraps stream messages as `XRPLResponse`, which
-            // drops the top-level `type` (ledgerClosed was never seen, TC-227).
-            // Ledgers close every few seconds: silence means a dead socket, so reconnect.
+            // drops the top-level `type`, so `ledgerClosed` would never match (TC-227).
             msg = tokio::time::timeout(WS_READ_TIMEOUT, ws.next()) => {
                 let Ok(msg) = msg else {
                     return Err(color_eyre::eyre::eyre!(
@@ -221,8 +220,8 @@ async fn connect_and_subscribe(
 #[cfg(test)]
 mod tests {
     use super::should_emit_ledger_trigger;
-    /// TC-103: duplicate ledger-close events emit one trigger per ledger index
 
+    /// TC-103: duplicate ledger-close events emit one trigger per ledger index
     #[test]
     fn ledger_trigger_emits_once_per_nonzero_index() {
         assert!(!should_emit_ledger_trigger(None, 0));
@@ -348,7 +347,7 @@ mod tests {
     }
 
     /// A socket that goes silent (no frames, no close) is abandoned after the read timeout and
-    /// the loop reconnects — the old code waited on it forever.
+    /// the loop reconnects.
     #[tokio::test]
     async fn ws_silent_socket_times_out_and_reconnects() {
         use crate::action::Action;

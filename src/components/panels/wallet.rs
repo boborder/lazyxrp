@@ -1314,7 +1314,6 @@ impl WalletPanel {
             return Ok(Some(Action::SetKeymapSuppression(true)));
         }
 
-        // Key generation (g — only when no composer open)
         if self.composer.is_none()
             && matches!(self.seed_address, Some(Ok(_)))
             && key.code == KeyCode::Char('g')
@@ -1933,7 +1932,7 @@ mod tests {
         assert!(matches!(closed, Some(Action::SetKeymapSuppression(false))));
         assert!(panel.composer.is_none());
 
-        // Esc walks back: form → picker (same type selected) → action list (row 14) → closed.
+        // Esc walks back: form → picker (same type selected) → action list (row 14).
         panel.composer = Some(ComposerPhase::PickKind { selected: 0 });
         panel.on_key_event(key('m')).expect("m");
         panel.on_key_event(key('j')).expect("down");
@@ -2316,7 +2315,6 @@ mod tests {
     fn trust_set_queue_uppercases_currency() {
         let mut panel = WalletPanel::new(true);
         panel.open_trust_set_composer();
-        // Rewrite the composer fields, then observe the queue conversion.
         if let Some(ComposerPhase::TrustSet {
             currency,
             issuer,
@@ -2425,7 +2423,6 @@ mod tests {
         let mut panel = WalletPanel::new(true);
         panel.is_focused = true;
         panel.open_account_set_composer();
-        // FLAG_OPTIONS index of DisableMaster
         panel.set_flag_ix = FLAG_OPTIONS
             .iter()
             .position(|f| *f == "DisableMaster")

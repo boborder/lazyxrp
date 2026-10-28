@@ -222,9 +222,6 @@ mod tests {
         });
         assert!(out.contains("Receive 100 USD"));
         assert!(out.contains("2 XRP"));
-        assert!(
-            out.contains("XRP → USD") || out.contains("rIssuer"),
-            "{out}"
-        );
+        assert!(out.contains("rIssuer"), "{out}");
     }
 }

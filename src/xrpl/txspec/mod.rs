@@ -41,7 +41,7 @@ fn normalized(name: &str) -> String {
         .collect()
 }
 
-/// Case-insensitive lookup; `-` / `_` ignored (`NFTokenMint`, `nftoken-mint`, `nftoken_mint`).
+/// Case-insensitive lookup; `-` / `_` / spaces ignored (`NFTokenMint`, `nftoken-mint`, `nftoken_mint`).
 pub fn lookup(name: &str) -> Option<&'static TxSpec> {
     let want = normalized(name);
     registry().find(|s| normalized(s.tx_type) == want)

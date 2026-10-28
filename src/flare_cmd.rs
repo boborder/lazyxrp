@@ -1,5 +1,5 @@
 //! Flare EVM write commands behind `lazyxrp -x fxrp-*` (redeem, minting tags, FDC-proven execute)
-//! and the Smart Account route lookup for `-x sa-vault`.
+//! and the Smart Account helpers for `-x sa-*` (vault route, memo instructions, user operations).
 //!
 //! Every write is gated by the caller (`[flare.fassets] execute = true`, the Flare EVM key, an
 //! https RPC, `--yes` on Flare mainnet), estimates gas first (`eth_estimateGas` runs the call, so
@@ -282,7 +282,7 @@ fn to_u128(v: U256, what: &str) -> color_eyre::Result<u128> {
     u128::try_from(v).map_err(|_| color_eyre::eyre::eyre!("Flare RPC returned out-of-range {what}"))
 }
 
-/// Receipt → hash, or an error naming the reverted transaction.
+/// Wait for the receipt; a revert is an error naming the transaction.
 async fn confirm(
     pending: alloy::providers::PendingTransactionBuilder<alloy::network::Ethereum>,
     what: &str,
@@ -703,7 +703,7 @@ mod tests {
         assert_eq!(m.len(), 42);
         assert_eq!((m[0], m[1], &m[2..10]), (0xFE, 0, &9_u64.to_be_bytes()[..]));
         assert_eq!(&m[10..], alloy::primitives::keccak256(&bytes).as_slice());
-        // Refused: no calls, bad target, value-carrying calls are not expressible.
+        // Refused: no calls, bad target, non-hex data, missing `:DATA`.
         assert!(build_user_operation(personal, 0, &[], 0).is_err());
         assert!(build_user_operation(personal, 0, &["0x12:0x".into()], 0).is_err());
         assert!(build_user_operation(personal, 0, &[format!("{target}:zz")], 0).is_err());

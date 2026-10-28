@@ -111,7 +111,7 @@ rc book --base XRP --quote USD --issuer <r-issuer>
 |------------|---------|
 | `info` | Server info |
 | `account <ADDR>` | Account info |
-| `account-status <ADDR>` | Activated if reserve met (≥ 10 XRP) |
+| `account-status <ADDR>` | `Activated` if the account exists on the ledger (`account_info` found), else `Not Activated` |
 | `book --base … --quote …` | Order book |
 | `summary [--account ADDR]` | Combined summary |
 | `nfts <ADDR>` | NFT list |

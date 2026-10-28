@@ -18,7 +18,7 @@
 
 - `ratatui` (`0.30` in `Cargo.toml`, `0.30.2` in `Cargo.lock`; `serde`, `macros`)
 - `crossterm` (`0.29` in `Cargo.toml`, `0.29.0` in `Cargo.lock`; `serde`, `event-stream`)
-- `clap` (`4` in `Cargo.toml`, `4.6.6` in `Cargo.lock`; `derive`, `cargo`, `wrap_help`, `unicode`, `string`)
+- `clap` (`4` in `Cargo.toml`, `4.6.7` in `Cargo.lock`; `derive`, `cargo`, `wrap_help`, `unicode`, `string`)
 - `ratatui-image` (`11` in `Cargo.toml`, `default-features = false`; `crossterm`. `image-defaults` is not used because it pulls in `image/default` (the AVIF encoder `ravif`, rayon, bmp/tiff, etc.) and slows the build) — Kitty / Sixel / iTerm2 / halfblocks image preview.
 - `image` (`0.25` in `Cargo.toml`, `default-features = false`; PNG/JPEG/GIF/WebP only) — NFT image decode.
 
@@ -92,7 +92,7 @@
 | `FLARE_RPC_URL` | Flare RPC URL (takes precedence over the `[flare] network` preset) |
 | `FLARE_FEEDS` | Flare feed list for Overview / Market (comma-separated) |
 | `FLARE_FEED` | Legacy single-feed setting (only when `FLARE_FEEDS` is unset) |
-| `FLARE_EVM_KEY` | Flare EVM key for FXRP C3 `executeDirectMinting` (only when `[flare.fassets] execute=true`; the default env name can be changed in config) |
+| `FLARE_EVM_KEY` | Flare EVM key (only when `[flare.fassets] execute=true`; the env name is `[flare.fassets] evm_key_env`): C3 `executeDirectMinting` (composer `7`, `-x fxrp-execute`), `fxrp-redeem`, `fxrp-tag-*` |
 | `LAZYXRP_CONFIG` | Explicit override of the config directory (`..` is rejected) |
 | `LAZYXRP_DATA` | Explicit override of the data directory |
 | `LAZYXRP_LOG_LEVEL` | Default filter for the file log (`EnvFilter` of `tracing-subscriber`) |
@@ -124,7 +124,7 @@ Flare keys in `config.toml` (details in [`architecture.md`](architecture.md) §6
 ## 5. Development commands
 
 - Resolve dependencies: `cargo build`
-- Task runner: root `mise.toml` (`mise run <task>`). `check` / `fmt` / `lint` (fmt+clippy is the CI baseline) / `test` / `test-serial` / `doc` / `audit` (cargo-audit + cargo-deny — same as CI; ignore lists: `deny.toml` for cargo-deny, `.cargo/audit.toml` for cargo-audit) / `update` (re-runs check + audit after `cargo update`) / `clean` (removes target/ and benchmark output) / `bench*` / `tag-push` (runs the 4 gates before creating the tag). The tools themselves are under `[tools]` (rust uses the same channel `stable` as [`rust-toolchain.toml`](../rust-toolchain.toml), `hyperfine`, `cargo-audit`, `cargo-deny`, `cargo-bloat`).
+- Task runner: root `mise.toml` (`mise run <task>`). `check` / `fmt` / `lint` (fmt+clippy is the CI baseline) / `test` / `test-serial` / `e2e-testnet` (opt-in live writes, [`test.md`](test.md)) / `doc` / `audit` (cargo-audit + cargo-deny — same as CI; ignore lists: `deny.toml` for cargo-deny, `.cargo/audit.toml` for cargo-audit) / `update` (re-runs check + audit after `cargo update`) / `clean` (removes target/ and benchmark output) / `bench*` / `release` / `tag-push` ([`maintenance.md`](maintenance.md)). The tools themselves are under `[tools]` (rust uses the same channel `stable` as [`rust-toolchain.toml`](../rust-toolchain.toml), `hyperfine`, `cargo-audit`, `cargo-deny`, `cargo-bloat`).
 - Compile check: `cargo check`
 - Local install (optional): root `./install.sh` (**either `curl` or `wget` is required for HTTP fetches**). English prompts. See options with `--help` (`--method cargo|binary`, `--install-rust` / `--no-install-rust`, etc.). Source builds run from the root of a cloned tree (the same level as `Cargo.toml` / `rust-toolchain.toml`). With `curl | bash` alone, the default toolchain installed via rustup matches **the `channel` of the repo's `rust-toolchain.toml` whenever it can be read** (falls back to **`stable`** on the plain stdin path where it cannot). The GitHub Releases REST API can be **rate-limited depending on the environment when unauthenticated against the public API**, so optionally set **`GITHUB_TOKEN` / `GITHUB_API_TOKEN`**. Binary placement **copies to a `*.partial.*` file in INSTALL_DIR and then `mv`s (cleanup on failure or interruption is the EXIT `cleanup`).** **Manual uninstall** is `./install.sh --uninstall-help` (`lazyxrp --self-uninstall` / `--yes` **from the binary on PATH** also works. Besides the binary / `cargo uninstall`, it shows optional examples of deleting the user config and data directories, separately for Linux/macOS, and notes on `LAZYXRP_CONFIG` / `LAZYXRP_DATA` and the `data_dir` / `config_dir` overrides in `config.toml`, as in the README Uninstall). A TTY gets interactive mode + animation; `-q` or a non-TTY is non-interactive. Downloads prefer `curl` (falling back to `wget`) with retry/timeout. GitHub tag / commit SHA resolution **prefers `jq` if present** (otherwise the original grep/sed). The `BINARY_INSTALL=1 ./install.sh -q` prebuilt-first example is unchanged. Or **[mise](https://mise.jdx.dev/)** `mise run install` (via the task in `mise.toml`; see `README.md` for details)
 - Run (TUI): `cargo run --bin lazyxrp -- --account <r-address>`

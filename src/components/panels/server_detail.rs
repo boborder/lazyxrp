@@ -22,7 +22,6 @@ pub(super) struct ValidatorDetail {
 }
 
 impl ValidatorDetail {
-    // methods remain crate-visible via pub(super) where needed
     pub(super) fn open(&mut self, row: &DunlValidatorRow, index: usize, dunl: &DunlSummary) {
         self.visible = true;
         self.scroll = 0;

@@ -1036,7 +1036,7 @@ impl WalletPanel {
                     ])
                 };
                 // Hint first and scroll to keep the selection visible: the wallet panel is often
-                // shorter than the 14-row list.
+                // shorter than the 15-row list.
                 let first_row = 2u16;
                 let scroll = (first_row + *selected as u16 + 1).saturating_sub(inner.height);
                 Paragraph::new(vec![
@@ -2021,7 +2021,7 @@ mod tests {
         assert!(editing);
         assert_eq!(row, 1);
 
-        // `]` from row 1 wraps: 2 → 0 → 1; three presses from 0 cycle back to 0.
+        // `]` from row 0 steps 1 → 2 → 0 (wrap) → 1.
         let mut row = 0;
         for expected in [1usize, 2, 0, 1] {
             WalletPanel::composer_row_nav(&mut editing, &key(']'), &mut row, 3);

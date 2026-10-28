@@ -182,12 +182,8 @@ mod tests {
         }
     }
 
-    /// TC-142: parse_xrpl_toml — a validator whose public_key matches
-    /// (case-insensitive) carries its attestation through to the result.
-    ///
-    /// parse_xrpl_toml — a VALIDATORS table whose public_key matches
-    /// (case-insensitive) is reported as found; a non-matching key is
-    /// reported as not found.
+    /// TC-142: parse_xrpl_toml — a validator whose public_key matches (case-insensitive) is
+    /// found and carries its attestation through; a non-matching key is not found.
     #[test]
     fn parse_xrpl_toml_matches_or_misses_validator() {
         struct Case {
@@ -279,7 +275,7 @@ mod node_key_tests {
     use super::*;
 
     /// xrp-ledger.toml lists validators in base58 node format (`nH…`); the expected key (hex from
-    /// a manifest) must match it, either way round. Old code only compared the strings.
+    /// a manifest) must match it, either way round.
     #[test]
     fn toml_base58_node_key_matches_hex_expected_key() {
         const NODE_KEY: &str = "nHBidG3pZK11zQD6kpNDoAhDxH6WLGui6ZxSbUx7LSqLHsgzMPec";

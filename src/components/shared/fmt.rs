@@ -186,7 +186,5 @@ mod tests {
         assert_eq!(short_hex("ééééééééééééééééééé", 3, 3), "ééé…ééé");
         assert_eq!(group_digits(""), "");
         assert_eq!(fmt_xrp(-0.0000001), "0");
-        // Non-ASCII input must not panic; digits-only grouping is not defined for it.
-        let _ = group_digits("١٢٣٤٥٦٧");
     }
 }

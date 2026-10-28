@@ -245,18 +245,18 @@ pub struct RipplePathFindResult {
     pub source_account: String,
 }
 
-/// Key generation result (TUI: local via `signing::generate_wallet_keys_local`; RPC parser in `client`).
+/// Key generation result (local via `signing::generate_wallet_keys_local`).
 ///
 /// Security: `Debug` redacts `master_seed` / `master_seed_hex`.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GeneratedWalletKeys {
-    /// Master seed (Ed25519 family seed, starts with `s`).
+    /// Family seed (base58, starts with `s`).
     pub master_seed: String,
     /// Hex-encoded master seed.
     pub master_seed_hex: String,
     /// The derived XRPL address (starts with `r`).
     pub account_id: String,
-    /// Public key (starts with `a` for Ed25519).
+    /// Hex-encoded public key (`ED…` for Ed25519).
     pub public_key: String,
     /// Key algorithm: `"ed25519"` or `"secp256k1"`.
     pub key_type: String,
@@ -500,7 +500,7 @@ pub struct TxRow {
     pub tx_type: String,
     pub ledger_index: u32,
     pub result: String,
-    /// Direction marker: "▼" outbound, "▲" inbound, "·" self-only.
+    /// Direction marker: "▼" outbound, "▲" inbound, "·" self-payment or neither side.
     pub direction: String,
     /// Shared raw transaction JSON (avoid deep clones on Action routing).
     pub tx_json: ArcValue,
@@ -611,7 +611,7 @@ impl BookPair {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AccountSetSubmitParams {
-    /// Uppercase flag name (`RequireDest`, `DefaultRipple`, …) or empty / `(none)`.
+    /// Wallet flag label (`RequireDest`, `DefaultRipple`, …); see `signing::parse_account_set_flag_choice`.
     pub set_flag: Option<String>,
     pub clear_flag: Option<String>,
     pub domain_ascii: String,

@@ -1028,11 +1028,13 @@ mod tests {
                 0,
             )
             .unwrap();
-        assert!((SIGNER_LIST_SET.build_json)(&account, &own, 1).is_err());
+        let e = (SIGNER_LIST_SET.build_json)(&account, &own, 1).expect_err("self in signer list");
+        assert!(e.to_string().contains("CollectionInvalidItem"), "{e}");
         let own_clawback = spec("Clawback")
             .prepare(&f(&[("Amount", &format!("USD:{account}:1"))]), 0)
             .unwrap();
-        assert!((CLAWBACK.build_json)(&account, &own_clawback, 1).is_err());
+        let e = (CLAWBACK.build_json)(&account, &own_clawback, 1).expect_err("clawback from self");
+        assert!(e.to_string().contains("IssuerMustNotEqualAccount"), "{e}");
     }
 
     /// TC-263: the generic submit path carries this family end to end against a local RPC mock —

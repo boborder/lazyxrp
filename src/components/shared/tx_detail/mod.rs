@@ -421,7 +421,6 @@ mod tests {
         // Empty tx/meta: result line is always present.
         let empty = json!({});
         let lines = detail_lines_for(&empty, &empty);
-        assert!(!lines.is_empty());
         assert!(lines[0].to_string().contains("Result"));
 
         // Hash and result values are shown when present.
@@ -521,7 +520,6 @@ mod tests {
         let lines = detail_lines_for(&tx, &meta);
         let text: Vec<String> = lines.iter().map(|l| l.to_string()).collect();
 
-        // "CustomTx" is in known list? No, so it goes to Other fields
         assert!(
             text.iter().any(|s| s.contains("Other fields")),
             "Should have Other fields section: {:?}",

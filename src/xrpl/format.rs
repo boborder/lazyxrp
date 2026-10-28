@@ -520,7 +520,7 @@ mod tests {
         assert_eq!(summarize_paths_computed(&hex_currency), "RLUSD@rIssuer1");
     }
 
-    /// Remote multibyte strings must not panic the byte-slicing display helpers, and a
+    /// Remote multibyte strings must not panic the address shortener, and a
     /// NaN source amount must not break the sort order.
     #[test]
     fn remote_strings_do_not_panic_display_helpers() {
@@ -548,7 +548,6 @@ mod tests {
     /// TC-084: path_find_rows_from — send/hops display rows, cheapest alternative first
     #[test]
     fn path_find_rows_rendering() {
-        // Single direct alternative.
         let direct = RipplePathFindResult {
             alternatives: vec![PathAlternative {
                 paths_computed: json!([]),
@@ -563,7 +562,6 @@ mod tests {
         assert_eq!(rows[0].send, "1.000000 XRP");
         assert_eq!(rows[0].hops, "direct");
 
-        // Multiple alternatives are sorted by cheapest send.
         let multi = RipplePathFindResult {
             alternatives: vec![
                 PathAlternative {
@@ -640,7 +638,7 @@ mod tests {
         );
         assert!(send_max_spec_from_quote(&result(vec![]), &xrp_req, 100).is_err());
 
-        // Lead 2: alternatives not matching the requested source are ignored, even when cheaper.
+        // Alternatives not matching the requested source are ignored, even when cheaper.
         let mixed = result(vec![
             json!({"currency": "EUR", "issuer": "rI", "value": "1"}),
             json!({"currency": "USD", "issuer": "rEvil", "value": "1"}),

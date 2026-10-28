@@ -15,10 +15,10 @@ Generated: 2026-05-01 | Scope: コードベース全体（`src/`、`install.sh`�
 | I-3 | write は必ず simulate → `tesSUCCESS` → `Sequence`/`Fee` 取得 → sign → submit。simulate なしで署名しない | `poll.rs` / `submit.rs` |
 | I-4 | `XRPL_SEED` / `XRPL_MNEMONIC` は `Config::new()` が poll / UI タスクを spawn する前に一度だけ取り出して env から除去（`take_secret_env`）。以降 `remove_var` は呼ばれない。Linux では起動時の `/proc/self/environ` ブロックは書き換わらず、同一 uid の読み手には見え続ける（既知の限界） | `config.rs` |
 | I-5 | 設定優先順位: CLI > env > user `config.toml` > 組み込み `config.json5`。資格情報は上位ソースが seed / mnemonic のどちらかを設定したら下位ソースの両方を破棄（同一階層で両方設定は `credential_from_secrets` がエラー） | `lib.rs` resolve 関数 + `config.rs` (`layer_credentials`, `apply_cli_credentials`) |
-| I-6 | 定期 poll は `MIN_POLL_INTERVAL`（10 s）未満にしない | `poll.rs` `drive_poll_loop` |
+| I-6 | WebSocket の ledger close トリガーは直前の poll から `MIN_POLL_INTERVAL`（10 s）以内なら poll しない。定期 tick は `poll_interval_ms`（下限 500 ms）に従う | `poll.rs` `drive_poll_loop` |
 | I-7 | `account_tx` の not-found は空リスト（エラーにしない） | `poll.rs` |
 | I-8 | `Tui::drop` は端末を復元し、drop 中に panic しない | `tui.rs` |
-| I-9 | `TAB_TITLES` とパネルの数・順序が一致（TC-060）。パネル追加時は同じ変更で更新 | `app.rs` |
+| I-9 | `TAB_TITLES` とパネルの数・順序が一致（`App::new` の `debug_assert_eq!`）。パネル追加時は同じ変更で更新 | `app.rs` |
 | I-10 | `TxRow` の `ArcValue` JSON を `Arc::make_mut` しない | `xrpl/types.rs`（規約） |
 | I-11 | 全 RPC は `tokio::time::timeout(RPC_TIMEOUT, …)` で包む | `poll.rs` / `client.rs` |
 | — | 署名は family seed **または** BIP39 mnemonic（`credential_from_secrets`）。mnemonic を seed に変換しない | `signing.rs` |
@@ -104,7 +104,7 @@ Generated: 2026-05-01 | Scope: コードベース全体（`src/`、`install.sh`�
 ## 2026-10-11 endpoint network 照合（S-017）
 
 - **症状**: `XRPL_RPC_SERVER`（`rpc_server` / `--server` も同じ）は `--network` の preset より優先される（architecture §6.2）。mainnet endpoint を指したまま `--network testnet` で書き込むと、`--yes` ガードは testnet 扱いで外れ、署名・送信は mainnet に届いた。TUI の `<Ctrl-n>` も custom endpoint を維持するため同様。testnet E2E 中に、mainnet の `XRPL_RPC_SERVER` と `XRPL_SEED` が設定されたシェルで判明（その回の write は env を外していたため mainnet 送信なし）。
-- **対応**: 署名前に `RpcClient::ensure_network` で `server_info.network_id` を照合し、不一致なら拒否（mainnet は `network_id` 省略 = 0、testnet 1、devnet 2、xahau 21337、xahau-test 21338 を実測）。TUI 全 XRPL submit（`fetch_account_summary_for_submit`）と CLI `send` / `offer-create` / `offer-cancel` が対象。write 1 回につき RPC が 1 回増える。
+- **対応**: 署名前に `RpcClient::ensure_network` で `server_info.network_id` を照合し、不一致なら拒否（mainnet は `network_id` 省略 = 0、testnet 1、devnet 2、xahau 21337、xahau-test 21338 を実測）。TUI 全 XRPL submit（`fetch_account_summary_for_submit`）と CLI の全 XRPL write（`send`・`offer-*`・`amm-*`・`account-delete`・`tx` / `nft-*`）が対象。write 1 回につき RPC が 1 回増える。
 - **残余**: 照合はノードの自己申告。悪意ある endpoint は偽の `network_id` を返せる（信頼する endpoint を選ぶ前提は S-015 と同じ）。
 
 ## 2026-08-06 再レビュー対応

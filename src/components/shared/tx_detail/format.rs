@@ -3,7 +3,6 @@ use crate::xrpl::{JsonAmount, drops_to_xrp, hex_to_ascii, json_amount};
 use ratatui::text::{Line, Span};
 use serde_json::Value;
 
-/// Format an xrpl Currency for display.
 /// Push Account, Sequence, Fee directly from a serde_json::Value without cloning.
 pub(crate) fn push_common_lines_from_value(lines: &mut Vec<Line>, tx: &Value) {
     let accent = theme::accent_style();
@@ -98,17 +97,6 @@ pub(crate) fn format_value(key: &str, value: &Value) -> String {
 mod tests {
     use super::*;
     use serde_json::json;
-
-    #[test]
-    fn fmt_xrpl_amount_from_value_branches() {
-        assert_eq!(fmt_xrpl_amount_from_value(&json!("1000000")), "1.000000");
-        assert_eq!(fmt_xrpl_amount_from_value(&json!(1_000_000)), "1.000000");
-        let issued = json!({"value":"100","currency":"USD","issuer":"rsA2LpG"});
-        assert_eq!(
-            fmt_xrpl_amount_from_value(&issued),
-            "100 USD (issuer: rsA2LpG)"
-        );
-    }
 
     /// Account-only TX renders one Account line; all-field TX renders 3 lines.
     #[test]

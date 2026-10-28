@@ -148,7 +148,7 @@ impl NftTab {
         if inner.width == 0 || inner.height == 0 {
             return;
         }
-        // Full URI above the image (wrapped, at most 4 lines), so a long CID is never cut.
+        // Full URI above the image (wrapped, at most 4 lines): the table column ellipsizes it.
         let uri = self
             .table_state
             .selected()

@@ -739,6 +739,7 @@ mod registry_tests {
             .collect();
         assert!(text.contains("rA,XRP,rB,USD:rI"), "{text}");
         assert!(text.contains("13f"), "{text}");
+        assert!(text.contains("5.000000"), "{text}");
     }
 
     /// TC-094: typed parsers reject a mismatched TransactionType.

@@ -791,7 +791,7 @@ pub async fn execute_cli_command(
     Ok(())
 }
 
-/// Lookup entry used by the short `rp` argv0 alias.
+/// Lookup entry for `rp` (the `rp` binary or the argv0 `rp` symlink).
 pub async fn execute_rp_lookup(rpc_url: &str, raw: &str) -> color_eyre::Result<()> {
     let rpc = RpcClient::connect(rpc_url)?;
     match classify_rp_target(raw.trim())? {

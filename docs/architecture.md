@@ -18,7 +18,7 @@ From [`requirements.md`](requirements.md). Tests in [`test.md`](test.md) trace h
 | TX detail parser registry | §5.2.1 below, `src/components/shared/tx_detail/` |
 | Security audit S-xxx / risks R-xxx | [`security.md`](security.md) |
 | Doc index | [`AGENTS.md`](../AGENTS.md) |
-| Graphify | [`graphify-out/GRAPH_REPORT.md`](../graphify-out/GRAPH_REPORT.md) |
+| Graphify | `graphify-out/GRAPH_REPORT.md` (local, gitignored; `graphify update .`) |
 
 ## System boundary
 
@@ -67,7 +67,7 @@ Behavioral contract:
 - Input routing: key and bracketed-paste events go to the visible tab only; paste inserts only into a field being edited and never triggers hotkeys. Keybindings are limited to the `config.rs::is_bindable` allowlist (rejected at load); config files are permission-checked on the file actually read, `~` is expanded in `config_dir` / `data_dir` / `LAZYXRP_*`, and credentials resolve CLI > env > file (a lower source's other kind is dropped; both kinds at one level is an error).
 - Composer phases shipped: Payment, AccountSet, SetRegularKey, OfferCreate, OfferCancel, TrustSet, FXRP Mint (C2), FXRP Execute (C3), EscrowCreate (`9`), Escrows finish/cancel (`0`), AMMDeposit (`d`), AMMWithdraw (`w`), AccountDelete (`x`), Smart Account (`a`). TUI only for escrow (no `-x` escrow commands).
 - Transaction composer (TC-255): picker row `[m] Transaction` lists the spec'd types (`xrpl::txspec`, §2.1); the form is generated from `TxSpec::fields` (one row per field, spec defaults prefilled, the focused row shows help text and its inline validation error, the preview line is green `▸ <summary>` when `TxSpec::validate` passes and orange with the error otherwise). Row nav / edit keys are the shared composer ones; `s` validates exactly like the poll task and queues one `Action::GenericTxSubmit`. Types with `TxSpec::confirm` (NFTokenBurn `BURN`, NFTokenAcceptOffer `ACCEPT`) never queue directly: `s` opens the same type-to-confirm `DangerConfirm` as AccountDelete (Esc restores the form). Assets tab `x` (TC-256): `NftTab` answers `Action::NftBurnStart` with `Action::TxComposerOpen{NFTokenBurn, NFTokenID}`; the app jumps to the Account tab and the wallet opens the form prefilled (only with a signing credential). The components never call `xrpl/` clients; they read the static spec registry and emit Actions.
-- AMM (TC-222–226): AMMDeposit is two-asset only (`tfTwoAsset`; `Amount` / `Amount2` = maxima, also naming the pool; `signing::validate_amm_deposit_specs`: specs `XRP:drops` / `CUR:issuer:value`, two different assets). AMMWithdraw: empty LP amount → `tfWithdrawAll`; otherwise `tfLPToken` + `LPTokenIn` whose currency / issuer (AMM account) come from `amm_info` (`RpcClient::amm_lp_token`) before simulate. Same simulate → sign → submit; composer `d` / `w` and `-x amm-deposit` / `-x amm-withdraw`. No AMMCreate / single-asset / Vote / Bid.
+- AMM (TC-222–226): AMMDeposit is two-asset only (`tfTwoAsset`; `Amount` / `Amount2` = maxima, also naming the pool; `signing::validate_amm_deposit_specs`: specs `XRP:drops` / `CUR:issuer:value`, two different assets). AMMWithdraw: empty LP amount → `tfWithdrawAll`; otherwise `tfLPToken` + `LPTokenIn` whose currency / issuer (AMM account) come from `amm_info` (`RpcClient::amm_lp_token`) before simulate. Same simulate → sign → submit; composer `d` / `w` and `-x amm-deposit` / `-x amm-withdraw`. No single-asset deposit / withdraw; AMMCreate / Vote / Bid / Delete are spec'd types (§2.1).
 - AccountDelete (TC-232–233): Destination = classic or X-address (tag from the X-address, network bit checked like Payment). The composer never queues directly: a valid destination opens type-to-confirm `DELETE` (`DangerResume::AccountDelete` carries the destination; Esc restores it). Fee is not computed locally: simulate fills the owner-reserve fee (≤ `MAX_NODE_FEE_DROPS`) and that value is signed. Preconditions (`tecTOO_SOON` < 256 ledgers, `tecHAS_OBLIGATIONS` owned objects, `tecDST_TAG_NEEDED`, `temDST_IS_SRC`) are left to simulate. `-x account-delete <DEST>` is the same path with the CLI prompt / `--yes`.
 - EscrowCreate: XRP only, no crypto-condition. `signing::validate_escrow_create_input` (composer + poll): classic Destination, amount > 0, FinishAfter / optional CancelAfter as durations relative to submit (`90s` / `30m` / `2h` / `7d`), CancelAfter strictly later. The poll task fixes absolute Ripple-epoch times once (local clock) so simulate and the signed tx carry the same values; a FinishAfter already passed by ledger time fails in simulate.
 - Escrows: opening sends `RefreshAccountEscrows` → `RpcClient::account_escrows` (`account_objects` type `escrow`, first 200, owned **and** incoming). `OfferSequence` = object `Sequence` when present, else the creating tx (`PreviousTxnID`; only EscrowCreate modifies an Escrow) `Sequence`, or `TicketSequence` when 0. `s` → EscrowFinish, `c` → EscrowCancel (`EscrowCloseSubmit`, same simulate → sign → submit). Refused locally: unresolved sequence, Finish of a condition escrow. Timing rules (FinishAfter / CancelAfter passed) are left to simulate (`tecNO_PERMISSION`).
@@ -109,7 +109,7 @@ MPT / Identity families (`mpt.rs` TC-301/303/305/310, `identity.rs` TC-300/302/3
 
 Channel / AMM family (`channel_amm.rs`, TC-280–286): PaymentChannelCreate / Fund / Claim (drops-only `Amount`, `PublicKey` 66 hex, `Time` for `CancelAfter` / `Expiration`; Claim takes a pasted `Signature` + `PublicKey`, never generated locally, `Flags` renew / close) and AMMCreate / Vote / Bid / Delete (`Asset` / `Asset2` = `XRP` or `CUR:issuer` via `parse_amm_asset`, `TradingFee` 0..=1000, `BidMin` / `BidMax` LP-token `CUR:issuer:value`, `AuthAccounts` ≤ 4). Confirm phrases `LOCK` / `FUND` / `CLAIM` / `CREATE` / `BID` / `DELETE` (none on AMMVote). Not supported: `CredentialIDs` on Claim; AMMClawback stays `Unsupported`.
 
-**How to add a transaction type** (later families: Check*, TicketCreate, DepositPreauth, SignerListSet, PaymentChannel*, AMM*):
+**How to add a transaction type:**
 
 1. Create `src/xrpl/txspec/<family>.rs` (copy `nft.rs`): per type a `pub const X: TxSpec` with `FieldSpec`s (name = ledger field name, `FieldKind`, `required`, `help`, `default`), an optional cross-field `check`, `*_tx` (typed struct via `common_fields!`), `*_json` (`tx.validate()` + `serde_json::to_value`), `*_sign` (`sign_blob!`), and `pub static SPECS: &[TxSpec] = &[…]`.
 2. Add `pub(crate) mod <family>;` in `txspec/mod.rs` and **one entry** `<family>::SPECS` to `FAMILIES`. Nothing else: the picker, form, `-x tx`, submit, guards and coverage `Spec` rows follow from the registry. Confirm-phrase types set `confirm: Some(Confirm{phrase, hint})`.
@@ -167,7 +167,9 @@ WebSocket ledger close coalesces poll triggers (`MIN_POLL_INTERVAL`). Scheduled 
 |-------|---------|-------|
 | `network` | `flare` | `flare` \| `songbird` \| `coston2` — RPC preset; `FLARE_RPC_URL` env wins |
 | `display` | `full` | `full` \| `compact` \| `off` — panel layout + FTSO/FXRP poll skip when `off` (C3 URL unchanged) |
-| `fassets.execute` | `false` | Must be true for C3 `executeDirectMinting` |
+| `fassets.execute` | `false` | Must be true for C3 `executeDirectMinting` and every Flare EVM write |
+| `fassets.evm_key_env` | `FLARE_EVM_KEY` | Env var name holding the Flare EVM key (read and removed at startup) |
+| `fassets.expected_core_vault` | _(unset)_ | XRPL Core Vault pin for C2 / `sa-memo` / `sa-call` Payments; the Flare RPC answer must equal it (unset / mismatch → refused) |
 | `wallet.address` | _(unset)_ | Optional `0x…` EVM address — Overview read panel (native FLR + FXRP); invalid hex fails config load |
 | `smart_accounts.expected_operator` | _(unset)_ | XRPL `r…` operator pin for Smart Account instruction Payments. Flare RPC's `getXrplProviderWallets()[0]` must equal it (unset / mismatch → refused). Verify out of band |
 
@@ -185,7 +187,7 @@ Types, RPC methods, `Action` variants: `src/xrpl/types.rs`. UX layout: [`DESIGN.
 | Market | Book, PathFind, AMM, TrustLines, FTSO, Oracle | `book_offers`, `ripple_path_find`, `amm_info`, `account_lines`, oracles |
 | Assets | `NftTab` + 3× `LedgerObjectsPanel` (objects / pay channels / escrows; layout: [`DESIGN.md`](../DESIGN.md) §4) | `account_nfts`, `account_objects` |
 
-Poll skips heavy market fetches when tab inactive (`should_poll_market_book`, `should_poll_asset_panels` in `poll.rs`).
+Poll skips tab-specific fetches when the tab is inactive (`should_poll_account_panels`, `should_poll_market_book`, `should_poll_asset_panels` in `poll.rs`).
 
 ### 5.2 Shared behaviors
 
@@ -202,7 +204,7 @@ Poll skips heavy market fetches when tab inactive (`should_poll_market_book`, `s
 | `render_tx_detail` | `tx_detail/mod.rs` | Draw centered popup |
 | `typed_detail_lines` | `tx_detail/parsers.rs` | Dispatch by `TransactionType` |
 | `detail_lines_for` | `tx_detail/mod.rs` | Fallback for unknown fields |
-| `TX_DETAIL_PARSERS` | `tx_detail/parsers.rs` | Static registry (29 types) |
+| `TX_DETAIL_PARSERS` | `tx_detail/parsers.rs` | Static registry (49 types) |
 
 Any table row carrying `raw_json: ArcValue` (tx + meta) can open the overlay via `Action::TxDetailToggle` when focused.
 
@@ -219,9 +221,9 @@ Any table row carrying `raw_json: ArcValue` (tx + meta) can open the overlay via
 - While **open**: consumes `Quit`, data refresh, `Tick`, and navigation actions so background tables do not change selection under the popup.
 - `SelectNext` / `FocusNext` (and prev) scroll detail text with saturating arithmetic.
 
-**Registered types (29)**
+**Registered types (49)**
 
-`Payment`, `AccountSet`, `TrustSet`, `OfferCreate`, `OfferCancel`, `NFTokenMint`, `NFTokenBurn`, `NFTokenCreateOffer`, `NFTokenAcceptOffer`, `NFTokenCancelOffer`, `CheckCreate`, `CheckCash`, `CheckCancel`, `SignerListSet`, `SetRegularKey`, `DepositPreauth`, `EscrowCreate`, `EscrowFinish`, `EscrowCancel`, `PaymentChannelCreate`, `PaymentChannelFund`, `PaymentChannelClaim`, `AMMCreate`, `AMMDeposit`, `AMMWithdraw`, `AMMVote`, `AMMBid`, `AMMDelete`, `TicketCreate`.
+`Payment`, `AccountSet`, `TrustSet`, `OfferCreate`, `OfferCancel`, `NFTokenMint`, `NFTokenBurn`, `NFTokenCreateOffer`, `NFTokenAcceptOffer`, `NFTokenCancelOffer`, `CheckCreate`, `CheckCash`, `CheckCancel`, `SignerListSet`, `SetRegularKey`, `DepositPreauth`, `EscrowCreate`, `EscrowFinish`, `EscrowCancel`, `PaymentChannelCreate`, `PaymentChannelFund`, `PaymentChannelClaim`, `AMMCreate`, `AMMDeposit`, `AMMWithdraw`, `AMMVote`, `AMMBid`, `AMMDelete`, `XChainCreateBridge`, `XChainModifyBridge`, `XChainCreateClaimID`, `XChainCommit`, `XChainClaim`, `XChainAccountCreateCommit`, `Clawback`, `MPTokenIssuanceCreate`, `MPTokenIssuanceDestroy`, `MPTokenIssuanceSet`, `MPTokenAuthorize`, `CredentialCreate`, `CredentialAccept`, `CredentialDelete`, `DIDSet`, `DIDDelete`, `OracleSet`, `OracleDelete`, `PermissionedDomainSet`, `PermissionedDomainDelete`, `TicketCreate`.
 
 Six AMM variants share `amm_detail_lines` (ordered fields, explicit `null`, `TradingFee` formatting on create/vote).
 

@@ -133,13 +133,13 @@
 - C2（FXRP Mint composer）の受取先は、署名アカウント自身の personal account を既定値にすること（読み取りが署名アカウントのもので 300 秒以内のときのみ。別アカウント・古い読み取りは空欄）。composer は受取先を全桁表示し、personal account は Flare RPC の応答である旨と explorer での照合を促すこと。XRPL 署名のみで「XRP → 自分の personal account の FXRP」を完結できること（他の Flare アドレスを要求しない）。
 - 実装済み（CLI のみ）: vault instruction（`-x sa-vault`）、memo 命令 `0xE0` / `0xE1` / `0xE2` / `0xD0` / `0xD1`（`-x sa-memo`）、カスタム instruction `0xFE`（`-x sa-call`）、FDC proof 取得 + `executeDirectMinting[WithData]`（`-x fxrp-execute`、Flare EVM 鍵が必要）。`sa-memo` は検証後に公開 executor の finalize を最大 5 分待ち（`--no-wait` で省略）、未完了なら自分で finalize する手順を示すこと。待機は支払いの validated 後なので、Flare 読み取りの失敗でもコマンドを失敗させない（stderr に `sa-status` の再確認手順、exit 0）。executor が固定されている場合は `0xE0` / `0xE1` / `0xE2` で待たず、固定された executor からの finalize を案内する。`-x sa-status <tx>` は `isTransactionIdUsed` の読み取りのみ（plain の recipient memo mint は対象外、Coston2 で確認）。`sa-call`（`0xFE`）は userOp バイトを持つ executor しか finalize できないため、公開 executor を待たず、その旨と手順を示すこと。
 - finalize は Flare 上の第三者（executor）に依存する。公開 executor が mainnet で動いている（2026-10-24 の読み取り調査）ことは、lazyxrp が送る少額・低手数料の支払いが拾われることを保証しない（executor の手数料下限は未測定）。拾われない場合に XRP は Core Vault に残り、自分で finalize するには EVM 鍵・FLR（mainnet の attestation 約 20 FLR + gas）が要る。
-- Smart Account の状態は永続化しない。Smart Account に関するものは何も保存しない。表示する情報（personal account、nonce、operator wallets、instruction fee、FXRP 残高、vault ポジション）は Overview の poll ごとに Flare から読み取り、メモリ上にのみ保持する（`SmartAccountInfo`。300 秒より古い、または別ネットワークのスナップショットは拒否し、`verify_*_terms` は署名直前に view を再読込する。TC-363）。`getPersonalAccount(xrplAddress)` は決定的なので覚えておく必要がなく、保存したコピーは古くなる（残高・nonce・operator・手数料は変わる）うえ、これらのガードを迂回してしまう。永続化する価値があるのは、S-019 を閉じるための、ユーザーが検証した `[flare.smart_accounts] expected_personal_account` の pin（`expected_operator` と同様）だけだが、未実装（ROADMAP F5-b、P3）。lazyxrp が永続化するのはユーザーが書いた設定ファイルとログだけで、ウォレット・Smart Account・履歴のキャッシュは持たない。
+- Smart Account の状態は永続化しない: 表示する情報はすべて Overview の poll ごとに Flare から読み取り、メモリ上にのみ保持する（理由とガード: [`architecture-ja.md`](architecture-ja.md) §6.9「永続化」）。lazyxrp が永続化するのはユーザーが書いた設定ファイルとログだけで、ウォレット・Smart Account・履歴のキャッシュは持たない。
 - 対象外（ROADMAP）: `0xFF`（memo 内 userOp。公開 executor が中継できる唯一のカスタム instruction で、XRPL 署名のみの用途では優先度が上がる）、`sa-memo` / `sa-call` の TUI 化。
 
 ### FR-18: 宣言的 TX spec による書き込みと coverage 管理
 
 - XRPL トランザクション種別を `TxSpec`（フィールド仕様・検証・unsigned `tx_json`・型付き署名）として宣言的に追加でき、1 つの共通経路（TUI composer「Transaction」`m`・`-x tx <TYPE> Field=value…`・`-x nft-mint` / `-x nft-burn`）で書き込めること。共通経路は既存の書き込みガード（network 照合・mainnet `--yes`・simulate `tesSUCCESS` 必須かつ要求への束縛・Fee 上限・submit 直列化・`--watch` 拒否）を重複実装せず再利用すること。
-- NFT 5 種（NFTokenMint / Burn / CreateOffer / AcceptOffer / CancelOffer）を対象とする。URI は平文 ≤ 256 bytes を hex 化、TransferFee は 0..=50000（0 超は transferable 必須）、id は 64 hex、金額は `XRP:drops` / `CUR:issuer:value`。不可逆な操作（Burn・AcceptOffer）は composer で型付き確認（`BURN` / `ACCEPT`）を必須とすること。Assets タブ `x` で選択 NFT の Burn composer を NFTokenID 入力済みで開けること。
+- spec 化済みの family: NFT（NFTokenMint / Burn / CreateOffer / AcceptOffer / CancelOffer）、account objects（Check ×3、TicketCreate、DepositPreauth、SignerListSet、Clawback）、PaymentChannel ×3 + AMMCreate / Vote / Bid / Delete、XChain ×6、MPT ×4、identity（Credential ×3、DID ×2、Oracle ×2、PermissionedDomain ×2）。family ごとのフィールド規則: [`architecture-ja.md`](architecture-ja.md) §2.1。不可逆または資産を動かす操作は composer で型付き確認（例: `BURN` / `ACCEPT`）を必須とすること。Assets タブ `x` で選択 NFT の Burn composer を NFTokenID 入力済みで開けること。
 - 対応状況は `src/coverage.rs` を SSOT として、種別ごとの read / TUI write / CLI write / status（Existing・Spec・Planned・Unsupported）を管理し、ROADMAP.md「XRPL coverage」表および README の件数と自動テストで一致を強制すること（`lazyxrp -x coverage` が表を出力）。
 
 ### FR-13: シークレット管理（Phase 3 準備基盤）
@@ -158,7 +158,7 @@
 
 - Phase 1（読み取り拡張）+ Phase 2（ネットワーク抽象化 + Xahau / Flare multichain）: **実装完了**
 - Phase 3（書き込み系 TX）: **実装済み**。TUI コンポーザーと CLI で Payment / AccountSet / SetRegularKey / OfferCreate / OfferCancel / TrustSet / FXRP Mint / FXRP Execute / AMMDeposit（two-asset）/ AMMWithdraw（全額 or LP 量）/ AccountDelete（TUI は `DELETE` 入力の確認必須）に対応。EscrowCreate / EscrowFinish / EscrowCancel は TUI コンポーザーのみ（時間条件のみ、crypto-condition 非対応）。残りは本番動作確認とエッジケース対応。
-- Phase 3b（宣言的 TX spec、FR-18）: **NFT 5 種を実装**。共通経路（composer `m` / `-x tx`）。以降の family（Check / Ticket / DepositPreauth / SignerList / PaymentChannel / AMM）は `txspec/` に 1 ファイル + `FAMILIES` に 1 行で追加（`architecture-ja.md` §2.1）。
+- Phase 3b（宣言的 TX spec、FR-18）: FR-18 に挙げた family を共通経路（composer `m` / `-x tx`）で**実装済み**。新しい family は `txspec/` に 1 ファイル + `FAMILIES` に 1 行で追加（`architecture-ja.md` §2.1）。
 
 ## 7. スコープ注記: 未対応・計画中
 

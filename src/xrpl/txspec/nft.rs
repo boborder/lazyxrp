@@ -25,7 +25,7 @@ const FAMILY: &str = "NFT";
 const ID_LEN: usize = 64;
 /// rippled `maxTokenURILength`.
 const MAX_URI_BYTES: usize = 256;
-/// rippled `maxTransferFee` (basis points of 1/100 %: 50000 = 50 %).
+/// rippled `maxTransferFee` (units of 1/1000 %: 50000 = 50 %).
 const MAX_TRANSFER_FEE: u32 = 50_000;
 /// rippled `maxTokenOfferCancelCount`.
 const MAX_CANCEL_OFFERS: usize = 500;
@@ -1004,7 +1004,8 @@ mod tests {
         let own_issuer = spec("NFTokenMint")
             .prepare(&f(&[("NFTokenTaxon", "1"), ("Issuer", &account)]), 0)
             .unwrap();
-        assert!((MINT.build_json)(&account, &own_issuer, 1).is_err());
+        let err = (MINT.build_json)(&account, &own_issuer, 1).unwrap_err();
+        assert!(err.to_string().contains("ValueEqualsValue"), "{err}");
         let own_owner = spec("NFTokenCreateOffer")
             .prepare(
                 &f(&[
@@ -1015,6 +1016,7 @@ mod tests {
                 0,
             )
             .unwrap();
-        assert!((CREATE_OFFER.build_json)(&account, &own_owner, 1).is_err());
+        let err = (CREATE_OFFER.build_json)(&account, &own_owner, 1).unwrap_err();
+        assert!(err.to_string().contains("ValueEqualsValue"), "{err}");
     }
 }

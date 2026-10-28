@@ -288,7 +288,7 @@ pub struct LedgerConfig {
     pub currency_code: Option<String>,
     pub offer_limit: u16,
     pub poll_interval_ms: u64,
-    /// Network preset (mainnet / testnet / devnet). Determines default RPC/WS endpoints.
+    /// Network preset (mainnet / testnet / devnet / xahau / xahau-test). Determines default RPC/WS endpoints.
     #[serde(default)]
     pub network: Network,
     /// Custom RPC endpoint. Overrides the network preset when set.
@@ -352,7 +352,6 @@ fn validated_path(raw: PathBuf) -> Option<PathBuf> {
         .components()
         .any(|c| c == std::path::Component::ParentDir)
     {
-        // Security: path traversal via environment variable rejected
         eprintln!(
             "lazyxrp: ignoring env-var path '{}' — contains '..' traversal",
             raw.display()
@@ -364,7 +363,7 @@ fn validated_path(raw: PathBuf) -> Option<PathBuf> {
 
 pub static PROJECT_NAME: &str = env!("CARGO_CRATE_NAME");
 
-/// Network preset override (`mainnet` / `testnet` / `devnet`). Merged in `Config::new()` so UI matches `resolve_network` priority.
+/// Network preset override (any `--network` value, case-insensitive). Merged in `Config::new()` so the UI matches the resolved network.
 pub const XRPL_NETWORK_ENV: &str = "XRPL_NETWORK";
 /// HTTP JSON-RPC endpoint override. Merged in `Config::new()` (env wins over config file) so splash and `[xrpl]` stay aligned with `resolve_rpc_url`.
 pub const XRPL_RPC_SERVER_ENV: &str = "XRPL_RPC_SERVER";
@@ -421,12 +420,12 @@ fn layer_credentials(low: Credentials, high: Credentials) -> Credentials {
 }
 
 impl Config {
-    /// Effective data directory after merging embedded defaults, env keys, and config file.
+    /// Effective data directory: the config file's `data_dir`, else [`data_dir`] (env / platform default).
     pub fn resolved_data_dir(&self) -> PathBuf {
         non_empty_path_or(&self.paths.data_dir, data_dir)
     }
 
-    /// Effective config directory after merging embedded defaults, env keys, and config file.
+    /// Effective config directory: the config file's `config_dir`, else [`config_dir`] (env / XDG / platform default).
     pub fn resolved_config_dir(&self) -> PathBuf {
         non_empty_path_or(&self.paths.config_dir, config_dir)
     }
@@ -566,7 +565,6 @@ fn config_permission_warning(path: &std::path::Path) -> Option<String> {
     let mode = path.metadata().ok()?.permissions().mode();
     // 0o044 = group-read (0o040) | world-read (0o004)
     (mode & 0o044 != 0).then(|| {
-        // Security: config file with signing credential should be readable only by owner (0600)
         format!(
             "lazyxrp: warning: config file '{}' has mode {:04o} and contains a signing credential. \
              Run: chmod 600 {}",
@@ -702,7 +700,7 @@ fn extract_modifiers(raw: &str) -> (&str, KeyModifiers) {
                 modifiers.insert(KeyModifiers::SHIFT);
                 current = &rest[6..];
             }
-            _ => break, // break out of the loop if no known prefix is detected
+            _ => break,
         };
     }
 

@@ -37,7 +37,7 @@ fn spawn_rpc(result: &str) -> (String, JoinHandle<()>) {
             }
         };
         // Accepted streams inherit the listener's nonblocking mode; restore
-        // blocking I/O so read/write wait for the client like the original code.
+        // blocking I/O so read/write wait for the client.
         stream.set_nonblocking(false).expect("blocking RPC stream");
         let mut request = [0_u8; 8192];
         let _ = stream.read(&mut request).expect("read RPC request");
@@ -85,7 +85,8 @@ fn lazyxrp_binary_rejects_exec_without_subcommand() {
     let output = command.arg("-x").output().expect("run lazyxrp binary");
 
     assert!(!output.status.success());
-    assert!(!String::from_utf8_lossy(&output.stderr).is_empty());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("requires a script subcommand"), "{stderr}");
 }
 
 #[test]

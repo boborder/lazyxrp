@@ -20,7 +20,7 @@
 
 ### P-005: `config.rs` remains one file
 
-- Symptom: `src/config.rs` is about 1200 lines (defaults / file / env / keybindings / styles / Flare network+display+wallet / paths / test helpers)
+- Symptom: `src/config.rs` is about 1530 lines including tests (defaults / file / env / keybindings / styles / Flare network+display+fassets+wallet+smart_accounts / paths / test helpers)
 - Fix: once it exceeds about 1500 lines, split into `config/defaults.rs`, `config/keybindings.rs`, `config/styles.rs`
 
 ### P-007: Xahau `NetworkID` acceptance by simulate is unverified
@@ -35,7 +35,7 @@
 
 ### P-009: Bilingual docs can drift
 
-- There is no automated check. When editing, compare the ID sets (TC/FR/S/R/P) of `X.md` vs `X-ja.md` (see maintenance.md).
+- There is no automated check. When editing, compare the ID sets (TC/FR/NFR/S/R/I/P/F) of `X.md` vs `X-ja.md` (see maintenance.md).
 
 ## Operational notes
 

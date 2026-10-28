@@ -14,9 +14,8 @@ pub fn init(directory: std::path::PathBuf) -> color_eyre::Result<()> {
         let _ = std::fs::set_permissions(&log_path, std::fs::Permissions::from_mode(0o600));
     }
     let env_filter = EnvFilter::builder().with_default_directive(tracing::Level::INFO.into());
-    // If the `RUST_LOG` environment variable is set, use that as the default, otherwise use the
-    // value of the `LOG_ENV` environment variable. If the `LOG_ENV` environment variable contains
-    // errors, then this will return an error.
+    // `RUST_LOG` wins when set and valid; otherwise `<PROJECT>_LOG_LEVEL` (e.g. `LAZYXRP_LOG_LEVEL`),
+    // whose parse errors are returned.
     let log_env = format!("{}_LOG_LEVEL", config::PROJECT_NAME.to_uppercase());
     let env_filter = env_filter
         .try_from_env()

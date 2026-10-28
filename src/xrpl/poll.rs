@@ -464,7 +464,7 @@ async fn poll_batch(
         }
 
         // Flare-only cooldown: escalate on total failure, reset on any success.
-        // Independent state from the XRPL backoff above (same schedule).
+        // Independent state from the XRPL backoff (same schedule).
         update_backoff(flare_ok, flare_backoff_secs, flare_backoff_until);
         // Health visibility: a total flare failure arms the status-bar flare
         // dot; the next successful flare fetch clears it.
@@ -686,7 +686,6 @@ async fn drive_poll_loop(
         tab_watch,
         submit_lock,
     } = ctx;
-    // Immutable across the loop; the seven submit arms below borrow it.
     let signing_credential = signing_credential.as_ref();
     // Wrapped in an async RwLock so the network-switch arm can swap the client
     // mid-loop; read guards are Send and safe across awaits.
@@ -700,9 +699,6 @@ async fn drive_poll_loop(
         }
     });
     let mut current_network = *network_watch.borrow();
-    // Shared batch inputs for the two scheduled-poll arms below.
-    // Inputs captured by reference via a helper defined below (network-agnostic).
-    // NOTE: rpc is threaded through explicitly to allow live re-binding on switch.
     let mut backoff_secs: u64 = 0;
     let mut backoff_until: Option<Instant> = None;
     let mut flare_backoff_secs: u64 = 0;

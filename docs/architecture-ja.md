@@ -18,7 +18,7 @@
 | TX 詳細パーサのレジストリ | 後述 §5.2.1、`src/components/shared/tx_detail/` |
 | セキュリティ監査 S-xxx / リスク R-xxx | [`security-ja.md`](security-ja.md) |
 | ドキュメント索引 | [`AGENTS.md`](../AGENTS.md) |
-| Graphify | [`graphify-out/GRAPH_REPORT.md`](../graphify-out/GRAPH_REPORT.md) |
+| Graphify | `graphify-out/GRAPH_REPORT.md`（ローカル専用・gitignore 対象。`graphify update .` で生成） |
 
 ## システム境界
 
@@ -67,7 +67,7 @@ Account タブの `WalletPanel` + `wallet_composer.rs`。**操作キー:** [`DES
 - 入力ルーティング: キーおよび bracketed-paste イベントは表示中のタブにのみ届く。paste は編集中のフィールドにのみ挿入され、ホットキーを発火しない。キーバインドは `config.rs::is_bindable` の許可リストに限る（ロード時に拒否）。設定ファイルは実際に読んだファイルでパーミッション検査され、`config_dir` / `data_dir` / `LAZYXRP_*` の `~` は展開される。認証情報は CLI > env > file の順に解決する（下位ソースのもう一方の種別は捨てられ、同一レベルに両種別があるとエラー）。
 - 提供済みの Composer フェーズ: Payment、AccountSet、SetRegularKey、OfferCreate、OfferCancel、TrustSet、FXRP Mint (C2)、FXRP Execute (C3)、EscrowCreate（`9`）、Escrows finish/cancel（`0`）、AMMDeposit（`d`）、AMMWithdraw（`w`）、AccountDelete（`x`）、Smart Account（`a`）。escrow は TUI のみ（`-x` の escrow コマンドは無い）。
 - Transaction composer（TC-255）: ピッカー行 `[m] Transaction` が spec'd 型（`xrpl::txspec`、§2.1）を列挙する。フォームは `TxSpec::fields` から生成される（フィールドごとに 1 行、spec の既定値をプリフィル、フォーカス行にヘルプ文とインライン検証エラーを表示、プレビュー行は `TxSpec::validate` が通れば緑の `▸ <summary>`、そうでなければエラー付きのオレンジ）。行移動／編集キーは共通の composer のものと同じ。`s` は poll タスクとまったく同じ検証を行い、`Action::GenericTxSubmit` を 1 件キューに積む。`TxSpec::confirm` を持つ型（NFTokenBurn `BURN`、NFTokenAcceptOffer `ACCEPT`）は直接キューに積まず、`s` が AccountDelete と同じ type-to-confirm の `DangerConfirm` を開く（Esc でフォームに戻る）。Assets タブ `x`（TC-256）: `NftTab` が `Action::NftBurnStart` に `Action::TxComposerOpen{NFTokenBurn, NFTokenID}` で応答し、app は Account タブへ移動してウォレットがプリフィル済みフォームを開く（署名認証情報がある場合のみ）。コンポーネントは `xrpl/` クライアントを呼ばず、静的な spec レジストリを読んで Action を発行するだけである。
-- AMM（TC-222–226）: AMMDeposit は two-asset のみ（`tfTwoAsset`。`Amount` / `Amount2` = 上限値で、プールの指定も兼ねる。`signing::validate_amm_deposit_specs`: spec は `XRP:drops` / `CUR:issuer:value`、2 つの異なるアセット）。AMMWithdraw: LP 量が空 → `tfWithdrawAll`、それ以外は `tfLPToken` + `LPTokenIn`。その通貨／issuer（AMM アカウント）は simulate 前に `amm_info`（`RpcClient::amm_lp_token`）から得る。simulate → sign → submit は共通。composer `d` / `w` と `-x amm-deposit` / `-x amm-withdraw`。AMMCreate / single-asset / Vote / Bid は無し。
+- AMM（TC-222–226）: AMMDeposit は two-asset のみ（`tfTwoAsset`。`Amount` / `Amount2` = 上限値で、プールの指定も兼ねる。`signing::validate_amm_deposit_specs`: spec は `XRP:drops` / `CUR:issuer:value`、2 つの異なるアセット）。AMMWithdraw: LP 量が空 → `tfWithdrawAll`、それ以外は `tfLPToken` + `LPTokenIn`。その通貨／issuer（AMM アカウント）は simulate 前に `amm_info`（`RpcClient::amm_lp_token`）から得る。simulate → sign → submit は共通。composer `d` / `w` と `-x amm-deposit` / `-x amm-withdraw`。single-asset の deposit / withdraw は無し。AMMCreate / Vote / Bid / Delete は spec 型（§2.1）。
 - AccountDelete（TC-232–233）: Destination = classic または X-address（タグは X-address 由来、network bit は Payment と同様に検査）。Composer は直接キューに積まず、有効な destination で type-to-confirm `DELETE` が開く（`DangerResume::AccountDelete` が destination を保持し、Esc で復元）。Fee はローカルで計算しない: simulate が owner-reserve fee（≤ `MAX_NODE_FEE_DROPS`）を埋め、その値が署名される。前提条件（`tecTOO_SOON` < 256 ledgers、`tecHAS_OBLIGATIONS` 所有オブジェクト、`tecDST_TAG_NEEDED`、`temDST_IS_SRC`）は simulate に任せる。`-x account-delete <DEST>` は CLI プロンプト／`--yes` を用いる同じ経路である。
 - EscrowCreate: XRP のみ、crypto-condition 無し。`signing::validate_escrow_create_input`（composer + poll）: classic Destination、amount > 0、FinishAfter / 任意の CancelAfter は submit からの相対 duration（`90s` / `30m` / `2h` / `7d`）、CancelAfter は厳密に後。poll タスクが絶対 Ripple-epoch 時刻を（ローカル時計で）一度だけ確定し、simulate と署名済み tx が同じ値を持つ。FinishAfter が ledger 時刻で既に過ぎていれば simulate で失敗する。
 - Escrows: 開くと `RefreshAccountEscrows` → `RpcClient::account_escrows`（`account_objects` type `escrow`、先頭 200 件、自分が所有するもの**と**宛先が自分のもの）を送る。`OfferSequence` = オブジェクトの `Sequence`（あれば）、無ければ作成 tx（`PreviousTxnID`。Escrow を変更するのは EscrowCreate のみ）の `Sequence`、それが 0 なら `TicketSequence`。`s` → EscrowFinish、`c` → EscrowCancel（`EscrowCloseSubmit`、simulate → sign → submit は共通）。ローカルで拒否するもの: sequence を解決できない場合、condition 付き escrow の Finish。タイミング規則（FinishAfter / CancelAfter 経過）は simulate に任せる（`tecNO_PERMISSION`）。
@@ -109,7 +109,7 @@ MPT / Identity family（`mpt.rs` TC-301/303/305/310、`identity.rs` TC-300/302/3
 
 Channel / AMM family（`channel_amm.rs`、TC-280–286）: PaymentChannelCreate / Fund / Claim（drops のみの `Amount`、`PublicKey` 66 hex、`CancelAfter` / `Expiration` は `Time`。Claim は貼り付けた `Signature` + `PublicKey` を受け取り、ローカルでは生成しない。`Flags` renew / close）と AMMCreate / Vote / Bid / Delete（`Asset` / `Asset2` = `XRP` または `CUR:issuer`（`parse_amm_asset` 経由）、`TradingFee` 0..=1000、`BidMin` / `BidMax` は LP トークン `CUR:issuer:value`、`AuthAccounts` ≤ 4）。confirm フレーズは `LOCK` / `FUND` / `CLAIM` / `CREATE` / `BID` / `DELETE`（AMMVote には無し）。非対応: Claim の `CredentialIDs`。AMMClawback は `Unsupported` のまま。
 
-**トランザクション型の追加方法**（今後の family: Check*、TicketCreate、DepositPreauth、SignerListSet、PaymentChannel*、AMM*）:
+**トランザクション型の追加方法**:
 
 1. `src/xrpl/txspec/<family>.rs` を作る（`nft.rs` をコピー）: 型ごとに `pub const X: TxSpec` と `FieldSpec`（name = ledger のフィールド名、`FieldKind`、`required`、`help`、`default`）、任意のフィールド間 `check`、`*_tx`（`common_fields!` による型付き構造体）、`*_json`（`tx.validate()` + `serde_json::to_value`）、`*_sign`（`sign_blob!`）、そして `pub static SPECS: &[TxSpec] = &[…]`。
 2. `txspec/mod.rs` に `pub(crate) mod <family>;` を追加し、`FAMILIES` に **1 エントリ** `<family>::SPECS` を追加する。それ以外は不要: ピッカー、フォーム、`-x tx`、submit、ガード、カバレッジの `Spec` 行はレジストリから導かれる。confirm フレーズを持つ型は `confirm: Some(Confirm{phrase, hint})` を設定する。
@@ -167,7 +167,9 @@ WebSocket の ledger close は poll トリガーを集約する（`MIN_POLL_INTE
 |-------|---------|-------|
 | `network` | `flare` | `flare` \| `songbird` \| `coston2` — RPC プリセット。`FLARE_RPC_URL` env が優先 |
 | `display` | `full` | `full` \| `compact` \| `off` — パネルレイアウト + `off` のとき FTSO/FXRP の poll をスキップ（C3 の URL は変わらない） |
-| `fassets.execute` | `false` | C3 `executeDirectMinting` には true が必要 |
+| `fassets.execute` | `false` | C3 `executeDirectMinting` と全 Flare EVM write には true が必要 |
+| `fassets.evm_key_env` | `FLARE_EVM_KEY` | Flare EVM 鍵を持つ env 変数名（起動時に読み取って除去） |
+| `fassets.expected_core_vault` | _（未設定）_ | C2 / `sa-memo` / `sa-call` Payment 用の XRPL Core Vault pin。Flare RPC の回答がこれと等しくなければならない（未設定／不一致 → 拒否） |
 | `wallet.address` | _（未設定）_ | 任意の `0x…` EVM アドレス — Overview の読み取りパネル（ネイティブ FLR + FXRP）。不正な hex は設定ロードに失敗する |
 | `smart_accounts.expected_operator` | _（未設定）_ | Smart Account 命令 Payment 用の XRPL `r…` operator pin。Flare RPC の `getXrplProviderWallets()[0]` がこれと等しくなければならない（未設定／不一致 → 拒否）。帯域外で検証すること |
 
@@ -185,7 +187,7 @@ WebSocket の ledger close は poll トリガーを集約する（`MIN_POLL_INTE
 | Market | Book、PathFind、AMM、TrustLines、FTSO、Oracle | `book_offers`、`ripple_path_find`、`amm_info`、`account_lines`、oracles |
 | Assets | `NftTab` + 3× `LedgerObjectsPanel`（objects / pay channels / escrows。レイアウト: [`DESIGN.md`](../DESIGN.md) §4） | `account_nfts`、`account_objects` |
 
-poll はタブが非アクティブのとき重い market 取得をスキップする（`poll.rs` の `should_poll_market_book`、`should_poll_asset_panels`）。
+poll はタブが非アクティブのときタブ固有の取得をスキップする（`poll.rs` の `should_poll_account_panels`、`should_poll_market_book`、`should_poll_asset_panels`）。
 
 ### 5.2 共通の挙動
 
@@ -202,7 +204,7 @@ poll はタブが非アクティブのとき重い market 取得をスキップ�
 | `render_tx_detail` | `tx_detail/mod.rs` | 中央寄せポップアップの描画 |
 | `typed_detail_lines` | `tx_detail/parsers.rs` | `TransactionType` によるディスパッチ |
 | `detail_lines_for` | `tx_detail/mod.rs` | 未知フィールドのフォールバック |
-| `TX_DETAIL_PARSERS` | `tx_detail/parsers.rs` | 静的レジストリ（29 型） |
+| `TX_DETAIL_PARSERS` | `tx_detail/parsers.rs` | 静的レジストリ（49 型） |
 
 `raw_json: ArcValue`（tx + meta）を持つテーブル行は、フォーカス中に `Action::TxDetailToggle` でオーバーレイを開ける。
 
@@ -219,9 +221,9 @@ poll はタブが非アクティブのとき重い market 取得をスキップ�
 - **開**のとき: `Quit`、データ更新、`Tick`、ナビゲーション系 Action を消費し、ポップアップの下で背景のテーブルの選択が変わらないようにする。
 - `SelectNext` / `FocusNext`（および prev）は飽和算術で詳細テキストをスクロールする。
 
-**登録済みの型（29）**
+**登録済みの型（49）**
 
-`Payment`, `AccountSet`, `TrustSet`, `OfferCreate`, `OfferCancel`, `NFTokenMint`, `NFTokenBurn`, `NFTokenCreateOffer`, `NFTokenAcceptOffer`, `NFTokenCancelOffer`, `CheckCreate`, `CheckCash`, `CheckCancel`, `SignerListSet`, `SetRegularKey`, `DepositPreauth`, `EscrowCreate`, `EscrowFinish`, `EscrowCancel`, `PaymentChannelCreate`, `PaymentChannelFund`, `PaymentChannelClaim`, `AMMCreate`, `AMMDeposit`, `AMMWithdraw`, `AMMVote`, `AMMBid`, `AMMDelete`, `TicketCreate`.
+`Payment`, `AccountSet`, `TrustSet`, `OfferCreate`, `OfferCancel`, `NFTokenMint`, `NFTokenBurn`, `NFTokenCreateOffer`, `NFTokenAcceptOffer`, `NFTokenCancelOffer`, `CheckCreate`, `CheckCash`, `CheckCancel`, `SignerListSet`, `SetRegularKey`, `DepositPreauth`, `EscrowCreate`, `EscrowFinish`, `EscrowCancel`, `PaymentChannelCreate`, `PaymentChannelFund`, `PaymentChannelClaim`, `AMMCreate`, `AMMDeposit`, `AMMWithdraw`, `AMMVote`, `AMMBid`, `AMMDelete`, `XChainCreateBridge`, `XChainModifyBridge`, `XChainCreateClaimID`, `XChainCommit`, `XChainClaim`, `XChainAccountCreateCommit`, `Clawback`, `MPTokenIssuanceCreate`, `MPTokenIssuanceDestroy`, `MPTokenIssuanceSet`, `MPTokenAuthorize`, `CredentialCreate`, `CredentialAccept`, `CredentialDelete`, `DIDSet`, `DIDDelete`, `OracleSet`, `OracleDelete`, `PermissionedDomainSet`, `PermissionedDomainDelete`, `TicketCreate`.
 
 6 つの AMM バリアントは `amm_detail_lines` を共有する（順序付きフィールド、明示的な `null`、create/vote での `TradingFee` 整形）。
 

@@ -213,9 +213,7 @@ impl RpcClient {
             }
             Err(e) => {
                 dunl_cache_mark_failed();
-                // Warn only when a cached summary will actually be served —
-                // first-ever failure has no entry (mark_failed is a no-op) and
-                // errors every poll until the first success.
+                // Warn only when a cached summary will actually be served.
                 if dunl_cache_get().is_some() {
                     tracing::warn!(
                         "dUNL refresh failed; serving cached manifest for up to {}s",
@@ -595,9 +593,8 @@ impl RpcClient {
     /// destination currency amount.  Use this to preview swap rates before
     /// submitting an IOU payment (especially self-pay → DEX swap).
     ///
-    /// `destination_amount` should be an object like
-    /// `{"currency":"USD","issuer":"r...","value":"100"}` or
-    /// a numeric-string for XRP drops (`.0` appended to canonicalise drops).
+    /// `destination_amount` is an IOU object like
+    /// `{"currency":"USD","issuer":"r...","value":"100"}` or an XRP drops string.
     /// `source_currencies`: optional `[{"currency":..,"issuer"?:..}]` filter (Payment quote).
     pub async fn ripple_path_find(
         &self,
@@ -785,7 +782,8 @@ mod tests {
             let _ = s.write_all(head.as_bytes()).await;
         });
         let rpc = RpcClient::connect(&format!("http://{addr}")).unwrap();
-        assert!(rpc.rpc_value("server_info", json!({})).await.is_err());
+        let err = rpc.rpc_once("server_info", &json!({})).await.unwrap_err();
+        assert!(err.to_string().contains("307"), "{err}");
         server.abort();
         target_srv.abort();
     }
@@ -1095,7 +1093,7 @@ mod submit_tests {
     }
 
     /// Lost submit reply: one submit attempt only, then the local hash is looked up and the
-    /// real outcome reported (old code replayed the blob 3×).
+    /// real outcome reported.
     #[tokio::test]
     async fn lost_submit_reply_resolves_via_tx_lookup_without_replaying() {
         let (url, server, seen) = lossy_node(json!({"validated": true,

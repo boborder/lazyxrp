@@ -15,7 +15,7 @@
 - インライン `#[cfg(test)]` モジュールを優先する。ライブネットワークのケースは `#[ignore]` とし、明示的に実行する。
 - テストは lib（`src/lib.rs`）、`tests/cli_smoke.rs`（バイナリ境界）、`tests/testnet_e2e.rs`（オプトイン、ライブの testnet/devnet: send / offer / NFT mint → burn。`mise run e2e-testnet`、CI では実行しない）に置く。`Cargo.toml` の `[lib] doctest = false` と両 `[[bin]]` ターゲットの `test = false` は、空のテストターゲットをスキップして `cargo test` の再ビルドを速く保つ。単体テストは `main.rs` / `bin/rp.rs` ではなく lib モジュールに置くこと。置く場合は先に `test = false` を外す。
 - **トレーサビリティ:** ユーザーに見える TC は `docs/requirements.md` の FR/NFR、または `docs/architecture.md` の § に対応づける。キー／レイアウトの TC は `DESIGN.md` にトレースする。ネットワーク／Flare の行は [トレーサビリティ](#トレーサビリティ) を参照。
-- **バイリンガル文書:** `docs/*.md` と `ROADMAP.md` はすべて日本語版 `*-ja.md`（本ファイルは `test-ja.md`）を持つ。エージェントにとっては英語版が正本であり、片方を変更するときは同じ変更でもう片方も変更しなければならない。ID 集合（TC / FR / NFR / S / R / I / P / F）は一致させる。
+- **バイリンガル文書:** 本ファイルは英語版 `test.md` の日本語版。ルールは [`AGENTS.md`](../AGENTS.md)（TC の ID 集合を一致させる）。
 
 ## コマンド
 
@@ -47,18 +47,17 @@ cargo deny check
 | TC-017 | P1 | `src/xrpl/parse.rs` | book_offers — レスポンスを OfferRow の Vec にパース |
 | TC-018 | P2 | `src/xrpl/parse.rs` | server_info/fee — レスポンスをサマリー構造体にパース |
 | TC-019-022 | P2 | `src/config.rs` | parse_style — 空はデフォルト、前景／背景のマッピング、修飾子の組み合わせ、gray==grey |
-| TC-023 | P2 | `src/config.rs` | extract_color_and_modifiers — 修飾子と色を抽出する |
+| TC-023 | P2 | `src/config.rs` | extract_color_and_modifiers — `parse_style_spec_mapping`（TC-019-022）経由で検証。専用テストは無い |
 | TC-024-025 | P2 | `src/config.rs` | parse_color — RGB 短縮形。不明は None を返す。範囲外の `rgb`/`grayNN`/`bright colorNN` は None を返す（u8 オーバーフローなし） |
-| TC-026 | P0 | `src/config.rs` | Config::new — デフォルトのキーバインドを読み込む |
+| TC-026 | P0 | `src/config.rs` | Config::new — デフォルトのキーバインドを読み込む（未変更の `<q>` → Quit を `user_keybindings_override_and_extend_defaults`、TC-195 で検証） |
 | TC-027-029,031-032 | P1 | `src/config.rs` | parse_key_event — 修飾キーの組み合わせ、大文字小文字非依存、不正なキーはエラー |
 | TC-033-035, TC-092 | P1 | `src/config.rs` | Config ソース優先順位 — ファイルがデフォルトを上書き、`XRPL_RPC_SERVER` 環境変数がファイルを上書き、XDG 解決、`~/.config` フォールバック |
 | TC-036 | P2 | `src/config.rs` | Config 検証 — 不正なキーシーケンス形式 |
-| TC-037 | P0 | `src/network.rs` | Network::default — Mainnet である |
+| TC-037 | P0 | `src/network.rs` | Network::default — Mainnet である（enum の `#[default]`。専用テストは無い） |
 | TC-038-040 | P0 | `src/network.rs` | Network::from_str — mainnet/testnet/devnet のラウンドトリップ、大文字小文字非依存、不明はエラー |
 | TC-041 | P1 | `src/network.rs` | Network::is_production — 正しい真偽値 |
 | TC-042 | P0 | `src/config.rs` | `Config::new` で `XRPL_NETWORK` がファイルの network を上書きする。パース不能／`" testnet"` の値は無視される |
-| TC-043 | P0 | `src/lib.rs` | resolve_rpc_url/resolve_ws_url — 優先順位 CLI > 環境変数 > 設定ファイル > ネットワークのデフォルト |
-| TC-044 | P1 | `src/lib.rs` | resolve_ws_url — CLI の --ws-server が最優先 |
+| TC-043/TC-044 | P0 | `src/lib.rs` | resolve_rpc_url/resolve_ws_url — 優先順位 CLI > 環境変数 > 設定ファイル > ネットワークのデフォルト（CLI の `--ws-server` は環境変数に勝つ） |
 | TC-045-046 | P1 | `src/signing.rs` | credential_from_secrets — none / seed / mnemonic / 両方指定は拒否、の結果マトリクス |
 | TC-047 | P1 | `src/signing.rs` | prompt_production_confirmation — testnet/devnet ではスキップ |
 | TC-048 | P2 | `src/signing.rs` | prompt_production_confirmation — --yes で mainnet でもスキップ |
@@ -88,7 +87,7 @@ cargo deny check
 | TC-080-082 | P2 | `src/xrpl/parse.rs` | ripple_path_find — alternatives、空の alternatives、XRP drops 文字列としての `source_amount` |
 | TC-083 | P2 | `src/xrpl/format.rs` | summarize_paths_computed — ホップ連鎖の省略表記 |
 | TC-084 | P2 | `src/xrpl/format.rs` | path_find_rows_from — 表示行。安い順の並び |
-| TC-085-086 | P2 | `src/xrpl/types.rs` | asset_display_name — 既知の hex コード。不明はそのまま通す |
+| TC-085-086 | P2 | `src/xrpl/types.rs` | asset_display_name — 既知の hex コード。不明はそのまま通す。`USD`/`XRP` に見える紛らわしいコードは hex + `…` で表示 |
 | TC-087 | P2 | `src/xrpl/poll.rs` | Poll トリガー — 短時間の連続発火をまとめる |
 | TC-088 | P0 | `src/xrpl/submit.rs` | Mainnet ガード: `--yes` なしではすべての submit 経路が拒否される（R-006）。テーブルに Smart Account instruction を含む |
 | TC-089/TC-144 | P0 | `src/xrpl/parse.rs`, `src/xrpl/poll.rs` | account_tx 結果のマッピング — not-found → 空の履歴（I-7）。アクションは append フラグに従う（Ok/Err × append のマトリクス） |
@@ -124,7 +123,7 @@ cargo deny check
 | TC-247 | P0 | `src/components/panels/wallet.rs` | Smart Account コンポーザーは read した `decimals()` に従う（6 と仮定せず 8 と 0）: 8 decimals で `12.5` → 1_250_000_000 単位。残高ちょうどは受理、残高 + 1 単位は拒否。decimals より多い小数桁は拒否。decimals > 18、および read なしではキューに積まれない |
 | TC-104 | P1 | `src/xrpl/parse.rs`, `src/components/shared/fps.rs` | account_tx の marker はパース後も保持される。tick-rate ラベルは 1 秒後に更新される |
 | TC-105 | P2 | `src/xrpl/client.rs` | ローカル HTTP 429 は成功するまで再試行される |
-| TC-248 | P0 | `src/coverage.rs` | XRPL カバレッジのずれ: `xrpl-coverage` マーカー間の ROADMAP.md の表が `rows()`（type、family、read、TUI、CLI、status）と一致し、README が書き込み可能／全体の `**N / M**` を記載する。レジストリが整合している（type の重複掲載なし、すべての Spec type に tx_detail パーサーがある、Existing の行が配線されている） |
+| TC-248 | P0 | `src/coverage.rs` | XRPL カバレッジのずれ: `xrpl-coverage` マーカー間の ROADMAP.md の表が `rows()`（type、read、TUI、CLI、status）と一致し、README が書き込み可能／全体の `**N / M**` を記載する。レジストリが整合している（type の重複掲載なし、すべての Spec type に tx_detail パーサーがある、未掲載 type のパーサーなし） |
 | TC-249 | P0 | `src/xrpl/txspec/{mod,nft}.rs` | NFT type ごとのフィールド検証テーブル（accept / reject。TransferFee 50000 は OK / 50001 は拒否され、transferable が必要。URI 256 / 257 バイト（マルチバイト含む）。id 63 / 64 / 65 hex。taxon は u32 最大。500 / 501 offers。sell / buy の Owner ルール。BrokerFee は両方の offer が必要。不明なフィールド／フラグ）。レジストリが正しく構成されている。CLI の `Field=value` パース。相対 `Time` は `prepare` で 1 回だけ解決される |
 | TC-250 | P0 | `src/xrpl/txspec/nft.rs` | NFT type ごとの未署名 `tx_json` の形（hex URI、flags ビット、Amount は drops / IOU オブジェクト、Account / Sequence） |
 | TC-251 | P0 | `src/xrpl/txspec/nft.rs` | NFT type ごとの署名済み blob が、互いに異なる Sequence 41 / Fee 13 / LastLedgerSequence 987654 でデコードされる（引数を入れ替えると失敗する）。ビルダーは crate のモデルルールを適用する |
@@ -171,7 +170,7 @@ cargo deny check
 | TC-344 | P0 | `src/flare_cmd.rs` | upstream の `MemoInstructions.sol` に基づく memo 復元レイアウト: `0xE0` / `0xE1` 42 B、`0xE2` 50 B、`0xD0` 30 B、`0xD1` 10 B（`[op \| walletId 0 \| fee u64 BE \| body]`）。`0xE1` は `newNonce <= current` と `u32::MAX` を超えるジャンプを拒否（境界をテスト）、`--target` の欠落 / 不足、executor ゼロも拒否。op ごとの target 状態（`0xE0` / `0xE2` は `isTransactionIdUsed` が false の間のみ、`0xE1` は true になってからのみ。`check_target_state`） |
 | TC-345 | P0 | `src/flare_cmd.rs` | `0xFE` ユーザー操作: `abi.encode(PackedUserOperation)` が同じ sender / nonce / `executeUserOp(Call[])` にデコードされ、memo は `[0xFE \| 0 \| fee u64 BE \| keccak256(userOp)]`（42 B）。call なし / 不正な target / 不正な hex は拒否。Coston2 live: `sa-call` → 支払いを検証 → `fxrp-execute --data <userOp>` → personal account の `FXRP.transfer` が実行された（recipient 5 → 6 FXRP、`getNonce` 3 → 4） |
 | TC-346 | P0 | `src/flare.rs` | 書き込みのチェーンゲート: Flare ネットワークごとの `expected_chain_id`。`check_write_chain` は**報告された** `eth_chainId` から mainnet の `--yes` 要否を判定（不一致は拒否）。`tx_fee_cap` — `send_capped` は gas × max fee が `MAX_TX_FEE_WEI`（10 FLR）を超えると拒否。誤ったチェーンでの `fxrp-execute` は他のどのステップより前に拒否される |
-| TC-347 | P0 | `src/signing.rs` | `eth_address_checksum_enforced_for_mixed_case`: 全小文字 / 全大文字は受理、EIP-55 チェックサムが誤った大小混在は拒否 |
+| TC-347 | P0 | `src/signing.rs` | `eth_address_checksum_enforced_for_mixed_case`: 全小文字はチェックサム検証を省略、大文字を含む場合は EIP-55 に一致必須（全大文字・誤った大小混在は拒否） |
 | TC-348 | P0 | `src/xrpl/submit.rs` | `xrpl_writes_refuse_unpaired_flare_network`、`fxrp_execute_direct_mint_refuses_unpaired_networks`、`fxrp_execute_direct_mint_flare_mainnet_without_yes_is_rejected`: XRPL の書き込み（C2 / Smart Account / C3）は XRPL ↔ Flare の交差ペアと、`--yes` なしの Flare mainnet を拒否 |
 | TC-349 | P0 | `src/lib.rs` | `direct_mint_payment_refused_when_paused_or_over_cap`: mint が pause 中、または金額が cap の余裕を超える場合、C2 Payment を拒否 |
 | TC-350 | P0 | `src/xrpl/poll.rs` | `stale_write_refusal_on_network_switch`: ネットワーク A で組み立てた書き込みは、アクティブネットワークが変わった後は（送信せず）拒否される（すべての書き込みパラメータに組み立て時の `network` を含む） |
@@ -198,7 +197,7 @@ cargo deny check
 | TC-304 | P0 | `src/xrpl/txspec/identity.rs` | identity 全 9 型の署名済み blob が、それぞれ異なる Sequence / Fee / LastLedgerSequence と署名付きでデコードされる |
 | TC-305 | P0 | `src/xrpl/txspec/mpt.rs` | MPT 全 4 型の署名済み blob が、それぞれ異なる Sequence / Fee / LastLedgerSequence と署名付きでデコードされる |
 | TC-306 | P0 | `src/xrpl/txspec/identity.rs`, `src/xrpl/txspec/mpt.rs` | 入力式の確認フレーズ: CredentialDelete / DIDDelete / OracleDelete / PermissionedDomainDelete は `DELETE`、MPTokenIssuanceDestroy は `DESTROY`。他の型にはなし |
-| TC-307 | P1 | `src/xrpl/txspec/identity.rs`, `src/xrpl/txspec/mpt.rs` | ビルダーは crate のモデルルールを適用: series のない OracleSet は拒否。MPTokenIssuanceSet / MPTokenAuthorize の `Holder` = 署名者は拒否 |
+| TC-307 | P1 | `src/xrpl/txspec/identity.rs`, `src/xrpl/txspec/mpt.rs` | ビルダーは crate のモデルルールを適用: 空の DIDSet は拒否。series のない OracleSet は拒否（自前の `required()` チェック、エラーに `PriceDataSeries` を含む）。MPTokenIssuanceSet / MPTokenAuthorize の `Holder` = 署名者は拒否 |
 | TC-308 | P1 | `src/xrpl/txspec/identity.rs` | フラットな文法: `BASE/QUOTE=price@scale`（delete 形式、u64 境界、scale 20/21、重複 / base = quote）と `rIssuer:Type` の credential（hex エンコードした type、重複、不正な issuer、サイズ） |
 | TC-309 | P0 | `src/xrpl/txspec/identity.rs` | ローカル RPC モックに対する DIDSet の汎用 submit: 空のフォームは RPC に到達しない。`server_info` → `account_info` → `simulate` → `submit`、simulate リクエストと署名済み blob 内の URI は hex エンコード |
 | TC-310 | P0 | `src/xrpl/txspec/mpt.rs` | ローカル RPC モックに対する MPTokenIssuanceCreate の汎用 submit: canTransfer なしの transfer fee は RPC に到達しない。simulate リクエストと署名済み blob に flags / metadata / Sequence / Fee / LastLedgerSequence を含む |

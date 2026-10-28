@@ -87,7 +87,7 @@ pub struct App {
     flare_evm_key: Option<secrecy::SecretString>,
     /// A seed or mnemonic is configured: the wallet pane (and its composer) exists.
     has_wallet: bool,
-    /// Wallet AccountSet form typing mode: skip Splash keymap in `on_key_event`.
+    /// A form/modal is typing: skip the global keymap in `on_key_event`.
     keymap_suppressed: bool,
     tick_rate: f64,
     /// One panel per tab — index matches TAB_TITLES
@@ -422,7 +422,6 @@ impl App {
             return Ok(());
         }
 
-        // Number keys jump to tabs 1..=TAB_TITLES.len()
         if let KeyCode::Char(c) = key.code
             && c.is_ascii_digit()
             && let Some(d) = c.to_digit(10)
@@ -465,7 +464,7 @@ impl App {
         }
     }
 
-    /// Send a poll command only if at least `min` duration has passed since the last one.
+    /// Send a poll command only if at least 500 ms have passed since the last one.
     fn send_debounced_poll(
         last: &mut Option<Instant>,
         tx: &mpsc::UnboundedSender<PollCommand>,
@@ -803,7 +802,6 @@ impl App {
             ])
             .areas(frame.area());
 
-            // Tabs — numbered, accent highlight, dim divider
             let titles: Vec<Line<'_>> = TAB_TITLES
                 .iter()
                 .enumerate()
@@ -821,29 +819,24 @@ impl App {
                 .block(Block::default());
             frame.render_widget(tabs, tabs_area);
 
-            // Footer key hints (above status bar)
             let hints = footer_line(active_tab);
             frame.render_widget(Paragraph::new(hints).style(theme::dim_style()), hints_area);
 
-            // Active panel
             if let Some(panel) = panels.get_mut(active_tab)
                 && let Err(err) = panel.draw(frame, main_area)
             {
                 error!(?err, "failed to draw panel");
             }
 
-            // FPS counter (top-right corner of main area)
             let fps_area = Rect::new(main_area.right().saturating_sub(10), main_area.top(), 10, 1);
             if let Err(err) = fps.draw(frame, fps_area) {
                 error!(?err, "failed to draw fps");
             }
 
-            // StatusBar
             if let Err(err) = status_bar.draw(frame, status_area) {
                 error!(?err, "failed to draw status");
             }
 
-            // Help overlay
             if show_help && let Err(err) = help.draw(frame, frame.area()) {
                 error!(?err, "failed to draw help");
             }
@@ -1124,7 +1117,7 @@ mod tests {
         Ok(())
     }
 
-    /// Tx History `f` / `m` reach the focused pane; filter typing suppresses the keymap.
+    /// Tx History `f` reaches the focused pane; filter typing suppresses the keymap.
     #[tokio::test]
     async fn account_tab_filter_key_reaches_tx_history() -> color_eyre::Result<()> {
         let mut app = seeded_app().await?;

@@ -139,7 +139,6 @@ mod tests {
             out.contains("rippled-test"),
             "server panel must still render"
         );
-        assert!(!out.contains("Oracle / FTSO / FXRP"));
         assert!(!out.contains("FTSO"));
     }
 

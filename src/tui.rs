@@ -59,7 +59,7 @@ impl Tui {
     }
 
     pub fn start(&mut self) {
-        self.cancel(); // Cancel any existing task
+        self.cancel();
         self.cancellation_token = CancellationToken::new();
         let event_loop = Self::event_loop(
             self.event_tx.clone(),
@@ -92,14 +92,13 @@ impl Tui {
                         CrosstermEvent::Key(key) if key.kind == KeyEventKind::Press => Event::Key(key),
                         CrosstermEvent::Paste(text) => Event::Paste(text),
                         CrosstermEvent::Resize(x, y) => Event::Resize(x, y),
-                        _ => continue, // ignore other events
+                        _ => continue,
                     }
                     Some(Err(_)) => Event::Error,
-                    None => break, // the event stream has stopped and will not produce any more events
+                    None => break,
                 },
             };
             if event_tx.send(event).is_err() {
-                // the receiver has been dropped, so there's no point in continuing the loop
                 break;
             }
         }

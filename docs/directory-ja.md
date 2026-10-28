@@ -163,7 +163,7 @@ lazyxrp/
 
 - `lib.rs`: `lazyxrp` / `rp` 両バイナリが共有するライブラリ。`run()`（TUI+CLI）と `run_rp()`（lookup 専用）。
 - `coverage.rs`: XRPL TX 種別カバレッジ（`rows()` = Existing / Spec（`xrpl::txspec::registry()` 由来）/ Planned / Unsupported、read は tx_detail parser 登録から）。`markdown_table()` を `lazyxrp -x coverage` が出力し、ROADMAP.md「XRPL coverage」と README の件数を drift テスト（TC-248）が検証。
-- `xrpl/txspec/`: 宣言的 TX spec（`mod.rs` = `TxSpec` / `FieldSpec` / `FAMILIES` レジストリ・検証・`prepare`、`nft.rs` = NFTokenMint / Burn / CreateOffer / AcceptOffer / CancelOffer）。共通 submit は `submit::submit_generic_transaction`。追加手順は `architecture-ja.md` §2.1。`tests/testnet_e2e.rs` に NFT mint → burn の opt-in テスト。
+- `xrpl/txspec/`: 宣言的 TX spec（`mod.rs` = `TxSpec` / `FieldSpec` / `FAMILIES` レジストリ・検証・`prepare`。family ごとに 1 ファイル、§1 参照）。共通 submit は `submit::submit_generic_transaction`。追加手順は `architecture-ja.md` §2.1。`tests/testnet_e2e.rs` に NFT mint → burn の opt-in テスト。
 - `main.rs`: `lazyxrp` バイナリの薄いエントリ（`lazyxrp::run()`）。
 - `bin/rp.rs`: `rp` バイナリの薄いエントリ（`lazyxrp::run_rp()`）。`cargo install` / リリース tarball で常に付く。
 - `uninstall.rs`: `lazyxrp --self-uninstall` — 実行中バイナリ・同階層の `{name}.bak`・同階層の `rp`（実体/symlink）と、`Config` で解決した config/data ディレクトリを削除する（`cargo uninstall` は呼ばない）。
@@ -189,7 +189,7 @@ lazyxrp/
 - `signing.rs` は `network`・`secrecy`・XRPL SDK crate と `xrpl` の純粋ヘルパ（`xrp_to_drops` / `resolve_payment_destination` / `GeneratedWalletKeys`）に依存し、`components/` と `app` を import しない。
 - 新しい TX 種別の write は共有パイプライン（`xrpl/submit.rs` の resolve / simulate / sign / submit、`poll.rs` の handler）を再利用し、種別ごとに独自の simulate・署名を書かない。宣言的な型は `xrpl/txspec/`（architecture-ja.md §2.1）。
 - パネルを追加したら同じ変更で `app::TAB_TITLES` を更新する（タブ index とパネル順を一致させる、security-ja.md I-9）。
-- 結合が強い箇所: `action.rs`（全送受信のハブ）、`poll.rs` の `submit_*`（型ごとの検証 + 共有 simulate/sign/submit）、`tx_detail/parsers.rs`（登録された TX 種別、architecture-ja.md「TX 詳細オーバーレイ」）。
+- 結合が強い箇所: `action.rs`（全送受信のハブ）、`poll.rs` から呼ばれる `submit.rs` の `submit_*`（型ごとの検証 + 共有 simulate/sign/submit）、`tx_detail/parsers.rs`（登録された TX 種別、architecture-ja.md §5.2.1）。
 
 ## 4. `src/components/panels/` 配下の責務
 
@@ -215,7 +215,7 @@ lazyxrp/
 
 ## 6. `src/components/shared/` 配下の責務
 
-- `fmt.rs`: 数値書式ユーティリティ（`group_digits` / `group_digits_u64`、`fmt_xrp` / `fmt_drops`、時刻変換）。
+- `fmt.rs`: 数値書式ユーティリティ（`group_digits` / `group_digits_u64`、`fmt_xrp`、`truncate_middle` / `short_hex`、ローカル時刻変換）。
 - `fps.rs`: フレームレート表示コンポーネント。
 - `help_overlay.rs`: `?` キーで開閉するキーバインドヘルプオーバーレイ。
 - `selectable_table.rs`: テーブル行選択・スクロールの共通補助。
@@ -224,9 +224,9 @@ lazyxrp/
 - `theme.rs`: 共通テーマ・色定義（`ACCENT` に加え `SECONDARY` でハッシュ列などを区別）。
 - `tx_detail/`: トランザクション詳細オーバーレイ（`TxDetailState` + `render_tx_detail`）— 全 XRPL トランザクション型をパースしてポップアップ表示。
   - `mod.rs`: 状態管理 (`TxDetailState`) とレンダリング (`render_tx_detail`, `detail_lines_for`)。
-  - `format.rs`: 共通フォーマット関数（`fmt_xrpl_amount`, `push_common_lines`, `format_value`, `fmt_currency`）。URI hex は `xrpl::hex_to_ascii`。
-  - `parsers.rs`: 29 種類の XRPL トランザクション型をパースする `*_detail_lines` 関数群。
-- `widgets.rs`: 共通 UI ヘルパー（`titled_block`、`titled_block_with_count`、`tx_table`、`spinner`）。履歴テーブルは更新時に構築し、`render_selectable_table` で再利用する。
+  - `format.rs`: 共通フォーマット関数（`fmt_xrpl_amount_from_value`, `push_common_lines_from_value`, `format_value`）。URI hex は `xrpl::hex_to_ascii`。
+  - `parsers.rs`: 49 種類の XRPL トランザクション型をパースする `*_detail_lines` 関数群。
+- `widgets.rs`: 共通 UI ヘルパー（`titled_block_with_count`、`tx_table`、`spinner`、`render_loading` / `render_empty` / `render_error`、`centered_popup_rect`）。履歴テーブルは更新時に構築し、`render_selectable_table` で再利用する。
 
 ## 7. `docs/` 配下の責務
 

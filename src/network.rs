@@ -144,7 +144,6 @@ mod tests {
         }
     }
 
-    /// next_network cycles through all variants and wraps to mainnet.
     #[test]
     fn next_network_wraps_all_variants() {
         let mut net = Network::Mainnet;

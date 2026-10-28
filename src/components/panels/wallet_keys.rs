@@ -288,5 +288,6 @@ mod tests {
         panel.is_form_editing = false;
         panel.field_row = 3;
         assert!(!panel.account_set_edit_keys(&key('1')));
+        assert_eq!(panel.tick_size, "7");
     }
 }

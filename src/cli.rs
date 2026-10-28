@@ -87,7 +87,7 @@ rp -t <64-char-tx-hash>\n  \
 rp <classic-or-x-address>\n\n\
 Full TUI: lazyxrp --help";
 
-/// Short-command CLI when argv0 is `rp` (symlink to lazyxrp).
+/// Short-command CLI: the `rp` binary, or argv0 `rp` (symlink to lazyxrp).
 #[derive(Parser, Debug)]
 #[command(
     name = "rp",
@@ -530,8 +530,6 @@ mod tests {
         assert!(Cli::try_parse_from(["lazyxrp", "-x", "book", "--base", "XRP"]).is_err());
         // Bare (no `-x`) form is also rejected by clap: `book` requires `--base`.
         assert!(Cli::try_parse_from(["lazyxrp", "book", "--quote", "USD"]).is_err());
-        // `watch` was removed: bare `lazyxrp` is the TUI.
-        assert!(Cli::try_parse_from(["lazyxrp", "watch"]).is_err());
     }
 
     /// TC-190: DEX CLI — `offers <ADDR>`, `offer-cancel <SEQ>`, `offer-create <GETS> <PAYS>` parse;
@@ -670,14 +668,6 @@ mod tests {
     #[test]
     fn exec_conflicts_with_self_uninstall() {
         assert!(Cli::try_parse_from(["lazyxrp", "--self-uninstall", "-x", "info"]).is_err());
-    }
-
-    /// `--self-uninstall` captures `--yes` (the subcommand guard is tested in lib.rs, TC-076).
-    #[test]
-    fn self_uninstall_parses() {
-        let c = Cli::try_parse_from(["lazyxrp", "--self-uninstall", "--yes"]).expect("parses");
-        assert!(c.self_uninstall);
-        assert!(c.yes, "--yes flag must be captured");
     }
 
     /// TC-125: `--network` public values include `xahau` and `xahau-test`

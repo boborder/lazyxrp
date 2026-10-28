@@ -84,7 +84,6 @@ impl Component for BookPanel {
         let [table_area, chart_area] =
             Layout::vertical([Constraint::Fill(1), Constraint::Length(chart_height)]).areas(inner);
 
-        // ── Table with StatefulWidget ──
         let header = Row::new(vec!["Quality", "Price", "TakerGets", "TakerPays"])
             .style(theme::header_row_style());
         let rows = self.offers.iter().map(|o| {

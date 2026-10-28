@@ -965,19 +965,15 @@ mod tests {
                 "result": { "offers": [{ "quality": quality }] }
             })
         };
-        // (a) string quality, not inverted: quality * 1_000_000
         assert_eq!(
             book_offer_best_price(&book(json!("0.5")), false),
             Some(500_000.0)
         );
-        // (b) invert=true → ask side: quality is drops/IOU, price is IOU per XRP
         assert_eq!(
             book_offer_best_price(&book(json!("0.5")), true),
             Some(2_000_000.0)
         );
-        // (c) non-numeric quality → fallback None
         assert_eq!(book_offer_best_price(&book(json!("abc")), false), None);
-        // (d) offers missing / empty → None
         assert_eq!(book_offer_best_price(&json!({ "result": {} }), false), None);
         assert_eq!(
             book_offer_best_price(&json!({ "result": { "offers": [] } }), false),
@@ -1099,6 +1095,7 @@ mod tests {
         assert!(parse_submit_success(&submit("terPRE_SEQ")).is_err());
     }
 
+    /// TC-069
     #[test]
     fn parse_submit_success_requires_tes_success_and_hash() {
         let value = json!({
@@ -1201,7 +1198,7 @@ mod tests {
         assert_eq!(sim.tx_json["LastLedgerSequence"], 21_430_170);
     }
 
-    /// Lead 4: node-supplied simulate result strings are stripped of control chars at parse time.
+    /// Node-supplied simulate result strings are stripped of control chars at parse time.
     #[test]
     fn parse_simulate_result_sanitizes_result_strings() {
         let v = json!({"result": {
@@ -1216,7 +1213,7 @@ mod tests {
         assert_eq!(sim.tx_json["Memo"], "keep\u{1b}raw");
     }
 
-    /// Lead 3: simulate Sequence must equal the requested one and LastLedgerSequence must sit
+    /// Simulate Sequence must equal the requested one and LastLedgerSequence must sit
     /// in (ledger_index, ledger_index + MAX_LLS_WINDOW].
     #[test]
     fn check_simulate_bound_to_request_rejects_foreign_sequence_and_far_lls() {
@@ -1377,7 +1374,6 @@ mod tests {
         });
         let paths = parse_ripple_path_find(&drops).expect("string source_amount should parse");
         assert_eq!(paths.alternatives.len(), 1);
-        // source_amount is a plain drops string, not an object
         assert_eq!(paths.alternatives[0].source_amount, json!("256987"));
     }
 

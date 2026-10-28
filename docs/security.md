@@ -15,10 +15,10 @@ This file tracks **security review findings (S-xxx)** and **implementation risks
 | I-3 | A write always goes simulate → `tesSUCCESS` → fetch `Sequence`/`Fee` → sign → submit. Never sign without simulating | `poll.rs` / `submit.rs` |
 | I-4 | `XRPL_SEED` / `XRPL_MNEMONIC` are taken out once by `Config::new()` before the poll / UI tasks are spawned, and removed from the env (`take_secret_env`). `remove_var` never runs afterwards. On Linux the startup `/proc/self/environ` block is not rewritten and stays visible to readers with the same uid (known limitation) | `config.rs` |
 | I-5 | Config precedence: CLI > env > user `config.toml` > built-in `config.json5`. For credentials, once a higher source sets either seed or mnemonic, both from lower sources are discarded (setting both at the same level is an error in `credential_from_secrets`) | resolve functions in `lib.rs` + `config.rs` (`layer_credentials`, `apply_cli_credentials`) |
-| I-6 | The periodic poll never goes below `MIN_POLL_INTERVAL` (10 s) | `poll.rs` `drive_poll_loop` |
+| I-6 | A WebSocket ledger-close trigger never polls sooner than `MIN_POLL_INTERVAL` (10 s) after the last poll; the scheduled tick follows `poll_interval_ms` (floor 500 ms) | `poll.rs` `drive_poll_loop` |
 | I-7 | `account_tx` not-found is an empty list (not an error) | `poll.rs` |
 | I-8 | `Tui::drop` restores the terminal and does not panic during drop | `tui.rs` |
-| I-9 | `TAB_TITLES` matches the panels in count and order (TC-060). When adding a panel, update it in the same change | `app.rs` |
+| I-9 | `TAB_TITLES` matches the panels in count and order (`debug_assert_eq!` in `App::new`). When adding a panel, update it in the same change | `app.rs` |
 | I-10 | Never `Arc::make_mut` the `ArcValue` JSON of a `TxRow` | `xrpl/types.rs` (convention) |
 | I-11 | Every RPC is wrapped in `tokio::time::timeout(RPC_TIMEOUT, …)` | `poll.rs` / `client.rs` |
 | — | Signing uses a family seed **or** a BIP39 mnemonic (`credential_from_secrets`). A mnemonic is never converted into a seed | `signing.rs` |
@@ -104,7 +104,7 @@ Risks without a matching S entry (e.g. R-006 mainnet guard bypass, R-008 RPC 429
 ## 2026-10-11 Endpoint network check (S-017)
 
 - **Symptom**: `XRPL_RPC_SERVER` (`rpc_server` / `--server` too) takes precedence over the `--network` preset (architecture §6.2). Writing with `--network testnet` while pointing at a mainnet endpoint made the `--yes` guard treat it as testnet and drop, and the signing / submission reached mainnet. The TUI `<Ctrl-n>` also keeps the custom endpoint, so the same applies. Found during testnet E2E in a shell with mainnet `XRPL_RPC_SERVER` and `XRPL_SEED` set (that run's writes had the env removed, so nothing was sent to mainnet).
-- **Mitigation**: before signing, `RpcClient::ensure_network` checks `server_info.network_id` and rejects a mismatch (measured: mainnet omits `network_id` = 0, testnet 1, devnet 2, xahau 21337, xahau-test 21338). It covers all TUI XRPL submits (`fetch_account_summary_for_submit`) and CLI `send` / `offer-create` / `offer-cancel`. This adds one RPC per write.
+- **Mitigation**: before signing, `RpcClient::ensure_network` checks `server_info.network_id` and rejects a mismatch (measured: mainnet omits `network_id` = 0, testnet 1, devnet 2, xahau 21337, xahau-test 21338). It covers all TUI XRPL submits (`fetch_account_summary_for_submit`) and every CLI XRPL write arm (`send`, `offer-*`, `amm-*`, `account-delete`, `tx` / `nft-*`). This adds one RPC per write.
 - **Residual**: the check is the node's self-report. A malicious endpoint can return a fake `network_id` (trusting the endpoint you choose is the same premise as S-015).
 
 ## 2026-08-06 Re-review fixes

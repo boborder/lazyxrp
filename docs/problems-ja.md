@@ -20,7 +20,7 @@
 
 ### P-005: `config.rs` が 1 ファイルのまま
 
-- 症状: `src/config.rs` は約 1200 行（defaults / file / env / keybindings / styles / Flare network+display+wallet / paths / test helpers）
+- 症状: `src/config.rs` はテスト込みで約 1530 行（defaults / file / env / keybindings / styles / Flare network+display+fassets+wallet+smart_accounts / paths / test helpers）
 - 対応: 約 1500 行を超えたら `config/defaults.rs`, `config/keybindings.rs`, `config/styles.rs` に分割
 
 ### P-007: Xahau `NetworkID` の simulate 受理は未検証
@@ -35,7 +35,7 @@
 
 ### P-009: 二言語ドキュメントのずれ
 
-- 自動チェックはない。編集時は `X.md` と `X-ja.md` の ID 集合（TC/FR/S/R/P）を比較する（maintenance-ja.md 参照）。
+- 自動チェックはない。編集時は `X.md` と `X-ja.md` の ID 集合（TC/FR/NFR/S/R/I/P/F）を比較する（maintenance-ja.md 参照）。
 
 ## 運用メモ
 

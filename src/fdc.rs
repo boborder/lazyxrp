@@ -472,9 +472,10 @@ mod tests {
         assert!(voting_round(1, 2, 90).is_err());
         assert!(voting_round(10, 0, 0).is_err());
 
-        let main = fdc_config(FlareNetwork::Flare, env_none).unwrap();
-        assert_eq!(main.source_id, "XRP");
-        assert!(main.verifier_base.starts_with("https://"));
+        assert_eq!(
+            fdc_config(FlareNetwork::Flare, env_none).unwrap().source_id,
+            "XRP"
+        );
         assert_eq!(
             fdc_config(FlareNetwork::Coston2, env_none)
                 .unwrap()

@@ -77,7 +77,7 @@ Mood: trading-terminal, not marketing site. One accent family (dodger/cornflower
 | `HIGHLIGHT_FG` | 255,255,255 | `#FFFFFF` | Text on selected row |
 | `CHART_VALUE_FG` | 15,23,42 | `#0F172A` | Text on `ACCENT` fills |
 
-**Frontmatter mapping:** `primary` = `ACCENT`; `border` = `BORDER` = `HIGHLIGHT_BG` (identical RGB). `panel-*` の `textColor` はタイトル色。focused border = `ACCENT` / unfocused = `MUTED`（`borderColor` は非標準プロパティのため frontmatter 外 — Components 表を参照）。
+**Frontmatter mapping:** `primary` = `ACCENT`; `border` = `BORDER` = `HIGHLIGHT_BG` (identical RGB). `panel-*` `textColor` is the title color. Focused border = `ACCENT` / unfocused = `MUTED` (`borderColor` is a non-standard property, so it stays out of the frontmatter — see the Components table).
 
 ---
 
@@ -98,7 +98,7 @@ No shipped font — the terminal provides it. Hierarchy is ratatui modifiers onl
 | 2 | `󰠿 Market` | Top **70%**: book **62%** \| path/AMM/lines **38%** (34/33/33). Bottom **30%**: FTSO+oracle 50/50, or oracle full when Flare off | 6, or 5 (FTSO skipped; index 4 → oracle) |
 | 3 | `󰒍 Assets` | Vertical **30 / 30 / 20 / 20** (NFT, objects, pay channels, escrows) | 4 |
 
-Guard: `TAB_TITLES.len() == panels.len() == 4` (`app.rs`, TC-060).
+Guard: `TAB_TITLES.len() == panels.len() == 4` (`debug_assert_eq!` in `App::new`).
 
 **Flare `[flare] display`** (pixels only; poll rules: architecture §6.7):
 
@@ -112,7 +112,7 @@ Guard: `TAB_TITLES.len() == panels.len() == 4` (`app.rs`, TC-060).
 
 | Piece | Source | States |
 |-------|--------|--------|
-| Panel chrome | `panel_block` / `titled_block` | Focused: `ACCENT` rounded border + `TITLE`. Unfocused: `MUTED`. Optional `(i/n)` count via `titled_block_with_count` |
+| Panel chrome | `panel_block` / `titled_block_with_count` | Focused: `ACCENT` rounded border + `TITLE`. Unfocused: `MUTED`. The second adds an optional `(i/n)` count |
 | Tabs | `app.rs` `TAB_TITLES` | 4 titles with nerd-font glyphs. Active: `HIGHLIGHT_BG` bold underline. Index prefix `MUTED`. Divider ` │ ` muted |
 | Table | `render_selectable_table` | Header accent underline. Focused selection: white on royal. Unfocused selection: muted reversed |
 | TX row | `tx_table_row` | Hash `SECONDARY` (16-char + `…`); ▼ `ERROR` / ▲ `SUCCESS` / · `MUTED`; type `ACCENT`; ledger muted; result success/error |
@@ -163,10 +163,10 @@ Defaults: [`config.json5`](config.json5) `keybindings.Splash`. User merge: `~/.c
 | Table | `Enter` | TX detail |
 | Wallet | `t`, `g` | Account tab only. `t`: composer picker (Payment, AccountSet, SetRegularKey, OfferCreate, TrustSet, FXRP Mint, Execute, OfferCancel, EscrowCreate, Escrows, AMMDeposit, AMMWithdraw, AccountDelete, Smart Account); needs a funded account. `g`: key generation (works for an unfunded seed; the popup draws in every wallet state). Under `--watch` the Wallet panel is replaced by the read-only Account panel (no `t` / `g`) |
 | Picker | `m` | **Transaction** (row 14): second list of spec'd types (`NFTokenMint`, `NFTokenBurn`, …; `j`/`k`/arrows, `Enter`; Esc → picker). Form is generated from the type's field specs |
-| Transaction | `j`/`k`, `Tab`, `[` `]`, `e`, `Enter` | Field nav / edit like other forms; the focused row shows its help text and inline validation error; preview `▸ <summary>` green when valid, orange with the error otherwise. `s` / `Ctrl-s` queue; Esc → type list. Burn / AcceptOffer: `s` opens a type-to-confirm (`BURN` / `ACCEPT`, Esc restores the form) |
+| Transaction | `j`/`k`, `Tab`, `[` `]`, `e`, `Enter` | Field nav / edit like other forms; the focused row shows its help text and inline validation error; preview `▸ <summary>` green when valid, orange with the error otherwise. `s` / `Ctrl-s` queue; Esc → type list. Types with a confirm phrase (e.g. `BURN`, `ACCEPT`, `CASH`, `DELETE`; list in [`docs/architecture.md`](docs/architecture.md) §2.1): `s` opens a type-to-confirm (Esc restores the form) |
 | Smart Account | `a` (picker), `i`, `e`, `Tab`, `s` | Needs the Overview Flare read (incl. FXRP `decimals()`; no read → no composer). `i` flips `0x01` FXRP transfer ↔ `0x02` redeem; rows: Flare recipient (transfer only) + Amount FXRP (decimal, converted to base units with the read `decimals()`; extra fraction digits refused) / Lots; header shows operator + pin status, fee (XRP) and personal-account FXRP balance. Overview FXRP panel gains rows: `Smart acct`, `SA FXRP`, `Nonce · deployed`, `Operator`, `SA fee` |
 | FXRP Mint | `6` (picker), `e`, `Tab`, `s` | Needs the Overview Flare read (Core Vault, fees, pause). Rows: Flare recipient + Amount XRP. The recipient is prefilled with your own Smart Account personal account when the read is for the signing account and under 300 s old (full address, editable; a dim line says when it equals the personal account and that it is a Flare RPC answer to check on an explorer); otherwise empty. After the Payment the flash points to finalization (public executor, or composer `7` / `-x fxrp-execute` with an EVM key) |
-| Picker | `Tab`, `j`/`k`, arrows, `1`–`9`, `0`, `d`, `w`, `x`, `a` | Phase select; the list scrolls to keep the selection visible when the wallet panel is short |
+| Picker | `Tab`, `j`/`k`, arrows, `1`–`9`, `0`, `d`, `w`, `x`, `a`, `m` | Phase select; the list scrolls to keep the selection visible when the wallet panel is short |
 | Forms | `Tab`, `[` `]`, `Enter` | Field nav; AccountSet `e` edits |
 | Payment | `i` | XRP ↔ IOU (resets row); last row **Send max** (`XRP:drops` / `CUR:issuer:value`, empty = same currency) → cross-currency via default paths, preview adds `spend ≤ …` |
 | Payment | `p` | Quote Send max via `ripple_path_find` in the Send max field's currency (`XRP` or `CUR:issuer`; empty + IOU Amount → XRP), + `slippage_bps`; fills the field |
@@ -184,7 +184,7 @@ Defaults: [`config.json5`](config.json5) `keybindings.Splash`. User merge: `~/.c
 
 **Tables** (book, lines, objects, path find): `j`/`k` + `Enter` → overlay.
 
-**TX detail:** `j`/`k` scroll; `Enter`/`Esc` close. Consumes actions so tables underneath stay put.
+**TX detail** (also the dUNL `Validator #N` overlay): `j`/`k` scroll; `Enter` closes (`TxDetailToggle`; `Esc` is not bound). Consumes actions so tables underneath stay put.
 
 New global binding: `config.json5` + `Action` + `app.rs` dispatch; document here and in [`docs/test.md`](docs/test.md) when user-visible.
 

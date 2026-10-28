@@ -163,7 +163,7 @@ lazyxrp/
 
 - `lib.rs`: library shared by both the `lazyxrp` and `rp` binaries. `run()` (TUI+CLI) and `run_rp()` (lookup only).
 - `coverage.rs`: XRPL TX type coverage (`rows()` = Existing / Spec (from `xrpl::txspec::registry()`) / Planned / Unsupported; reads come from tx_detail parser registration). `lazyxrp -x coverage` prints `markdown_table()`, and the drift test (TC-248) verifies the counts in ROADMAP.md "XRPL coverage" and the README.
-- `xrpl/txspec/`: declarative TX specs (`mod.rs` = `TxSpec` / `FieldSpec` / `FAMILIES` registry, validation, `prepare`; `nft.rs` = NFTokenMint / Burn / CreateOffer / AcceptOffer / CancelOffer). Common submit is `submit::submit_generic_transaction`. How to add a type: `architecture.md` §2.1. `tests/testnet_e2e.rs` has an opt-in NFT mint → burn test.
+- `xrpl/txspec/`: declarative TX specs (`mod.rs` = `TxSpec` / `FieldSpec` / `FAMILIES` registry, validation, `prepare`; one file per family, see §1). Common submit is `submit::submit_generic_transaction`. How to add a type: `architecture.md` §2.1. `tests/testnet_e2e.rs` has an opt-in NFT mint → burn test.
 - `main.rs`: thin entry of the `lazyxrp` binary (`lazyxrp::run()`).
 - `bin/rp.rs`: thin entry of the `rp` binary (`lazyxrp::run_rp()`). Always shipped with `cargo install` / release tarballs.
 - `uninstall.rs`: `lazyxrp --self-uninstall` — removes the running binary, the `{name}.bak` beside it, the `rp` beside it (file/symlink), and the config/data directories resolved via `Config` (does not call `cargo uninstall`).
@@ -189,7 +189,7 @@ lazyxrp/
 - `signing.rs` depends on `network`, `secrecy`, the XRPL SDK crate, and pure helpers of `xrpl` (`xrp_to_drops` / `resolve_payment_destination` / `GeneratedWalletKeys`); it does not import `components/` or `app`.
 - A write for a new TX type reuses the shared pipeline (resolve / simulate / sign / submit in `xrpl/submit.rs`, handlers in `poll.rs`); do not write per-type simulate or signing. Declarative types go in `xrpl/txspec/` (architecture.md §2.1).
 - When adding a panel, update `app::TAB_TITLES` in the same change (keep tab index and panel order consistent, security.md I-9).
-- Tightly coupled spots: `action.rs` (hub for all send/receive), `submit_*` in `poll.rs` (per-type validation + shared simulate/sign/submit), `tx_detail/parsers.rs` (registered TX types, architecture.md "TX detail overlay").
+- Tightly coupled spots: `action.rs` (hub for all send/receive), the `submit_*` functions in `submit.rs` dispatched from `poll.rs` (per-type validation + shared simulate/sign/submit), `tx_detail/parsers.rs` (registered TX types, architecture.md §5.2.1).
 
 ## 4. Responsibilities under `src/components/panels/`
 
@@ -215,7 +215,7 @@ lazyxrp/
 
 ## 6. Responsibilities under `src/components/shared/`
 
-- `fmt.rs`: number formatting utilities (`group_digits` / `group_digits_u64`, `fmt_xrp` / `fmt_drops`, time conversion).
+- `fmt.rs`: number formatting utilities (`group_digits` / `group_digits_u64`, `fmt_xrp`, `truncate_middle` / `short_hex`, local time conversion).
 - `fps.rs`: frame-rate display component.
 - `help_overlay.rs`: keybinding help overlay toggled with the `?` key.
 - `selectable_table.rs`: common helpers for table row selection and scrolling.
@@ -224,9 +224,9 @@ lazyxrp/
 - `theme.rs`: common theme and color definitions (`SECONDARY` in addition to `ACCENT`, used to distinguish e.g. hash columns).
 - `tx_detail/`: transaction detail overlay (`TxDetailState` + `render_tx_detail`) — parses every XRPL transaction type and shows it as a popup.
   - `mod.rs`: state management (`TxDetailState`) and rendering (`render_tx_detail`, `detail_lines_for`).
-  - `format.rs`: common formatting functions (`fmt_xrpl_amount`, `push_common_lines`, `format_value`, `fmt_currency`). URI hex uses `xrpl::hex_to_ascii`.
-  - `parsers.rs`: the `*_detail_lines` functions that parse 29 XRPL transaction types.
-- `widgets.rs`: common UI helpers (`titled_block`, `titled_block_with_count`, `tx_table`, `spinner`). The history table is built on update and reused via `render_selectable_table`.
+  - `format.rs`: common formatting functions (`fmt_xrpl_amount_from_value`, `push_common_lines_from_value`, `format_value`). URI hex uses `xrpl::hex_to_ascii`.
+  - `parsers.rs`: the `*_detail_lines` functions that parse 49 XRPL transaction types.
+- `widgets.rs`: common UI helpers (`titled_block_with_count`, `tx_table`, `spinner`, `render_loading` / `render_empty` / `render_error`, `centered_popup_rect`). The history table is built on update and reused via `render_selectable_table`.
 
 ## 7. Responsibilities under `docs/`
 

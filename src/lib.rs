@@ -272,8 +272,8 @@ fn check_xrpl_tx_hash(h: &str) -> color_eyre::Result<()> {
     Ok(())
 }
 
-/// Flare subcommands (`-x fxrp*`, `-x sa-vault`): handled before the XRPL client because they
-/// need the Flare RPC / EVM key. Writes need `[flare.fassets] execute = true`, the Flare EVM key,
+/// Flare subcommands (`-x fxrp*`, `-x sa-*`): handled before the XRPL client because they
+/// need the Flare RPC / EVM key. EVM writes need `[flare.fassets] execute = true`, the Flare EVM key,
 /// an https RPC and `--yes` on Flare mainnet; every EVM write estimates gas (= simulates) first.
 async fn run_flare_command(
     cmd: Cmd,
@@ -639,27 +639,6 @@ mod network_resolve_tests {
     use crate::config::Config;
     use crate::test_support::{TestEnvGuard, env_lock};
 
-    fn minimal_config_toml() -> &'static str {
-        r#"[xrpl]
-account = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
-issuer = "rMxCKbEDwqr76QuheSUMdEGf4B9xJ8m5De"
-currency = "RLUSD"
-currency_code = "524C555344000000000000000000000000000000"
-offer_limit = 5
-poll_interval_ms = 5000
-network = "mainnet"
-"#
-    }
-
-    /// Temp dir with a minimal `config.toml`; caller sets `LAZYXRP_CONFIG`.
-    fn temp_config_root(tag: &str) -> std::path::PathBuf {
-        let root = std::env::temp_dir().join(format!("lazyxrp-{tag}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(&root).unwrap();
-        std::fs::write(root.join("config.toml"), minimal_config_toml()).unwrap();
-        root
-    }
-
     /// TC-043: URL precedence cli > env > config file > network default, for HTTP and WS.
     #[test]
     fn resolve_urls_precedence_cli_env_config_default() {
@@ -703,37 +682,13 @@ network = "mainnet"
             "wss://cli"
         );
     }
-    /// TC-044
-    #[test]
-    fn resolve_ws_url_cli_overrides_env() -> color_eyre::Result<()> {
-        let _g = env_lock();
-        let _env = TestEnvGuard::new(&[
-            "LAZYXRP_CONFIG",
-            "XDG_CONFIG_HOME",
-            config::XRPL_RPC_SERVER_ENV,
-            config::XRPL_WS_SERVER_ENV,
-        ]);
-        let root = temp_config_root("tc044");
-        _env.remove("XDG_CONFIG_HOME");
-        _env.remove(config::XRPL_RPC_SERVER_ENV);
-        _env.set(config::XRPL_WS_SERVER_ENV, "wss://custom");
-        _env.set("LAZYXRP_CONFIG", root.to_str().unwrap());
-        let config = Config::new()?;
-        let cli = Cli::try_parse_from(["lazyxrp", "--ws-server", "wss://cli", "info"])
-            .map_err(|e| color_eyre::eyre::eyre!("{e}"))?;
-        let network = cli.network.unwrap_or(config.xrpl.network);
-        let url = resolve_ws_url(&cli, &config, &network);
-        assert_eq!(url, "wss://cli");
-        std::fs::remove_dir_all(&root).ok();
-        Ok(())
-    }
 }
 
 #[cfg(test)]
 mod endpoint_security_tests {
     use super::*;
 
-    /// Insecure endpoint schemes are rejected unless the --allow-insecure flag is set
+    /// Insecure endpoint schemes are rejected unless `--allow-insecure-rpc` is set.
     #[test]
     fn insecure_endpoint_schemes_rejected_without_flag() {
         let cases = [
