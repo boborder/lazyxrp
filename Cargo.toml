@@ -2,7 +2,7 @@
 name = "lazyxrp"
 version = "0.9.1"
 edition = "2024"
-rust-version = "1.94.1"
+rust-version = "1.99"
 description = "Terminal UI and CLI for the XRP Ledger: watch accounts, order books, NFTs and AMM pools; sign payments and DEX offers (simulate-first, mainnet guarded)"
 authors = ["boborder"]
 license = "MIT"
@@ -73,8 +73,8 @@ toml = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 secrecy = { version = "0.10", features = ["serde"] }
-kobe-xrpl = "3.4"
-kobe-primitives = { version = "3.4", default-features = false, features = ["bip32", "encoding"] }
+kobe-xrpl = "4"
+kobe-core = { version = "4", default-features = false, features = ["bip32", "encoding"] }
 xrpl-rust = "1.1"
 # native-tls (not default rustls/aws-lc-rs): aws-lc-sys alone is ~7 min of a clean build.
 reqwest = { version = "0.13", default-features = false, features = ["json", "stream", "native-tls", "charset", "http2", "system-proxy"] }
@@ -92,7 +92,7 @@ openssl = { version = "0.10", features = ["vendored"] }
 tokio-tungstenite = "0.24"
 
 [build-dependencies]
-vergen-gix = { version = "9", features = ["build"] }
+vergen-gix = { version = "10", features = ["build"] }
 
 [package.metadata.docs.rs]
 targets = ["x86_64-unknown-linux-gnu"]

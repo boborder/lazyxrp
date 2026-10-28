@@ -8,7 +8,7 @@
 
 - Language: Rust
 - Edition: 2024
-- Toolchain: `channel = "stable"` in `rust-toolchain.toml` (components: `rustfmt`, `clippy`). The MSRV equivalent is `rust-version = "1.94.1"` in `Cargo.toml` (tracks the MSRV of alloy 2.4.2; a reference value, since real builds force stable).
+- Toolchain: `channel = "stable"` in `rust-toolchain.toml` (components: `rustfmt`, `clippy`). The MSRV equivalent is `rust-version = "1.99"` in `Cargo.toml` (required by `kobe-xrpl` 4 and `vergen-gix` 10; a reference value, since real builds force stable).
 - Async runtime: Tokio (`1` in `Cargo.toml`, `features = ["macros", "rt-multi-thread", "sync", "time", "net", "io-util"]`; `full` is not used)
 - Target OS: release targets are in [`.github/workflows/cd.yml`](../.github/workflows/cd.yml) (cited by the README Requirements). Currently confirmed on macOS arm64.
 
@@ -25,7 +25,7 @@
 ### XRPL / networking
 - `reqwest` (`0.13` in `Cargo.toml`, direct dependency `0.13.5` in `Cargo.lock`; `default-features = false`, `features = ["json", "stream", "native-tls", "charset", "http2", "system-proxy"]` — JSON-RPC and bounded NFT metadata/image streaming). TLS is **native-tls**, not the default rustls/`aws-lc-rs` (the C build of `aws-lc-sys` alone dominated a clean build; `reqwest 0.12.x` on the `xrpl-rust` path is also native-tls). On the `xrpl-rust` path, **`reqwest 0.12.x` may coexist in the lock** (`Cargo.lock` is authoritative for resolution).
 - `xrpl-rust` (`1.1` in `Cargo.toml`, `1.3.0` in `Cargo.lock`)
-- `kobe-xrpl = 3.4` / `kobe-primitives = 3.4` — BIP39 secp256k1 mnemonic → BIP44 `m/44'/144'/0'/0/0` account derivation.
+- `kobe-xrpl = 4` / `kobe-core = 4` (was `kobe-primitives` before 4.0) — BIP39 secp256k1 mnemonic → BIP44 `m/44'/144'/0'/0/0` account derivation.
 - `tokio-tungstenite` — dev-dependency only (local WS server for `ws.rs` tests). The WS in the main binary goes through xrpl-rust
 - URL parsing uses `reqwest::Url` (a re-export of the `url` crate; there is no direct dependency)
 - `base64 = 0.23` — XRPLF dUNL blob / validator manifest decode (`base64::engine::general_purpose::STANDARD`)
@@ -46,8 +46,8 @@
 - `toml` (the user `config.toml` is read with `std::fs` + `toml::from_str`; the old `config` crate was removed in 0.6.1)
 - `directories` (`6` in `Cargo.toml`, `6.0.0` in `Cargo.lock` — `ProjectDirs`)
 - `serde` (`1` in `Cargo.toml`, `1.0.229` in `Cargo.lock`, `derive`)
-- `serde_json` (`1` in `Cargo.toml`, `1.0.151` in `Cargo.lock`)
-- `json5` (`1` in `Cargo.toml`, direct dependency `1.3.1` in `Cargo.lock` — parses the embedded `config.json5` at the repository root)
+- `serde_json` (`1` in `Cargo.toml`, `1.0.154` in `Cargo.lock`)
+- `json5` (`1` in `Cargo.toml`, direct dependency `1.3.4` in `Cargo.lock` — parses the embedded `config.json5` at the repository root)
 
 ### Observability / failure handling
 
@@ -71,8 +71,7 @@
 
 - Build script: `build.rs`
 - build-dependencies:
-  - `anyhow` (`1` in `Cargo.toml`, `1.0.104` in `Cargo.lock`)
-  - `vergen-gix` (`9` in `Cargo.toml`, `9.1.0` in `Cargo.lock`; `build`)
+  - `vergen-gix` (`10` in `Cargo.toml`, `10.0.3` in `Cargo.lock`; `build`)
 - Release profile:
   - `codegen-units = 1`
   - `lto = "fat"`

@@ -14,7 +14,7 @@
 - `auto-tag`（Auto Tag Release）: `main` push で test / msrv / rustfmt / clippy / docs / security-advisories / package / check-os の全ジョブが成功したあと、`Cargo.toml` の `version` を最新 `v*` タグと比較し、上がっていれば `v<version>` タグを作成・push。GITHUB_TOKEN のタグ push は他 workflow を発火させないため、続けて `gh workflow run CD --ref v<version>` で CD を明示 dispatch する（workflow 内コメントに記載の既知挙動）。
 - `package`: `cargo package --locked`（`include` allowlist だけで crates.io 配布物がビルドできることを PR 段階で検証）。`check-os`: macOS / Windows で `cargo check --locked --all-targets`（リリース対象 OS のコンパイル確認）。どちらも auto-tag の `needs`。
 - ワークフローは top-level `permissions` を最小（`contents: read`、cd.yml は `actions: read` も）にし、書き込みが必要な job（auto-tag / publish-github-release / trigger-benchmark）だけが個別に昇格する。push しない checkout は `persist-credentials: false`。
-- `msrv`: `cargo +1.94.1 check --locked --all-targets`。`Cargo.toml` の `rust-version` を上げるときはこの job も同時に更新する。
+- `msrv`: `cargo +1.99 check --locked --all-targets`。`Cargo.toml` の `rust-version` を上げるときはこの job も同時に更新する。
 
 **CD（公開、[cd.yml](../.github/workflows/cd.yml) — tag push / workflow_dispatch で起動）:**
 

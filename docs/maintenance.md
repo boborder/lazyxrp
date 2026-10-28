@@ -14,7 +14,7 @@ Publishing is a tag-driven automated release. `version` in `Cargo.toml` is the S
 - `auto-tag` (Auto Tag Release): on a `main` push, after all of test / msrv / rustfmt / clippy / docs / security-advisories / package / check-os are green, compares `version` in `Cargo.toml` with the latest `v*` tag and, if it is higher, creates and pushes the `v<version>` tag. A tag pushed with GITHUB_TOKEN does not trigger other workflows, so it then dispatches CD explicitly with `gh workflow run CD --ref v<version>` (known behavior, noted in a comment in the workflow).
 - `package`: `cargo package --locked` (verifies at PR time that the crates.io distribution builds from the `include` allowlist alone). `check-os`: `cargo check --locked --all-targets` on macOS / Windows (compile check for the release target OSes). Both are `needs` of auto-tag.
 - Workflows keep top-level `permissions` minimal (`contents: read`; cd.yml also `actions: read`), and only the jobs that need to write (auto-tag / publish-github-release / trigger-benchmark) escalate individually. Checkouts that do not push use `persist-credentials: false`.
-- `msrv`: `cargo +1.94.1 check --locked --all-targets`. When raising `rust-version` in `Cargo.toml`, update this job at the same time.
+- `msrv`: `cargo +1.99 check --locked --all-targets`. When raising `rust-version` in `Cargo.toml`, update this job at the same time.
 
 **CD (publishing, [cd.yml](../.github/workflows/cd.yml) — triggered by tag push / workflow_dispatch):**
 

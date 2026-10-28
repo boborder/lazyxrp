@@ -1,4 +1,4 @@
-use vergen_gix::{BuildBuilder, Emitter, GixBuilder};
+use vergen_gix::{Build, Emitter, Gix};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // crates.io / `cargo install` unpacks without `.git`. Always emit fallbacks
@@ -7,13 +7,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("cargo:rustc-env=VERGEN_GIT_DESCRIBE=unknown");
     println!("cargo:rustc-env=VERGEN_BUILD_DATE=unknown");
 
-    let mut emitter = Emitter::default();
-    if let Ok(build) = BuildBuilder::all_build() {
-        emitter.add_instructions(&build)?;
-    }
-    if let Ok(gix) = GixBuilder::all_git() {
-        emitter.add_instructions(&gix)?;
-    }
-    emitter.emit()?;
+    Emitter::default()
+        .add_instructions(&Build::all_build())?
+        .add_instructions(&Gix::all_git())?
+        .emit()?;
     Ok(())
 }

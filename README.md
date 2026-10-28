@@ -24,7 +24,7 @@ Watch mode uses **four top-level tabs** (jump with `1`–`4`):
 
 ## Requirements
 
-- Rust **1.94.1+** (MSRV from `Cargo.toml` `rust-version`)
+- Rust **1.99+** (MSRV from `Cargo.toml` `rust-version`)
 - Daily builds use the **`stable`** channel from [`rust-toolchain.toml`](rust-toolchain.toml)
 - Edition 2024
 - Release artifacts (`.github/workflows/cd.yml`): macOS (`x86_64`, `aarch64`), Linux (`x86_64`, `aarch64`, `i686`), Windows (`x86_64`). Verified on macOS arm64.

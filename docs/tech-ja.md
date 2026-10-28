@@ -8,7 +8,7 @@
 
 - 言語: Rust
 - Edition: 2024
-- ツールチェーン: `rust-toolchain.toml` で `channel = "stable"`（components: `rustfmt`, `clippy`）。MSRV 相当は `Cargo.toml` の `rust-version = "1.94.1"`（alloy 2.4.2 の MSRV に追従。実ビルドは stable 強制のため参考値）。
+- ツールチェーン: `rust-toolchain.toml` で `channel = "stable"`（components: `rustfmt`, `clippy`）。MSRV 相当は `Cargo.toml` の `rust-version = "1.99"`（`kobe-xrpl` 4 と `vergen-gix` 10 が要求。実ビルドは stable 強制のため参考値）。
 - 非同期ランタイム: Tokio（`Cargo.toml` は `1`、`features = ["macros", "rt-multi-thread", "sync", "time", "net", "io-util"]`。`full` は使わない）
 - 対象OS: リリース対象は [`.github/workflows/cd.yml`](../.github/workflows/cd.yml)（README Requirements が引用）。現在確認しているのは macOS arm64。
 
@@ -25,7 +25,7 @@
 ### XRPL / 通信
 - `reqwest`（`Cargo.toml` `0.13`、`Cargo.lock` 直接依存 `0.13.5`; `default-features = false`, `features = ["json", "stream", "native-tls", "charset", "http2", "system-proxy"]` — JSON-RPC と上限付き NFT metadata/image ストリーミング）。TLS は既定の rustls/`aws-lc-rs` ではなく **native-tls**（`aws-lc-sys` の C ビルドだけでクリーンビルドの大半を占めたため。`xrpl-rust` 経路の `reqwest 0.12.x` も native-tls）。`xrpl-rust` 経路では **`reqwest 0.12.x` がロックに併存**しうる（解決は `Cargo.lock` を正とする）。
 - `xrpl-rust`（`Cargo.toml` `1.1`、`Cargo.lock` `1.3.0`）
-- `kobe-xrpl = 3.4` / `kobe-primitives = 3.4` — BIP39 secp256k1 mnemonic → BIP44 `m/44'/144'/0'/0/0` アカウント導出。
+- `kobe-xrpl = 4` / `kobe-core = 4`（4.0 より前は `kobe-primitives`） — BIP39 secp256k1 mnemonic → BIP44 `m/44'/144'/0'/0/0` アカウント導出。
 - `tokio-tungstenite` — dev-dependency のみ（`ws.rs` テスト用ローカル WS サーバ）。本体の WS は xrpl-rust 経由。
 - URL 解析は `reqwest::Url`（`url` crate の再 export。直接依存は持たない）
 - `base64 = 0.23` — XRPLF dUNL blob / validator manifest decode（`base64::engine::general_purpose::STANDARD`）
@@ -46,8 +46,8 @@
 - `toml`（ユーザー `config.toml` を `std::fs` + `toml::from_str` で読む。旧 `config` crate は 0.6.1 で削除）
 - `directories`（`Cargo.toml` `6`、`Cargo.lock` `6.0.0` — `ProjectDirs`）
 - `serde`（`Cargo.toml` `1`、`Cargo.lock` `1.0.229`、`derive`）
-- `serde_json`（`Cargo.toml` `1`、`Cargo.lock` `1.0.151`）
-- `json5`（`Cargo.toml` `1`、`Cargo.lock` 直接依存 `1.3.1` — リポジトリ直下の埋め込み `config.json5` のパース）
+- `serde_json`（`Cargo.toml` `1`、`Cargo.lock` `1.0.154`）
+- `json5`（`Cargo.toml` `1`、`Cargo.lock` 直接依存 `1.3.4` — リポジトリ直下の埋め込み `config.json5` のパース）
 
 ### 監視性・障害対応
 
@@ -71,8 +71,7 @@
 
 - ビルドスクリプト: `build.rs`
 - build-dependencies:
-  - `anyhow`（`Cargo.toml` `1`、`Cargo.lock` `1.0.104`）
-  - `vergen-gix`（`Cargo.toml` `9`、`Cargo.lock` `9.1.0`; `build`）
+  - `vergen-gix`（`Cargo.toml` `10`、`Cargo.lock` `10.0.3`; `build`）
 - Release profile:
   - `codegen-units = 1`
   - `lto = "fat"`

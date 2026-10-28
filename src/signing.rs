@@ -2,7 +2,7 @@
 
 use std::io::{self, Write};
 
-use kobe_primitives::Derive;
+use kobe_core::Derive;
 use secrecy::{ExposeSecret, SecretString};
 use serde_json::Value;
 
@@ -46,7 +46,7 @@ impl SigningCredential {
 
     pub fn from_bip39_mnemonic(mnemonic: impl Into<String>) -> color_eyre::Result<Self> {
         let mnemonic = mnemonic.into();
-        kobe_primitives::Wallet::from_mnemonic(&mnemonic, None)
+        kobe_core::Wallet::from_mnemonic(&mnemonic, None)
             .map_err(|e| color_eyre::eyre::eyre!("invalid BIP39 mnemonic: {e}"))?;
         Ok(Self::Bip39Mnemonic(SecretString::from(mnemonic)))
     }
@@ -55,7 +55,7 @@ impl SigningCredential {
         match self {
             Self::FamilySeed(seed) => wallet_from_family_seed(seed.expose_secret(), 0),
             Self::Bip39Mnemonic(mnemonic) => {
-                let wallet = kobe_primitives::Wallet::from_mnemonic(mnemonic.expose_secret(), None)
+                let wallet = kobe_core::Wallet::from_mnemonic(mnemonic.expose_secret(), None)
                     .map_err(|e| color_eyre::eyre::eyre!("BIP39 wallet: {e}"))?;
                 let account = kobe_xrpl::Deriver::new(&wallet)
                     .derive(0)

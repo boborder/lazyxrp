@@ -10,6 +10,10 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 - `-x book` / `-x amm` accept a currency symbol such as `RLUSD` (sent as its 160-bit code, same rule as `xrpl.currency`); before, anything that was not a 3-letter or hex code failed with `bad currency`.
 - DESIGN.md: TX detail / validator overlays close with `Enter` (`Esc` was documented but is not bound).
 
+### Changed
+
+- Dependencies: `kobe-xrpl` 4 (with `kobe-core` 4, replacing `kobe-primitives`), `vergen-gix` 10, everything else updated within semver. MSRV (`rust-version`) is now **1.99**.
+
 ## [0.9.1] - 2026-10-26
 
 ### Changed
