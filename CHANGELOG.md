@@ -4,6 +4,10 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ## [Unreleased]
 
+### Fixed
+
+- TUI TrustSet refuses a malformed currency (e.g. `US D`) before simulate with `invalid IOU currency code`, like Payment; before, it went to the node raw and only the node rejected it.
+
 ## [0.10.0] - 2026-10-28
 
 ### Fixed

@@ -40,6 +40,7 @@
 
 - 症状: 2026-10-28 の testnet 書き込み約 10 件のうち 2 件（`-x send`・`-x offer-create`）が `expired: not validated by LastLedgerSequence` で終わった。`rp -t <hash>` では tx は存在するが `validated: false`。再実行ですぐ validated になった。続けて 12 件送信した追試ではすべて validated。
 - 原因は未確定: Fee は `simulate` の値、`LastLedgerSequence` は `ledger_index + 20`（P-006）。simulate 後に手数料が跳ねると queue に残ったまま期限切れになる可能性がある。再現できないため手数料ロジックは変更していない。
+- 別の仮説: 2 件とも `-x faucet` で資金供給した直後の最初の書き込みだった（`LastLedgerSequence` の基準が閉じた直後の ledger）。12 件の追試も faucet 直後の 1 件目が validated だったため弱まったが、否定はされていない。
 - 再発時（特に mainnet）の次の手: 変更する前に、失敗した hash と並べて `-x info` の `OpenLedgerFee` を記録する。
 
 ## 運用メモ

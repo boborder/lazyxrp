@@ -1484,7 +1484,7 @@ pub fn create_and_sign_trust_set(
     use xrpl::models::transactions::trust_set::TrustSet;
     use xrpl::models::transactions::{CommonFields, TransactionType};
 
-    let currency = require_nonempty_field("currency", currency)?;
+    let currency = require_trust_set_currency(currency)?;
 
     let issuer = require_classic_address_shape("issuer", issuer)?;
     let limit = require_nonempty_field("limit", limit)?;
@@ -1518,7 +1518,7 @@ pub fn build_trust_set_tx_json_for_simulate(
     use xrpl::models::transactions::trust_set::TrustSet;
     use xrpl::models::transactions::{CommonFields, TransactionType};
 
-    let currency = require_nonempty_field("currency", currency)?;
+    let currency = require_trust_set_currency(currency)?;
     let issuer = require_classic_address_shape("issuer", issuer)?;
     let limit = require_nonempty_field("limit", limit)?;
 
@@ -1535,6 +1535,16 @@ pub fn build_trust_set_tx_json_for_simulate(
     };
 
     serde_json::to_value(&tx).map_err(|e| color_eyre::eyre::eyre!("trust_set tx_json: {e}"))
+}
+
+/// TrustSet currency: non-empty and a valid IOU code (3 chars or 40 hex) — the composer has
+/// already turned a symbol into its code, so `US D` is refused here instead of by the node.
+fn require_trust_set_currency(currency: &str) -> color_eyre::Result<&str> {
+    let currency = require_nonempty_field("currency", currency)?;
+    if !is_valid_iou_currency(currency) {
+        color_eyre::eyre::bail!("invalid IOU currency code: {currency}");
+    }
+    Ok(currency)
 }
 
 /// Lowercase ASCII domain → hex string for `AccountSet.domain`.
@@ -2577,17 +2587,22 @@ mod tests {
         assert!(v.get("Flags").is_none() || v["Flags"] == 0);
     }
 
+    /// TC-370: TrustSet refuses an empty or malformed currency (`US D`, a raw `RLUSD` that
+    /// skipped `iou_currency_from_input`) before simulate.
     #[test]
-    fn build_trust_set_rejects_empty_currency() {
-        let err = build_trust_set_tx_json_for_simulate(
-            "rSenderxxxxxxxxxxxxxxxxxxxxxxxXX",
-            "  ",
-            "rIssuerxxxxxxxxxxxxxxxxxxxxxxxXX",
-            "1",
-            1,
-        )
-        .expect_err("empty currency");
-        assert!(format!("{err}").contains("currency"));
+    fn build_trust_set_rejects_empty_or_malformed_currency() {
+        let issuer = "rJrRMgiRgrU6hDF4pgu5DXQdWyPbY35ErN";
+        for bad in ["  ", "US D", "RLUSD"] {
+            let err = build_trust_set_tx_json_for_simulate(
+                "rSenderxxxxxxxxxxxxxxxxxxxxxxxXX",
+                bad,
+                issuer,
+                "1",
+                1,
+            )
+            .expect_err(bad);
+            assert!(format!("{err}").contains("currency"), "{bad:?}: {err}");
+        }
     }
 
     #[test]
