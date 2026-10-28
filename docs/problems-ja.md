@@ -36,6 +36,12 @@
 
 - 自動チェックはない。編集時は `X.md` と `X-ja.md` の ID 集合（TC/FR/NFR/S/R/I/P/F）を比較する（maintenance-ja.md 参照）。
 
+### P-010: testnet の書き込みがまれに期限切れ（`LastLedgerSequence`）
+
+- 症状: 2026-10-28 の testnet 書き込み約 10 件のうち 2 件（`-x send`・`-x offer-create`）が `expired: not validated by LastLedgerSequence` で終わった。`rp -t <hash>` では tx は存在するが `validated: false`。再実行ですぐ validated になった。続けて 12 件送信した追試ではすべて validated。
+- 原因は未確定: Fee は `simulate` の値、`LastLedgerSequence` は `ledger_index + 20`（P-006）。simulate 後に手数料が跳ねると queue に残ったまま期限切れになる可能性がある。再現できないため手数料ロジックは変更していない。
+- 再発時（特に mainnet）の次の手: 変更する前に、失敗した hash と並べて `-x info` の `OpenLedgerFee` を記録する。
+
 ## 運用メモ
 
 - macOS の `ld: ... built for newer 'macOS' version ...` は、現状は警告扱い

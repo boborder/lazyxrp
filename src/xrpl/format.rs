@@ -378,6 +378,7 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    /// TC-008-009: drops_to_xrp conversion; invalid string is zero
     /// `drops_to_xrp`: valid drops render with 6 decimals; invalid input
     /// yields "0.000000".
     #[test]
@@ -416,6 +417,7 @@ mod tests {
         }
     }
 
+    /// TC-010-012: format_amount None / XRP drops / issued object
     /// `format_amount`: None → "-", XRP drops string → XRP amount, and an
     /// issued-currency object renders `value CUR`.
     #[test]
@@ -603,6 +605,7 @@ mod tests {
         assert!(quote_source_currency("USD", true).is_err());
     }
 
+    /// TC-206: Send max currency/issuer mismatch and slippage overflow → Err
     /// TC-193: quote → Send max spec — cheapest alternative, slippage rounds up, no path → Err.
     #[test]
     fn send_max_spec_from_quote_table() {

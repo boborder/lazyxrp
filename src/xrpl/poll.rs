@@ -1034,6 +1034,7 @@ mod tests {
 
     use super::*;
 
+    /// TC-350: stale write refused after network switch
     /// TC-362: a write composed on one network is refused (nothing signed) when another is
     /// active at dequeue; the refusal is the command's own error action. Reads pass.
     #[test]
@@ -1063,6 +1064,7 @@ mod tests {
         assert!(stale_write_refusal(&PollCommand::Account, Network::Testnet).is_none());
     }
 
+    /// TC-173: tab gates
     /// Poll gates are tab-scoped: each predicate polls only on its own tab.
     #[test]
     fn should_poll_tab_gates() {

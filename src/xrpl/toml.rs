@@ -138,6 +138,7 @@ pub fn parse_xrpl_toml(
 mod tests {
     use super::*;
 
+    /// TC-177: toml domain plain hostname only
     /// A manifest-supplied domain cannot smuggle userinfo, port, path or query into the URL.
     #[test]
     fn plain_hostname_rejects_url_metacharacters() {
@@ -160,6 +161,7 @@ mod tests {
         assert!(is_plain_hostname("val-1.example.co.uk"));
     }
 
+    /// TC-177: private / reserved domains refused with no request
     /// Non-public hosts are refused before any request (no DNS or network needed for literals).
     #[tokio::test]
     async fn fetch_refuses_private_and_invalid_domains() {
@@ -274,6 +276,7 @@ attestation = "other-sig"
 mod node_key_tests {
     use super::*;
 
+    /// TC-355: base58 node key and hex compared as bytes
     /// xrp-ledger.toml lists validators in base58 node format (`nH…`); the expected key (hex from
     /// a manifest) must match it, either way round.
     #[test]

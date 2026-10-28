@@ -346,6 +346,7 @@ mod tests {
             .expect("join");
     }
 
+    /// TC-354: silent socket times out and reconnects
     /// A socket that goes silent (no frames, no close) is abandoned after the read timeout and
     /// the loop reconnects.
     #[tokio::test]

@@ -53,7 +53,7 @@ cargo deny check
 | TC-027-029,031-032 | P1 | `src/config/keybindings.rs` | parse_key_event — modifier composition, case insensitivity, invalid keys error |
 | TC-033-035, TC-092 | P1 | `src/config/mod.rs` | Config source precedence — file overrides default, `XRPL_RPC_SERVER` env overrides file, XDG resolution, `~/.config` fallback |
 | TC-036 | P2 | `src/config/keybindings.rs` | Config validation — invalid key sequence format |
-| TC-037 | P0 | `src/network.rs` | Network::default — is Mainnet (`#[default]` on the enum; no dedicated test) |
+| TC-037 | P0 | `src/network.rs` | Network::default — is Mainnet (`#[default]` on the enum; no automated test) |
 | TC-038-040 | P0 | `src/network.rs` | Network::from_str — roundtrip mainnet/testnet/devnet, case-insensitive, unknown errors |
 | TC-041 | P1 | `src/network.rs` | Network::is_production — correct boolean |
 | TC-042 | P0 | `src/config/mod.rs` | `XRPL_NETWORK` overrides the file's network in `Config::new`; unparsable / `" testnet"` values are ignored |
@@ -72,7 +72,7 @@ cargo deny check
 | TC-057 | P2 | `src/xrpl/cli_exec.rs` | CLI tx-history — local JSON-RPC succeeds |
 | TC-058 | P1 | `src/cli.rs` | CLI — invalid parameters error; removed `watch` subcommand no longer parses |
 | TC-059 | P2 | `src/xrpl/cli_exec.rs` | CLI — invalid classic account address fails before RPC connect |
-| TC-060 | P3 | `src/app.rs` | Watch mode — tab cycling/quit/refresh covered by TC-061–065 (former 4-tab construction test removed: asserted constructor defaults) |
+| TC-060 | P3 | `src/app.rs` | Watch mode — tab cycling/quit/refresh covered by TC-061–065 (former 4-tab construction test removed: asserted constructor defaults); no automated test of its own |
 | TC-061 | P1 | `src/app.rs` | Watch mode — `q` key sets `should_quit` |
 | TC-062-063 | P2 | `src/app.rs` | Watch mode — `r`/`b` send Account/Book PollCommand; a second press within 500 ms is debounced |
 | TC-064 | P2 | `src/app.rs` | Watch mode — TabNext/TabPrev wrap around panels |

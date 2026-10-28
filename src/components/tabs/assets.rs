@@ -118,6 +118,7 @@ impl Component for AssetsTab {
 mod tests {
     use super::*;
 
+    /// TC-159: Assets focus cycles forward
     #[test]
     fn focus_next_cycles_nft_objects_pay_and_escrow() -> color_eyre::Result<()> {
         let mut tab = AssetsTab::new();
@@ -140,6 +141,7 @@ mod tests {
         Ok(())
     }
 
+    /// TC-159: Assets focus cycles backward
     #[test]
     fn focus_prev_wraps_from_nft_to_escrow() -> color_eyre::Result<()> {
         let mut tab = AssetsTab::new();

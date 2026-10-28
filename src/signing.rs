@@ -1740,6 +1740,7 @@ mod tests {
         }
     }
 
+    /// TC-176: node Fee above MAX_NODE_FEE_DROPS rejected
     /// A node-chosen Fee above the cap is refused before anything is signed.
     #[test]
     fn sequence_fee_ledger_from_simulate_rejects_excessive_fee() {
@@ -1754,6 +1755,7 @@ mod tests {
         assert!(err.to_string().contains("exceeds"));
     }
 
+    /// TC-207: tx hash = SHA-512Half(TXN\0 ‖ blob)
     /// Transaction ID = SHA-512Half(`TXN\0` ‖ blob) (vector from an independent hashlib run);
     /// non-hex blobs are rejected rather than hashed.
     #[test]
@@ -1870,6 +1872,7 @@ mod tests {
         assert!(build_direct_mint_memo_data("not-hex-zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz").is_err());
     }
 
+    /// TC-347: EIP-55 checksum enforced for mixed case
     /// Mixed-case (any uppercase hex letter) recipients must carry a valid EIP-55 checksum;
     /// all-lowercase stays accepted.
     #[test]

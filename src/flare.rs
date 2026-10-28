@@ -1825,6 +1825,7 @@ mod tests {
         (info, requests)
     }
 
+    /// TC-339: vault positions (zero shares / failing read skipped)
     /// TC-241: `fetch_smart_account_info` decodes the controller views (personal account,
     /// deployed flag from `eth_getCode`, nonce, operators, both instruction fees, FXRP balance)
     /// and rejects an out-of-range remote value with an error instead of a panic.
@@ -1935,6 +1936,7 @@ mod tests {
         assert_eq!(bips_to_percent_display(12), "0.12%");
     }
 
+    /// TC-172: FTSO feed normalization
     #[test]
     fn to_valid_flare_pairs_normalizes_and_dedups() {
         let feeds = vec![
@@ -2031,6 +2033,7 @@ mod tests {
         }
     }
 
+    /// TC-346: write chain gate on reported chain id
     /// TC-360: chain ids are 14 / 19 / 114; a write needs the reported id to equal the configured
     /// network's, and Flare mainnet (by reported id) needs `--yes`.
     #[test]
@@ -2080,6 +2083,7 @@ mod tests {
         server.await.expect("join").expect("exactly one request");
     }
 
+    /// TC-346: send_capped fee cap
     /// TC-361: the gas cost cap is `gas × max fee`, saturating.
     #[test]
     fn tx_fee_cap() {
@@ -2089,6 +2093,7 @@ mod tests {
         assert!(check_tx_fee(u64::MAX, u128::MAX).is_err());
     }
 
+    /// TC-172: batched getFeedsById fetch (live)
     #[tokio::test]
     #[ignore = "live network dependency"]
     async fn flare_default_feeds_fetch_live() -> color_eyre::Result<()> {
@@ -2119,6 +2124,7 @@ mod tests {
         Ok(())
     }
 
+    /// TC-172: unknown feed fails cleanly (live)
     /// Unknown feed id: batch reverts, fee query is attempted, per-feed
     /// fallback skips it, and the empty result is a clean error (no panic).
     #[tokio::test]
@@ -2289,6 +2295,7 @@ mod tests {
         );
     }
 
+    /// TC-339: mainnet getVaults decode (live)
     /// The registered Smart Account vault list decodes on the real controller (mainnet): ids,
     /// addresses and types line up, and a fresh account holds no position.
     #[tokio::test]

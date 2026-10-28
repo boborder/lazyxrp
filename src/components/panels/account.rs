@@ -227,6 +227,7 @@ mod tests {
         crate::test_support::render_to_string(100, 12, |f| panel.draw(f, f.area()).unwrap())
     }
 
+    /// TC-160: Account panel loading / populated
     #[test]
     fn account_panel_renders_loading_then_balance_and_reserve() {
         let mut panel = AccountPanel::default();

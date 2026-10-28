@@ -109,6 +109,7 @@ impl Component for AmmPanel {
 mod tests {
     use super::*;
 
+    /// TC-161: AMM panel loading / pool summary
     #[test]
     fn amm_panel_renders_loading_and_pool_summary() {
         let mut panel = AmmPanel::default();

@@ -135,6 +135,7 @@ mod tests {
     use super::*;
     use crate::xrpl::PriceStats;
 
+    /// TC-162: Oracle panel not-configured / price table
     #[test]
     fn oracle_panel_renders_not_configured_and_price_rows() {
         let mut panel = OraclePanel::default();

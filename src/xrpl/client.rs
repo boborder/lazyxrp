@@ -696,6 +696,7 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    /// TC-179: chunked body over 16 MiB rejected while streaming
     /// A chunked body (no Content-Length) larger than the cap is cut off while reading.
     #[tokio::test]
     async fn chunked_body_over_cap_is_rejected_while_streaming() {
@@ -1033,6 +1034,7 @@ mod submit_tests {
         (url, server, seen)
     }
 
+    /// TC-352: NetworkID only above 1024
     /// `NetworkID` is carried only when the network id is > 1024: mainnet/testnet omit it,
     /// Xahau / Xahau-testnet sign 21337 / 21338 into the blob and into the simulate request.
     #[tokio::test]
@@ -1092,6 +1094,7 @@ mod submit_tests {
         }
     }
 
+    /// TC-351: lost submit reply → tx lookup, no replay
     /// Lost submit reply: one submit attempt only, then the local hash is looked up and the
     /// real outcome reported.
     #[tokio::test]
@@ -1110,6 +1113,7 @@ mod submit_tests {
         server.abort();
     }
 
+    /// TC-351: lost submit reply → applied failure
     /// Applied with a failure code after the reply was lost → error naming the code.
     #[tokio::test]
     async fn lost_submit_reply_reports_applied_failure() {
@@ -1126,6 +1130,7 @@ mod submit_tests {
         server.abort();
     }
 
+    /// TC-351: lost submit reply → explicit unknown
     /// Not found after the lookups → explicit unknown-outcome error carrying the hash.
     #[tokio::test]
     async fn lost_submit_reply_not_found_is_explicit_unknown() {

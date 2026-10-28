@@ -80,6 +80,7 @@ mod tests {
 
     const CLASSIC: &str = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh";
 
+    /// TC-166: empty / invalid destination rejected
     #[test]
     fn resolve_payment_destination_rejects_invalid() {
         assert!(resolve_payment_destination("").is_err());
@@ -88,6 +89,7 @@ mod tests {
         assert!(err.to_string().contains("invalid destination"), "{err}");
     }
 
+    /// TC-166: X-address tag preserved, classic has no tag
     #[test]
     fn resolve_payment_destination_classification() {
         let xaddr = classic_address_to_xaddress(CLASSIC, Some(42), false).expect("xaddr");
@@ -102,6 +104,7 @@ mod tests {
         assert!(resolved.xaddress_is_test.is_none());
     }
 
+    /// TC-166: X-address network guard
     #[test]
     fn xaddress_network_guard_branches() {
         let mainnet_xaddr = classic_address_to_xaddress(CLASSIC, None, false).expect("xaddr");

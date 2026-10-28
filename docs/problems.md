@@ -36,6 +36,12 @@
 
 - There is no automated check. When editing, compare the ID sets (TC/FR/NFR/S/R/I/P/F) of `X.md` vs `X-ja.md` (see maintenance.md).
 
+### P-010: Occasional testnet write expiry (`LastLedgerSequence`)
+
+- Symptom: 2 of about 10 testnet writes on 2026-10-28 (`-x send`, `-x offer-create`) ended with `expired: not validated by LastLedgerSequence`. `rp -t <hash>` showed the tx known but `validated: false`; a retry validated at once. A follow-up run of 12 sends in a row all validated.
+- Unconfirmed cause: the Fee comes from `simulate` and `LastLedgerSequence` is `ledger_index + 20` (P-006). A fee spike after simulate could leave the tx queued until it expires. Not reproduced, so the fee logic is unchanged.
+- Next step if it recurs (especially on mainnet): record `-x info`'s `OpenLedgerFee` next to the failing hash before changing anything.
+
 ## Operational notes
 
 - The macOS `ld: ... built for newer 'macOS' version ...` message is currently treated as a warning

@@ -338,6 +338,7 @@ mod tests {
         panel
     }
 
+    /// TC-365: paste goes to filter only while editing
     /// A pasted tx hash lands in the filter only while it is being edited; otherwise it is dropped.
     #[test]
     fn paste_goes_to_filter_only_while_editing() {

@@ -90,6 +90,7 @@ mod tests {
         assert_eq!(next_backoff_secs(100), 60);
     }
 
+    /// TC-004-005: json_str nested path / missing path
     /// TC: json_str returns the string at the nested path, or "" when missing.
     #[test]
     fn json_str_path_access() {
@@ -101,6 +102,7 @@ mod tests {
         assert_eq!(json_str(&missing, &["x"]), "");
     }
 
+    /// TC-006-007: json_u32 number / string coercion, missing or non-numeric is zero
     /// TC: json_u32 coerces numbers and string numbers, else returns 0.
     #[test]
     fn json_u32_coercion() {

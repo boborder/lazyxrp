@@ -141,7 +141,7 @@ fn parse_color(s: &str) -> Option<Color> {
 mod tests {
     use super::*;
 
-    /// TC-019-022: parse_style — empty yields default, fg/bg mapping, modifiers combined, gray==grey
+    /// TC-019-022, TC-023: parse_style — empty yields default, fg/bg mapping, modifiers combined, gray==grey
     #[test]
     fn parse_style_spec_mapping() {
         // Empty spec yields the default style.

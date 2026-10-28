@@ -198,6 +198,7 @@ mod tests {
         ASCII_ART.trim_start_matches('\n').lines().collect()
     }
 
+    /// TC-171: splash_art_column centering / width edges
     #[test]
     fn splash_art_column_geometry() {
         // Wide area shows full art width, centered horizontally.
@@ -228,6 +229,7 @@ mod tests {
         );
     }
 
+    /// TC-171: splash lines fit
     #[test]
     fn splash_ascii_lines_show_every_art_line_when_height_allows() {
         for tick in [0usize, 5, 9] {
@@ -240,6 +242,7 @@ mod tests {
         }
     }
 
+    /// TC-171: splash lines tight
     #[test]
     fn splash_ascii_lines_show_bottom_lines_when_height_is_tight() {
         let art = art_lines();

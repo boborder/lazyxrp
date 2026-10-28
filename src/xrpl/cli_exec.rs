@@ -979,6 +979,8 @@ mod tests {
                 .collect())
         }
 
+        /// TC-051, TC-052, TC-053, TC-054, TC-055, TC-056, TC-057, TC-157: read-only CLI
+        /// commands (account/book/summary/nfts/lines/amm/tx-history) succeed against local JSON-RPC
         /// TC-050–057, TC-066: read-only CLI commands use a deterministic
         /// local JSON-RPC boundary instead of the public internet.
         #[tokio::test]
@@ -1854,6 +1856,7 @@ mod tests {
             Ok(())
         }
 
+        /// TC-209: validated after LLS passes is re-checked → Ok
         /// TC-202: write wait — polls `tx` until validated (tes → Ok, tec → Err naming the code);
         /// not found once the validated ledger passes LastLedgerSequence → Err (expired);
         /// a node that never advances (or omits `validated_ledger`) hits the time limit → Err.

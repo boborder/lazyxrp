@@ -53,7 +53,7 @@ cargo deny check
 | TC-027-029,031-032 | P1 | `src/config/keybindings.rs` | parse_key_event — 修飾キーの組み合わせ、大文字小文字非依存、不正なキーはエラー |
 | TC-033-035, TC-092 | P1 | `src/config/mod.rs` | Config ソース優先順位 — ファイルがデフォルトを上書き、`XRPL_RPC_SERVER` 環境変数がファイルを上書き、XDG 解決、`~/.config` フォールバック |
 | TC-036 | P2 | `src/config/keybindings.rs` | Config 検証 — 不正なキーシーケンス形式 |
-| TC-037 | P0 | `src/network.rs` | Network::default — Mainnet である（enum の `#[default]`。専用テストは無い） |
+| TC-037 | P0 | `src/network.rs` | Network::default — Mainnet である（enum の `#[default]`。自動テストなし） |
 | TC-038-040 | P0 | `src/network.rs` | Network::from_str — mainnet/testnet/devnet のラウンドトリップ、大文字小文字非依存、不明はエラー |
 | TC-041 | P1 | `src/network.rs` | Network::is_production — 正しい真偽値 |
 | TC-042 | P0 | `src/config/mod.rs` | `Config::new` で `XRPL_NETWORK` がファイルの network を上書きする。パース不能／`" testnet"` の値は無視される |
@@ -72,7 +72,7 @@ cargo deny check
 | TC-057 | P2 | `src/xrpl/cli_exec.rs` | CLI tx-history — ローカル JSON-RPC で成功 |
 | TC-058 | P1 | `src/cli.rs` | CLI — 不正なパラメータはエラー。削除済みの `watch` サブコマンドはもうパースされない |
 | TC-059 | P2 | `src/xrpl/cli_exec.rs` | CLI — 不正なクラシックアドレスは RPC 接続前に失敗する |
-| TC-060 | P3 | `src/app.rs` | Watch モード — タブ巡回／終了／更新は TC-061–065 でカバー（旧 4 タブ構築テストは、コンストラクタのデフォルトを検証するだけだったため削除） |
+| TC-060 | P3 | `src/app.rs` | Watch モード — タブ巡回／終了／更新は TC-061–065 でカバー（旧 4 タブ構築テストは、コンストラクタのデフォルトを検証するだけだったため削除）。この行自体の自動テストなし |
 | TC-061 | P1 | `src/app.rs` | Watch モード — `q` キーで `should_quit` が立つ |
 | TC-062-063 | P2 | `src/app.rs` | Watch モード — `r`/`b` で Account/Book の PollCommand を送る。500 ms 以内の 2 回目の押下はデバウンスされる |
 | TC-064 | P2 | `src/app.rs` | Watch モード — TabNext/TabPrev でパネルを巡回する |

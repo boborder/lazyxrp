@@ -583,6 +583,7 @@ mod tests {
         );
     }
 
+    /// TC-181: group/world-readable credential config warns
     /// S-003: a group/world-readable credential-bearing config yields a warning (shown on
     /// stderr, since it runs before the tracing subscriber exists); a 0600 file does not.
     #[cfg(unix)]
@@ -806,6 +807,7 @@ seed = "sEdFileSeedValueNotReal1234567890"
         Ok(())
     }
 
+    /// TC-026: Config::new keeps default keybindings (untouched `<q>` → Quit)
     /// TC-195: user `[keybindings.Splash]` in config.toml adds keys and overrides a default
     /// binding; untouched defaults survive the merge.
     #[test]
@@ -923,6 +925,7 @@ network = "mainnet"
         assert_eq!(config_dir(), PathBuf::from("/tmp/lazyxrp-ok/cfg"));
     }
 
+    /// TC-359: only bindable actions allowed
     /// Keybindings may only bind payload-free safe actions; write/payload variants are
     /// rejected at load.
     #[test]
@@ -942,6 +945,7 @@ network = "mainnet"
         );
     }
 
+    /// TC-359: `~` paths expand
     /// A leading `~` in env / file directory settings resolves to HOME.
     #[test]
     fn tilde_paths_expand_to_home() {
@@ -960,6 +964,7 @@ network = "mainnet"
         assert_eq!(c.resolved_config_dir(), PathBuf::from("~other/x"));
     }
 
+    /// TC-359: credential precedence matrix
     /// Credential precedence: the highest-priority source wins; the other kind from lower
     /// sources is dropped. Same-level seed+mnemonic stays set (rejected by the caller).
     #[test]

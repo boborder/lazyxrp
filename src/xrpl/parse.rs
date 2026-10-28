@@ -675,6 +675,7 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    /// TC-180: control chars stripped from submit error and hash
     /// Remote text in CLI-visible errors/hashes carries no terminal control characters.
     #[test]
     fn submit_response_strings_are_stripped_of_control_chars() {
@@ -728,6 +729,7 @@ mod tests {
         assert!(rows[1].is_mutable);
     }
 
+    /// TC-014: account_lines response → TrustLineRow vec
     #[test]
     fn parse_account_lines_maps_lines_to_trust_rows() {
         let v = json!({
@@ -1084,6 +1086,7 @@ mod tests {
         assert!(!is_not_found_error("tecUNFUNDED_PAYMENT"));
     }
 
+    /// TC-353: terQUEUED is queued success
     /// `terQUEUED` is provisional success: reported queued with the hash; other `ter*` still fail.
     #[test]
     fn parse_submit_success_treats_terqueued_as_queued() {
@@ -1198,6 +1201,7 @@ mod tests {
         assert_eq!(sim.tx_json["LastLedgerSequence"], 21_430_170);
     }
 
+    /// TC-208: simulate engine_result(_message) control chars stripped
     /// Node-supplied simulate result strings are stripped of control chars at parse time.
     #[test]
     fn parse_simulate_result_sanitizes_result_strings() {
@@ -1213,6 +1217,7 @@ mod tests {
         assert_eq!(sim.tx_json["Memo"], "keep\u{1b}raw");
     }
 
+    /// TC-204: simulate Sequence / LastLedgerSequence bound to request
     /// Simulate Sequence must equal the requested one and LastLedgerSequence must sit
     /// in (ledger_index, ledger_index + MAX_LLS_WINDOW].
     #[test]

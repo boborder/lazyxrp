@@ -716,6 +716,7 @@ mod endpoint_security_tests {
         assert!(!refuses_insecure_signing("https://rpc", "wss://ws", true));
     }
 
+    /// TC-175: Flare `http://` RPC rejected without flag, refused for signing
     /// Flare RPC follows the XRPL endpoint rules: https only, and no signing over http.
     #[test]
     fn flare_endpoint_requires_https_and_refuses_insecure_signing() {
@@ -851,6 +852,7 @@ mod command_resolve_tests {
         }
     }
 
+    /// TC-349: C2 Payment refused when paused or over cap
     /// TC-363: `sa-memo` / `sa-call` refuse a paused mint and an amount over the minting cap,
     /// like the TUI composer does.
     #[test]

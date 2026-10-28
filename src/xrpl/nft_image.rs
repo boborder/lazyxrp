@@ -362,6 +362,7 @@ fn find_image_uri(value: &Value) -> Option<String> {
 mod tests {
     use super::*;
 
+    /// TC-364: IPFS spellings normalize
     /// Real-world IPFS spellings (including the doubled `ipfs://ipfs/`) all reach the same
     /// gateway path.
     #[test]
@@ -388,6 +389,7 @@ mod tests {
         assert_eq!(ipfs_path("ipfs://日本語"), Some("日本語"));
     }
 
+    /// TC-364: display URI via public gateway
     #[test]
     fn display_uri_converts_ipfs_to_public_gateway() {
         assert_eq!(
@@ -400,6 +402,7 @@ mod tests {
         );
     }
 
+    /// TC-364: data URI base64 only
     #[test]
     fn data_uri_decodes_base64_only() {
         let (bytes, mime) = decode_data_uri("data:image/png;base64,aGk=").unwrap();
@@ -424,6 +427,7 @@ mod tests {
         );
     }
 
+    /// TC-177: private / reserved literals refused
     #[test]
     fn rejects_unsafe_or_unsupported_uris() {
         let err = |uri: &str| resolve_uri(uri).unwrap_err().to_string();
@@ -775,6 +779,7 @@ mod tests {
         assert!(err.to_string().contains("private host"), "{err}");
     }
 
+    /// TC-358: IPv6 literal NFT URIs
     /// IPv6 literals keep their brackets in `host_str`: a private one is refused as private (not
     /// a DNS failure) and a public one passes the guard without any lookup.
     #[tokio::test]

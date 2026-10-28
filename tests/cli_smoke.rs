@@ -78,6 +78,7 @@ fn command_with_isolated_env(program: &str, name: &str) -> (Command, TempRoot) {
     (command, root)
 }
 
+/// TC-158: `lazyxrp` argv parse error exits non-zero
 #[test]
 fn lazyxrp_binary_rejects_exec_without_subcommand() {
     let (mut command, _root) =
@@ -89,6 +90,7 @@ fn lazyxrp_binary_rejects_exec_without_subcommand() {
     assert!(stderr.contains("requires a script subcommand"), "{stderr}");
 }
 
+/// TC-158: `lazyxrp` renders local-RPC output
 #[test]
 fn lazyxrp_binary_executes_info_against_local_rpc() {
     let (rpc_url, server) = spawn_rpc(
@@ -119,6 +121,7 @@ fn lazyxrp_binary_executes_info_against_local_rpc() {
     assert!(stdout.contains("\"hostid\": \"smoke\""), "{stdout}");
 }
 
+/// TC-158: `rp` renders local-RPC output
 #[test]
 fn rp_binary_queries_account_against_local_rpc() {
     let (rpc_url, server) = spawn_rpc(

@@ -415,6 +415,7 @@ mod tests {
         assert_eq!(expired.spans[0].style, theme::warning_style());
     }
 
+    /// TC-169: identity + dUNL + fetching
     #[test]
     fn validator_detail_renders_identity_dunl_and_fetching_state() {
         let row = row(Some("xrplf.org"), None);
@@ -435,6 +436,7 @@ mod tests {
         assert!(!out.contains("Raw TOML"));
     }
 
+    /// TC-169: verified TOML, rotated master, raw dump
     #[test]
     fn validator_detail_renders_verified_toml_rotated_master_and_raw_dump() {
         let row = row(Some("xrplf.org"), Some("EDFFFF0099AABBCC"));
@@ -466,6 +468,7 @@ mod tests {
         assert!(out.contains("node = \"wss://a.b\""));
     }
 
+    /// TC-169: missing manifest + TOML error
     #[test]
     fn validator_detail_renders_missing_manifest_and_toml_error_state() {
         let row = DunlValidatorRow {

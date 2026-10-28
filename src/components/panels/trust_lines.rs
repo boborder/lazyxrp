@@ -124,6 +124,7 @@ mod tests {
     use super::*;
     use crate::xrpl::ArcValue;
 
+    /// TC-163: Trust-lines panel loading / empty / populated
     #[test]
     fn trust_lines_panel_renders_loading_empty_and_rows() {
         let mut panel = TrustLinesPanel::default();

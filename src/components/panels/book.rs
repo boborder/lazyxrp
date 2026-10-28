@@ -168,6 +168,7 @@ mod tests {
         crate::test_support::render_to_string(100, 14, |f| panel.draw(f, f.area()).unwrap())
     }
 
+    /// TC-160: Book panel loading / empty / populated
     #[test]
     fn book_panel_renders_loading_empty_and_offer_states() {
         let mut panel = BookPanel::default();

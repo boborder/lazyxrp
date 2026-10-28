@@ -389,6 +389,7 @@ mod tests {
         crate::test_support::render_to_string(110, 18, |f| panel.draw(f, f.area()).unwrap())
     }
 
+    /// TC-165: Server panel loading / metrics
     #[test]
     fn server_panel_renders_loading_then_metrics() {
         let mut panel = ServerPanel::new("http://local-rpc".into());

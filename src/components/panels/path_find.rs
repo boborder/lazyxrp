@@ -198,6 +198,7 @@ mod tests {
     use super::*;
     use crate::xrpl::PathFindSnapshot;
 
+    /// TC-164: Path-find panel loading / route summary
     #[test]
     fn path_find_panel_renders_loading_and_route_summary() {
         let mut panel = PathFindPanel::default();

@@ -520,6 +520,7 @@ mod tests {
 mod drops_tests {
     use super::*;
 
+    /// TC-357: parse_drops is strict
     /// One strict drops grammar for every XRP amount: digits only, canonical, `<= 1e17`.
     #[test]
     fn parse_drops_is_strict() {

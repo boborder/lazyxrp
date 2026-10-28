@@ -155,6 +155,7 @@ mod tests {
         }
     }
 
+    /// TC-167: domain preferred / middle-truncated
     #[test]
     fn validator_row_label_middle_truncates_long_domain_to_fit_column() {
         assert_eq!(
@@ -168,6 +169,7 @@ mod tests {
         );
     }
 
+    /// TC-167: no-domain fallback to shortened public key
     #[test]
     fn validator_row_label_reports_no_domain_or_shortens_public_key_when_identity_missing() {
         // Short domain fits: returned as-is (prefers domain over pubkey).

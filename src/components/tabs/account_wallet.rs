@@ -160,6 +160,7 @@ mod tests {
         tab
     }
 
+    /// TC-170: wallet detection seed / mnemonic / none
     /// has_wallet reflects any signing config (seed or mnemonic), not chain selection.
     #[test]
     fn account_wallet_tab_has_wallet_matches_signing_config() {

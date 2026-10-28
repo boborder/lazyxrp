@@ -389,6 +389,7 @@ mod tests {
         Ok(())
     }
 
+    /// TC-364: URI control / bidi chars stripped
     /// The issuer controls the URI: ESC / newline / bidi override never reach the screen.
     #[test]
     fn draw_strips_control_and_bidi_chars_from_uri() -> color_eyre::Result<()> {
@@ -407,6 +408,7 @@ mod tests {
         Ok(())
     }
 
+    /// TC-364: width-aware URI column
     /// TC-178: remote multibyte `nft_id`/`uri` truncate by chars at draw time (no panic, no
     /// mid-codepoint cut); the URI column uses the available width, so a wide terminal shows
     /// the whole URI and a narrow one ellipsizes it; an empty list renders the empty state.

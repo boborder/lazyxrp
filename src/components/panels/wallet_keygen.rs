@@ -86,6 +86,7 @@ mod tests {
         }
     }
 
+    /// TC-168: keygen popup empty / seed+address+pubkey+warning
     #[test]
     fn keygen_popup_renders_seed_address_pubkey_and_offline_warning() {
         // No keygen result yet: nothing renders.

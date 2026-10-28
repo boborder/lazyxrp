@@ -243,6 +243,7 @@ mod tests {
         crate::test_support::render_to_string(48, 14, |f| panel.draw(f, f.area()).unwrap())
     }
 
+    /// TC-339: panel renders vault positions
     /// TC-245: `SmartAccountInfo` renders its values (personal account, FXRP balance, nonce,
     /// deployment, operator, both fees) and strips control characters from remote strings.
     #[test]

@@ -91,6 +91,7 @@ impl Network {
 mod tests {
     use super::*;
 
+    /// TC-038-040: Network::from_str roundtrip, case-insensitive, unknown errors
     /// Case-insensitive parse (env `XRPL_NETWORK`); unknown names error.
     #[test]
     fn from_str_contract() {
@@ -114,6 +115,7 @@ mod tests {
         assert!(<Network as clap::ValueEnum>::from_str("foonet", true).is_err());
     }
 
+    /// TC-041: Network::is_production
     #[test]
     fn is_production() {
         assert!(Network::Mainnet.is_production());

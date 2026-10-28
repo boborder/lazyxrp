@@ -267,6 +267,7 @@ mod tests {
         r#"{"blob":"eyJzZXF1ZW5jZSI6MSwiZXhwaXJhdGlvbiI6MCwidmFsaWRhdG9ycyI6W3sidmFsaWRhdGlvbl9wdWJsaWNfa2V5IjoibiIsIm1hbmlmZXN0IjoibSJ9XX0="}"#
     }
 
+    /// TC-173: stale-on-error during retry cooldown, none after clear
     /// TC-123: dUNL cache — fresh hit within TTL, stale entry served during failure cooldown,
     /// none after clear.
     #[test]
@@ -355,6 +356,7 @@ mod tests {
         }
     }
 
+    /// TC-356: field header spec vectors
     /// Field ID vectors from the XRPL serialization spec (type/code each below or above 16).
     #[test]
     fn field_header_matches_spec_vectors() {
@@ -379,6 +381,7 @@ mod tests {
         }
     }
 
+    /// TC-356: VL length spec boundaries
     /// VL prefix vectors: 192 / 193 / 12480 / 12481 / 918744 boundaries, 255 invalid.
     #[test]
     fn vl_length_matches_spec_boundaries() {
