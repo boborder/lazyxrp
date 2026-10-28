@@ -46,22 +46,22 @@ cargo deny check
 | TC-016 | P2 | `src/xrpl/parse.rs` | account_tx — レスポンスを TxRow の Vec にパース（direction 付き） |
 | TC-017 | P1 | `src/xrpl/parse.rs` | book_offers — レスポンスを OfferRow の Vec にパース |
 | TC-018 | P2 | `src/xrpl/parse.rs` | server_info/fee — レスポンスをサマリー構造体にパース |
-| TC-019-022 | P2 | `src/config.rs` | parse_style — 空はデフォルト、前景／背景のマッピング、修飾子の組み合わせ、gray==grey |
-| TC-023 | P2 | `src/config.rs` | extract_color_and_modifiers — `parse_style_spec_mapping`（TC-019-022）経由で検証。専用テストは無い |
-| TC-024-025 | P2 | `src/config.rs` | parse_color — RGB 短縮形。不明は None を返す。範囲外の `rgb`/`grayNN`/`bright colorNN` は None を返す（u8 オーバーフローなし） |
-| TC-026 | P0 | `src/config.rs` | Config::new — デフォルトのキーバインドを読み込む（未変更の `<q>` → Quit を `user_keybindings_override_and_extend_defaults`、TC-195 で検証） |
-| TC-027-029,031-032 | P1 | `src/config.rs` | parse_key_event — 修飾キーの組み合わせ、大文字小文字非依存、不正なキーはエラー |
-| TC-033-035, TC-092 | P1 | `src/config.rs` | Config ソース優先順位 — ファイルがデフォルトを上書き、`XRPL_RPC_SERVER` 環境変数がファイルを上書き、XDG 解決、`~/.config` フォールバック |
-| TC-036 | P2 | `src/config.rs` | Config 検証 — 不正なキーシーケンス形式 |
+| TC-019-022 | P2 | `src/config/styles.rs` | parse_style — 空はデフォルト、前景／背景のマッピング、修飾子の組み合わせ、gray==grey |
+| TC-023 | P2 | `src/config/styles.rs` | extract_color_and_modifiers — `parse_style_spec_mapping`（TC-019-022）経由で検証。専用テストは無い |
+| TC-024-025 | P2 | `src/config/styles.rs` | parse_color — RGB 短縮形。不明は None を返す。範囲外の `rgb`/`grayNN`/`bright colorNN` は None を返す（u8 オーバーフローなし） |
+| TC-026 | P0 | `src/config/mod.rs` | Config::new — デフォルトのキーバインドを読み込む（未変更の `<q>` → Quit を `user_keybindings_override_and_extend_defaults`、TC-195 で検証） |
+| TC-027-029,031-032 | P1 | `src/config/keybindings.rs` | parse_key_event — 修飾キーの組み合わせ、大文字小文字非依存、不正なキーはエラー |
+| TC-033-035, TC-092 | P1 | `src/config/mod.rs` | Config ソース優先順位 — ファイルがデフォルトを上書き、`XRPL_RPC_SERVER` 環境変数がファイルを上書き、XDG 解決、`~/.config` フォールバック |
+| TC-036 | P2 | `src/config/keybindings.rs` | Config 検証 — 不正なキーシーケンス形式 |
 | TC-037 | P0 | `src/network.rs` | Network::default — Mainnet である（enum の `#[default]`。専用テストは無い） |
 | TC-038-040 | P0 | `src/network.rs` | Network::from_str — mainnet/testnet/devnet のラウンドトリップ、大文字小文字非依存、不明はエラー |
 | TC-041 | P1 | `src/network.rs` | Network::is_production — 正しい真偽値 |
-| TC-042 | P0 | `src/config.rs` | `Config::new` で `XRPL_NETWORK` がファイルの network を上書きする。パース不能／`" testnet"` の値は無視される |
+| TC-042 | P0 | `src/config/mod.rs` | `Config::new` で `XRPL_NETWORK` がファイルの network を上書きする。パース不能／`" testnet"` の値は無視される |
 | TC-043/TC-044 | P0 | `src/lib.rs` | resolve_rpc_url/resolve_ws_url — 優先順位 CLI > 環境変数 > 設定ファイル > ネットワークのデフォルト（CLI の `--ws-server` は環境変数に勝つ） |
 | TC-045-046 | P1 | `src/signing.rs` | credential_from_secrets — none / seed / mnemonic / 両方指定は拒否、の結果マトリクス |
 | TC-047 | P1 | `src/signing.rs` | prompt_production_confirmation — testnet/devnet ではスキップ |
 | TC-048 | P2 | `src/signing.rs` | prompt_production_confirmation — --yes で mainnet でもスキップ |
-| TC-049 | P1 | `src/config.rs` | Config::new — 環境変数 XRPL_SEED がファイルの seed を上書きする |
+| TC-049 | P1 | `src/config/mod.rs` | Config::new — 環境変数 XRPL_SEED がファイルの seed を上書きする |
 | TC-050 | P0 | `src/xrpl/cli_exec.rs` | CLI info — ローカル JSON-RPC で成功 |
 | TC-051 | P1 | `src/xrpl/cli_exec.rs` | CLI account — ローカル JSON-RPC で成功 |
 | TC-052 | P1 | `src/xrpl/cli_exec.rs` | CLI book — ローカル JSON-RPC で成功 |
@@ -119,7 +119,7 @@ cargo deny check
 | TC-243 | P0 | `src/xrpl/submit.rs` | Smart Account の拒否はすべて RPC の前に起きる: pin が未設定／空白／不一致、fee が 0 または > 10 XRP、recipient がゼロ／不正、value が 0 / 10 バイト超、operator がアドレスでない、operator が X-address（タグ）、operator = 署名者。いずれも error アクションがちょうど 1 つ（R-017） |
 | TC-244 | P1 | `src/components/panels/wallet.rs` | Smart Account コンポーザー: 不正／ゼロの recipient、ゼロ／空／残高超過の金額、非数値／ゼロの lots、別アカウントの read → flash のみ。正しい transfer / redeem は正確なパラメータをキューに積む（FXRP の 10 進数 → read した `decimals()` による最小単位、operator + fee は read から）。ピッカー `a`、`i` で transfer ↔ redeem を切り替え、入力 + `s`、Esc → ピッカー行 13。read がないとコンポーザーは開かない。描画は operator、pin の状態、fee、残高を表示する |
 | TC-245 | P1 | `src/components/panels/fxrp_direct_mint.rs` | FXRP パネルは `SmartAccountInfo` の値（personal account、`fxrp_decimals` で整形した FXRP 残高、nonce + deployed / not deployed、operator、両方の fee）を描画する。リモート文字列中の制御文字は除去される。最初の `SmartAccountInfo` の前は行なし |
-| TC-246 | P2 | `src/config.rs` | `[flare.smart_accounts] expected_operator` をパースする。デフォルトは未設定 |
+| TC-246 | P2 | `src/config/mod.rs` | `[flare.smart_accounts] expected_operator` をパースする。デフォルトは未設定 |
 | TC-247 | P0 | `src/components/panels/wallet.rs` | Smart Account コンポーザーは read した `decimals()` に従う（6 と仮定せず 8 と 0）: 8 decimals で `12.5` → 1_250_000_000 単位。残高ちょうどは受理、残高 + 1 単位は拒否。decimals より多い小数桁は拒否。decimals > 18、および read なしではキューに積まれない |
 | TC-104 | P1 | `src/xrpl/parse.rs`, `src/components/shared/fps.rs` | account_tx の marker はパース後も保持される。tick-rate ラベルは 1 秒後に更新される |
 | TC-105 | P2 | `src/xrpl/client.rs` | ローカル HTTP 429 は成功するまで再試行される |
@@ -182,7 +182,7 @@ cargo deny check
 | TC-356 | P1 | `src/xrpl/dunl.rs` | dUNL VL のデコード: `field_header_matches_spec_vectors`（1 / 2 バイトのフィールド id）と `vl_length_matches_spec_boundaries`（1 / 2 / 3 バイト長） |
 | TC-357 | P1 | `src/xrpl/txspec/mod.rs` | `parse_drops_is_strict`: 数字のみ、符号 / 空白 / 小数は不可、オーバーフローは拒否 |
 | TC-358 | P1 | `src/xrpl/nft_image.rs` | `client_for_url_handles_ipv6_literals`: IPv6 リテラルの NFT URI が正しく解決 / ピン留めされる |
-| TC-359 | P0 | `src/config.rs` | `keybinding_rejects_payload_and_submit_actions`（`is_bindable` による許可リストのアクションのみ。ロード時に拒否）、`tilde_paths_expand_to_home`（`config_dir` / `data_dir` / `LAZYXRP_*` 内の `~`）、`credential_precedence_matrix`（CLI > env > file。下位ソースのもう一方の種別は破棄。同一レベルで両方 = エラー） |
+| TC-359 | P0 | `src/config/mod.rs` | `keybinding_rejects_payload_and_submit_actions`（`is_bindable` による許可リストのアクションのみ。ロード時に拒否）、`tilde_paths_expand_to_home`（`config_dir` / `data_dir` / `LAZYXRP_*` 内の `~`）、`credential_precedence_matrix`（CLI > env > file。下位ソースのもう一方の種別は破棄。同一レベルで両方 = エラー） |
 | TC-360 | P0 | `src/app.rs` | アクティブタブのみへのルーティング: `overview_t_key_does_not_open_hidden_composer`、`account_tab_filter_key_reaches_tx_history`、`composer_open_without_credential_stays_on_tab`。`startup_ends_when_server_info_errors`（`server_info` エラーでスプラッシュが終了） |
 | TC-361 | P0 | `src/components/panels/wallet.rs` | フォームの安全性: `trust_set_default_form_cannot_submit`（TrustSet は空で開始）、`account_set_no_freeze_requires_confirm`（`NOFREEZE` の入力が必要）、`submit_guard_survives_local_errors_and_stale_results`、`stale_or_foreign_network_snapshots_refuse_to_submit`（300 s 超または別ネットワークのスナップショットは拒否）、`paste_inserts_only_while_editing_without_hotkeys`（bracketed paste は編集中のみ） |
 | TC-362 | P2 | `src/components/panels/wallet.rs` / `wallet_keygen.rs` / `tabs/account_wallet.rs` | `keygen_works_unfunded_and_composer_is_gated`、`composer_popup_narrow_terminal_does_not_panic`、`keygen_popup_narrow_terminal_does_not_panic`、`keys_reach_focused_tx_history_pane` |
@@ -212,20 +212,20 @@ cargo deny check
 | TC-110 | P2 | `src/components/tabs/nft.rs` | URI のない NFT はプレビューリクエストを発行しない |
 | TC-111 | P1 | `src/network.rs` | すべてのネットワークが、それぞれ異なる `https://`/`wss://` エンドポイントに解決される（xahau を含む） |
 | TC-112 | P2 | `src/network.rs` | xahau の各バリアントを含む全ネットワークの serde ラウンドトリップ |
-| TC-113-114 | P2 | `src/config.rs` | `[flare]` の `network`/`display` が設定ファイルから読み込まれ（coston2 プリセット URL）、既定は Flare/Full |
+| TC-113-114 | P2 | `src/config/mod.rs` | `[flare]` の `network`/`display` が設定ファイルから読み込まれ（coston2 プリセット URL）、既定は Flare/Full |
 | TC-115 | P1 | `src/app.rs` | NetworkSwitchCycle が `app.network`、net_tx、StatusBar バッジのパディングを更新する |
 | TC-116 | P2 | `src/components/tabs/overview.rs` | Overview Off は Flare 統合パネルを省略する |
 | TC-117 | P2 | `src/components/tabs/overview.rs` | Overview Compact は FTSO/FXRP を 1 行サマリで表示する(44/56 分割は維持) |
 | TC-118 | P2 | `src/components/tabs/market_oracle.rs` | Market Off は FTSO パネルを省略し、XRPL oracle は残す |
 | TC-119 | P2 | `src/components/tabs/market_oracle.rs` | Market Compact は FTSO を 1 行サマリで表示する |
-| TC-120 | P2 | `src/config.rs` | `[flare.wallet] address` の EVM 検証と正規化 |
+| TC-120 | P2 | `src/config/mod.rs` | `[flare.wallet] address` の EVM 検証と正規化 |
 | TC-121 | P2 | `src/components/panels/flare_wallet.rs` | 未設定のウォレットはセットアップ案内を表示する |
 | TC-122 | P2 | `src/components/panels/flare_wallet.rs` | 設定済みウォレットは `FlareWalletBalance` から残高行を描画する |
 | TC-123 | P2 | `src/xrpl/dunl.rs` | dUNL キャッシュ — TTL 内はヒット、クリア後はミス |
 | TC-124 | P2 | `src/flare.rs` | Flare レジストリキャッシュ — アドレスは RPC URL ごとに保存される |
 | TC-125 | P1 | `src/cli.rs` | CLI `--network` は `xahau` / `xahau-test` を受け付ける(clap デフォルトの `xahau-testnet` は拒否) |
 | TC-126 | P1 | `src/cli.rs` | `--allow-insecure-rpc` はデフォルト off。フラグで TUI と `rp` が有効になる |
-| TC-127 | P1 | `src/config.rs` | 設定ファイルの `network = "xahau-test"` は XahauTest として読み込まれる(TC-042 のテストに統合) |
+| TC-127 | P1 | `src/config/mod.rs` | 設定ファイルの `network = "xahau-test"` は XahauTest として読み込まれる(TC-042 のテストに統合) |
 | TC-128 | P2 | `src/components/shared/theme.rs` | DESIGN.md frontmatter の `colors.*` の hex 値が `theme.rs` の定数と一致する |
 | TC-129 | P1 | `src/components/panels/wallet.rs` | Fxrp proof プレビューはマルチバイト JSON を文字単位で切り詰める(バイトスライスによる panic の回帰) |
 | TC-130 | P1 | `src/components/panels/wallet_keys.rs` | `payment_edit_keys` の入力フィルタ — IOU 通貨行は 40 文字以下(3 文字コードまたは 40 桁 hex)、金額は数字と単一のドットのみ、宛先は表示可能 ASCII |
@@ -278,7 +278,7 @@ cargo deny check
 | TC-364 | P1 | `src/xrpl/nft_image.rs`, `src/components/tabs/nft.rs` | `ipfs_spellings_normalize_to_one_gateway_path`（`ipfs://`、`IPFS://`、`ipfs://ipfs/`、`/ipfs/`、素の CIDv0/v1 → 1 つのゲートウェイパス）、`data_uri_decodes_base64_only`、`display_uri_converts_ipfs_to_public_gateway`（`https://ipfs.io/ipfs/…` として表示、他の URI は変更なし）。NFT タブの URI 列は幅対応（広い端末は URI 全体を表示、狭い端末は `…` で終わる、TC-178 のマルチバイトケース）および `draw_strips_control_and_bidi_chars_from_uri` |
 | TC-179 | P1 | `src/xrpl/client.rs` | 16 MiB 超のチャンク本文はストリーミング中に拒否 |
 | TC-180 | P2 | `src/xrpl/parse.rs` | submit エラーテキストと tx ハッシュから制御文字を除去 |
-| TC-181 | P2 | `src/config.rs` | グループ/ワールド読み取り可能な認証情報 config は（stderr に）警告を出す。0600 は出さない |
+| TC-181 | P2 | `src/config/mod.rs` | グループ/ワールド読み取り可能な認証情報 config は（stderr に）警告を出す。0600 は出さない |
 | TC-182 | — | `install.sh`, `.github/workflows/cd.yml` | 手動: トークンが argv に出ない（stub-curl で確認）。`cargo package` はトークンなし、その後 `publish --no-verify` |
 | TC-183 | P2 | `src/xrpl/parse.rs` | `account_offers` 行 — 小文字キーをマップ。u32 の `seq` がないエントリはスキップ |
 | TC-184 | P1 | `src/signing.rs` | OfferCancel の simulate JSON と署名済み blob が `OfferSequence`/`Sequence` を持つ |
@@ -292,7 +292,7 @@ cargo deny check
 | TC-192 | P1 | `src/xrpl/format.rs` | Quote のソース通貨 — Send max の prefix が優先、IOU の Amount は XRP が既定、XRP の Amount は非 XRP の prefix が必要、IOU の prefix には issuer が必要 |
 | TC-193 | P1 | `src/xrpl/format.rs` | Quote → Send max 指定 — 最安の代替、スリッページは切り上げ（drops / 有効数字 6 桁）、パスなし → Err |
 | TC-194 | P1 | `src/components/panels/wallet.rs` | Payment `p` — 不正なフォームは flash。有効なフォームは `PaymentQuote` をキューに積む（既定 100 bps）。QuoteOk で Send max を埋める。QuoteErr は flash |
-| TC-195 | P2 | `src/config.rs` | ユーザーの `[keybindings.Splash]` はキーを追加し既定を上書き。未変更の既定は保持 |
+| TC-195 | P2 | `src/config/mod.rs` | ユーザーの `[keybindings.Splash]` はキーを追加し既定を上書き。未変更の既定は保持 |
 | TC-196 | P0 | `src/xrpl/cli_exec.rs` | CLI `send` — submit が拒否（`tefPAST_SEQ`）されたら Err を返す → 終了コード非 0 |
 | TC-197 | P1 | `src/signing.rs` | `validate_payment_input` — 宛先のチェックサム / X-address、正の金額、IOU の通貨+issuer、SendMax 指定（XRP→XRP は拒否、空 = なし） |
 | TC-198 | P1 | `src/components/panels/wallet.rs` | Payment プレビューと `s` の検証共有 — チェックサム不正 / Send max 不正はオレンジのままで、submit は flash 付きで拒否 |
@@ -310,7 +310,7 @@ cargo deny check
 | TC-210 | P1 | `src/xrpl/client.rs` | 307 を返す JSON-RPC エンドポイント → Err。リダイレクト先へはリクエストを再 POST しない |
 | TC-211 | P1 | `src/signing.rs` | `XRP:<drops>:<tail>` は拒否（SendMax と OfferCreate の指定） |
 | TC-212 | P1 | `src/xrpl/cli_exec.rs` | `-x send 0` は RPC 前に `validate_payment_input` で拒否 |
-| TC-213 | P1 | `src/components/panels/wallet_keygen.rs`, `src/config.rs` | Keygen ポップアップは NetworkChange でクリア、ラベルは "Esc to dismiss"。`Config::new` は Flare EVM 鍵の env を取得して削除（TC-049 の拡張） |
+| TC-213 | P1 | `src/components/panels/wallet_keygen.rs`, `src/config/mod.rs` | Keygen ポップアップは NetworkChange でクリア、ラベルは "Esc to dismiss"。`Config::new` は Flare EVM 鍵の env を取得して削除（TC-049 の拡張） |
 | TC-214 | P1 | `src/xrpl/submit.rs` | TUI の submit 結果 = `<local hash> · fee N drops`（署名した simulate の fee） |
 | TC-215 | P1 | `src/signing.rs` | Escrow の期間 `90s`/`30m`/`2h`/`7d` → 秒。空、単位なし、ゼロ、負、小数、未知の単位、u32 オーバーフローは拒否 |
 | TC-216 | P1 | `src/signing.rs` | EscrowCreate 入力 — classic の Destination、XRP > 0、FinishAfter 必須、CancelAfter は任意で厳密に後 |
@@ -357,8 +357,8 @@ cargo deny check
 | リスク | カバーするもの | 根拠 |
 |------|------------|----------|
 | R-006 mainnet 書き込みガードの回避 | TC-088 `mainnet_submit_without_yes_is_rejected` | `src/xrpl/submit.rs` |
-| R-007 config マージの優先順位 | TC-033-035/TC-092 `config_source_precedence`, TC-036 | `src/config.rs` |
-| R-001 seed 優先順位チェーン | TC-045/046/049 `credential_from_secrets` + 環境変数による上書き | `src/signing.rs`, `src/config.rs` |
+| R-007 config マージの優先順位 | TC-033-035/TC-092 `config_source_precedence`, TC-036 | `src/config/mod.rs`, `src/config/keybindings.rs` |
+| R-001 seed 優先順位チェーン | TC-045/046/049 `credential_from_secrets` + 環境変数による上書き | `src/signing.rs`, `src/config/mod.rs` |
 | R-016 エンドポイントのネットワーク ≠ 選択中のネットワーク | TC-203 `endpoint_network_id_must_match` + CLI/TUI での拒否 | `src/network.rs`, `src/xrpl/cli_exec.rs`, `src/xrpl/submit.rs` |
 | R-017 Smart Account の operator / fee が 1 回の RPC 応答に由来する | TC-240, TC-243（`check_operator`, `smart_account_instruction_refusals_never_reach_rpc`）。mainnet ゲート TC-088 | `src/flare.rs`, `src/xrpl/submit.rs` |
 | R-019 C2 の recipient が RPC から供給された personal account でプリフィルされる | TC-367（署名者自身の、新しい read の場合のみプリフィル。全文表示）— 残存リスクは受容、security-ja.md S-019 | `src/components/panels/wallet_composer.rs` |

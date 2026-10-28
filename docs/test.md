@@ -46,22 +46,22 @@ cargo deny check
 | TC-016 | P2 | `src/xrpl/parse.rs` | account_tx — parse response into TxRow vec (with direction) |
 | TC-017 | P1 | `src/xrpl/parse.rs` | book_offers — parse response into OfferRow vec |
 | TC-018 | P2 | `src/xrpl/parse.rs` | server_info/fee — parse response into summary structs |
-| TC-019-022 | P2 | `src/config.rs` | parse_style — empty yields default, foreground/background mapping, modifiers combined, gray==grey |
-| TC-023 | P2 | `src/config.rs` | extract_color_and_modifiers — exercised through `parse_style_spec_mapping` (TC-019-022); no dedicated test |
-| TC-024-025 | P2 | `src/config.rs` | parse_color — RGB shorthand; unknown returns None; out-of-range `rgb`/`grayNN`/`bright colorNN` return None (no u8 overflow) |
-| TC-026 | P0 | `src/config.rs` | Config::new — loads default keybindings (untouched `<q>` → Quit asserted in `user_keybindings_override_and_extend_defaults`, TC-195) |
-| TC-027-029,031-032 | P1 | `src/config.rs` | parse_key_event — modifier composition, case insensitivity, invalid keys error |
-| TC-033-035, TC-092 | P1 | `src/config.rs` | Config source precedence — file overrides default, `XRPL_RPC_SERVER` env overrides file, XDG resolution, `~/.config` fallback |
-| TC-036 | P2 | `src/config.rs` | Config validation — invalid key sequence format |
+| TC-019-022 | P2 | `src/config/styles.rs` | parse_style — empty yields default, foreground/background mapping, modifiers combined, gray==grey |
+| TC-023 | P2 | `src/config/styles.rs` | extract_color_and_modifiers — exercised through `parse_style_spec_mapping` (TC-019-022); no dedicated test |
+| TC-024-025 | P2 | `src/config/styles.rs` | parse_color — RGB shorthand; unknown returns None; out-of-range `rgb`/`grayNN`/`bright colorNN` return None (no u8 overflow) |
+| TC-026 | P0 | `src/config/mod.rs` | Config::new — loads default keybindings (untouched `<q>` → Quit asserted in `user_keybindings_override_and_extend_defaults`, TC-195) |
+| TC-027-029,031-032 | P1 | `src/config/keybindings.rs` | parse_key_event — modifier composition, case insensitivity, invalid keys error |
+| TC-033-035, TC-092 | P1 | `src/config/mod.rs` | Config source precedence — file overrides default, `XRPL_RPC_SERVER` env overrides file, XDG resolution, `~/.config` fallback |
+| TC-036 | P2 | `src/config/keybindings.rs` | Config validation — invalid key sequence format |
 | TC-037 | P0 | `src/network.rs` | Network::default — is Mainnet (`#[default]` on the enum; no dedicated test) |
 | TC-038-040 | P0 | `src/network.rs` | Network::from_str — roundtrip mainnet/testnet/devnet, case-insensitive, unknown errors |
 | TC-041 | P1 | `src/network.rs` | Network::is_production — correct boolean |
-| TC-042 | P0 | `src/config.rs` | `XRPL_NETWORK` overrides the file's network in `Config::new`; unparsable / `" testnet"` values are ignored |
+| TC-042 | P0 | `src/config/mod.rs` | `XRPL_NETWORK` overrides the file's network in `Config::new`; unparsable / `" testnet"` values are ignored |
 | TC-043/TC-044 | P0 | `src/lib.rs` | resolve_rpc_url/resolve_ws_url — precedence CLI > env > config file > network default (CLI `--ws-server` beats env) |
 | TC-045-046 | P1 | `src/signing.rs` | credential_from_secrets — none / seed / mnemonic / both-rejected outcome matrix |
 | TC-047 | P1 | `src/signing.rs` | prompt_production_confirmation — testnet/devnet skips |
 | TC-048 | P2 | `src/signing.rs` | prompt_production_confirmation — --yes skips on mainnet |
-| TC-049 | P1 | `src/config.rs` | Config::new — env XRPL_SEED overrides file seed |
+| TC-049 | P1 | `src/config/mod.rs` | Config::new — env XRPL_SEED overrides file seed |
 | TC-050 | P0 | `src/xrpl/cli_exec.rs` | CLI info — local JSON-RPC succeeds |
 | TC-051 | P1 | `src/xrpl/cli_exec.rs` | CLI account — local JSON-RPC succeeds |
 | TC-052 | P1 | `src/xrpl/cli_exec.rs` | CLI book — local JSON-RPC succeeds |
@@ -119,7 +119,7 @@ cargo deny check
 | TC-243 | P0 | `src/xrpl/submit.rs` | Smart Account refusals happen before any RPC: pin unset / blank / mismatched, fee 0 or > 10 XRP, zero / malformed recipient, value 0 / over 10 bytes, non-address operator, X-address operator (tag), operator = signer; exactly one error action each (R-017) |
 | TC-244 | P1 | `src/components/panels/wallet.rs` | Smart Account composer: bad / zero recipient, zero / empty / over-balance amount, non-numeric / zero lots, read for another account → flash only; valid transfer / redeem queue exact params (FXRP decimal → base units via the read `decimals()`, operator + fee from the read); picker `a`, `i` flips transfer ↔ redeem, typing + `s`, Esc → picker row 13; composer refuses to open without a read; render shows operator, pin status, fee, balance |
 | TC-245 | P1 | `src/components/panels/fxrp_direct_mint.rs` | FXRP panel renders `SmartAccountInfo` values (personal account, FXRP balance formatted with `fxrp_decimals`, nonce + deployed / not deployed, operator, both fees); control characters in remote strings are stripped; no rows before the first `SmartAccountInfo` |
-| TC-246 | P2 | `src/config.rs` | `[flare.smart_accounts] expected_operator` parses; unset by default |
+| TC-246 | P2 | `src/config/mod.rs` | `[flare.smart_accounts] expected_operator` parses; unset by default |
 | TC-247 | P0 | `src/components/panels/wallet.rs` | Smart Account composer follows the read `decimals()` (8 and 0, not an assumed 6): `12.5` → 1_250_000_000 units at 8 decimals; exact balance accepted, balance + 1 unit refused; more fraction digits than decimals refused; decimals > 18 and no read → never queues |
 | TC-104 | P1 | `src/xrpl/parse.rs`, `src/components/shared/fps.rs` | account_tx marker survives parsing; tick-rate label refreshes after 1s |
 | TC-105 | P2 | `src/xrpl/client.rs` | Local HTTP 429 retried before success |
@@ -182,7 +182,7 @@ cargo deny check
 | TC-356 | P1 | `src/xrpl/dunl.rs` | dUNL VL decoding: `field_header_matches_spec_vectors` (1-/2-byte field ids) and `vl_length_matches_spec_boundaries` (1/2/3-byte lengths) |
 | TC-357 | P1 | `src/xrpl/txspec/mod.rs` | `parse_drops_is_strict`: digits only, no sign / whitespace / fraction, overflow refused |
 | TC-358 | P1 | `src/xrpl/nft_image.rs` | `client_for_url_handles_ipv6_literals`: IPv6 literal NFT URIs resolve / pin correctly |
-| TC-359 | P0 | `src/config.rs` | `keybinding_rejects_payload_and_submit_actions` (only allowlisted actions via `is_bindable`; rejected at load), `tilde_paths_expand_to_home` (`~` in `config_dir` / `data_dir` / `LAZYXRP_*`), `credential_precedence_matrix` (CLI > env > file; lower source's other kind dropped; same-level both = error) |
+| TC-359 | P0 | `src/config/mod.rs` | `keybinding_rejects_payload_and_submit_actions` (only allowlisted actions via `is_bindable`; rejected at load), `tilde_paths_expand_to_home` (`~` in `config_dir` / `data_dir` / `LAZYXRP_*`), `credential_precedence_matrix` (CLI > env > file; lower source's other kind dropped; same-level both = error) |
 | TC-360 | P0 | `src/app.rs` | Active-tab-only routing: `overview_t_key_does_not_open_hidden_composer`, `account_tab_filter_key_reaches_tx_history`, `composer_open_without_credential_stays_on_tab`; `startup_ends_when_server_info_errors` (splash ends on `server_info` error) |
 | TC-361 | P0 | `src/components/panels/wallet.rs` | Form safety: `trust_set_default_form_cannot_submit` (TrustSet starts empty), `account_set_no_freeze_requires_confirm` (typed `NOFREEZE`), `submit_guard_survives_local_errors_and_stale_results`, `stale_or_foreign_network_snapshots_refuse_to_submit` (snapshot > 300 s or other network refused), `paste_inserts_only_while_editing_without_hotkeys` (bracketed paste is edit-only) |
 | TC-362 | P2 | `src/components/panels/wallet.rs` / `wallet_keygen.rs` / `tabs/account_wallet.rs` | `keygen_works_unfunded_and_composer_is_gated`, `composer_popup_narrow_terminal_does_not_panic`, `keygen_popup_narrow_terminal_does_not_panic`, `keys_reach_focused_tx_history_pane` |
@@ -212,20 +212,20 @@ cargo deny check
 | TC-110 | P2 | `src/components/tabs/nft.rs` | NFT without URI emits no preview request |
 | TC-111 | P1 | `src/network.rs` | Every network resolves distinct `https://`/`wss://` endpoints (xahau included) |
 | TC-112 | P2 | `src/network.rs` | serde roundtrip for all networks including xahau variants |
-| TC-113-114 | P2 | `src/config.rs` | `[flare]` `network`/`display` load from a config file (coston2 preset URL) and default to Flare/Full |
+| TC-113-114 | P2 | `src/config/mod.rs` | `[flare]` `network`/`display` load from a config file (coston2 preset URL) and default to Flare/Full |
 | TC-115 | P1 | `src/app.rs` | NetworkSwitchCycle updates `app.network`, net_tx, and StatusBar badge padding |
 | TC-116 | P2 | `src/components/tabs/overview.rs` | Overview Off omits combined Flare panel |
 | TC-117 | P2 | `src/components/tabs/overview.rs` | Overview Compact uses one-line FTSO/FXRP summaries (44/56 split kept) |
 | TC-118 | P2 | `src/components/tabs/market_oracle.rs` | Market Off omits FTSO panel, keeps XRPL oracle |
 | TC-119 | P2 | `src/components/tabs/market_oracle.rs` | Market Compact uses one-line FTSO summary |
-| TC-120 | P2 | `src/config.rs` | `[flare.wallet] address` EVM validation + normalization |
+| TC-120 | P2 | `src/config/mod.rs` | `[flare.wallet] address` EVM validation + normalization |
 | TC-121 | P2 | `src/components/panels/flare_wallet.rs` | Unconfigured wallet shows setup guidance |
 | TC-122 | P2 | `src/components/panels/flare_wallet.rs` | Configured wallet renders balance rows from `FlareWalletBalance` |
 | TC-123 | P2 | `src/xrpl/dunl.rs` | dUNL cache — hit within TTL, miss after clear |
 | TC-124 | P2 | `src/flare.rs` | Flare registry cache — addresses stored per RPC URL |
 | TC-125 | P1 | `src/cli.rs` | CLI `--network` accepts `xahau` / `xahau-test` (rejects clap-default `xahau-testnet`) |
 | TC-126 | P1 | `src/cli.rs` | `--allow-insecure-rpc` defaults off; flag enables TUI and `rp` |
-| TC-127 | P1 | `src/config.rs` | Config file `network = "xahau-test"` loads XahauTest (merged with TC-042 test) |
+| TC-127 | P1 | `src/config/mod.rs` | Config file `network = "xahau-test"` loads XahauTest (merged with TC-042 test) |
 | TC-128 | P2 | `src/components/shared/theme.rs` | DESIGN.md frontmatter `colors.*` hex values match `theme.rs` constants |
 | TC-129 | P1 | `src/components/panels/wallet.rs` | Fxrp proof preview truncates multibyte JSON by chars (byte-slice panic regression) |
 | TC-130 | P1 | `src/components/panels/wallet_keys.rs` | `payment_edit_keys` input filters — IOU currency row ≤40 chars (3-char code or 40-hex), amount digits + single dot, destination graphic ASCII |
@@ -278,7 +278,7 @@ cargo deny check
 | TC-364 | P1 | `src/xrpl/nft_image.rs`, `src/components/tabs/nft.rs` | `ipfs_spellings_normalize_to_one_gateway_path` (`ipfs://`, `IPFS://`, `ipfs://ipfs/`, `/ipfs/`, bare CIDv0/v1 → one gateway path), `data_uri_decodes_base64_only`, `display_uri_converts_ipfs_to_public_gateway` (displayed as `https://ipfs.io/ipfs/…`, other URIs unchanged); NFT tab URI column is width-aware (wide terminal shows the whole URI, narrow one ends in `…`, TC-178 multibyte case) and `draw_strips_control_and_bidi_chars_from_uri` |
 | TC-179 | P1 | `src/xrpl/client.rs` | Chunked body over 16 MiB is rejected while streaming |
 | TC-180 | P2 | `src/xrpl/parse.rs` | Control characters stripped from submit error text and tx hash |
-| TC-181 | P2 | `src/config.rs` | Group/world-readable credential config yields a (stderr) warning; 0600 does not |
+| TC-181 | P2 | `src/config/mod.rs` | Group/world-readable credential config yields a (stderr) warning; 0600 does not |
 | TC-182 | — | `install.sh`, `.github/workflows/cd.yml` | Manual: token not in argv (stub-curl check); `cargo package` token-free then `publish --no-verify` |
 | TC-183 | P2 | `src/xrpl/parse.rs` | `account_offers` rows — lowercase keys mapped; entries without u32 `seq` skipped |
 | TC-184 | P1 | `src/signing.rs` | OfferCancel simulate JSON + signed blob carry `OfferSequence`/`Sequence` |
@@ -292,7 +292,7 @@ cargo deny check
 | TC-192 | P1 | `src/xrpl/format.rs` | Quote source currency — Send max prefix wins, IOU Amount defaults to XRP, XRP Amount needs non-XRP prefix, IOU prefix needs issuer |
 | TC-193 | P1 | `src/xrpl/format.rs` | Quote → Send max spec — cheapest alternative, slippage rounded up (drops / 6 sig. digits), no path → Err |
 | TC-194 | P1 | `src/components/panels/wallet.rs` | Payment `p` — invalid form flashes; valid form queues `PaymentQuote` (default 100 bps); QuoteOk fills Send max; QuoteErr flashes |
-| TC-195 | P2 | `src/config.rs` | User `[keybindings.Splash]` adds keys and overrides defaults; untouched defaults kept |
+| TC-195 | P2 | `src/config/mod.rs` | User `[keybindings.Splash]` adds keys and overrides defaults; untouched defaults kept |
 | TC-196 | P0 | `src/xrpl/cli_exec.rs` | CLI `send` — rejected submit (`tefPAST_SEQ`) returns Err → non-zero exit |
 | TC-197 | P1 | `src/signing.rs` | `validate_payment_input` — destination checksum / X-address, positive amount, IOU currency+issuer, SendMax spec (XRP→XRP rejected, blank = none) |
 | TC-198 | P1 | `src/components/panels/wallet.rs` | Payment preview + `s` share validation — bad checksum / bad Send max stay orange and submit refuses with flash |
@@ -310,7 +310,7 @@ cargo deny check
 | TC-210 | P1 | `src/xrpl/client.rs` | JSON-RPC endpoint answering 307 → Err; request not re-posted to the redirect target |
 | TC-211 | P1 | `src/signing.rs` | `XRP:<drops>:<tail>` rejected (SendMax and OfferCreate specs) |
 | TC-212 | P1 | `src/xrpl/cli_exec.rs` | `-x send 0` refused by `validate_payment_input` before any RPC |
-| TC-213 | P1 | `src/components/panels/wallet_keygen.rs`, `src/config.rs` | Keygen popup cleared on NetworkChange, label "Esc to dismiss"; `Config::new` takes + removes the Flare EVM key env (TC-049 extended) |
+| TC-213 | P1 | `src/components/panels/wallet_keygen.rs`, `src/config/mod.rs` | Keygen popup cleared on NetworkChange, label "Esc to dismiss"; `Config::new` takes + removes the Flare EVM key env (TC-049 extended) |
 | TC-214 | P1 | `src/xrpl/submit.rs` | TUI submit result = `<local hash> · fee N drops` (simulate fee that was signed) |
 | TC-215 | P1 | `src/signing.rs` | Escrow duration `90s`/`30m`/`2h`/`7d` → seconds; empty, unitless, zero, negative, fractional, unknown unit, u32 overflow rejected |
 | TC-216 | P1 | `src/signing.rs` | EscrowCreate input — classic Destination, XRP > 0, FinishAfter required, CancelAfter optional and strictly later |
@@ -357,8 +357,8 @@ cargo deny check
 | Risk | Covered by | Evidence |
 |------|------------|----------|
 | R-006 mainnet write guard bypass | TC-088 `mainnet_submit_without_yes_is_rejected` | `src/xrpl/submit.rs` |
-| R-007 config merge precedence | TC-033-035/TC-092 `config_source_precedence`, TC-036 | `src/config.rs` |
-| R-001 seed priority chain | TC-045/046/049 `credential_from_secrets` + env override | `src/signing.rs`, `src/config.rs` |
+| R-007 config merge precedence | TC-033-035/TC-092 `config_source_precedence`, TC-036 | `src/config/mod.rs`, `src/config/keybindings.rs` |
+| R-001 seed priority chain | TC-045/046/049 `credential_from_secrets` + env override | `src/signing.rs`, `src/config/mod.rs` |
 | R-016 endpoint network ≠ selected network | TC-203 `endpoint_network_id_must_match` + CLI/TUI refusal | `src/network.rs`, `src/xrpl/cli_exec.rs`, `src/xrpl/submit.rs` |
 | R-017 Smart Account operator / fee from one RPC answer | TC-240, TC-243 (`check_operator`, `smart_account_instruction_refusals_never_reach_rpc`); mainnet gate TC-088 | `src/flare.rs`, `src/xrpl/submit.rs` |
 | R-019 C2 recipient prefilled from an RPC-supplied personal account | TC-367 (prefill only for the signer's own, fresh read; shown in full) — residual accepted, security.md S-019 | `src/components/panels/wallet_composer.rs` |

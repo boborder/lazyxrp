@@ -18,10 +18,9 @@
 
 - 実態は signing も未実装で、poll の `_ => {}` が `EscrowCreateSubmit` を知らないうちに捨てていた。signing / `submit_escrow_*` / composer（`9` Create・`0` Finish/Cancel）を追加し、poll の `PollCommand` match から catch-all を外した（新しい command の取りこぼしはコンパイルエラーになる）。TC-215–221、testnet E2E は `docs/test-ja.md`。
 
-### P-005: `config.rs` が 1 ファイルのまま
+### ~~P-005: `config.rs` が 1 ファイルのまま~~ → 解決（2026-10-28）
 
-- 症状: `src/config.rs` はテスト込みで約 1530 行（defaults / file / env / keybindings / styles / Flare network+display+fassets+wallet+smart_accounts / paths / test helpers）
-- 対応: 約 1500 行を超えたら `config/defaults.rs`, `config/keybindings.rs`, `config/styles.rs` に分割
+- `src/config.rs`（約 1530 行）を `src/config/mod.rs`（Config・ロード/マージ・env・パス・Flare セクション・複数領域にまたがるテスト）、`config/defaults.rs`（フォールバック定数・serde 既定値・`LedgerConfig` / `FlareFassetsConfig` の `Default`）、`config/keybindings.rs`、`config/styles.rs` に分割。純粋な移動のみで `crate::config::*` のパスは不変。
 
 ### P-007: Xahau `NetworkID` の simulate 受理は未検証
 

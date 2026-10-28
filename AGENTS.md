@@ -32,7 +32,7 @@ When shipping behavior: update root `ROADMAP.md` and `docs/` (`architecture.md`,
 2. Otherwise implement.
 3. After implementation → run **`cargo check`** (minimum); `mise run lint` is the CI lint gate (fmt + clippy).
 4. After `cargo check` → sync related **`docs/`**.
-5. Changes to **`src/config.rs`** keys or behavior → update every **`docs/`** file that mentions them in the same change.
+5. Changes to **`src/config/`** keys or behavior → update every **`docs/`** file that mentions them in the same change.
 6. Parallel agents: one integrator edits shared files (`CHANGELOG.md`, the `ROADMAP.md` coverage table, README counts); regenerate the table with `lazyxrp -x coverage`, never by hand.
 7. Dependency updates → `mise run update` (cargo update + check + audit).
 

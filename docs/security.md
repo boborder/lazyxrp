@@ -10,11 +10,11 @@ This file tracks **security review findings (S-xxx)** and **implementation risks
 
 | ID | Invariant | Enforced in |
 |----|-----------|-------------|
-| I-1 | Plaintext `seed` / `mnemonic` are cleared to `None` in `Config::new()`, leaving only `SecretString`. `lib.rs::run` moves them via `Config::take_secrets()` into `Secrets` (seed / mnemonic / Flare EVM key) before sharing the `Arc<Config>` (the shared config holds no secrets) | `config.rs` / `lib.rs` |
+| I-1 | Plaintext `seed` / `mnemonic` are cleared to `None` in `Config::new()`, leaving only `SecretString`. `lib.rs::run` moves them via `Config::take_secrets()` into `Secrets` (seed / mnemonic / Flare EVM key) before sharing the `Arc<Config>` (the shared config holds no secrets) | `config/mod.rs` / `lib.rs` |
 | I-2 | A write on mainnet (`Network::is_production()`) requires `--yes` or `skip_mainnet_prompt: true` | each submit in `poll.rs` / `submit.rs` |
 | I-3 | A write always goes simulate → `tesSUCCESS` → fetch `Sequence`/`Fee` → sign → submit. Never sign without simulating | `poll.rs` / `submit.rs` |
-| I-4 | `XRPL_SEED` / `XRPL_MNEMONIC` are taken out once by `Config::new()` before the poll / UI tasks are spawned, and removed from the env (`take_secret_env`). `remove_var` never runs afterwards. On Linux the startup `/proc/self/environ` block is not rewritten and stays visible to readers with the same uid (known limitation) | `config.rs` |
-| I-5 | Config precedence: CLI > env > user `config.toml` > built-in `config.json5`. For credentials, once a higher source sets either seed or mnemonic, both from lower sources are discarded (setting both at the same level is an error in `credential_from_secrets`) | resolve functions in `lib.rs` + `config.rs` (`layer_credentials`, `apply_cli_credentials`) |
+| I-4 | `XRPL_SEED` / `XRPL_MNEMONIC` are taken out once by `Config::new()` before the poll / UI tasks are spawned, and removed from the env (`take_secret_env`). `remove_var` never runs afterwards. On Linux the startup `/proc/self/environ` block is not rewritten and stays visible to readers with the same uid (known limitation) | `config/mod.rs` |
+| I-5 | Config precedence: CLI > env > user `config.toml` > built-in `config.json5`. For credentials, once a higher source sets either seed or mnemonic, both from lower sources are discarded (setting both at the same level is an error in `credential_from_secrets`) | resolve functions in `lib.rs` + `config/mod.rs` (`layer_credentials`, `apply_cli_credentials`) |
 | I-6 | A WebSocket ledger-close trigger never polls sooner than `MIN_POLL_INTERVAL` (10 s) after the last poll; the scheduled tick follows `poll_interval_ms` (floor 500 ms) | `poll.rs` `drive_poll_loop` |
 | I-7 | `account_tx` not-found is an empty list (not an error) | `poll.rs` |
 | I-8 | `Tui::drop` restores the terminal and does not panic during drop | `tui.rs` |

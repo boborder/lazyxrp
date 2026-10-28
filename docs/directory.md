@@ -33,7 +33,11 @@ lazyxrp/
 │   ├── app.rs
 │   ├── action.rs
 │   ├── cli.rs
-│   ├── config.rs
+│   ├── config/
+│   │   ├── mod.rs             # Config / load+merge / env / paths
+│   │   ├── defaults.rs        # fallback constants, serde defaults
+│   │   ├── keybindings.rs     # KeyBindings, key parsing, `is_bindable`
+│   │   └── styles.rs          # Styles, style/color parsing
 │   ├── network.rs
 │   ├── signing.rs
 │   ├── flare.rs
@@ -145,7 +149,7 @@ lazyxrp/
 
 - `Cargo.toml`: crate definition, dependencies, and features.
 - `rust-toolchain.toml`: the Rust channel **shared by CI and local builds** (currently `stable`). `dtolnay/rust-toolchain` in `.github/workflows/ci.yml` (SHA-pinned, `# v1`) is given the same string as this file's `channel` as its `toolchain` input (required in v1; `rustfmt` / `clippy` are specified via `components` in the relevant jobs). Actions SHA updates are handled by `.github/dependabot.yml`.
-- `config.json5`: built-in defaults such as keybindings (the `include_str!` target of `src/config.rs`). Separate from the user config `config.toml`.
+- `config.json5`: built-in defaults such as keybindings (the `include_str!` target of `src/config/mod.rs`). Separate from the user config `config.toml`.
 - `Cargo.lock`: pinned dependency versions (**committed for the binary**; CI runs `cargo … --locked`).
 - `build.rs`: build-time helper.
 - `README.md`: user-facing overview and startup steps.
@@ -171,7 +175,7 @@ lazyxrp/
 - `xrpl/`: everything XRPL-related. `mod.rs` only re-exports. `address.rs` (classic/X-Address resolution, network-match check), `client.rs` (`RpcClient` façade, JSON-RPC / HTTPS dUNL fetch, `tx` lookup), `dunl.rs` (XRPLF dUNL JSON, manifest ST), `format.rs` (amount / path / ripple-time formatting, `xrp_to_drops` / `hex_to_ascii` / `path_find_*`), `parse.rs` (JSON-RPC response parsers, book helpers), `util.rs` (JSON path helpers + reconnect backoff), `types.rs` (row data types, `BookPair`, `PollContext` / `PollCommand`), `poll.rs` (periodic polling, `PollCommand` dispatch), `submit.rs` (wallet submit path: mainnet guard → simulate → sign → submit, the various `submit_*`, `simulate_tx_requiring_tes_success`, Payment quote), `ws.rs` (WebSocket), `cli_exec.rs` (non-TUI `execute_cli_command` / `execute_rp_lookup`), `toml.rs` (`xrp-ledger.toml` parser).
 - `cli.rs`: command-line arguments and subcommand definitions (`Cli`), and `RpCli` for `rp`.
 - `action.rs`: the `Action` passed around inside the app.
-- `config.rs`: defaults + config-file load and merge, and applying `XRPL_*` environment variables (seed, RPC/WS, network).
+- `config/`: defaults + config-file load and merge, and applying `XRPL_*` environment variables (seed, RPC/WS, network).
 - `components/mod.rs`: common UI component trait and submodule aggregation.
 - `tui.rs`: shared TUI infrastructure (rendering, events, terminal management).
 - `logging.rs`: log initialization.
@@ -185,7 +189,7 @@ lazyxrp/
 - `components/` may import `action`, `config` (`Arc<Config>`), `network`, row types / pure helpers of `xrpl` (`xrpl::sanitize_text` / `xrp_to_drops` / `hex_to_ascii` / `txspec`), pure validation/encoding functions of `signing` (`validate_*` / `parse_*` / `encode_fxrp_*`), and types and pure helpers of `flare` (`format_token_units` / `classify_mint` / `check_operator`, etc.). It does not import `xrpl/client`, `xrpl/poll`, `xrpl/submit`, or `app` (it holds no `RpcClient`; I/O goes through `Action`).
 - `xrpl/` may import the internal modules `action`, `network`, `signing`, `config`, `cli`, `flare`, and `coverage` (from `cli_exec.rs` / `poll.rs`). It does not import `components/` or `app`. `xrpl/types.rs` is a leaf with no dependency on UI / poll.
 - `coverage.rs` has a reverse dependency: it imports `components::shared::tx_detail` (parser registration) and `xrpl::txspec` (registry). Because `xrpl/cli_exec.rs` calls `coverage`, a path `xrpl/` → `coverage` → `components` exists (read-only registration info only).
-- `config.rs` imports `Action` / `Mode` from `action` (for keybinding deserialization). `Mode` lives in `action.rs`.
+- `config/` imports `Action` from `action` (for keybinding deserialization).
 - `signing.rs` depends on `network`, `secrecy`, the XRPL SDK crate, and pure helpers of `xrpl` (`xrp_to_drops` / `resolve_payment_destination` / `GeneratedWalletKeys`); it does not import `components/` or `app`.
 - A write for a new TX type reuses the shared pipeline (resolve / simulate / sign / submit in `xrpl/submit.rs`, handlers in `poll.rs`); do not write per-type simulate or signing. Declarative types go in `xrpl/txspec/` (architecture.md §2.1).
 - When adding a panel, update `app::TAB_TITLES` in the same change (keep tab index and panel order consistent, security.md I-9).
@@ -253,5 +257,5 @@ The index of documents (the question each doc answers) has [`AGENTS.md`](../AGEN
 | `Cli` / `RpCli` | `src/cli.rs` | Clap-derived CLIs. `Cli`: TUI flags + `-x` script mode. |
 | `App::run()` | `src/app.rs` | TUI main loop: event handling → action processing → dirty-flagged render (`needs_draw`). |
 | `execute_cli_command()` / `execute_rp_lookup()` | `src/xrpl/cli_exec.rs` | Non-TUI CLI dispatchers. |
-| `Config::new()` | `src/config.rs` | Config loading: built-in defaults → user config.toml → env vars. |
+| `Config::new()` | `src/config/mod.rs` | Config loading: built-in defaults → user config.toml → env vars. |
 | `build.rs` | `build.rs` | Build-time metadata (vergen-gix for commit hash, date). |

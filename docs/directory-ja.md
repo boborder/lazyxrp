@@ -33,7 +33,11 @@ lazyxrp/
 │   ├── app.rs
 │   ├── action.rs
 │   ├── cli.rs
-│   ├── config.rs
+│   ├── config/
+│   │   ├── mod.rs             # Config / load+merge / env / paths
+│   │   ├── defaults.rs        # フォールバック定数・serde 既定値
+│   │   ├── keybindings.rs     # KeyBindings・キー解析, `is_bindable`
+│   │   └── styles.rs          # Styles・style/色の解析
 │   ├── network.rs
 │   ├── signing.rs
 │   ├── flare.rs
@@ -145,7 +149,7 @@ lazyxrp/
 
 - `Cargo.toml`: クレート定義と依存関係、features 設定。
 - `rust-toolchain.toml`: **CI とローカルで同じ** Rust チャンネル（現状 `stable`）。`.github/workflows/ci.yml` の `dtolnay/rust-toolchain`（SHA 固定、`# v1`）は入力 `toolchain` にこのファイルの `channel` と同じ文字列を渡す（v1 で必須；`rustfmt` / `clippy` は該当ジョブで `components` 指定）。Actions の SHA 更新は `.github/dependabot.yml`。
-- `config.json5`: キーバインド等の組み込みデフォルト（`src/config.rs` の `include_str!` 対象）。ユーザー設定 `config.toml` とは別物。
+- `config.json5`: キーバインド等の組み込みデフォルト（`src/config/mod.rs` の `include_str!` 対象）。ユーザー設定 `config.toml` とは別物。
 - `Cargo.lock`: 依存の固定バージョン（**バイナリ向けにコミット**。CI は `cargo … --locked`）。
 - `build.rs`: ビルド時の補助処理。
 - `README.md`: 利用者向けの概要と起動手順。
@@ -171,7 +175,7 @@ lazyxrp/
 - `xrpl/`: XRPL 連携一式。`mod.rs` は再エクスポートのみ。`address.rs`（classic/X-Address 解決・ネットワーク一致検査）、`client.rs`（`RpcClient` façade・JSON-RPC / HTTPS dUNL fetch・`tx` lookup）、`dunl.rs`（XRPLF dUNL JSON・manifest ST）、`format.rs`（金額・path・ripple time 整形、`xrp_to_drops` / `hex_to_ascii` / `path_find_*`）、`parse.rs`（JSON-RPC レスポンスパーサ・book helper）、`util.rs`（JSON パスヘルパ + 再接続バックオフ）、`types.rs`（行データ型・`BookPair`・`PollContext` / `PollCommand`）、`poll.rs`（定期ポーリング・`PollCommand` 振り分け）、`submit.rs`（ウォレット送信パス: mainnet guard → simulate → sign → submit、`submit_*` 各種・`simulate_tx_requiring_tes_success`・Payment quote）、`ws.rs`（WebSocket）、`cli_exec.rs`（非 TUI の `execute_cli_command` / `execute_rp_lookup`）、`toml.rs`（`xrp-ledger.toml` パーサ）。
 - `cli.rs`: コマンドライン引数とサブコマンド定義（`Cli`）および `rp` 用 `RpCli`。
 - `action.rs`: アプリ内部で流す `Action`。
-- `config.rs`: 既定値 + 設定ファイルのロードとマージ、`XRPL_*` 環境変数（シード・RPC/WS・ネットワーク）の反映。
+- `config/`: 既定値 + 設定ファイルのロードとマージ、`XRPL_*` 環境変数（シード・RPC/WS・ネットワーク）の反映。
 - `components/mod.rs`: UI コンポーネント共通トレイトとサブモジュール統合。
 - `tui.rs`: TUI 基盤（描画・イベント・端末管理）の共通処理。
 - `logging.rs`: ログ初期化処理。
@@ -185,7 +189,7 @@ lazyxrp/
 - `components/` が import してよいのは `action`・`config`（`Arc<Config>`）・`network`・`xrpl` の行型 / 純粋ヘルパ（`xrpl::sanitize_text` / `xrp_to_drops` / `hex_to_ascii` / `txspec`）・`signing` の純粋な検証・エンコード関数（`validate_*` / `parse_*` / `encode_fxrp_*`）・`flare` の型と純粋ヘルパ（`format_token_units` / `classify_mint` / `check_operator` など）。`xrpl/client`・`xrpl/poll`・`xrpl/submit`・`app` は import しない（`RpcClient` を持たず、I/O は `Action` 経由）。
 - `xrpl/` が import してよい内部モジュールは `action`・`network`・`signing`・`config`・`cli`・`flare`・`coverage`（`cli_exec.rs` / `poll.rs` から）。`components/` と `app` は import しない。`xrpl/types.rs` は UI / poll に依存しない leaf。
 - `coverage.rs` は `components::shared::tx_detail`（parser 登録）と `xrpl::txspec`（registry）を import する逆向き依存を持つ。`xrpl/cli_exec.rs` が `coverage` を呼ぶため、`xrpl/` → `coverage` → `components` の経路が存在する（読み取り専用の登録情報のみ）。
-- `config.rs` は `action` の `Action` / `Mode` を import する（keybinding デシリアライズ用）。`Mode` は `action.rs` に置く。
+- `config/` は `action` の `Action` を import する（keybinding デシリアライズ用）。
 - `signing.rs` は `network`・`secrecy`・XRPL SDK crate と `xrpl` の純粋ヘルパ（`xrp_to_drops` / `resolve_payment_destination` / `GeneratedWalletKeys`）に依存し、`components/` と `app` を import しない。
 - 新しい TX 種別の write は共有パイプライン（`xrpl/submit.rs` の resolve / simulate / sign / submit、`poll.rs` の handler）を再利用し、種別ごとに独自の simulate・署名を書かない。宣言的な型は `xrpl/txspec/`（architecture-ja.md §2.1）。
 - パネルを追加したら同じ変更で `app::TAB_TITLES` を更新する（タブ index とパネル順を一致させる、security-ja.md I-9）。
@@ -253,5 +257,5 @@ lazyxrp/
 | `Cli` / `RpCli` | `src/cli.rs` | Clap 由来の CLI。`Cli`: TUI フラグ + `-x` スクリプトモード。 |
 | `App::run()` | `src/app.rs` | TUI メインループ: イベント処理 → アクション処理 → dirty フラグ付き描画（`needs_draw`）。 |
 | `execute_cli_command()` / `execute_rp_lookup()` | `src/xrpl/cli_exec.rs` | 非 TUI の CLI ディスパッチャ。 |
-| `Config::new()` | `src/config.rs` | 設定ロード: 組み込みデフォルト → ユーザー config.toml → 環境変数。 |
+| `Config::new()` | `src/config/mod.rs` | 設定ロード: 組み込みデフォルト → ユーザー config.toml → 環境変数。 |
 | `build.rs` | `build.rs` | ビルド時メタデータ（commit hash・日付は vergen-gix）。 |

@@ -18,10 +18,9 @@
 
 - In fact signing was also unimplemented, and the `_ => {}` arm in poll silently dropped `EscrowCreateSubmit`. Added signing / `submit_escrow_*` / composer (`9` Create, `0` Finish/Cancel) and removed the catch-all from the poll `PollCommand` match (a missed new command is now a compile error). TC-215–221; testnet E2E is in `docs/test.md`.
 
-### P-005: `config.rs` remains one file
+### ~~P-005: `config.rs` remains one file~~ → resolved (2026-10-28)
 
-- Symptom: `src/config.rs` is about 1530 lines including tests (defaults / file / env / keybindings / styles / Flare network+display+fassets+wallet+smart_accounts / paths / test helpers)
-- Fix: once it exceeds about 1500 lines, split into `config/defaults.rs`, `config/keybindings.rs`, `config/styles.rs`
+- Split `src/config.rs` (about 1530 lines) into `src/config/mod.rs` (Config, load/merge, env, paths, Flare sections, cross-area tests), `config/defaults.rs` (fallback constants, serde defaults, `Default` for `LedgerConfig` / `FlareFassetsConfig`), `config/keybindings.rs` and `config/styles.rs`. Pure move; `crate::config::*` paths unchanged.
 
 ### P-007: Xahau `NetworkID` acceptance by simulate is unverified
 

@@ -10,11 +10,11 @@ Generated: 2026-05-01 | Scope: コードベース全体（`src/`、`install.sh`�
 
 | ID | 不変条件 | 強制箇所 |
 |----|----------|----------|
-| I-1 | 平文 `seed` / `mnemonic` は `Config::new()` で `None` に消し、`SecretString` のみ残す。`lib.rs::run` が `Config::take_secrets()` で `Secrets`（seed / mnemonic / Flare EVM 鍵）へ移してから `Arc<Config>` を共有する（共有 config は秘密を持たない） | `config.rs` / `lib.rs` |
+| I-1 | 平文 `seed` / `mnemonic` は `Config::new()` で `None` に消し、`SecretString` のみ残す。`lib.rs::run` が `Config::take_secrets()` で `Secrets`（seed / mnemonic / Flare EVM 鍵）へ移してから `Arc<Config>` を共有する（共有 config は秘密を持たない） | `config/mod.rs` / `lib.rs` |
 | I-2 | mainnet（`Network::is_production()`）の write は `--yes` または `skip_mainnet_prompt: true` が必須 | `poll.rs` / `submit.rs` の各 submit |
 | I-3 | write は必ず simulate → `tesSUCCESS` → `Sequence`/`Fee` 取得 → sign → submit。simulate なしで署名しない | `poll.rs` / `submit.rs` |
-| I-4 | `XRPL_SEED` / `XRPL_MNEMONIC` は `Config::new()` が poll / UI タスクを spawn する前に一度だけ取り出して env から除去（`take_secret_env`）。以降 `remove_var` は呼ばれない。Linux では起動時の `/proc/self/environ` ブロックは書き換わらず、同一 uid の読み手には見え続ける（既知の限界） | `config.rs` |
-| I-5 | 設定優先順位: CLI > env > user `config.toml` > 組み込み `config.json5`。資格情報は上位ソースが seed / mnemonic のどちらかを設定したら下位ソースの両方を破棄（同一階層で両方設定は `credential_from_secrets` がエラー） | `lib.rs` resolve 関数 + `config.rs` (`layer_credentials`, `apply_cli_credentials`) |
+| I-4 | `XRPL_SEED` / `XRPL_MNEMONIC` は `Config::new()` が poll / UI タスクを spawn する前に一度だけ取り出して env から除去（`take_secret_env`）。以降 `remove_var` は呼ばれない。Linux では起動時の `/proc/self/environ` ブロックは書き換わらず、同一 uid の読み手には見え続ける（既知の限界） | `config/mod.rs` |
+| I-5 | 設定優先順位: CLI > env > user `config.toml` > 組み込み `config.json5`。資格情報は上位ソースが seed / mnemonic のどちらかを設定したら下位ソースの両方を破棄（同一階層で両方設定は `credential_from_secrets` がエラー） | `lib.rs` resolve 関数 + `config/mod.rs` (`layer_credentials`, `apply_cli_credentials`) |
 | I-6 | WebSocket の ledger close トリガーは直前の poll から `MIN_POLL_INTERVAL`（10 s）以内なら poll しない。定期 tick は `poll_interval_ms`（下限 500 ms）に従う | `poll.rs` `drive_poll_loop` |
 | I-7 | `account_tx` の not-found は空リスト（エラーにしない） | `poll.rs` |
 | I-8 | `Tui::drop` は端末を復元し、drop 中に panic しない | `tui.rs` |

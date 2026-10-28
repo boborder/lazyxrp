@@ -8,7 +8,7 @@
 
 - **Security is non-negotiable.** Mainnet writes require simulate + `--yes`, seeds/mnemonics go only through `credential_from_secrets`, and the config world-readable warning must not be removed. Never loosen these in pursuit of adoption (popularity). Details in [`security.md`](security.md).
 - C3 was verified on testnet (XRPL testnet + Coston2) on 2026-10-11. Running it on mainnet has not been done and is not planned (user decision: real funds stay on testnet). Fetching the FDC proof (verifier `prepareRequest` → `FdcHub` → DA layer) was **a policy pivot on 2026-10-20** (user-approved): `-x fxrp-execute` does everything from fetching through `executeDirectMinting` in one command. The TUI's C3 still uses pasting the proof as before. Reasons and mitigations are in the 2026-10-20 section of [`security.md`](security.md).
-- Keymap customization touches `src/config.rs` → under the AGENTS.md contract, every `docs/` file that mentions config keys must be synced in the same change. Built-in defaults live in `config.json5`.
+- Keymap customization touches `src/config/` → under the AGENTS.md contract, every `docs/` file that mentions config keys must be synced in the same change. Built-in defaults live in `config.json5`.
 - OfferCancel (formerly F-02) has been merged into DEX trading. It is not pursued as a separate task.
 
 ## Pivot log

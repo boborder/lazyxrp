@@ -8,7 +8,7 @@
 
 - **セキュリティは非交渉。** mainnet write は simulate + `--yes`、seed/mnemonic は `credential_from_secrets` 経由のみ、config の world-readable 警告を外さない。採用（人気）追求のために緩めない。詳細は [`security-ja.md`](security-ja.md)。
 - C3 は testnet（XRPL testnet + Coston2）で検証済み（2026-10-11）。mainnet での実行は未実施・計画外（ユーザー判断: 実資金は testnet）。FDC proof の取得（verifier `prepareRequest` → `FdcHub` → DA layer）は **2026-10-20 に方針転換**（ユーザー承認）: `-x fxrp-execute` が取得から `executeDirectMinting` までを 1 コマンドで行う。TUI の C3 は従来どおり proof 貼り付け。理由と対策は [`security-ja.md`](security-ja.md) 2026-10-20 節。
-- Keymap customization は `src/config.rs` を変更するため、AGENTS.md のルールにより、config キーに言及する全 `docs/` を同一変更内で同期する。組み込みデフォルトは `config.json5`。
+- Keymap customization は `src/config/` を変更するため、AGENTS.md のルールにより、config キーに言及する全 `docs/` を同一変更内で同期する。組み込みデフォルトは `config.json5`。
 - OfferCancel（旧 F-02）は DEX trading に統合済み。個別タスクとしては追わない。
 
 ## Pivot log（進路変更記録）
