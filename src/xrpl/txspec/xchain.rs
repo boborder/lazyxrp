@@ -731,7 +731,8 @@ mod tests {
                 Some("issue"),
             ),
             (
-                format!("{DOOR_A},TOOLONG:{ISSUER},{DOOR_B},USD:{ISSUER}"),
+                // Symbols up to 20 bytes are encoded (TC-369); a longer one has no code.
+                format!("{DOOR_A},ABCDEFGHIJKLMNOPQRSTU:{ISSUER},{DOOR_B},USD:{ISSUER}"),
                 Some("issue"),
             ),
             (format!("{DOOR_A},XRP:{ISSUER},{DOOR_B},XRP"), Some("issue")),

@@ -810,7 +810,7 @@ fn validate_iou_fields(currency: &str, issuer: &str, value: &str) -> color_eyre:
 enum OfferAmountSpec<'a> {
     Xrp(u64),
     Iou {
-        currency: &'a str,
+        currency: String,
         issuer: &'a str,
         value: &'a str,
     },
@@ -835,8 +835,8 @@ fn parse_offer_amount_spec(spec: &str) -> color_eyre::Result<OfferAmountSpec<'_>
     if parts.len() < 3 {
         color_eyre::eyre::bail!("IOU amount needs 3 parts (CUR:issuer:value): {spec}");
     }
-    let currency = parts[0];
-    validate_iou_fields(currency, parts[1], parts[2])?;
+    let currency = crate::xrpl::currency_code_for(parts[0]);
+    validate_iou_fields(&currency, parts[1], parts[2])?;
     Ok(OfferAmountSpec::Iou {
         currency,
         issuer: parts[1],
@@ -865,7 +865,7 @@ pub(crate) fn parse_offer_amount(spec: &str) -> color_eyre::Result<xrpl::models:
             value,
         } => {
             let ica = IssuedCurrencyAmount {
-                currency: currency.to_string().into(),
+                currency: currency.into(),
                 issuer: issuer.to_string().into(),
                 value: value.to_string().into(),
             };
@@ -1205,11 +1205,12 @@ pub fn parse_amm_asset(spec: &str) -> color_eyre::Result<(String, Option<String>
     let Some((currency, issuer)) = spec.split_once(':') else {
         color_eyre::eyre::bail!("asset must be XRP or CUR:issuer: {spec}");
     };
-    if !is_valid_iou_currency(currency) {
+    let currency = crate::xrpl::currency_code_for(currency);
+    if !is_valid_iou_currency(&currency) {
         color_eyre::eyre::bail!("invalid IOU currency code: {currency}");
     }
     require_classic_address_shape("issuer", issuer)?;
-    Ok((currency.to_string(), Some(issuer.to_string())))
+    Ok((currency, Some(issuer.to_string())))
 }
 
 pub(crate) fn amm_currency(asset: (String, Option<String>)) -> xrpl::models::Currency<'static> {
@@ -1229,7 +1230,7 @@ fn amm_asset_of_amount(spec: &str) -> color_eyre::Result<(String, Option<String>
         OfferAmountSpec::Xrp(_) => ("XRP".into(), None),
         OfferAmountSpec::Iou {
             currency, issuer, ..
-        } => (currency.to_string(), Some(issuer.to_string())),
+        } => (currency, Some(issuer.to_string())),
     })
 }
 
@@ -2617,5 +2618,32 @@ mod tests {
             );
         }
         assert!(validate_iou_fields("USD", issuer, "1").is_ok());
+    }
+
+    /// TC-369: CLI write specs take a currency symbol like the reads do — `RLUSD` in an
+    /// offer / AMM spec becomes its 160-bit code before validation; >20-byte symbols and
+    /// anything not plain alphanumeric (a typo'd `USD `, `US D`, non-ASCII) stay refused
+    /// instead of signing for a lookalike token.
+    #[test]
+    fn write_specs_encode_currency_symbols() {
+        let iss = "rJrRMgiRgrU6hDF4pgu5DXQdWyPbY35ErN";
+        let rlusd = "524C555344000000000000000000000000000000";
+        let amount = parse_offer_amount(&format!("RLUSD:{iss}:1")).expect("symbol spec");
+        let json = serde_json::to_value(&amount).unwrap();
+        assert_eq!(json["currency"], rlusd);
+        assert_eq!(
+            parse_amm_asset(&format!("RLUSD:{iss}")).unwrap(),
+            (rlusd.to_string(), Some(iss.to_string()))
+        );
+        assert_eq!(parse_amm_asset(&format!("USD:{iss}")).unwrap().0, "USD");
+        assert!(parse_amm_asset(&format!("{}:{iss}", "A".repeat(21))).is_err());
+        assert!(validate_offer_specs(&format!("{}:{iss}:1", "A".repeat(21)), "XRP:1").is_err());
+        for bad in ["USD ", "US D", "USD\u{a0}", "RL-USD"] {
+            assert!(parse_amm_asset(&format!("{bad}:{iss}")).is_err(), "{bad:?}");
+            assert!(
+                validate_offer_specs(&format!("{bad}:{iss}:1"), "XRP:1").is_err(),
+                "{bad:?}"
+            );
+        }
     }
 }
