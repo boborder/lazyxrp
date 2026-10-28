@@ -26,5 +26,5 @@ pub use submit::{run_direct_mint_payment, run_smart_account_instruction};
 pub use toml::fetch_xrpl_toml_with_meta;
 pub(crate) use types::RIPPLE_EPOCH_UNIX;
 pub use types::*;
-pub(crate) use util::{currency_code_for, sanitize_text};
+pub(crate) use util::{currency_code_for, iou_currency_from_input, sanitize_text};
 pub use ws::start_ws_task;

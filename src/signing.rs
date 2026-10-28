@@ -476,9 +476,11 @@ pub fn validate_payment_input(
         bail!("amount required");
     }
     match iou {
-        Some((currency, issuer)) => {
-            validate_iou_fields(&currency.trim().to_ascii_uppercase(), issuer.trim(), amount)?
-        }
+        Some((currency, issuer)) => validate_iou_fields(
+            &crate::xrpl::iou_currency_from_input(currency),
+            issuer.trim(),
+            amount,
+        )?,
         None => {
             if crate::xrpl::xrp_to_drops(amount).map_err(|e| eyre!("amount: {e}"))? == 0 {
                 bail!("amount must be > 0");
@@ -2500,7 +2502,8 @@ mod tests {
             (DEST, "abc", None, None, Some("amount")),
             (DEST, " 1.5 ", None, None, None),
             (DEST, "10", usd, None, None),
-            (DEST, "10", Some(("USDX", ISS)), None, Some("currency")),
+            (DEST, "10", Some(("RLUSD", ISS)), None, None), // symbol → 160-bit code (TC-370)
+            (DEST, "10", Some(("US D", ISS)), None, Some("currency")),
             (DEST, "10", Some(("USD", "rIssuer")), None, Some("issuer")),
             (DEST, "-1", usd, None, Some("IOU value")),
             (DEST, "10", usd, Some("XRP:5000000"), None),

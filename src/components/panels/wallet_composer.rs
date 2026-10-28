@@ -484,7 +484,7 @@ impl WalletPanel {
             return None;
         };
         let (currency, issuer, limit) = (
-            currency.trim().to_uppercase(),
+            crate::xrpl::iou_currency_from_input(currency),
             issuer.trim().to_string(),
             limit.trim().to_string(),
         );
@@ -776,7 +776,7 @@ impl WalletPanel {
             iou_currency: if iou_currency.is_empty() {
                 None
             } else {
-                Some(iou_currency.to_uppercase())
+                Some(crate::xrpl::iou_currency_from_input(&iou_currency))
             },
             iou_issuer: if iou_issuer.is_empty() {
                 None
@@ -812,7 +812,7 @@ impl WalletPanel {
         }
         let (iou_currency, iou_issuer) = if *is_iou {
             (
-                Some(iou_currency.trim().to_uppercase()),
+                Some(crate::xrpl::iou_currency_from_input(iou_currency)),
                 Some(iou_issuer.trim().to_string()),
             )
         } else {

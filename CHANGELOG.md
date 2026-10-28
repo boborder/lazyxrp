@@ -14,6 +14,7 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 - Dependencies: `kobe-xrpl` 4 (with `kobe-core` 4, replacing `kobe-primitives`), `vergen-gix` 10, everything else updated within semver. MSRV (`rust-version`) is now **1.99**.
 - Write specs accept a currency symbol such as `RLUSD:rIssuer:10` too (converted to the 160-bit code before validation), matching the reads: `-x offer-create` / `amm-deposit` amounts, `amm-withdraw` assets, and `tx` amount / bridge issue fields. Before, only 3-letter or 40-hex codes passed (`invalid IOU currency code`).
+- The TUI Payment (IOU) and TrustSet composers accept a currency symbol such as `RLUSD` too. A symbol keeps its case (`Rlusd` is a different token); 3-letter codes are still uppercased.
 
 ## [0.9.1] - 2026-10-26
 

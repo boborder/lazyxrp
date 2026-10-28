@@ -21,6 +21,18 @@ pub(crate) fn currency_code_for(symbol: &str) -> String {
     }
 }
 
+/// Composer IOU currency field → wire code. 3-letter and 40-hex codes are uppercased
+/// (existing behavior: `usd` means `USD`, hex case is irrelevant); a longer symbol keeps its
+/// case — `Rlusd` and `RLUSD` are different tokens — and goes through [`currency_code_for`].
+pub(crate) fn iou_currency_from_input(raw: &str) -> String {
+    let raw = raw.trim();
+    if raw.len() == 3 || (raw.len() == 40 && raw.bytes().all(|b| b.is_ascii_hexdigit())) {
+        raw.to_ascii_uppercase()
+    } else {
+        currency_code_for(raw)
+    }
+}
+
 /// Strip control, bidi-override and invisible format characters (and cap length) from
 /// remote-supplied text, so a hostile node cannot inject escape sequences or visually
 /// reorder / hide text (Trojan Source style) in the TUI, error reports or CLI output.
@@ -118,5 +130,18 @@ mod tests {
             "tesSSECCUSx"
         );
         assert_eq!(sanitize_text("あいうえお", 3), "あいう");
+    }
+
+    /// TC-370: the TUI Payment / TrustSet currency field accepts a symbol: 3-letter and 40-hex
+    /// codes are uppercased as before, `RLUSD` becomes its 160-bit code with its case kept
+    /// (`Rlusd` is a different token), and typo input is left for validation to refuse.
+    #[test]
+    fn iou_currency_from_input_keeps_symbol_case() {
+        let rlusd = "524C555344000000000000000000000000000000";
+        assert_eq!(iou_currency_from_input(" usd "), "USD");
+        assert_eq!(iou_currency_from_input(&rlusd.to_lowercase()), rlusd);
+        assert_eq!(iou_currency_from_input("RLUSD"), rlusd);
+        assert_ne!(iou_currency_from_input("Rlusd"), rlusd);
+        assert_eq!(iou_currency_from_input("US D"), "US D");
     }
 }
