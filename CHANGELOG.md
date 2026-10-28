@@ -4,6 +4,8 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-10-28
+
 ### Fixed
 
 - TUI: keystrokes were randomly lost (roughly 1 in 3 runs). The terminal event stream started before the NFT image picker queried the terminal, so the picker missed its replies and left a thread reading stdin that stole keys. The event stream now starts after every component's `init`.
@@ -221,7 +223,8 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 See [GitHub Releases](https://github.com/boborder/lazyxrp/releases) for 0.2.11 and older.
 
-[Unreleased]: https://github.com/boborder/lazyxrp/compare/v0.9.1...HEAD
+[Unreleased]: https://github.com/boborder/lazyxrp/compare/v0.10.0...HEAD
+[0.10.0]: https://github.com/boborder/lazyxrp/compare/v0.9.1...v0.10.0
 [0.9.1]: https://github.com/boborder/lazyxrp/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/boborder/lazyxrp/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/boborder/lazyxrp/compare/v0.7.0...v0.8.0
