@@ -52,10 +52,10 @@
 
 - `signing::SimulatedFill { sequence, fee_drops, last_ledger_sequence }` を `sequence_fee_ledger_from_simulate` が返し、すべての `create_and_sign_*`、`txspec` の `sign` ポインタ、CLI / submit の `sign` クロージャが受け取る。2 つを入れ替えるとコンパイルが通らない。`PaymentSpec` と `AccountSetChanges` は simulate リクエストと署名済みトランザクションで共通の Payment / AccountSet のフィールドを持ち、各フローが 1 回作って両方に渡す。変更前のコードと照合済み: フィールドごとに異なる値で、署名済み blob 31 件・simulate JSON・拒否メッセージがバイト単位で一致。`signing.rs` に `#[allow(clippy::too_many_arguments)]` は残っていない。
 
-### P-013: 150 行を超える関数がまだ残っている
+### ~~P-013: 150 行を超える関数がまだ残っている~~ → 解決（2026-10-30）
 
-- 分割済み: `render_composer`（983 → 104 行）、wallet の `key_action`、`execute_cli_command`（483 → 123）、`poll.rs::drive_poll_loop`（366 → 111。コマンドの振り分けは `run_command`、143 行で TC-372 が検証）と `poll_batch`（308 → 3 段階）、`app.rs::drain_and_dispatch_actions`（280 → 11 行と `handle_action` の 132 行）。まだ長い: `lib.rs::run_flare_command`（324）、`tx_detail::detail_lines_for`（214）、`validator_detail_lines`（184）、`wallet.rs::update`（174）、`submit_fxrp_direct_mint_payment`（171）、`server.rs::draw`（164）、`submit_smart_account_instruction`（160）、`submit_payment_transaction`（159）、`account.rs::draw`（150）。
-- `run_flare_command` には自動テストがない（書き込みに live の Flare ノードが要る）ため、実行手段と合わせて分割する。
+- 150 行以上の本番関数は残っていない（最長は `run_flare_command`、`poll_xrpl`、`submit_payment_transaction`、`submit_smart_account_instruction` の 144〜147 行。`txspec/identity.rs` の `field_validation_tables` はテスト）。大きさではなく仕事ごとに分割した: `poll.rs`（`drive_poll_loop` 366 → 111 と `run_command` / `poll_xrpl` / `poll_oracle_prices` / `poll_flare`、TC-372）、`app.rs`（`drain_and_dispatch_actions` 280 → 11 と `handle_action` / `fan_out` / `poll_command_for`、TC-373）、`tx_detail` と `validator_detail_lines` はセクションごと、Server / Account の `draw` は領域ごと、wallet の `update`（成功アーム 14 個 → `submit_success` テーブル）、`submit_fxrp_direct_mint_payment`（`plan_direct_mint`）、`lib.rs::run_flare_command`（324 → 144、Flare サブコマンドごとに 1 関数、TC-374）。
+- 分割のたびに、既存テストだけでなく旧コードとの比較で確認した。コミットしない一時的な差分テストで、トランザクション 12 形、バリデータ詳細 1,200 通り、Server パネル 360 状態と Account パネル 1,008 状態（スタイル込みバッファ）、wallet の成功アクション 448 通り、Direct Mint Payment の入力 25,920 通りの出力が、前後でバイト一致した。Flare サブコマンド本体は live の Flare ノードが必要なので、そのまま移した（旧関数との行の多重集合比較で、意図した差分だけが残る: `url` を所有ではなく借用にしたこと、`sa-memo` / `sa-call` で共有する `send_direct_mint`）。ネットワーク I/O の前の拒否だけにテストがある（TC-374）。
 
 ### ~~P-014: `signing.rs` 以外に `too_many_arguments` の allow が 7 個残っている~~ → 解決（2026-10-30）
 

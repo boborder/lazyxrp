@@ -1193,6 +1193,50 @@ pub(super) async fn submit_payment_transaction(
     .await;
 }
 
+/// A Direct Mint Payment's inputs after every check that needs neither the network nor a key.
+struct DirectMintPlan {
+    memo: String,
+    amount_drops: u64,
+    /// Core Vault classic address.
+    destination: String,
+}
+
+/// Network pairing, memo, amount against the Direct Mint fees, and the Core Vault destination.
+/// Errors are the text of the `FxrpDirectMintPaymentSubmitErr` that reports them.
+fn plan_direct_mint(
+    network: &Network,
+    flare_network: crate::config::FlareNetwork,
+    params: &FxrpDirectMintPaymentParams,
+) -> Result<DirectMintPlan, String> {
+    crate::flare::check_network_pair(network, flare_network)?;
+    let memo = match &params.custom_memo {
+        Some(m) => m.clone(),
+        None => signing::build_direct_mint_memo_data(&params.flare_recipient)
+            .map_err(|e| format!("{e}"))?,
+    };
+    let amount_drops =
+        xrp_to_drops(params.amount_xrp.trim()).map_err(|e| format!("amount: {e}"))?;
+    if amount_drops == 0 {
+        return Err("amount must be greater than zero".into());
+    }
+    crate::flare::check_direct_mint_amount(
+        amount_drops,
+        params.min_fee_uba,
+        params.fee_bips,
+        params.executor_fee_uba,
+    )?;
+    let destination =
+        resolve_payment_destination(params.core_vault_xrpl.trim()).map_err(|e| format!("{e}"))?;
+    if destination.destination_tag.is_some() {
+        return Err("Core Vault destination must be classic address (no X-address tag)".into());
+    }
+    Ok(DirectMintPlan {
+        memo,
+        amount_drops,
+        destination: destination.classic,
+    })
+}
+
 pub(super) async fn submit_fxrp_direct_mint_payment(
     rpc: &RpcClient,
     network: &Network,
@@ -1203,61 +1247,17 @@ pub(super) async fn submit_fxrp_direct_mint_payment(
     signing_credential: Option<&crate::signing::SigningCredential>,
 ) {
     let submit_err = Action::FxrpDirectMintPaymentSubmitErr;
-    if let Err(e) = crate::flare::check_network_pair(network, flare_network) {
-        send_action(action_tx, submit_err(e));
-        return;
-    }
-    let memo = match &params.custom_memo {
-        Some(m) => m.clone(),
-        None => {
-            let Some(m) = unwrap_or_submit_err(
-                signing::build_direct_mint_memo_data(&params.flare_recipient),
-                submit_err,
-                action_tx,
-            ) else {
-                return;
-            };
-            m
-        }
-    };
-    let amount_drops = match xrp_to_drops(params.amount_xrp.trim()) {
-        Ok(v) => v,
+    let DirectMintPlan {
+        memo,
+        amount_drops,
+        destination: destination_resolved,
+    } = match plan_direct_mint(network, flare_network, &params) {
+        Ok(plan) => plan,
         Err(e) => {
-            send_action(action_tx, submit_err(format!("amount: {e}")));
+            send_action(action_tx, submit_err(e));
             return;
         }
     };
-    if amount_drops == 0 {
-        send_action(
-            action_tx,
-            submit_err("amount must be greater than zero".into()),
-        );
-        return;
-    }
-    if let Err(e) = crate::flare::check_direct_mint_amount(
-        amount_drops,
-        params.min_fee_uba,
-        params.fee_bips,
-        params.executor_fee_uba,
-    ) {
-        send_action(action_tx, submit_err(e));
-        return;
-    }
-    let Some(destination) = unwrap_or_submit_err(
-        resolve_payment_destination(params.core_vault_xrpl.trim()),
-        submit_err,
-        action_tx,
-    ) else {
-        return;
-    };
-    if destination.destination_tag.is_some() {
-        send_action(
-            action_tx,
-            submit_err("Core Vault destination must be classic address (no X-address tag)".into()),
-        );
-        return;
-    }
-    let destination_resolved = destination.classic;
     let Some(wallet) = resolve_submit_wallet(
         network,
         params.skip_mainnet_prompt,
