@@ -230,7 +230,7 @@ cargo deny check
 | TC-127 | P1 | `src/config/mod.rs` | 設定ファイルの `network = "xahau-test"` は XahauTest として読み込まれる(TC-042 のテストに統合) |
 | TC-128 | P2 | `src/components/shared/theme.rs` | DESIGN.md frontmatter の `colors.*` の hex 値が `theme.rs` の定数と一致する |
 | TC-129 | P1 | `src/components/panels/wallet.rs` | Fxrp proof プレビューはマルチバイト JSON を文字単位で切り詰める(バイトスライスによる panic の回帰) |
-| TC-130 | P1 | `src/components/panels/wallet_keys.rs` | `payment_edit_keys` の入力フィルタ — IOU 通貨行は 40 文字以下(3 文字コードまたは 40 桁 hex)、金額は数字と単一のドットのみ、宛先は表示可能 ASCII |
+| TC-130 | P1 | `src/components/panels/wallet_keys.rs` | `ComposerPhase::payment_edit_key` の入力フィルタ（Payment 以外のフェーズは何も受け付けない） — IOU 通貨行は 40 文字以下(3 文字コードまたは 40 桁 hex)、金額は数字と単一のドットのみ、宛先は表示可能 ASCII |
 | TC-131 | P1 | `src/components/panels/wallet_keys.rs` | `account_set_edit_keys` — 行 0/1 はロック、domain は自由テキスト、tick/transfer は数字のみ |
 | TC-132 | P2 | `src/components/panels/wallet_composer.rs` | Composer の行移動 — `[`/`]` は循環、編集中の Enter は次へ進む、`e` で編集を切り替える |
 | TC-133 | P1 | `src/components/shared/selectable_table.rs` | 選択は `reset_len` でクランプされ、len 0 で選択解除され、端で止まる |

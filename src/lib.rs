@@ -231,10 +231,12 @@ pub async fn run() -> color_eyre::Result<()> {
             }
             let mut app = app::App::new(
                 tick_rate,
-                rpc_url,
-                ws_url,
+                app::Endpoints {
+                    network,
+                    rpc_url,
+                    ws_url,
+                },
                 args.account.clone().or(watch_address),
-                network,
                 config,
                 secrets,
                 yes,

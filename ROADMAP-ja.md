@@ -245,6 +245,7 @@ Unsupported / Planned の種別の理由別グルーピングは [A](#a-xrpl-ト
 | 2026-10-30 | — | テストの統合 | **済**。同じ対象のテストを 1 つの `#[test]` のセクションにまとめた（lib 448 → 341。アサーション・`#[ignore]`・属性は不変: `assert*` 2,159、`matches!` 99、エラー期待 110。本番コードの行カバレッジは前後とも 12,947 / 18,280 で、失った行はない）。`docs/test.md` は統合後のテスト名を参照。`docs/test.md` に規則を追加: RAII ガードを持つセクションは独自のブロックに入れる（統合で `env_lock()` が一度デッドロックした） |
 | 2026-10-30 | — | 署名 API の構造体化 | **済**。`(sequence, fee_drops, last_ledger_sequence)` の 3 つ組をすべての受け渡しで `SimulatedFill` に置き換え（P-012）。`PaymentSpec` / `AccountSetChanges` が長い位置引数リストを置き換える。`signing.rs` に `too_many_arguments` の allow は残っていない。署名済み blob・simulate JSON・拒否メッセージは変更前のコードとバイト単位で一致（31 件、フィールドごとに異なる値）。未着手: P-011、P-013、P-014 |
 | 2026-10-30 | — | RPC エラーの型付け | **済**。`NodeError` が `"[XRPL-<kind>] …"` の文字列プロトコルを置き換える（P-011）。呼び出し側は型に問い合わせる。**挙動変更**: 一時的なノードエラー（`tooBusy`、`noNetwork`、`noCurrent`、`noClosed`、`failedToForward`、`amendmentBlocked`）を再試行するようになり、`entryNotFound` / `lgrNotFound` / `actMalformed` は not found として扱う。旧分類器は、実ノードのメッセージにトークンが含まれないため一度も一致しなかった。表示テキストは不変。未着手: P-013、P-014 |
+| 2026-10-30 | — | 引数リストの型化 | **済**。最後の 7 個の `too_many_arguments` の allow を解消（P-014）: `Backoff`、`SubmitPlan`（build / sign / on_ok のクロージャを位置ではなく名前で渡す）、`Endpoints`、`TomlFetch`、`ComposerPhase::payment_edit_key`。`ServerPanel::update` にあった到達不能な重複の `XrplTomlFetched` アームを削除。挙動の変更なし。未着手: P-013 |
 
 長期項目の出荷: F-01 AccountDelete（0.5.0、2026-10-11）は composer `x` + `-x account-delete`、TC-232–233。Watch / Operate 分離（0.6.0、2026-10-11）、TC-234–235。
 

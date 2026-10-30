@@ -21,6 +21,14 @@ pub(super) struct ValidatorDetail {
     pub(super) content_type: Option<String>,
 }
 
+/// The outcome of one `xrp-ledger.toml` fetch, as carried by `Action::XrplTomlFetched`.
+pub(super) struct TomlFetch {
+    pub(super) status: u16,
+    pub(super) content_type: Option<String>,
+    pub(super) raw: Option<String>,
+    pub(super) result: Result<XrplTomlData, String>,
+}
+
 impl ValidatorDetail {
     pub(super) fn open(&mut self, row: &DunlValidatorRow, index: usize, dunl: &DunlSummary) {
         self.visible = true;
@@ -46,21 +54,17 @@ impl ValidatorDetail {
         );
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub(super) fn set_toml(
         &mut self,
         row: &DunlValidatorRow,
         index: usize,
         dunl: &DunlSummary,
-        status: u16,
-        content_type: Option<String>,
-        raw: Option<String>,
-        result: Result<XrplTomlData, String>,
+        fetch: TomlFetch,
     ) {
-        self.toml = Some(result);
-        self.toml_raw = raw;
-        self.status = status;
-        self.content_type = content_type;
+        self.toml = Some(fetch.result);
+        self.toml_raw = fetch.raw;
+        self.status = fetch.status;
+        self.content_type = fetch.content_type;
         self.lines = validator_detail_lines(
             row,
             index,

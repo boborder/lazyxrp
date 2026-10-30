@@ -226,24 +226,42 @@ pub(super) async fn simulate_then_finalize<E, FS, FO>(
     finalize_simulate_sign_submit(rpc, action_tx, sim, sign_blob, submit_err, on_ok).await;
 }
 
+/// The per-transaction steps of a write, named so they cannot be swapped at a call site:
+/// `build(account, sequence)` makes the tx_json to simulate, `sign(wallet, account, fill)` the
+/// signed blob, `on_ok(hash)` the follow-up actions; `submit_err` wraps any failure into the
+/// panel's error action.
+pub(super) struct SubmitPlan<E, B, S, O>
+where
+    E: Fn(String) -> Action + Copy,
+    B: FnOnce(&str, u32) -> color_eyre::Result<Value>,
+    S: FnOnce(&xrpl::wallet::Wallet, &str, signing::SimulatedFill) -> color_eyre::Result<String>,
+    O: FnOnce(String) -> Vec<Action>,
+{
+    pub(super) submit_err: E,
+    pub(super) build: B,
+    pub(super) sign: S,
+    pub(super) on_ok: O,
+}
+
 /// Account fetch → build tx_json → simulate → sign → submit for an already-resolved wallet.
-/// `build(account, sequence)`, `sign(wallet, account, fill)`.
-#[allow(clippy::too_many_arguments)]
 pub(super) async fn run_submit_with_wallet<E, B, S, O>(
     rpc: &RpcClient,
     network: &Network,
     wallet: &xrpl::wallet::Wallet,
-    submit_err: E,
     action_tx: &UnboundedSender<Action>,
-    build: B,
-    sign: S,
-    on_ok: O,
+    plan: SubmitPlan<E, B, S, O>,
 ) where
     E: Fn(String) -> Action + Copy,
     B: FnOnce(&str, u32) -> color_eyre::Result<Value>,
     S: FnOnce(&xrpl::wallet::Wallet, &str, signing::SimulatedFill) -> color_eyre::Result<String>,
     O: FnOnce(String) -> Vec<Action>,
 {
+    let SubmitPlan {
+        submit_err,
+        build,
+        sign,
+        on_ok,
+    } = plan;
     let account: &str = &wallet.classic_address;
     let Some(account_info) =
         fetch_account_summary_for_submit(rpc, network, account, submit_err, action_tx).await
@@ -262,18 +280,14 @@ pub(super) async fn run_submit_with_wallet<E, B, S, O>(
 }
 
 /// Mainnet guard + wallet, then [`run_submit_with_wallet`]. Callers validate inputs first.
-#[allow(clippy::too_many_arguments)]
 pub(super) async fn run_submit<E, B, S, O>(
     rpc: &RpcClient,
     network: &Network,
     skip_mainnet_prompt: bool,
     signing_credential: Option<&crate::signing::SigningCredential>,
     mainnet_err: &str,
-    submit_err: E,
     action_tx: &UnboundedSender<Action>,
-    build: B,
-    sign: S,
-    on_ok: O,
+    plan: SubmitPlan<E, B, S, O>,
 ) where
     E: Fn(String) -> Action + Copy,
     B: FnOnce(&str, u32) -> color_eyre::Result<Value>,
@@ -285,15 +299,12 @@ pub(super) async fn run_submit<E, B, S, O>(
         skip_mainnet_prompt,
         signing_credential,
         mainnet_err,
-        submit_err,
+        plan.submit_err,
         action_tx,
     ) else {
         return;
     };
-    run_submit_with_wallet(
-        rpc, network, &wallet, submit_err, action_tx, build, sign, on_ok,
-    )
-    .await;
+    run_submit_with_wallet(rpc, network, &wallet, action_tx, plan).await;
 }
 
 pub(super) fn account_set_params_nonempty(p: &AccountSetSubmitParams) -> bool {
@@ -387,20 +398,22 @@ pub(super) async fn submit_account_set_transaction(
         rpc,
         network,
         &wallet,
-        submit_err,
         action_tx,
-        |account, sequence| {
-            signing::build_account_set_tx_json_for_simulate(account, sequence, &changes)
-        },
-        |wallet, account, fill| {
-            signing::create_and_sign_account_set(wallet, account, fill, &changes)
-        },
-        |hash| {
-            vec![
-                Action::AccountSetSubmitOk(hash),
-                Action::RefreshAccount,
-                Action::RefreshTxHistory,
-            ]
+        SubmitPlan {
+            submit_err,
+            build: |account, sequence| {
+                signing::build_account_set_tx_json_for_simulate(account, sequence, &changes)
+            },
+            sign: |wallet, account, fill| {
+                signing::create_and_sign_account_set(wallet, account, fill, &changes)
+            },
+            on_ok: |hash| {
+                vec![
+                    Action::AccountSetSubmitOk(hash),
+                    Action::RefreshAccount,
+                    Action::RefreshTxHistory,
+                ]
+            },
         },
     )
     .await;
@@ -442,23 +455,27 @@ pub(super) async fn submit_trust_set_transaction(
         params.skip_mainnet_prompt,
         signing_credential,
         "production network: restart lazyxrp with --yes to allow TrustSet writes",
-        submit_err,
         action_tx,
-        |account, sequence| {
-            signing::build_trust_set_tx_json_for_simulate(
-                account, &currency, &issuer, &limit, sequence,
-            )
-        },
-        |wallet, account, fill| {
-            signing::create_and_sign_trust_set(wallet, account, &currency, &issuer, &limit, fill)
-        },
-        |hash| {
-            vec![
-                Action::TrustSetSubmitOk(hash),
-                Action::RefreshAccount,
-                Action::RefreshLines,
-                Action::RefreshTxHistory,
-            ]
+        SubmitPlan {
+            submit_err,
+            build: |account, sequence| {
+                signing::build_trust_set_tx_json_for_simulate(
+                    account, &currency, &issuer, &limit, sequence,
+                )
+            },
+            sign: |wallet, account, fill| {
+                signing::create_and_sign_trust_set(
+                    wallet, account, &currency, &issuer, &limit, fill,
+                )
+            },
+            on_ok: |hash| {
+                vec![
+                    Action::TrustSetSubmitOk(hash),
+                    Action::RefreshAccount,
+                    Action::RefreshLines,
+                    Action::RefreshTxHistory,
+                ]
+            },
         },
     )
     .await;
@@ -493,25 +510,33 @@ pub(super) async fn submit_offer_create_transaction(
         params.skip_mainnet_prompt,
         signing_credential,
         "production network: restart lazyxrp with --yes to allow OfferCreate writes",
-        submit_err,
         action_tx,
-        |account, sequence| {
-            signing::build_offer_create_tx_json_for_simulate(
-                account,
-                &taker_gets,
-                &taker_pays,
-                sequence,
-            )
-        },
-        |wallet, account, fill| {
-            signing::create_and_sign_offer_create(wallet, account, &taker_gets, &taker_pays, fill)
-        },
-        |hash| {
-            vec![
-                Action::OfferCreateSubmitOk(hash),
-                Action::RefreshAccount,
-                Action::RefreshTxHistory,
-            ]
+        SubmitPlan {
+            submit_err,
+            build: |account, sequence| {
+                signing::build_offer_create_tx_json_for_simulate(
+                    account,
+                    &taker_gets,
+                    &taker_pays,
+                    sequence,
+                )
+            },
+            sign: |wallet, account, fill| {
+                signing::create_and_sign_offer_create(
+                    wallet,
+                    account,
+                    &taker_gets,
+                    &taker_pays,
+                    fill,
+                )
+            },
+            on_ok: |hash| {
+                vec![
+                    Action::OfferCreateSubmitOk(hash),
+                    Action::RefreshAccount,
+                    Action::RefreshTxHistory,
+                ]
+            },
         },
     )
     .await;
@@ -531,24 +556,26 @@ pub(super) async fn submit_offer_cancel_transaction(
         params.skip_mainnet_prompt,
         signing_credential,
         "production network: restart lazyxrp with --yes to allow OfferCancel writes",
-        submit_err,
         action_tx,
-        |account, sequence| {
-            signing::build_offer_cancel_tx_json_for_simulate(
-                account,
-                params.offer_sequence,
-                sequence,
-            )
-        },
-        |wallet, account, fill| {
-            signing::create_and_sign_offer_cancel(wallet, account, params.offer_sequence, fill)
-        },
-        |hash| {
-            vec![
-                Action::OfferCancelSubmitOk(hash),
-                Action::RefreshAccount,
-                Action::RefreshTxHistory,
-            ]
+        SubmitPlan {
+            submit_err,
+            build: |account, sequence| {
+                signing::build_offer_cancel_tx_json_for_simulate(
+                    account,
+                    params.offer_sequence,
+                    sequence,
+                )
+            },
+            sign: |wallet, account, fill| {
+                signing::create_and_sign_offer_cancel(wallet, account, params.offer_sequence, fill)
+            },
+            on_ok: |hash| {
+                vec![
+                    Action::OfferCancelSubmitOk(hash),
+                    Action::RefreshAccount,
+                    Action::RefreshTxHistory,
+                ]
+            },
         },
     )
     .await;
@@ -606,36 +633,38 @@ pub(super) async fn submit_escrow_create_transaction(
         params.skip_mainnet_prompt,
         signing_credential,
         "production network: restart lazyxrp with --yes to allow EscrowCreate writes",
-        submit_err,
         action_tx,
-        |account, sequence| {
-            signing::build_escrow_create_tx_json_for_simulate(
-                account,
-                &destination,
-                amount_drops,
-                finish_after,
-                cancel_after,
-                sequence,
-            )
-        },
-        |wallet, account, fill| {
-            signing::create_and_sign_escrow_create(
-                wallet,
-                account,
-                &destination,
-                amount_drops,
-                finish_after,
-                cancel_after,
-                fill,
-            )
-        },
-        |hash| {
-            vec![
-                Action::EscrowCreateSubmitOk(hash),
-                Action::RefreshAccount,
-                Action::RefreshTxHistory,
-                Action::RefreshLedgerObjects,
-            ]
+        SubmitPlan {
+            submit_err,
+            build: |account, sequence| {
+                signing::build_escrow_create_tx_json_for_simulate(
+                    account,
+                    &destination,
+                    amount_drops,
+                    finish_after,
+                    cancel_after,
+                    sequence,
+                )
+            },
+            sign: |wallet, account, fill| {
+                signing::create_and_sign_escrow_create(
+                    wallet,
+                    account,
+                    &destination,
+                    amount_drops,
+                    finish_after,
+                    cancel_after,
+                    fill,
+                )
+            },
+            on_ok: |hash| {
+                vec![
+                    Action::EscrowCreateSubmitOk(hash),
+                    Action::RefreshAccount,
+                    Action::RefreshTxHistory,
+                    Action::RefreshLedgerObjects,
+                ]
+            },
         },
     )
     .await;
@@ -662,34 +691,36 @@ pub(super) async fn submit_escrow_close_transaction(
         params.skip_mainnet_prompt,
         signing_credential,
         "production network: restart lazyxrp with --yes to allow EscrowFinish/EscrowCancel writes",
-        submit_err,
         action_tx,
-        |account, sequence| {
-            signing::build_escrow_close_tx_json_for_simulate(
-                account,
-                &owner,
-                params.offer_sequence,
-                params.cancel,
-                sequence,
-            )
-        },
-        |wallet, account, fill| {
-            signing::create_and_sign_escrow_close(
-                wallet,
-                account,
-                &owner,
-                params.offer_sequence,
-                params.cancel,
-                fill,
-            )
-        },
-        |hash| {
-            vec![
-                Action::EscrowCloseSubmitOk(hash),
-                Action::RefreshAccount,
-                Action::RefreshTxHistory,
-                Action::RefreshLedgerObjects,
-            ]
+        SubmitPlan {
+            submit_err,
+            build: |account, sequence| {
+                signing::build_escrow_close_tx_json_for_simulate(
+                    account,
+                    &owner,
+                    params.offer_sequence,
+                    params.cancel,
+                    sequence,
+                )
+            },
+            sign: |wallet, account, fill| {
+                signing::create_and_sign_escrow_close(
+                    wallet,
+                    account,
+                    &owner,
+                    params.offer_sequence,
+                    params.cancel,
+                    fill,
+                )
+            },
+            on_ok: |hash| {
+                vec![
+                    Action::EscrowCloseSubmitOk(hash),
+                    Action::RefreshAccount,
+                    Action::RefreshTxHistory,
+                    Action::RefreshLedgerObjects,
+                ]
+            },
         },
     )
     .await;
@@ -719,21 +750,23 @@ pub(super) async fn submit_amm_deposit_transaction(
         params.skip_mainnet_prompt,
         signing_credential,
         "production network: restart lazyxrp with --yes to allow AMMDeposit writes",
-        submit_err,
         action_tx,
-        |account, sequence| {
-            signing::build_amm_deposit_tx_json_for_simulate(account, amount, amount2, sequence)
-        },
-        |wallet, account, fill| {
-            signing::create_and_sign_amm_deposit(wallet, account, amount, amount2, fill)
-        },
-        |hash| {
-            vec![
-                Action::AmmSubmitOk(format!("AMMDeposit · {hash}")),
-                Action::RefreshAccount,
-                Action::RefreshTxHistory,
-                Action::RefreshLines,
-            ]
+        SubmitPlan {
+            submit_err,
+            build: |account, sequence| {
+                signing::build_amm_deposit_tx_json_for_simulate(account, amount, amount2, sequence)
+            },
+            sign: |wallet, account, fill| {
+                signing::create_and_sign_amm_deposit(wallet, account, amount, amount2, fill)
+            },
+            on_ok: |hash| {
+                vec![
+                    Action::AmmSubmitOk(format!("AMMDeposit · {hash}")),
+                    Action::RefreshAccount,
+                    Action::RefreshTxHistory,
+                    Action::RefreshLines,
+                ]
+            },
         },
     )
     .await;
@@ -844,31 +877,33 @@ pub(super) async fn submit_account_delete_transaction(
         params.skip_mainnet_prompt,
         signing_credential,
         "production network: restart lazyxrp with --yes to allow AccountDelete writes",
-        submit_err,
         action_tx,
-        |account, sequence| {
-            signing::build_account_delete_tx_json_for_simulate(
-                account,
-                &destination.classic,
-                destination.destination_tag,
-                sequence,
-            )
-        },
-        |wallet, account, fill| {
-            signing::create_and_sign_account_delete(
-                wallet,
-                account,
-                &destination.classic,
-                destination.destination_tag,
-                fill,
-            )
-        },
-        |hash| {
-            vec![
-                Action::AccountDeleteSubmitOk(hash),
-                Action::RefreshAccount,
-                Action::RefreshTxHistory,
-            ]
+        SubmitPlan {
+            submit_err,
+            build: |account, sequence| {
+                signing::build_account_delete_tx_json_for_simulate(
+                    account,
+                    &destination.classic,
+                    destination.destination_tag,
+                    sequence,
+                )
+            },
+            sign: |wallet, account, fill| {
+                signing::create_and_sign_account_delete(
+                    wallet,
+                    account,
+                    &destination.classic,
+                    destination.destination_tag,
+                    fill,
+                )
+            },
+            on_ok: |hash| {
+                vec![
+                    Action::AccountDeleteSubmitOk(hash),
+                    Action::RefreshAccount,
+                    Action::RefreshTxHistory,
+                ]
+            },
         },
     )
     .await;
@@ -914,20 +949,22 @@ pub(super) async fn submit_generic_transaction(
         params.skip_mainnet_prompt,
         signing_credential,
         &mainnet_err,
-        submit_err,
         action_tx,
-        |account, sequence| (spec.build_json)(account, &fields, sequence),
-        |wallet, account, fill| (spec.sign)(wallet, account, &fields, fill),
-        |hash| {
-            let mut actions = vec![
-                Action::GenericTxSubmitOk(format!("{} · {hash}", spec.tx_type)),
-                Action::RefreshAccount,
-                Action::RefreshTxHistory,
-            ];
-            if spec.family == "NFT" {
-                actions.push(Action::RefreshNfts);
-            }
-            actions
+        SubmitPlan {
+            submit_err,
+            build: |account, sequence| (spec.build_json)(account, &fields, sequence),
+            sign: |wallet, account, fill| (spec.sign)(wallet, account, &fields, fill),
+            on_ok: |hash| {
+                let mut actions = vec![
+                    Action::GenericTxSubmitOk(format!("{} · {hash}", spec.tx_type)),
+                    Action::RefreshAccount,
+                    Action::RefreshTxHistory,
+                ];
+                if spec.family == "NFT" {
+                    actions.push(Action::RefreshNfts);
+                }
+                actions
+            },
         },
     )
     .await;
@@ -978,24 +1015,31 @@ pub(super) async fn submit_set_regular_key_transaction(
         rpc,
         network,
         &wallet,
-        submit_err,
         action_tx,
-        |account, sequence| {
-            signing::build_set_regular_key_tx_json_for_simulate(
-                account,
-                regular_key.as_deref(),
-                sequence,
-            )
-        },
-        |wallet, account, fill| {
-            signing::create_and_sign_set_regular_key(wallet, account, regular_key.as_deref(), fill)
-        },
-        |hash| {
-            vec![
-                Action::SetRegularKeySubmitOk(hash),
-                Action::RefreshAccount,
-                Action::RefreshTxHistory,
-            ]
+        SubmitPlan {
+            submit_err,
+            build: |account, sequence| {
+                signing::build_set_regular_key_tx_json_for_simulate(
+                    account,
+                    regular_key.as_deref(),
+                    sequence,
+                )
+            },
+            sign: |wallet, account, fill| {
+                signing::create_and_sign_set_regular_key(
+                    wallet,
+                    account,
+                    regular_key.as_deref(),
+                    fill,
+                )
+            },
+            on_ok: |hash| {
+                vec![
+                    Action::SetRegularKeySubmitOk(hash),
+                    Action::RefreshAccount,
+                    Action::RefreshTxHistory,
+                ]
+            },
         },
     )
     .await;

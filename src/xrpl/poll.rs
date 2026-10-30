@@ -68,6 +68,31 @@ pub(crate) fn is_backoff_active(backoff_until: Option<Instant>) -> bool {
     backoff_until.is_some_and(|until| Instant::now() < until)
 }
 
+/// Failed-poll backoff: the escalating delay and the instant its window closes.
+/// The XRPL poll and the Flare batch each keep their own, on the same schedule.
+#[derive(Default)]
+struct Backoff {
+    secs: u64,
+    until: Option<Instant>,
+}
+
+impl Backoff {
+    /// Reset on success; on failure escalate via [`next_backoff_secs`] and arm a window
+    /// observed by [`Backoff::is_active`].
+    fn record(&mut self, succeeded: bool) {
+        if succeeded {
+            *self = Self::default();
+        } else {
+            self.secs = next_backoff_secs(self.secs);
+            self.until = Some(Instant::now() + Duration::from_secs(self.secs));
+        }
+    }
+
+    fn is_active(&self) -> bool {
+        is_backoff_active(self.until)
+    }
+}
+
 pub(crate) fn action_from_account_tx_result(
     result: Result<crate::xrpl::types::AccountTxPage, color_eyre::Report>,
     append: bool,
@@ -169,8 +194,7 @@ async fn maybe_account_tx(
 async fn poll_batch(
     inputs: PollBatchInputs<'_>,
     action_tx: &UnboundedSender<Action>,
-    flare_backoff_secs: &mut u64,
-    flare_backoff_until: &mut Option<Instant>,
+    flare_backoff: &mut Backoff,
 ) -> bool {
     let PollBatchInputs {
         rpc,
@@ -374,7 +398,7 @@ async fn poll_batch(
     // feeds the XRPL backoff decision.
     if active_tab == 0
         && flare_display != crate::config::FlareDisplay::Off
-        && !is_backoff_active(*flare_backoff_until)
+        && !flare_backoff.is_active()
         && let Some(flare_rpc) = flare_rpc_url
     {
         // Concurrent: worst-case arm occupancy is one RPC_TIMEOUT, not four.
@@ -465,7 +489,7 @@ async fn poll_batch(
 
         // Flare-only cooldown: escalate on total failure, reset on any success.
         // Independent state from the XRPL backoff (same schedule).
-        update_backoff(flare_ok, flare_backoff_secs, flare_backoff_until);
+        flare_backoff.record(flare_ok);
         // Health visibility: a total flare failure arms the status-bar flare
         // dot; the next successful flare fetch clears it.
         if !flare_ok {
@@ -538,17 +562,14 @@ fn dispatch_timed<T, F>(
     send_timed(action_tx, label, result, ok_action);
 }
 
-#[allow(clippy::too_many_arguments)]
 async fn run_scheduled_poll<'a>(
     rpc: &'a RpcClient,
     tab_watch: &tokio::sync::watch::Receiver<usize>,
     build_batch: &impl Fn(usize) -> PollBatchInputs<'a>,
     seed_address: Option<&str>,
     action_tx: &UnboundedSender<Action>,
-    backoff_secs: &mut u64,
-    backoff_until: &mut Option<Instant>,
-    flare_backoff_secs: &mut u64,
-    flare_backoff_until: &mut Option<Instant>,
+    backoff: &mut Backoff,
+    flare_backoff: &mut Backoff,
 ) -> Option<Instant> {
     let active_tab = *tab_watch.borrow();
     Some(
@@ -558,38 +579,21 @@ async fn run_scheduled_poll<'a>(
             seed_address,
             active_tab,
             action_tx,
-            backoff_secs,
-            backoff_until,
-            flare_backoff_secs,
-            flare_backoff_until,
+            backoff,
+            flare_backoff,
         )
         .await,
     )
 }
 
-/// Reset the poll backoff on success; on failure escalate via [`next_backoff_secs`]
-/// and arm a backoff window observed by [`is_backoff_active`].
-fn update_backoff(succeeded: bool, backoff_secs: &mut u64, backoff_until: &mut Option<Instant>) {
-    if succeeded {
-        *backoff_secs = 0;
-        *backoff_until = None;
-    } else {
-        *backoff_secs = next_backoff_secs(*backoff_secs);
-        *backoff_until = Some(Instant::now() + Duration::from_secs(*backoff_secs));
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
 async fn execute_scheduled_poll(
     rpc: &RpcClient,
     inputs: PollBatchInputs<'_>,
     seed_address: Option<&str>,
     active_tab: usize,
     action_tx: &UnboundedSender<Action>,
-    backoff_secs: &mut u64,
-    backoff_until: &mut Option<Instant>,
-    flare_backoff_secs: &mut u64,
-    flare_backoff_until: &mut Option<Instant>,
+    backoff: &mut Backoff,
+    flare_backoff: &mut Backoff,
 ) -> Instant {
     // Overlap wallet overview with the main batch (same RpcClient, independent RPCs).
     let wallet_fut = async {
@@ -600,15 +604,9 @@ async fn execute_scheduled_poll(
             _ => false,
         }
     };
-    let (batch_succeeded, wallet_overview_succeeded) = tokio::join!(
-        poll_batch(inputs, action_tx, flare_backoff_secs, flare_backoff_until),
-        wallet_fut
-    );
-    update_backoff(
-        batch_succeeded || wallet_overview_succeeded,
-        backoff_secs,
-        backoff_until,
-    );
+    let (batch_succeeded, wallet_overview_succeeded) =
+        tokio::join!(poll_batch(inputs, action_tx, flare_backoff), wallet_fut);
+    backoff.record(batch_succeeded || wallet_overview_succeeded);
     Instant::now()
 }
 
@@ -699,10 +697,8 @@ async fn drive_poll_loop(
         }
     });
     let mut current_network = *network_watch.borrow();
-    let mut backoff_secs: u64 = 0;
-    let mut backoff_until: Option<Instant> = None;
-    let mut flare_backoff_secs: u64 = 0;
-    let mut flare_backoff_until: Option<Instant> = None;
+    let mut backoff = Backoff::default();
+    let mut flare_backoff = Backoff::default();
     let mut tick = tokio::time::interval(poll_interval.max(Duration::from_millis(500)));
     let mut price_tick = tokio::time::interval(Duration::from_secs(90));
     // A slow poll must push the next one back, not trigger a catch-up burst of RPC calls.
@@ -734,10 +730,8 @@ async fn drive_poll_loop(
                 },
                 seed_address.as_deref(),
                 &action_tx,
-                &mut backoff_secs,
-                &mut backoff_until,
-                &mut flare_backoff_secs,
-                &mut flare_backoff_until,
+                &mut backoff,
+                &mut flare_backoff,
             )
             .await;
         }};
@@ -775,14 +769,14 @@ async fn drive_poll_loop(
                 }
             }
             _ = tick.tick() => {
-                if is_backoff_active(backoff_until) {
+                if backoff.is_active() {
                     continue;
                 }
                 scheduled_poll!();
             }
             Some(()) = poll_trigger_rx.recv() => {
                 drain_poll_trigger_burst(&mut poll_trigger_rx);
-                if is_backoff_active(backoff_until) || should_skip_poll_trigger(last_poll) {
+                if backoff.is_active() || should_skip_poll_trigger(last_poll) {
                     continue;
                 }
                 scheduled_poll!();
@@ -1258,28 +1252,36 @@ mod tests {
     /// open backoff window; success resets both.
     #[test]
     fn scheduled_poll_backoff_escalates_then_resets() {
-        let mut secs = 0_u64;
-        let mut until = None;
+        let mut backoff = Backoff::default();
         for expected in [2, 4, 8] {
-            update_backoff(false, &mut secs, &mut until);
-            assert_eq!(secs, expected, "backoff must escalate after failure");
-            let deadline = until.expect("backoff window must be armed after failure");
+            backoff.record(false);
+            assert_eq!(
+                backoff.secs, expected,
+                "backoff must escalate after failure"
+            );
+            let deadline = backoff
+                .until
+                .expect("backoff window must be armed after failure");
             assert!(
-                is_backoff_active(Some(deadline)),
+                backoff.is_active(),
                 "armed window must be open immediately after failure"
             );
             assert!(
-                deadline <= Instant::now() + Duration::from_secs(secs),
+                deadline <= Instant::now() + Duration::from_secs(backoff.secs),
                 "window must be no longer than the escalated backoff"
             );
         }
         for _ in 0..10 {
-            update_backoff(false, &mut secs, &mut until);
+            backoff.record(false);
         }
-        assert_eq!(secs, 60, "backoff must cap at 60 s");
-        update_backoff(true, &mut secs, &mut until);
-        assert_eq!(secs, 0, "success must reset backoff to the floor");
-        assert!(until.is_none(), "success must clear the backoff window");
+        assert_eq!(backoff.secs, 60, "backoff must cap at 60 s");
+        backoff.record(true);
+        assert_eq!(backoff.secs, 0, "success must reset backoff to the floor");
+        assert!(
+            backoff.until.is_none(),
+            "success must clear the backoff window"
+        );
+        assert!(!backoff.is_active());
     }
 
     /// The Market-tab AMM read maps a pool to `XrplAmmInfo(Some)`, and "no pool" (`actNotFound`)

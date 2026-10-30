@@ -1,7 +1,7 @@
 //! Modal key handling for the wallet composer.
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use super::{ACCOUNT_SET_ROWS, FLAG_OPTIONS, WalletPanel};
+use super::{ACCOUNT_SET_ROWS, ComposerPhase, FLAG_OPTIONS, WalletPanel};
 use crate::action::Action;
 
 impl WalletPanel {
@@ -38,17 +38,73 @@ impl WalletPanel {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
-    pub(super) fn payment_edit_keys(
-        dest: &mut String,
-        amt: &mut String,
-        currency: &mut String,
-        issuer: &mut String,
-        send_max: &mut String,
-        is_iou: bool,
-        row: usize,
-        key: &KeyEvent,
-    ) -> bool {
+    pub(super) fn account_set_modal_key_to_action(&mut self, key: KeyEvent) -> Option<Action> {
+        if self.account_set_edit_keys(&key) {
+            return None;
+        }
+        match key.code {
+            KeyCode::Char('e') | KeyCode::Char('E')
+                if !key.modifiers.contains(KeyModifiers::CONTROL) =>
+            {
+                self.is_form_editing = !self.is_form_editing;
+                return Some(Action::SetKeymapSuppression(true));
+            }
+            KeyCode::Char('s') | KeyCode::Char('S')
+                if key.modifiers.contains(KeyModifiers::CONTROL) || !self.is_form_editing =>
+            {
+                return self.queue_submit_account_set();
+            }
+            KeyCode::Char('[') => {
+                self.field_row = (self.field_row + ACCOUNT_SET_ROWS - 1) % ACCOUNT_SET_ROWS;
+            }
+            KeyCode::Char(']') => {
+                self.field_row = (self.field_row + 1) % ACCOUNT_SET_ROWS;
+            }
+            KeyCode::Tab => {
+                self.field_row = (self.field_row + 1) % ACCOUNT_SET_ROWS;
+            }
+            KeyCode::BackTab => {
+                self.field_row = (self.field_row + ACCOUNT_SET_ROWS - 1) % ACCOUNT_SET_ROWS;
+            }
+            KeyCode::Char(',') if self.field_row <= 1 => {
+                if self.field_row == 0 {
+                    self.set_flag_ix =
+                        (self.set_flag_ix + FLAG_OPTIONS.len() - 1) % FLAG_OPTIONS.len();
+                } else {
+                    self.clear_flag_ix =
+                        (self.clear_flag_ix + FLAG_OPTIONS.len() - 1) % FLAG_OPTIONS.len();
+                }
+            }
+            KeyCode::Char('.') if self.field_row <= 1 => {
+                if self.field_row == 0 {
+                    self.set_flag_ix = (self.set_flag_ix + 1) % FLAG_OPTIONS.len();
+                } else {
+                    self.clear_flag_ix = (self.clear_flag_ix + 1) % FLAG_OPTIONS.len();
+                }
+            }
+            _ => {}
+        }
+        None
+    }
+}
+
+impl ComposerPhase {
+    /// Type one key into the focused field of the Payment form. `false` when the field does not
+    /// accept it, or when the phase is not a Payment.
+    pub(super) fn payment_edit_key(&mut self, key: &KeyEvent) -> bool {
+        let Self::Payment {
+            row,
+            destination: dest,
+            amount: amt,
+            iou_currency: currency,
+            iou_issuer: issuer,
+            send_max,
+            is_iou,
+        } = self
+        else {
+            return false;
+        };
+        let (row, is_iou) = (*row, *is_iou);
         // Last row (2 XRP / 4 IOU) is the free-text SendMax spec.
         if row == if is_iou { 4 } else { 2 } {
             return match key.code {
@@ -113,55 +169,6 @@ impl WalletPanel {
             _ => false,
         }
     }
-
-    pub(super) fn account_set_modal_key_to_action(&mut self, key: KeyEvent) -> Option<Action> {
-        if self.account_set_edit_keys(&key) {
-            return None;
-        }
-        match key.code {
-            KeyCode::Char('e') | KeyCode::Char('E')
-                if !key.modifiers.contains(KeyModifiers::CONTROL) =>
-            {
-                self.is_form_editing = !self.is_form_editing;
-                return Some(Action::SetKeymapSuppression(true));
-            }
-            KeyCode::Char('s') | KeyCode::Char('S')
-                if key.modifiers.contains(KeyModifiers::CONTROL) || !self.is_form_editing =>
-            {
-                return self.queue_submit_account_set();
-            }
-            KeyCode::Char('[') => {
-                self.field_row = (self.field_row + ACCOUNT_SET_ROWS - 1) % ACCOUNT_SET_ROWS;
-            }
-            KeyCode::Char(']') => {
-                self.field_row = (self.field_row + 1) % ACCOUNT_SET_ROWS;
-            }
-            KeyCode::Tab => {
-                self.field_row = (self.field_row + 1) % ACCOUNT_SET_ROWS;
-            }
-            KeyCode::BackTab => {
-                self.field_row = (self.field_row + ACCOUNT_SET_ROWS - 1) % ACCOUNT_SET_ROWS;
-            }
-            KeyCode::Char(',') if self.field_row <= 1 => {
-                if self.field_row == 0 {
-                    self.set_flag_ix =
-                        (self.set_flag_ix + FLAG_OPTIONS.len() - 1) % FLAG_OPTIONS.len();
-                } else {
-                    self.clear_flag_ix =
-                        (self.clear_flag_ix + FLAG_OPTIONS.len() - 1) % FLAG_OPTIONS.len();
-                }
-            }
-            KeyCode::Char('.') if self.field_row <= 1 => {
-                if self.field_row == 0 {
-                    self.set_flag_ix = (self.set_flag_ix + 1) % FLAG_OPTIONS.len();
-                } else {
-                    self.clear_flag_ix = (self.clear_flag_ix + 1) % FLAG_OPTIONS.len();
-                }
-            }
-            _ => {}
-        }
-        None
-    }
 }
 
 #[cfg(test)]
@@ -172,11 +179,11 @@ mod tests {
         KeyEvent::new(KeyCode::Char(c), KeyModifiers::empty())
     }
 
-    /// TC-130: payment_edit_keys filter table — destination is ascii_graphic
+    /// TC-130: payment_edit_key filter table — destination is ascii_graphic
     /// only, IOU currency takes up to 40 alphanumerics (3-char code or 40-hex),
     /// amounts accept digits and at most one '.' (row 3 in IOU mode).
     #[test]
-    fn payment_edit_keys_filter_table() {
+    fn payment_edit_key_filter_table() {
         // (field, is_iou, row, key, initial, expected_accept, expected_after)
         let cases: &[(&str, bool, usize, char, &str, bool, &str)] = &[
             ("dest", false, 0, 'a', "", true, "a"),
@@ -215,38 +222,49 @@ mod tests {
             ("smax", true, 4, ' ', "", false, ""),
         ];
         for (field, is_iou, row, c, initial, accept, after) in cases {
-            let mut dest = String::new();
-            let mut amt = String::new();
-            let mut currency = String::new();
-            let mut issuer = String::new();
-            let mut send_max = String::new();
-            match *field {
-                "dest" => dest.push_str(initial),
-                "amt" => amt.push_str(initial),
-                "cur" => currency.push_str(initial),
-                "smax" => send_max.push_str(initial),
-                _ => issuer.push_str(initial),
-            }
-            let got = WalletPanel::payment_edit_keys(
-                &mut dest,
-                &mut amt,
-                &mut currency,
-                &mut issuer,
-                &mut send_max,
-                *is_iou,
-                *row,
-                &key(*c),
-            );
-            let result = match *field {
-                "dest" => dest.as_str(),
-                "amt" => amt.as_str(),
-                "cur" => currency.as_str(),
-                "smax" => send_max.as_str(),
-                _ => issuer.as_str(),
+            let init = |name: &str| {
+                if field == &name {
+                    initial.to_string()
+                } else {
+                    String::new()
+                }
             };
+            let mut phase = ComposerPhase::Payment {
+                row: *row,
+                destination: init("dest"),
+                amount: init("amt"),
+                iou_currency: init("cur"),
+                iou_issuer: init("iss"),
+                send_max: init("smax"),
+                is_iou: *is_iou,
+            };
+            let got = phase.payment_edit_key(&key(*c));
+            let ComposerPhase::Payment {
+                destination,
+                amount,
+                iou_currency,
+                iou_issuer,
+                send_max,
+                ..
+            } = &phase
+            else {
+                unreachable!("phase stays Payment");
+            };
+            let result = match *field {
+                "dest" => destination,
+                "amt" => amount,
+                "cur" => iou_currency,
+                "smax" => send_max,
+                _ => iou_issuer,
+            }
+            .as_str();
             assert_eq!(got, *accept, "{field} row={row} c={c}");
             assert_eq!(result, *after, "{field} row={row} c={c}");
         }
+        assert!(
+            !ComposerPhase::AccountSet.payment_edit_key(&key('a')),
+            "only a Payment phase takes payment keys"
+        );
     }
 
     /// TC-131: account_set_edit_keys only edits field_row 2-4 while editing;

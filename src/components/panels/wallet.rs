@@ -775,7 +775,7 @@ impl WalletPanel {
     }
 
     /// Text field the cursor is in for every phase that types plain characters. Payment and
-    /// AccountSet filter per row (`payment_edit_keys` / `account_set_edit_keys`); DangerConfirm
+    /// AccountSet filter per row (`payment_edit_key` / `account_set_edit_keys`); DangerConfirm
     /// is type-to-confirm and never receives pasted text.
     fn edit_target(&mut self) -> Option<&mut String> {
         Some(match self.composer.as_mut()? {
@@ -878,28 +878,9 @@ impl WalletPanel {
             }
             return;
         }
-        if let Some(ComposerPhase::Payment {
-            row,
-            destination,
-            amount,
-            iou_currency,
-            iou_issuer,
-            send_max,
-            is_iou,
-        }) = &mut self.composer
-        {
+        if let Some(phase @ ComposerPhase::Payment { .. }) = &mut self.composer {
             for c in chars {
-                let key = KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE);
-                Self::payment_edit_keys(
-                    destination,
-                    amount,
-                    iou_currency,
-                    iou_issuer,
-                    send_max,
-                    *is_iou,
-                    *row,
-                    &key,
-                );
+                phase.payment_edit_key(&KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
             }
             return;
         }
@@ -1017,26 +998,9 @@ impl WalletPanel {
             return KeyFlow::Break(self.queue_payment_quote());
         }
 
-        if let Some(ComposerPhase::Payment {
-            row,
-            ref mut destination,
-            ref mut amount,
-            ref mut iou_currency,
-            ref mut iou_issuer,
-            ref mut send_max,
-            is_iou,
-        }) = self.composer
-            && self.is_form_editing
-            && Self::payment_edit_keys(
-                destination,
-                amount,
-                iou_currency,
-                iou_issuer,
-                send_max,
-                is_iou,
-                row,
-                key,
-            )
+        if self.is_form_editing
+            && let Some(phase) = &mut self.composer
+            && phase.payment_edit_key(key)
         {
             return KeyFlow::Break(None);
         }

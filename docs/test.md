@@ -230,7 +230,7 @@ cargo deny check
 | TC-127 | P1 | `src/config/mod.rs` | Config file `network = "xahau-test"` loads XahauTest (merged with TC-042 test) |
 | TC-128 | P2 | `src/components/shared/theme.rs` | DESIGN.md frontmatter `colors.*` hex values match `theme.rs` constants |
 | TC-129 | P1 | `src/components/panels/wallet.rs` | Fxrp proof preview truncates multibyte JSON by chars (byte-slice panic regression) |
-| TC-130 | P1 | `src/components/panels/wallet_keys.rs` | `payment_edit_keys` input filters — IOU currency row ≤40 chars (3-char code or 40-hex), amount digits + single dot, destination graphic ASCII |
+| TC-130 | P1 | `src/components/panels/wallet_keys.rs` | `ComposerPhase::payment_edit_key` input filters (a non-Payment phase takes none) — IOU currency row ≤40 chars (3-char code or 40-hex), amount digits + single dot, destination graphic ASCII |
 | TC-131 | P1 | `src/components/panels/wallet_keys.rs` | `account_set_edit_keys` — rows 0/1 locked, domain free text, tick/transfer digits only |
 | TC-132 | P2 | `src/components/panels/wallet_composer.rs` | Composer row nav — `[`/`]` wrap, Enter advances while editing, `e` toggles edit |
 | TC-133 | P1 | `src/components/shared/selectable_table.rs` | Selection clamps on `reset_len`, deselects at len 0, stops at ends |

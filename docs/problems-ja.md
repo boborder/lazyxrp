@@ -57,9 +57,10 @@
 - 分割済み: `render_composer`（983 → 104 行）、wallet の `key_action`、`execute_cli_command`（483 → 123）。まだ長い: `poll.rs::drive_poll_loop`（370）と `poll_batch`（309）、`lib.rs::run_flare_command`（324）、`app.rs::drain_and_dispatch_actions`（280）、`tx_detail::detail_lines_for`（214）、`validator_detail_lines`（184）、`wallet.rs::update`（174）、`submit_fxrp_direct_mint_payment`（171）、`server.rs::draw`（164）、`submit_smart_account_instruction`（160）、`submit_payment_transaction`（159）、`account.rs::draw`（150）。
 - `run_flare_command` には自動テストがない（書き込みに live の Flare ノードが要る）ため、実行手段と合わせて分割する。
 
-### P-014: `signing.rs` 以外に `too_many_arguments` の allow が 7 個残っている
+### ~~P-014: `signing.rs` 以外に `too_many_arguments` の allow が 7 個残っている~~ → 解決（2026-10-30）
 
-- `poll.rs::run_scheduled_poll` / `execute_scheduled_poll`（`&mut` の backoff 変数 4 個: `Backoff { secs, until }` の組で足りる）、`submit.rs::run_submit` / `run_submit_with_wallet`（rpc・network・action チャネル: 共有コンテキスト）、`App::new`（設定 8 個）、`server_detail::set_toml`（TOML 取得結果）、`wallet_keys::payment_edit_keys`（`&mut String` 5 個）。いずれも局所的な変更で API への影響はなく、急ぎではない。
+- クレート内に `#[allow(clippy::too_many_arguments)]` は残っていない。`poll::Backoff { secs, until }`（`record(succeeded)`、`is_active()`）が対になった `&mut` の backoff 変数を置き換える。`submit::SubmitPlan { submit_err, build, sign, on_ok }` が、`run_submit` / `run_submit_with_wallet` が位置で受け取っていた 3 つのクロージャに名前を付ける。`app::Endpoints { network, rpc_url, ws_url }` が `App::new` の受け取る解決済みの接続先、`server_detail::TomlFetch` が TOML 取得結果、`ComposerPhase::payment_edit_key(&mut self, key)` は 5 個の `&mut String` ではなく Payment フェーズ自身を操作する。
+- 途中で見つけたもの: `ServerPanel::update` の 2 つ目の `Action::XrplTomlFetched ... if self.detail.visible` アームは到達不能だった（直前の `if self.detail.visible { match … }` がすべてのアームで return する）。移植せず削除した。
 
 ## 運用メモ
 

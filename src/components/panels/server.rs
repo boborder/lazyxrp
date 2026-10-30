@@ -24,7 +24,7 @@ mod detail;
 #[path = "server_dunl.rs"]
 mod dunl;
 
-use detail::{ValidatorDetail, render_validator_detail};
+use detail::{TomlFetch, ValidatorDetail, render_validator_detail};
 
 fn dunl_expiry_tag(dunl: &DunlSummary) -> String {
     dunl.days_until_expiry()
@@ -120,10 +120,12 @@ impl Component for ServerPanel {
                             row,
                             idx,
                             d,
-                            *status,
-                            content_type.clone(),
-                            raw.clone(),
-                            result.clone(),
+                            TomlFetch {
+                                status: *status,
+                                content_type: content_type.clone(),
+                                raw: raw.clone(),
+                                result: result.clone(),
+                            },
                         );
                     }
                     return Ok(None);
@@ -175,30 +177,6 @@ impl Component for ServerPanel {
                             expected_pubkey,
                         });
                     }
-                }
-            }
-            Action::XrplTomlFetched {
-                status,
-                content_type,
-                raw,
-                result,
-                ..
-            } if self.detail.visible => {
-                if let Some(idx) = self.dunl_table.selected()
-                    && let (Some(d), Some(row)) = (
-                        self.dunl.as_ref(),
-                        self.dunl.as_ref().and_then(|d| d.validators.get(idx)),
-                    )
-                {
-                    self.detail.set_toml(
-                        row,
-                        idx,
-                        d,
-                        *status,
-                        content_type.clone(),
-                        raw.clone(),
-                        result.clone(),
-                    );
                 }
             }
             _ => {}

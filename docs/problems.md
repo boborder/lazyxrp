@@ -57,9 +57,10 @@
 - Already split: `render_composer` (983 → 104 lines), the wallet `key_action`, `execute_cli_command` (483 → 123). Still long: `poll.rs::drive_poll_loop` (370) and `poll_batch` (309), `lib.rs::run_flare_command` (324), `app.rs::drain_and_dispatch_actions` (280), `tx_detail::detail_lines_for` (214), `validator_detail_lines` (184), `wallet.rs::update` (174), `submit_fxrp_direct_mint_payment` (171), `server.rs::draw` (164), `submit_smart_account_instruction` (160), `submit_payment_transaction` (159), `account.rs::draw` (150).
 - `run_flare_command` has no automated test (its writes need a live Flare node), so split it together with a way to exercise it.
 
-### P-014: Seven `too_many_arguments` allows remain outside `signing.rs`
+### ~~P-014: Seven `too_many_arguments` allows remain outside `signing.rs`~~ → resolved (2026-10-30)
 
-- `poll.rs::run_scheduled_poll` / `execute_scheduled_poll` (four `&mut` backoff variables: a `Backoff { secs, until }` pair would do), `submit.rs::run_submit` / `run_submit_with_wallet` (rpc, network, action channel: a shared context), `App::new` (8 settings), `server_detail::set_toml` (the TOML fetch outcome) and `wallet_keys::payment_edit_keys` (five `&mut String` fields). Each is a local change with no API impact, so none is urgent.
+- No `#[allow(clippy::too_many_arguments)]` is left in the crate. `poll::Backoff { secs, until }` (`record(succeeded)`, `is_active()`) replaces the paired `&mut` backoff variables; `submit::SubmitPlan { submit_err, build, sign, on_ok }` names the three closures `run_submit` / `run_submit_with_wallet` took by position; `app::Endpoints { network, rpc_url, ws_url }` is the resolved connection that `App::new` takes; `server_detail::TomlFetch` is the TOML fetch outcome; `ComposerPhase::payment_edit_key(&mut self, key)` works on the Payment phase itself instead of five `&mut String` fields.
+- Found on the way: the second `Action::XrplTomlFetched ... if self.detail.visible` arm in `ServerPanel::update` was unreachable (the `if self.detail.visible { match … }` above it returns on every arm), so it was deleted rather than ported.
 
 ## Operational notes
 

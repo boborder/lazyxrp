@@ -160,18 +160,28 @@ fn resolve_flare_feeds() -> Vec<String> {
         .collect()
 }
 
+/// The resolved network and the RPC / WebSocket URLs to use for it (CLI, env and config
+/// overrides already applied).
+pub struct Endpoints {
+    pub network: Network,
+    pub rpc_url: String,
+    pub ws_url: String,
+}
+
 impl App {
-    #[allow(clippy::too_many_arguments)]
     pub fn new(
         tick_rate: f64,
-        rpc_server: String,
-        ws_server: String,
+        endpoints: Endpoints,
         account: Option<String>,
-        network: Network,
         mut config: Config,
         secrets: Secrets,
         skip_mainnet_prompt: bool,
     ) -> color_eyre::Result<Self> {
+        let Endpoints {
+            network,
+            rpc_url: rpc_server,
+            ws_url: ws_server,
+        } = endpoints;
         let (action_tx, action_rx) = mpsc::unbounded_channel();
         let (poll_tx, poll_rx) = mpsc::unbounded_channel();
         // `run` replaces this channel; only unit tests keep the receiver to inspect what was queued.
@@ -901,10 +911,12 @@ mod tests {
         };
         App::new(
             4.0,
-            "https://xrplcluster.com".into(),
-            "wss://xrplcluster.com".into(),
+            Endpoints {
+                network: Network::Mainnet,
+                rpc_url: "https://xrplcluster.com".into(),
+                ws_url: "wss://xrplcluster.com".into(),
+            },
             Some("rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh".into()),
-            Network::Mainnet,
             config,
             secrets,
             false,
