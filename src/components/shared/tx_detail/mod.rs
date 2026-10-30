@@ -162,14 +162,100 @@ pub fn render_tx_detail(frame: &mut Frame, area: Rect, state: &mut TxDetailState
     );
 }
 
-/// Format an `xrpl::models::Amount` into a human-readable string.
+/// Transaction fields shown in this order (labelled, accent value) when no typed parser applies;
+/// anything else falls under "Other fields".
+const KNOWN_FIELDS: &[&str] = &[
+    "TransactionType",
+    "Account",
+    "Destination",
+    "Amount",
+    "Fee",
+    "Sequence",
+    "SetFlag",
+    "ClearFlag",
+    "Domain",
+    "TickSize",
+    "TransferRate",
+    "LimitAmount",
+    "QualityIn",
+    "QualityOut",
+    "TakerGets",
+    "TakerPays",
+    "OfferSequence",
+    "Expiration",
+    "NFTokenID",
+    "URI",
+    "TransferFee",
+    "NFTokenTaxon",
+    "Issuer",
+    "RegularKey",
+    "SignerQuorum",
+    "Channel",
+    "PublicKey",
+    "SettleDelay",
+    "CancelAfter",
+    "FinishAfter",
+    "Condition",
+    "Fulfillment",
+    "OwnerCount",
+    "Balance",
+    "Flags",
+    "LastLedgerSequence",
+    "SourceTag",
+    "DestinationTag",
+    "InvoiceID",
+    "SendMax",
+    "DeliverMin",
+    "Memos",
+    "Signers",
+    "TxnSignature",
+    "SigningPubKey",
+    "MPTokenIssuanceID",
+    "Holder",
+    "Asset",
+    "Asset2",
+    "TradingFee",
+    "LPTokenOut",
+    "LPTokenIn",
+    "EPrice",
+    "BidMin",
+    "BidMax",
+    "Authorize",
+    "Unauthorize",
+    "DIDDocument",
+    "Data",
+];
+
+/// Detail lines of one transaction: header, then the typed parser's lines (or the recognised
+/// fields when none applies), the remaining fields and the compact metadata.
 fn detail_lines_for<'a>(tx: &'a Value, meta: &'a Value) -> Vec<Line<'a>> {
+    let mut lines = header_lines(tx, meta);
+
+    // Typed parsers (registration table in parsers.rs)
+    let typed_shown = if let Some(typed_lines) = typed_detail_lines(tx) {
+        lines.extend(typed_lines);
+        true
+    } else {
+        false
+    };
+
+    let Value::Object(tx_object) = tx else {
+        return lines;
+    };
+    if !typed_shown {
+        lines.extend(known_field_lines(tx_object));
+    }
+    lines.extend(other_field_lines(tx_object));
+    lines.extend(metadata_lines(meta));
+    lines
+}
+
+/// Hash, result, ledger and date, followed by a blank line.
+fn header_lines<'a>(tx: &'a Value, meta: &'a Value) -> Vec<Line<'a>> {
     let mut lines = Vec::new();
-    let label_style = theme::dim_style();
     let value_style = theme::accent_style();
     let hi_style = Style::new().fg(theme::TITLE).bold();
 
-    // Header
     if let Some(hash) = tx.get("hash").and_then(Value::as_str) {
         lines.push(Line::from(vec![
             Span::styled("Hash", hi_style),
@@ -220,100 +306,38 @@ fn detail_lines_for<'a>(tx: &'a Value, meta: &'a Value) -> Vec<Line<'a>> {
 
     lines.push(Line::from(""));
 
-    // Typed parsers (registration table in parsers.rs)
-    let typed_shown = if let Some(typed_lines) = typed_detail_lines(tx) {
-        lines.extend(typed_lines);
-        true
-    } else {
-        false
-    };
+    lines
+}
 
-    let known: &[&str] = &[
-        "TransactionType",
-        "Account",
-        "Destination",
-        "Amount",
-        "Fee",
-        "Sequence",
-        "SetFlag",
-        "ClearFlag",
-        "Domain",
-        "TickSize",
-        "TransferRate",
-        "LimitAmount",
-        "QualityIn",
-        "QualityOut",
-        "TakerGets",
-        "TakerPays",
-        "OfferSequence",
-        "Expiration",
-        "NFTokenID",
-        "URI",
-        "TransferFee",
-        "NFTokenTaxon",
-        "Issuer",
-        "RegularKey",
-        "SignerQuorum",
-        "Channel",
-        "PublicKey",
-        "SettleDelay",
-        "CancelAfter",
-        "FinishAfter",
-        "Condition",
-        "Fulfillment",
-        "OwnerCount",
-        "Balance",
-        "Flags",
-        "LastLedgerSequence",
-        "SourceTag",
-        "DestinationTag",
-        "InvoiceID",
-        "SendMax",
-        "DeliverMin",
-        "Memos",
-        "Signers",
-        "TxnSignature",
-        "SigningPubKey",
-        "MPTokenIssuanceID",
-        "Holder",
-        "Asset",
-        "Asset2",
-        "TradingFee",
-        "LPTokenOut",
-        "LPTokenIn",
-        "EPrice",
-        "BidMin",
-        "BidMax",
-        "Authorize",
-        "Unauthorize",
-        "DIDDocument",
-        "Data",
-    ];
-
-    let tx_object = match tx {
-        Value::Object(o) => o,
-        _ => return lines,
-    };
-
-    if !typed_shown {
-        for key in known.iter() {
-            if let Some(value) = tx_object.get(*key) {
-                if value.is_null() {
-                    continue;
-                }
-                let formatted = format_value(key, value);
-                lines.push(Line::from(vec![
-                    Span::styled(*key, label_style),
-                    Span::raw(": "),
-                    Span::styled(formatted, value_style),
-                ]));
+/// The recognised fields of `tx_object`, in [`KNOWN_FIELDS`] order.
+fn known_field_lines(tx_object: &serde_json::Map<String, Value>) -> Vec<Line<'_>> {
+    let mut lines = Vec::new();
+    let label_style = theme::dim_style();
+    let value_style = theme::accent_style();
+    for key in KNOWN_FIELDS {
+        if let Some(value) = tx_object.get(*key) {
+            if value.is_null() {
+                continue;
             }
+            let formatted = format_value(key, value);
+            lines.push(Line::from(vec![
+                Span::styled(*key, label_style),
+                Span::raw(": "),
+                Span::styled(formatted, value_style),
+            ]));
         }
     }
+    lines
+}
 
+/// Fields that are neither shown elsewhere nor in [`KNOWN_FIELDS`], under an "Other fields" heading.
+fn other_field_lines(tx_object: &serde_json::Map<String, Value>) -> Vec<Line<'_>> {
+    let mut lines = Vec::new();
+    let label_style = theme::dim_style();
+    let hi_style = Style::new().fg(theme::TITLE).bold();
     let mut has_remaining = false;
     for (key, value) in tx_object.iter() {
-        if known.contains(&key.as_str())
+        if KNOWN_FIELDS.contains(&key.as_str())
             || key == "hash"
             || key == "ledger_index"
             || key == "TransactionResult"
@@ -337,17 +361,17 @@ fn detail_lines_for<'a>(tx: &'a Value, meta: &'a Value) -> Vec<Line<'a>> {
             Span::styled(formatted, theme::dim_style()),
         ]));
     }
+    lines
+}
 
-    // Metadata (compact)
-    let meta_obj = if !meta.is_null() {
-        if let Some(obj) = meta.as_object() {
-            obj
-        } else {
-            return lines;
-        }
-    } else {
-        return lines;
+/// Compact metadata block: every `meta` field but the result, with `AffectedNodes` as a count.
+fn metadata_lines(meta: &Value) -> Vec<Line<'_>> {
+    let Some(meta_obj) = meta.as_object() else {
+        return Vec::new();
     };
+    let label_style = theme::dim_style();
+    let hi_style = Style::new().fg(theme::TITLE).bold();
+    let mut lines = Vec::new();
     let mut meta_lines = Vec::new();
     for (key, value) in meta_obj.iter() {
         if key == "TransactionResult" || value.is_null() {

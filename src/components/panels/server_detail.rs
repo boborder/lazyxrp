@@ -100,6 +100,17 @@ pub(super) fn validator_detail_lines(
     status: u16,
     content_type: Option<&str>,
 ) -> Vec<Line<'static>> {
+    let mut lines = identity_lines(row, index);
+    lines.extend(dunl_lines(dunl));
+    lines.extend(toml_lines(row, toml, status, content_type));
+    if let Some(raw) = raw {
+        lines.extend(raw_toml_lines(raw));
+    }
+    lines
+}
+
+/// Title, domain, manifest, sequence and keys of the validator.
+fn identity_lines(row: &DunlValidatorRow, index: usize) -> Vec<Line<'static>> {
     let label_style = theme::dim_style();
     let value_style = theme::accent_style();
     let success_style = theme::success_style();
@@ -173,6 +184,14 @@ pub(super) fn validator_detail_lines(
         )));
     }
 
+    lines
+}
+
+/// The dUNL list the validator was read from, and how long it stays valid.
+fn dunl_lines(dunl: &DunlSummary) -> Vec<Line<'static>> {
+    let label_style = theme::dim_style();
+    let warning_style = theme::warning_style();
+    let mut lines = Vec::new();
     lines.push(Line::from(""));
     lines.push(Line::from(vec![
         Span::styled("dUNL list", label_style),
@@ -192,7 +211,21 @@ pub(super) fn validator_detail_lines(
             style,
         )));
     }
+    lines
+}
 
+/// What the validator's `xrp-ledger.toml` fetch returned: HTTP status, content type, parsed data.
+fn toml_lines(
+    row: &DunlValidatorRow,
+    toml: &Option<Result<XrplTomlData, String>>,
+    status: u16,
+    content_type: Option<&str>,
+) -> Vec<Line<'static>> {
+    let label_style = theme::dim_style();
+    let value_style = theme::accent_style();
+    let success_style = theme::success_style();
+    let warning_style = theme::warning_style();
+    let mut lines = Vec::new();
     lines.push(Line::from(""));
     lines.push(Line::from(vec![Span::styled(
         "xrp-ledger.toml",
@@ -261,18 +294,21 @@ pub(super) fn validator_detail_lines(
             )));
         }
     }
+    lines
+}
 
-    if let Some(raw) = raw {
-        lines.push(Line::from(""));
-        lines.push(Line::from(vec![Span::styled("Raw TOML", label_style)]));
-        for line_text in raw.lines() {
-            lines.push(Line::from(Span::styled(
-                clean(line_text),
-                theme::dim_style(),
-            )));
-        }
+/// The fetched TOML text, one dim line per source line.
+fn raw_toml_lines(raw: &str) -> Vec<Line<'static>> {
+    let label_style = theme::dim_style();
+    let mut lines = Vec::new();
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![Span::styled("Raw TOML", label_style)]));
+    for line_text in raw.lines() {
+        lines.push(Line::from(Span::styled(
+            clean(line_text),
+            theme::dim_style(),
+        )));
     }
-
     lines
 }
 
