@@ -1,3 +1,9 @@
+//! Startup splash, animated by `Tick`:
+//! 1. a highlight wave travels down the ASCII logo line by line;
+//! 2. the logo is pinned horizontally centred, top-aligned;
+//! 3. the status line ends in breathing dots (`. .. ...`);
+//! 4. the quit hint cycles its brackets `[ ]` / `< >` / `( )`.
+
 use std::sync::Arc;
 
 use ratatui::{
@@ -15,11 +21,6 @@ use crate::{
     config::Config,
 };
 
-/// Splash の tick 駆動アニメ
-/// 1. ASCII ロゴの行ごとウェーブ（強調が縦に伝わる）
-/// 2. ロゴは「中央上部」に固定配置（横中央 + 上寄せ）
-/// 3. ステータス末尾のドット呼吸（`. .. ...`）
-/// 4. quit ヒントの括弧スタイル周期 `[ ]` / `< >` / `( )`
 const ASCII_ART: &str = r#"
          _                   __  ______  ____
         | |    __ _ _____   _\ \/ /  _ \|  _ \
@@ -54,7 +55,7 @@ fn ascii_art_max_width() -> u16 {
 }
 
 fn splash_art_column(art_area: Rect) -> Rect {
-    // ASCII の崩れを避けるため、折り返し前提ではなく「必要幅を中央配置」。
+    // Centre the art at its natural width instead of letting it wrap, which would break it.
     let w = ascii_art_max_width().min(art_area.width.max(1));
     let side = art_area.width.saturating_sub(w) / 2;
     Rect {
@@ -65,12 +66,12 @@ fn splash_art_column(art_area: Rect) -> Rect {
     }
 }
 
-/// 利用可能な高さに応じて ASCII アートの表示行を調整
+/// Fit the ASCII art to the available height.
 fn splash_ascii_lines_for_height(tick: usize, max_lines: usize) -> Vec<Line<'static>> {
     let lines = ASCII_ART.trim_start_matches('\n').lines();
     let n = lines.clone().count();
 
-    // 十分な高さがない場合は下の部分だけ表示（ロゴの下半分が重要）
+    // Too short for the whole logo: keep the bottom rows, which carry the "XRP Ledger" name.
     let skip = n.saturating_sub(max_lines);
     let vn = (n - skip).max(1);
     let head = (tick / 2) % vn;
@@ -138,13 +139,13 @@ impl Component for SplashScreen {
         let inner = block.inner(area);
         frame.render_widget(block, area);
 
-        // 小さいウィンドウ対応：最低限 status + hint は必ず表示
+        // Small windows: the status and hint rows always win over the art.
         const STATUS_H: u16 = 1;
         const HINT_H: u16 = 1;
         const ART_FULL: u16 = 14;
         let min_needed = STATUS_H + HINT_H;
 
-        // 「中央上部」に固定：上寄せで表示し、残りは下へ流す
+        // Top-aligned; any leftover height goes below the art.
         let art_h = if inner.height >= ART_FULL + min_needed {
             ART_FULL
         } else {
@@ -229,9 +230,14 @@ mod tests {
         );
     }
 
+    /// The ASCII art shows every line when it fits and the bottom lines when height is tight.
+    ///
     /// TC-171: splash lines fit
+    ///
+    /// TC-171: splash lines tight
     #[test]
-    fn splash_ascii_lines_show_every_art_line_when_height_allows() {
+    fn splash_ascii_lines_fit_height() {
+        // every art line when height allows
         for tick in [0usize, 5, 9] {
             let lines = splash_ascii_lines_for_height(tick, 12);
             let art = art_lines();
@@ -240,11 +246,8 @@ mod tests {
                 assert_eq!(line.spans[0].content.to_string(), expected);
             }
         }
-    }
 
-    /// TC-171: splash lines tight
-    #[test]
-    fn splash_ascii_lines_show_bottom_lines_when_height_is_tight() {
+        // bottom lines when height is tight
         let art = art_lines();
         let lines = splash_ascii_lines_for_height(0, 5);
         assert_eq!(lines.len(), 5, "tight height must show exactly 5 lines");

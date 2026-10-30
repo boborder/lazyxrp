@@ -80,18 +80,20 @@ mod tests {
 
     const CLASSIC: &str = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh";
 
+    /// Destinations resolve to classic address + tag by kind; invalid ones are refused.
+    ///
     /// TC-166: empty / invalid destination rejected
+    ///
+    /// TC-166: X-address tag preserved, classic has no tag
     #[test]
-    fn resolve_payment_destination_rejects_invalid() {
+    fn resolve_payment_destination_contract() {
+        // rejects invalid
         assert!(resolve_payment_destination("").is_err());
         assert!(resolve_payment_destination("   ").is_err());
         let err = resolve_payment_destination("not-an-address").expect_err("invalid shape");
         assert!(err.to_string().contains("invalid destination"), "{err}");
-    }
 
-    /// TC-166: X-address tag preserved, classic has no tag
-    #[test]
-    fn resolve_payment_destination_classification() {
+        // classification
         let xaddr = classic_address_to_xaddress(CLASSIC, Some(42), false).expect("xaddr");
         let resolved = resolve_payment_destination(&xaddr).expect("resolve");
         assert_eq!(resolved.classic, CLASSIC);

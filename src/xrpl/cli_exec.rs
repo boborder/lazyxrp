@@ -258,53 +258,85 @@ pub(crate) async fn wait_validated(
     }
 }
 
-/// Simulate (never sign without it) → `describe` prints the summary and returns the confirmation
-/// prompt → confirm → sign → submit → optionally wait for validation. `Ok` on user cancel.
-/// `describe(engine_result, fee_drops, tx_sequence)`; `sign(tx_sequence, fee_drops, last_ledger_sequence)`.
-#[allow(clippy::too_many_arguments)]
-async fn simulate_confirm_submit(
-    rpc: &RpcClient,
-    network: &Network,
+/// What every signed CLI command shares: the node, the network it must be on, the credential
+/// and the user's `--yes` / `--wait`.
+#[derive(Clone, Copy)]
+struct WriteFlow<'a> {
+    rpc: &'a RpcClient,
+    network: &'a Network,
+    credential: Option<&'a SigningCredential>,
     yes: bool,
     wait: bool,
-    announce_success: bool,
-    tx_json: serde_json::Value,
-    describe: impl FnOnce(&str, u32, u32) -> color_eyre::Result<String>,
-    sign: impl FnOnce(u32, u32, u32) -> color_eyre::Result<String>,
-) -> color_eyre::Result<()> {
-    let sim = super::submit::simulate_tx_requiring_tes_success(rpc, tx_json)
-        .await
-        .map_err(|e| color_eyre::eyre::eyre!(e))?;
-    let (tx_sequence, fee_drops, last_ledger_sequence) =
-        signing::sequence_fee_ledger_from_simulate(&sim.tx_json)?;
-    let prompt = describe(&sim.engine_result, fee_drops, tx_sequence)?;
-    if !prompt_production_confirmation(&prompt, network, yes) {
-        println!("Transaction cancelled by user.");
-        return Ok(());
+}
+
+impl WriteFlow<'_> {
+    fn wallet(&self) -> color_eyre::Result<xrpl::wallet::Wallet> {
+        cli_wallet(self.credential)
     }
-    let blob = signing::with_network_id(rpc.network_id(), || {
-        sign(tx_sequence, fee_drops, last_ledger_sequence)
-    })?;
-    // Sign/submit failures propagate so scripts see a non-zero exit.
-    let summary = rpc.submit_signed_tx(&blob).await?;
-    println!("Transaction Hash: {}", summary.hash);
-    if summary.queued {
-        println!("Transaction queued (terQUEUED): not yet applied; confirm by hash.");
-    } else if announce_success {
-        println!("Transaction submitted successfully!");
+
+    /// The signer's address and its current account state, once the node is known to be on the
+    /// selected network.
+    async fn load_account(
+        &self,
+        wallet: &xrpl::wallet::Wallet,
+    ) -> color_eyre::Result<(String, super::types::AccountSummary)> {
+        let account = wallet.classic_address.clone();
+        self.rpc.ensure_network(self.network).await?;
+        let account_info = self.rpc.account_info(&account).await?;
+        Ok((account, account_info))
     }
-    if wait {
-        let result = wait_validated(
+
+    /// Simulate (never sign without it) → `describe` prints the summary and returns the confirmation
+    /// prompt → confirm → sign → submit → optionally wait for validation. `Ok` on user cancel.
+    /// `describe(engine_result, fee_drops, tx_sequence)`; `sign(tx_sequence, fee_drops, last_ledger_sequence)`.
+    async fn simulate_confirm_submit(
+        &self,
+        announce_success: bool,
+        tx_json: serde_json::Value,
+        describe: impl FnOnce(&str, u32, u32) -> color_eyre::Result<String>,
+        sign: impl FnOnce(u32, u32, u32) -> color_eyre::Result<String>,
+    ) -> color_eyre::Result<()> {
+        let Self {
             rpc,
-            &summary.hash,
-            last_ledger_sequence,
-            WAIT_POLL,
-            WAIT_LIMIT,
-        )
-        .await?;
-        println!("Validated: {result}");
+            network,
+            yes,
+            wait,
+            ..
+        } = *self;
+        let sim = super::submit::simulate_tx_requiring_tes_success(rpc, tx_json)
+            .await
+            .map_err(|e| color_eyre::eyre::eyre!(e))?;
+        let (tx_sequence, fee_drops, last_ledger_sequence) =
+            signing::sequence_fee_ledger_from_simulate(&sim.tx_json)?;
+        let prompt = describe(&sim.engine_result, fee_drops, tx_sequence)?;
+        if !prompt_production_confirmation(&prompt, network, yes) {
+            println!("Transaction cancelled by user.");
+            return Ok(());
+        }
+        let blob = signing::with_network_id(rpc.network_id(), || {
+            sign(tx_sequence, fee_drops, last_ledger_sequence)
+        })?;
+        // Sign/submit failures propagate so scripts see a non-zero exit.
+        let summary = rpc.submit_signed_tx(&blob).await?;
+        println!("Transaction Hash: {}", summary.hash);
+        if summary.queued {
+            println!("Transaction queued (terQUEUED): not yet applied; confirm by hash.");
+        } else if announce_success {
+            println!("Transaction submitted successfully!");
+        }
+        if wait {
+            let result = wait_validated(
+                rpc,
+                &summary.hash,
+                last_ledger_sequence,
+                WAIT_POLL,
+                WAIT_LIMIT,
+            )
+            .await?;
+            println!("Validated: {result}");
+        }
+        Ok(())
     }
-    Ok(())
 }
 
 pub async fn execute_cli_command(
@@ -317,6 +349,13 @@ pub async fn execute_cli_command(
 ) -> color_eyre::Result<()> {
     validate_cmd_account_and_issuer_addresses(&cmd)?;
     let rpc = RpcClient::connect(rpc_url)?;
+    let flow = WriteFlow {
+        rpc: &rpc,
+        network,
+        credential: signing_credential.as_ref(),
+        yes,
+        wait,
+    };
     match cmd {
         Cmd::Info => {
             println!(
@@ -335,27 +374,7 @@ pub async fn execute_cli_command(
             quote,
             issuer,
             limit,
-        } => {
-            let issuer = issuer.unwrap_or_default();
-            let rows = rpc
-                .book_offers(
-                    &base,
-                    if base.eq_ignore_ascii_case("XRP") {
-                        None
-                    } else {
-                        Some(&issuer)
-                    },
-                    &quote,
-                    if quote.eq_ignore_ascii_case("XRP") {
-                        None
-                    } else {
-                        Some(&issuer)
-                    },
-                    limit,
-                )
-                .await?;
-            println!("{}", serde_json::to_string_pretty(&rows)?);
-        }
+        } => cmd_book(&rpc, base, quote, issuer, limit).await?,
         Cmd::Summary { account } => {
             let account = account.unwrap_or_default();
             let server_info = rpc.server_info().await?;
@@ -398,190 +417,21 @@ pub async fn execute_cli_command(
                 serde_json::to_string_pretty(&rpc.account_tx(&address, limit, None).await?.rows)?
             );
         }
-        Cmd::AccountStatus { address } => {
-            let is_activated = rpc.fetch_account_activation_status(&address).await?;
-            println!("Account: {}", address);
-            println!(
-                "Status: {}",
-                if is_activated {
-                    "Activated"
-                } else {
-                    "Not Activated"
-                }
-            );
-            if !is_activated {
-                println!(
-                    "Note: the account does not exist on the ledger until a payment funds it past the reserve"
-                );
-            }
-        }
+        Cmd::AccountStatus { address } => cmd_account_status(&rpc, address).await?,
         Cmd::Offers { address } => {
             println!(
                 "{}",
                 serde_json::to_string_pretty(&rpc.account_offers(&address).await?)?
             );
         }
-        Cmd::OfferCancel { sequence } => {
-            let wallet = cli_wallet(signing_credential.as_ref())?;
-            let account = wallet.classic_address.clone();
-            rpc.ensure_network(network).await?;
-            let account_info = rpc.account_info(&account).await?;
-            // Never sign without simulate (Sequence/Fee/LLS from simulate, fee capped).
-            let tx_json = signing::build_offer_cancel_tx_json_for_simulate(
-                &account,
-                sequence,
-                account_info.sequence,
-            )?;
-            simulate_confirm_submit(
-                &rpc,
-                network,
-                yes,
-                wait,
-                false,
-                tx_json,
-                |_, fee_drops, _| {
-                    println!("OfferCancel #{sequence} from {account} (fee {fee_drops} drops)");
-                    Ok(format!("Cancel offer #{sequence} of {account}"))
-                },
-                |tx_sequence, fee_drops, last_ledger_sequence| {
-                    signing::create_and_sign_offer_cancel(
-                        &wallet,
-                        &account,
-                        sequence,
-                        tx_sequence,
-                        fee_drops,
-                        last_ledger_sequence,
-                    )
-                },
-            )
-            .await?;
-        }
+        Cmd::OfferCancel { sequence } => cmd_offer_cancel(&flow, sequence).await?,
         Cmd::OfferCreate {
             taker_gets,
             taker_pays,
-        } => {
-            let wallet = cli_wallet(signing_credential.as_ref())?;
-            let account = wallet.classic_address.clone();
-            rpc.ensure_network(network).await?;
-            let account_info = rpc.account_info(&account).await?;
-            let tx_json = signing::build_offer_create_tx_json_for_simulate(
-                &account,
-                &taker_gets,
-                &taker_pays,
-                account_info.sequence,
-            )?;
-            simulate_confirm_submit(
-                &rpc,
-                network,
-                yes,
-                wait,
-                false,
-                tx_json,
-                |_, fee_drops, tx_sequence| {
-                    println!(
-                        "OfferCreate from {account}: give {taker_gets}, want {taker_pays} (fee {fee_drops} drops, offer seq {tx_sequence})"
-                    );
-                    Ok(format!("Place offer: give {taker_gets}, want {taker_pays}"))
-                },
-                |tx_sequence, fee_drops, last_ledger_sequence| {
-                    signing::create_and_sign_offer_create(
-                        &wallet,
-                        &account,
-                        &taker_gets,
-                        &taker_pays,
-                        tx_sequence,
-                        fee_drops,
-                        last_ledger_sequence,
-                    )
-                },
-            )
-            .await?;
-        }
-        Cmd::AmmDeposit { amount, amount2 } => {
-            let wallet = cli_wallet(signing_credential.as_ref())?;
-            let account = wallet.classic_address.clone();
-            rpc.ensure_network(network).await?;
-            let account_info = rpc.account_info(&account).await?;
-            let tx_json = signing::build_amm_deposit_tx_json_for_simulate(
-                &account,
-                &amount,
-                &amount2,
-                account_info.sequence,
-            )?;
-            simulate_confirm_submit(
-                &rpc,
-                network,
-                yes,
-                wait,
-                false,
-                tx_json,
-                |_, fee_drops, _| {
-                    println!(
-                        "AMMDeposit from {account}: up to {amount} + {amount2} (fee {fee_drops} drops)"
-                    );
-                    Ok(format!("AMM deposit up to {amount} + {amount2}"))
-                },
-                |tx_sequence, fee_drops, last_ledger_sequence| {
-                    signing::create_and_sign_amm_deposit(
-                        &wallet,
-                        &account,
-                        &amount,
-                        &amount2,
-                        tx_sequence,
-                        fee_drops,
-                        last_ledger_sequence,
-                    )
-                },
-            )
-            .await?;
-        }
+        } => cmd_offer_create(&flow, taker_gets, taker_pays).await?,
+        Cmd::AmmDeposit { amount, amount2 } => cmd_amm_deposit(&flow, amount, amount2).await?,
         Cmd::AmmWithdraw { asset, asset2, lp } => {
-            let wallet = cli_wallet(signing_credential.as_ref())?;
-            let account = wallet.classic_address.clone();
-            rpc.ensure_network(network).await?;
-            let account_info = rpc.account_info(&account).await?;
-            let lp_token = match lp.as_deref().map(str::trim) {
-                Some(value) => Some((rpc.amm_lp_token(&asset, &asset2).await?, value)),
-                None => None,
-            };
-            let lp_in = lp_token
-                .as_ref()
-                .map(|((currency, issuer), value)| (currency.as_str(), issuer.as_str(), *value));
-            let what = lp_in.map_or("all LP tokens".to_string(), |(_, _, v)| format!("{v} LP"));
-            let tx_json = signing::build_amm_withdraw_tx_json_for_simulate(
-                &account,
-                &asset,
-                &asset2,
-                lp_in,
-                account_info.sequence,
-            )?;
-            simulate_confirm_submit(
-                &rpc,
-                network,
-                yes,
-                wait,
-                false,
-                tx_json,
-                |_, fee_drops, _| {
-                    println!(
-                        "AMMWithdraw from {account}: {what} of {asset}/{asset2} (fee {fee_drops} drops)"
-                    );
-                    Ok(format!("AMM withdraw {what} of {asset}/{asset2}"))
-                },
-                |tx_sequence, fee_drops, last_ledger_sequence| {
-                    signing::create_and_sign_amm_withdraw(
-                        &wallet,
-                        &account,
-                        &asset,
-                        &asset2,
-                        lp_in,
-                        tx_sequence,
-                        fee_drops,
-                        last_ledger_sequence,
-                    )
-                },
-            )
-            .await?;
+            cmd_amm_withdraw(&flow, asset, asset2, lp).await?
         }
         Cmd::Coverage => {
             print!("{}", crate::coverage::markdown_table());
@@ -600,193 +450,397 @@ pub async fn execute_cli_command(
         | Cmd::SaVault { .. } => {
             color_eyre::eyre::bail!("this Flare subcommand is handled before the XRPL client")
         }
-        Cmd::AccountDelete { destination } => {
-            use super::address::{ensure_xaddress_matches_network, resolve_payment_destination};
-
-            let resolved = resolve_payment_destination(destination.trim())?;
-            ensure_xaddress_matches_network(&resolved, network)?;
-            let (dest, tag) = (resolved.classic, resolved.destination_tag);
-            let wallet = cli_wallet(signing_credential.as_ref())?;
-            let account = wallet.classic_address.clone();
-            rpc.ensure_network(network).await?;
-            let account_info = rpc.account_info(&account).await?;
-            let tx_json = signing::build_account_delete_tx_json_for_simulate(
-                &account,
-                &dest,
-                tag,
-                account_info.sequence,
-            )?;
-            let tag_note = tag.map_or(String::new(), |t| format!(" (tag {t})"));
-            simulate_confirm_submit(
-                &rpc,
-                network,
-                yes,
-                wait,
-                false,
-                tx_json,
-                |_, fee_drops, _| {
-                    println!(
-                        "AccountDelete {account} → {dest}{tag_note}: balance {} XRP minus fee {fee_drops} drops goes to the destination; the account is removed (irreversible)",
-                        account_info.balance_xrp
-                    );
-                    Ok(format!(
-                        "AccountDelete {account} (remaining XRP to {dest}{tag_note})"
-                    ))
-                },
-                |tx_sequence, fee_drops, last_ledger_sequence| {
-                    signing::create_and_sign_account_delete(
-                        &wallet,
-                        &account,
-                        &dest,
-                        tag,
-                        tx_sequence,
-                        fee_drops,
-                        last_ledger_sequence,
-                    )
-                },
-            )
-            .await?;
-        }
+        Cmd::AccountDelete { destination } => cmd_account_delete(&flow, destination).await?,
         generic @ (Cmd::Tx { .. } | Cmd::NftMint { .. } | Cmd::NftBurn { .. }) => {
-            let (spec, fields) = cmd_tx_request(&generic)?;
-            let wallet = cli_wallet(signing_credential.as_ref())?;
-            let account = wallet.classic_address.clone();
-            rpc.ensure_network(network).await?;
-            let account_info = rpc.account_info(&account).await?;
-            let tx_json = (spec.build_json)(&account, &fields, account_info.sequence)?;
-            let summary = spec.summary_line(&fields);
-            simulate_confirm_submit(
-                &rpc,
-                network,
-                yes,
-                wait,
-                false,
-                tx_json,
-                |_, fee_drops, _| {
-                    println!("{account}: {summary} (fee {fee_drops} drops)");
-                    Ok(match spec.confirm {
-                        Some(c) => format!("{summary} — {}", c.hint),
-                        None => summary,
-                    })
-                },
-                |tx_sequence, fee_drops, last_ledger_sequence| {
-                    (spec.sign)(
-                        &wallet,
-                        &account,
-                        &fields,
-                        tx_sequence,
-                        fee_drops,
-                        last_ledger_sequence,
-                    )
-                },
-            )
-            .await?;
+            cmd_generic_tx(&flow, generic).await?
         }
-        Cmd::Faucet { address } => {
-            let url = faucet_url(network)?;
-            // No address: keys are generated here; only the address goes to the faucet.
-            let (address, seed) = match address {
-                Some(address) => (address, None),
-                None => {
-                    let keys = signing::generate_wallet_keys_local("ed25519")?;
-                    let seed = secrecy::SecretString::from(keys.master_seed.clone());
-                    (keys.account_id.clone(), Some(seed))
-                }
-            };
-            let funded = fund_from_faucet(url, &address).await?;
-            println!("Funded {address} with {} XRP", funded.amount_xrp);
-            if let Some(hash) = funded.tx_hash {
-                println!("Transaction Hash: {hash}");
-            }
-            if let Some(seed) = seed {
-                println!("Seed: {}", secrecy::ExposeSecret::expose_secret(&seed));
-                eprintln!(
-                    "note: test-network seed shown once and not saved; export XRPL_SEED to sign with it"
-                );
-            }
-        }
+        Cmd::Faucet { address } => cmd_faucet(network, address).await?,
         Cmd::Send {
             destination,
             amount,
-        } => {
-            use super::address::{ensure_xaddress_matches_network, resolve_payment_destination};
+        } => cmd_send(&flow, destination, amount).await?,
+    }
+    Ok(())
+}
 
-            signing::validate_payment_input(&destination, &amount, None, None)?;
-            let wallet = cli_wallet(signing_credential.as_ref())?;
-            let account = wallet.classic_address.clone();
+async fn cmd_offer_cancel(flow: &WriteFlow<'_>, sequence: u32) -> color_eyre::Result<()> {
+    let wallet = flow.wallet()?;
+    let (account, account_info) = flow.load_account(&wallet).await?;
+    // Never sign without simulate (Sequence/Fee/LLS from simulate, fee capped).
+    let tx_json = signing::build_offer_cancel_tx_json_for_simulate(
+        &account,
+        sequence,
+        account_info.sequence,
+    )?;
+    flow.simulate_confirm_submit(
+        false,
+        tx_json,
+        |_, fee_drops, _| {
+            println!("OfferCancel #{sequence} from {account} (fee {fee_drops} drops)");
+            Ok(format!("Cancel offer #{sequence} of {account}"))
+        },
+        |tx_sequence, fee_drops, last_ledger_sequence| {
+            signing::create_and_sign_offer_cancel(
+                &wallet,
+                &account,
+                sequence,
+                tx_sequence,
+                fee_drops,
+                last_ledger_sequence,
+            )
+        },
+    )
+    .await?;
+    Ok(())
+}
 
-            let resolved = resolve_payment_destination(destination.trim())?;
-            ensure_xaddress_matches_network(&resolved, network)?;
-            let destination_classic = resolved.classic;
-            let destination_tag = resolved.destination_tag;
+async fn cmd_offer_create(
+    flow: &WriteFlow<'_>,
+    taker_gets: String,
+    taker_pays: String,
+) -> color_eyre::Result<()> {
+    let wallet = flow.wallet()?;
+    let (account, account_info) = flow.load_account(&wallet).await?;
+    let tx_json = signing::build_offer_create_tx_json_for_simulate(
+        &account,
+        &taker_gets,
+        &taker_pays,
+        account_info.sequence,
+    )?;
+    flow.simulate_confirm_submit(
+                false,
+        tx_json,
+        |_, fee_drops, tx_sequence| {
+            println!(
+                "OfferCreate from {account}: give {taker_gets}, want {taker_pays} (fee {fee_drops} drops, offer seq {tx_sequence})"
+            );
+            Ok(format!("Place offer: give {taker_gets}, want {taker_pays}"))
+        },
+        |tx_sequence, fee_drops, last_ledger_sequence| {
+            signing::create_and_sign_offer_create(
+                &wallet,
+                &account,
+                &taker_gets,
+                &taker_pays,
+                tx_sequence,
+                fee_drops,
+                last_ledger_sequence,
+            )
+        },
+    )
+    .await?;
+    Ok(())
+}
 
-            rpc.ensure_network(network).await?;
-            let account_info = rpc.account_info(&account).await?;
-            let balance_xrp_str = account_info.balance_xrp;
-            let balance_drops = xrp_to_drops(&balance_xrp_str).unwrap_or(0);
+async fn cmd_amm_deposit(
+    flow: &WriteFlow<'_>,
+    amount: String,
+    amount2: String,
+) -> color_eyre::Result<()> {
+    let wallet = flow.wallet()?;
+    let (account, account_info) = flow.load_account(&wallet).await?;
+    let tx_json = signing::build_amm_deposit_tx_json_for_simulate(
+        &account,
+        &amount,
+        &amount2,
+        account_info.sequence,
+    )?;
+    flow.simulate_confirm_submit(
+        false,
+        tx_json,
+        |_, fee_drops, _| {
+            println!(
+                "AMMDeposit from {account}: up to {amount} + {amount2} (fee {fee_drops} drops)"
+            );
+            Ok(format!("AMM deposit up to {amount} + {amount2}"))
+        },
+        |tx_sequence, fee_drops, last_ledger_sequence| {
+            signing::create_and_sign_amm_deposit(
+                &wallet,
+                &account,
+                &amount,
+                &amount2,
+                tx_sequence,
+                fee_drops,
+                last_ledger_sequence,
+            )
+        },
+    )
+    .await?;
+    Ok(())
+}
 
-            println!("From: {}", account);
-            println!("To: {}", destination_classic);
-            if let Some(tag) = destination_tag {
-                println!("Destination Tag: {}", tag);
+async fn cmd_amm_withdraw(
+    flow: &WriteFlow<'_>,
+    asset: String,
+    asset2: String,
+    lp: Option<String>,
+) -> color_eyre::Result<()> {
+    let wallet = flow.wallet()?;
+    let (account, account_info) = flow.load_account(&wallet).await?;
+    let lp_token = match lp.as_deref().map(str::trim) {
+        Some(value) => Some((flow.rpc.amm_lp_token(&asset, &asset2).await?, value)),
+        None => None,
+    };
+    let lp_in = lp_token
+        .as_ref()
+        .map(|((currency, issuer), value)| (currency.as_str(), issuer.as_str(), *value));
+    let what = lp_in.map_or("all LP tokens".to_string(), |(_, _, v)| format!("{v} LP"));
+    let tx_json = signing::build_amm_withdraw_tx_json_for_simulate(
+        &account,
+        &asset,
+        &asset2,
+        lp_in,
+        account_info.sequence,
+    )?;
+    flow.simulate_confirm_submit(
+        false,
+        tx_json,
+        |_, fee_drops, _| {
+            println!(
+                "AMMWithdraw from {account}: {what} of {asset}/{asset2} (fee {fee_drops} drops)"
+            );
+            Ok(format!("AMM withdraw {what} of {asset}/{asset2}"))
+        },
+        |tx_sequence, fee_drops, last_ledger_sequence| {
+            signing::create_and_sign_amm_withdraw(
+                &wallet,
+                &account,
+                &asset,
+                &asset2,
+                lp_in,
+                tx_sequence,
+                fee_drops,
+                last_ledger_sequence,
+            )
+        },
+    )
+    .await?;
+    Ok(())
+}
+
+async fn cmd_account_delete(flow: &WriteFlow<'_>, destination: String) -> color_eyre::Result<()> {
+    use super::address::{ensure_xaddress_matches_network, resolve_payment_destination};
+
+    let resolved = resolve_payment_destination(destination.trim())?;
+    ensure_xaddress_matches_network(&resolved, flow.network)?;
+    let (dest, tag) = (resolved.classic, resolved.destination_tag);
+    let wallet = flow.wallet()?;
+    let (account, account_info) = flow.load_account(&wallet).await?;
+    let tx_json = signing::build_account_delete_tx_json_for_simulate(
+        &account,
+        &dest,
+        tag,
+        account_info.sequence,
+    )?;
+    let tag_note = tag.map_or(String::new(), |t| format!(" (tag {t})"));
+    flow.simulate_confirm_submit(
+                false,
+        tx_json,
+        |_, fee_drops, _| {
+            println!(
+                "AccountDelete {account} → {dest}{tag_note}: balance {} XRP minus fee {fee_drops} drops goes to the destination; the account is removed (irreversible)",
+                account_info.balance_xrp
+            );
+            Ok(format!(
+                "AccountDelete {account} (remaining XRP to {dest}{tag_note})"
+            ))
+        },
+        |tx_sequence, fee_drops, last_ledger_sequence| {
+            signing::create_and_sign_account_delete(
+                &wallet,
+                &account,
+                &dest,
+                tag,
+                tx_sequence,
+                fee_drops,
+                last_ledger_sequence,
+            )
+        },
+    )
+    .await?;
+    Ok(())
+}
+
+async fn cmd_generic_tx(flow: &WriteFlow<'_>, generic: Cmd) -> color_eyre::Result<()> {
+    let (spec, fields) = cmd_tx_request(&generic)?;
+    let wallet = flow.wallet()?;
+    let (account, account_info) = flow.load_account(&wallet).await?;
+    let tx_json = (spec.build_json)(&account, &fields, account_info.sequence)?;
+    let summary = spec.summary_line(&fields);
+    flow.simulate_confirm_submit(
+        false,
+        tx_json,
+        |_, fee_drops, _| {
+            println!("{account}: {summary} (fee {fee_drops} drops)");
+            Ok(match spec.confirm {
+                Some(c) => format!("{summary} — {}", c.hint),
+                None => summary,
+            })
+        },
+        |tx_sequence, fee_drops, last_ledger_sequence| {
+            (spec.sign)(
+                &wallet,
+                &account,
+                &fields,
+                tx_sequence,
+                fee_drops,
+                last_ledger_sequence,
+            )
+        },
+    )
+    .await?;
+    Ok(())
+}
+
+async fn cmd_send(
+    flow: &WriteFlow<'_>,
+    destination: String,
+    amount: String,
+) -> color_eyre::Result<()> {
+    use super::address::{ensure_xaddress_matches_network, resolve_payment_destination};
+
+    signing::validate_payment_input(&destination, &amount, None, None)?;
+    let wallet = flow.wallet()?;
+
+    let resolved = resolve_payment_destination(destination.trim())?;
+    ensure_xaddress_matches_network(&resolved, flow.network)?;
+    let destination_classic = resolved.classic;
+    let destination_tag = resolved.destination_tag;
+
+    let (account, account_info) = flow.load_account(&wallet).await?;
+    let balance_xrp_str = account_info.balance_xrp;
+    let balance_drops = xrp_to_drops(&balance_xrp_str).unwrap_or(0);
+
+    println!("From: {}", account);
+    println!("To: {}", destination_classic);
+    if let Some(tag) = destination_tag {
+        println!("Destination Tag: {}", tag);
+    }
+    println!("Amount: {} XRP", amount);
+    println!("Current Balance: {} XRP", balance_xrp_str);
+
+    // Never sign without simulate: Sequence/Fee/LastLedgerSequence come from simulate
+    // (fee capped by `sequence_fee_ledger_from_simulate`).
+    let tx_json = signing::build_payment_tx_json_for_simulate(
+        &account,
+        &destination_classic,
+        &amount,
+        None,
+        None,
+        None,
+        destination_tag,
+        None,
+        account_info.sequence,
+    )?;
+    flow.simulate_confirm_submit(
+        true,
+        tx_json,
+        |engine_result, fee_drops, _| {
+            println!("Simulate: {} (fee {} drops)", engine_result, fee_drops);
+            let amount_drops = xrp_to_drops(&amount)?;
+            let needed_drops = amount_drops
+                .checked_add(u64::from(fee_drops))
+                .ok_or_else(|| color_eyre::eyre::eyre!("amount too large"))?;
+            if balance_drops < needed_drops {
+                return Err(color_eyre::eyre::eyre!(
+                    "Insufficient balance: current {} drops, need {} drops",
+                    balance_drops,
+                    needed_drops
+                ));
             }
-            println!("Amount: {} XRP", amount);
-            println!("Current Balance: {} XRP", balance_xrp_str);
-
-            // Never sign without simulate: Sequence/Fee/LastLedgerSequence come from simulate
-            // (fee capped by `sequence_fee_ledger_from_simulate`).
-            let tx_json = signing::build_payment_tx_json_for_simulate(
+            Ok(format!("Send {} XRP to {}", amount, destination_classic))
+        },
+        |sequence, fee_drops, last_ledger_sequence| {
+            signing::create_and_sign_payment(
+                &wallet,
                 &account,
                 &destination_classic,
                 &amount,
-                None,
-                None,
-                None,
+                None, // iou_currency: XRP-only
+                None, // iou_issuer: XRP-only
+                None, // send_max
                 destination_tag,
-                None,
-                account_info.sequence,
-            )?;
-            simulate_confirm_submit(
-                &rpc,
-                network,
-                yes,
-                wait,
-                true,
-                tx_json,
-                |engine_result, fee_drops, _| {
-                    println!("Simulate: {} (fee {} drops)", engine_result, fee_drops);
-                    let amount_drops = xrp_to_drops(&amount)?;
-                    let needed_drops = amount_drops
-                        .checked_add(u64::from(fee_drops))
-                        .ok_or_else(|| color_eyre::eyre::eyre!("amount too large"))?;
-                    if balance_drops < needed_drops {
-                        return Err(color_eyre::eyre::eyre!(
-                            "Insufficient balance: current {} drops, need {} drops",
-                            balance_drops,
-                            needed_drops
-                        ));
-                    }
-                    Ok(format!("Send {} XRP to {}", amount, destination_classic))
-                },
-                |sequence, fee_drops, last_ledger_sequence| {
-                    signing::create_and_sign_payment(
-                        &wallet,
-                        &account,
-                        &destination_classic,
-                        &amount,
-                        None, // iou_currency: XRP-only
-                        None, // iou_issuer: XRP-only
-                        None, // send_max
-                        destination_tag,
-                        None, // memo_data
-                        sequence,
-                        fee_drops,
-                        last_ledger_sequence,
-                    )
-                },
+                None, // memo_data
+                sequence,
+                fee_drops,
+                last_ledger_sequence,
             )
-            .await?;
+        },
+    )
+    .await?;
+    Ok(())
+}
+
+async fn cmd_faucet(network: &Network, address: Option<String>) -> color_eyre::Result<()> {
+    let url = faucet_url(network)?;
+    // No address: keys are generated here; only the address goes to the faucet.
+    let (address, seed) = match address {
+        Some(address) => (address, None),
+        None => {
+            let keys = signing::generate_wallet_keys_local("ed25519")?;
+            let seed = secrecy::SecretString::from(keys.master_seed.clone());
+            (keys.account_id.clone(), Some(seed))
         }
+    };
+    let funded = fund_from_faucet(url, &address).await?;
+    println!("Funded {address} with {} XRP", funded.amount_xrp);
+    if let Some(hash) = funded.tx_hash {
+        println!("Transaction Hash: {hash}");
+    }
+    if let Some(seed) = seed {
+        println!("Seed: {}", secrecy::ExposeSecret::expose_secret(&seed));
+        eprintln!(
+            "note: test-network seed shown once and not saved; export XRPL_SEED to sign with it"
+        );
+    }
+    Ok(())
+}
+
+async fn cmd_book(
+    rpc: &RpcClient,
+    base: String,
+    quote: String,
+    issuer: Option<String>,
+    limit: u16,
+) -> color_eyre::Result<()> {
+    let issuer = issuer.unwrap_or_default();
+    let rows = rpc
+        .book_offers(
+            &base,
+            if base.eq_ignore_ascii_case("XRP") {
+                None
+            } else {
+                Some(&issuer)
+            },
+            &quote,
+            if quote.eq_ignore_ascii_case("XRP") {
+                None
+            } else {
+                Some(&issuer)
+            },
+            limit,
+        )
+        .await?;
+    println!("{}", serde_json::to_string_pretty(&rows)?);
+    Ok(())
+}
+
+async fn cmd_account_status(rpc: &RpcClient, address: String) -> color_eyre::Result<()> {
+    let is_activated = rpc.fetch_account_activation_status(&address).await?;
+    println!("Account: {}", address);
+    println!(
+        "Status: {}",
+        if is_activated {
+            "Activated"
+        } else {
+            "Not Activated"
+        }
+    );
+    if !is_activated {
+        println!(
+            "Note: the account does not exist on the ledger until a payment funds it past the reserve"
+        );
     }
     Ok(())
 }
@@ -1098,11 +1152,17 @@ mod tests {
             Ok(())
         }
 
+        /// `send` simulates before signing and submitting, and stops when simulate is not
+        /// tesSUCCESS.
+        ///
         /// TC-188: `-x send` checks the endpoint network, then account_info → simulate → submit
         /// (no unsimulated signing); the signed Fee comes from the simulate response and a
         /// simulate for a foreign Sequence aborts before submit.
+        ///
+        /// TC-188: a non-`tesSUCCESS` simulate stops the flow before signing/submit.
         #[tokio::test]
-        async fn send_simulates_before_signing_and_submits() -> color_eyre::Result<()> {
+        async fn send_simulates_before_signing_and_stops_on_failure() -> color_eyre::Result<()> {
+            // simulates before signing and submits
             use secrecy::SecretString;
             use xrpl::core::binarycodec::decode;
 
@@ -1185,6 +1245,41 @@ mod tests {
                 rpc_mock::methods(&server.await??),
                 ["server_info", "account_info", "simulate"]
             );
+
+            // stops when simulate is not tes success
+
+            fn failing_simulate(method: &str) -> Value {
+                match method {
+                    "simulate" => json!({
+                        "engine_result": "tecUNFUNDED_PAYMENT",
+                        "engine_result_message": "Insufficient XRP balance to send.",
+                        "tx_json": {}
+                    }),
+                    other => result_for(other),
+                }
+            }
+            let listener = TcpListener::bind(("127.0.0.1", 0)).await?;
+            let url = format!("http://{}", listener.local_addr()?);
+            let server = tokio::spawn(serve_with(listener, 3, failing_simulate));
+            let credential = crate::signing::credential_from_secrets(
+                Some(&SecretString::from("sEdSkooMk31MeTjbHVE7vLvgCpEMAdB")),
+                None,
+            )?;
+            let err = execute_cli_command(
+                Cmd::Send {
+                    destination: GENESIS.into(),
+                    amount: "0.000123".into(),
+                },
+                &url,
+                &Network::Testnet,
+                credential,
+                false,
+                false,
+            )
+            .await
+            .expect_err("tec simulate must abort");
+            assert!(err.to_string().contains("tecUNFUNDED_PAYMENT"), "{err}");
+            assert_eq!(server.await??, ["server_info", "account_info", "simulate"]);
             Ok(())
         }
 
@@ -1226,53 +1321,23 @@ mod tests {
             Ok(())
         }
 
-        /// TC-188: a non-`tesSUCCESS` simulate stops the flow before signing/submit.
-        #[tokio::test]
-        async fn send_stops_when_simulate_is_not_tes_success() -> color_eyre::Result<()> {
-            use secrecy::SecretString;
-
-            fn failing_simulate(method: &str) -> Value {
-                match method {
-                    "simulate" => json!({
-                        "engine_result": "tecUNFUNDED_PAYMENT",
-                        "engine_result_message": "Insufficient XRP balance to send.",
-                        "tx_json": {}
-                    }),
-                    other => result_for(other),
-                }
-            }
-            let listener = TcpListener::bind(("127.0.0.1", 0)).await?;
-            let url = format!("http://{}", listener.local_addr()?);
-            let server = tokio::spawn(serve_with(listener, 3, failing_simulate));
-            let credential = crate::signing::credential_from_secrets(
-                Some(&SecretString::from("sEdSkooMk31MeTjbHVE7vLvgCpEMAdB")),
-                None,
-            )?;
-            let err = execute_cli_command(
-                Cmd::Send {
-                    destination: GENESIS.into(),
-                    amount: "0.000123".into(),
-                },
-                &url,
-                &Network::Testnet,
-                credential,
-                false,
-                false,
-            )
-            .await
-            .expect_err("tec simulate must abort");
-            assert!(err.to_string().contains("tecUNFUNDED_PAYMENT"), "{err}");
-            assert_eq!(server.await??, ["server_info", "account_info", "simulate"]);
-            Ok(())
-        }
-
         const NFT_ID: &str = "000B013A95F14B0044F78A264E41713C64B5F89242540EE208C3098E00000D65";
 
+        /// `-x tx` signs through simulate, refuses bad input before any RPC, and stops on a
+        /// simulate refusal or waits for validation.
+        ///
         /// TC-254: CLI `nft-mint` / `tx` — `server_info → account_info → simulate → submit`;
         /// simulate and the signed blob carry the spec's fields (plain-text URI → hex, flag bits,
         /// case-insensitive `Field=value` names), and the blob the simulate Sequence / Fee / LLS.
+        ///
+        /// TC-254: invalid forms and a missing key fail before any RPC (unknown type / field,
+        /// bad id, fee without `transferable`, `Field` without `=`).
+        ///
+        /// TC-254: a non-`tesSUCCESS` simulate stops the generic CLI flow before signing; with
+        /// `wait` a validated result is polled via `tx` after submit (`--no-wait` skips it).
         #[tokio::test]
-        async fn generic_tx_cli_signs_through_simulate() -> color_eyre::Result<()> {
+        async fn generic_tx_cli_contract() -> color_eyre::Result<()> {
+            // signs through simulate
             use xrpl::core::binarycodec::decode;
 
             let listener = TcpListener::bind(("127.0.0.1", 0)).await?;
@@ -1357,13 +1422,8 @@ mod tests {
             );
             let signed = decode(requests[7]["params"][0]["tx_blob"].as_str().unwrap())?;
             assert_eq!(signed["NFTokenID"], NFT_ID);
-            Ok(())
-        }
 
-        /// TC-254: invalid forms and a missing key fail before any RPC (unknown type / field,
-        /// bad id, fee without `transferable`, `Field` without `=`).
-        #[tokio::test]
-        async fn generic_tx_cli_refusals_never_reach_rpc() -> color_eyre::Result<()> {
+            // refusals never reach rpc
             let burn = |id: &str| Cmd::NftBurn {
                 nftoken_id: id.into(),
                 owner: None,
@@ -1399,67 +1459,66 @@ mod tests {
                 assert!(err.to_string().contains(want), "{want}: {err}");
                 assert!(server.await??.is_empty(), "{want}: reached the RPC");
             }
-            Ok(())
-        }
 
-        /// TC-254: a non-`tesSUCCESS` simulate stops the generic CLI flow before signing; with
-        /// `wait` a validated result is polled via `tx` after submit (`--no-wait` skips it).
-        #[tokio::test]
-        async fn generic_tx_cli_simulate_stop_and_wait() -> color_eyre::Result<()> {
-            fn tec_simulate(method: &str) -> Value {
-                match method {
-                    "simulate" => json!({
-                        "engine_result": "tecNO_ENTRY",
-                        "engine_result_message": "no such NFT",
-                        "tx_json": {}
-                    }),
-                    other => result_for(other),
+            // simulate stop and wait
+            {
+                fn tec_simulate(method: &str) -> Value {
+                    match method {
+                        "simulate" => json!({
+                            "engine_result": "tecNO_ENTRY",
+                            "engine_result_message": "no such NFT",
+                            "tx_json": {}
+                        }),
+                        other => result_for(other),
+                    }
                 }
-            }
-            fn validating(method: &str) -> Value {
-                match method {
-                    "tx" => json!({"validated": true, "meta": {"TransactionResult": "tesSUCCESS"}}),
-                    other => result_for(other),
+                fn validating(method: &str) -> Value {
+                    match method {
+                        "tx" => {
+                            json!({"validated": true, "meta": {"TransactionResult": "tesSUCCESS"}})
+                        }
+                        other => result_for(other),
+                    }
                 }
+                let burn = || Cmd::NftBurn {
+                    nftoken_id: NFT_ID.into(),
+                    owner: None,
+                };
+
+                let listener = TcpListener::bind(("127.0.0.1", 0)).await?;
+                let url = format!("http://{}", listener.local_addr()?);
+                let server = tokio::spawn(serve_with(listener, 3, tec_simulate));
+                let err = execute_cli_command(
+                    burn(),
+                    &url,
+                    &Network::Testnet,
+                    test_credential()?,
+                    true,
+                    false,
+                )
+                .await
+                .expect_err("tec simulate must abort");
+                assert!(err.to_string().contains("tecNO_ENTRY"), "{err}");
+                assert_eq!(server.await??, ["server_info", "account_info", "simulate"]);
+
+                let listener = TcpListener::bind(("127.0.0.1", 0)).await?;
+                let url = format!("http://{}", listener.local_addr()?);
+                let server = tokio::spawn(serve_with(listener, 5, validating));
+                execute_cli_command(
+                    burn(),
+                    &url,
+                    &Network::Testnet,
+                    test_credential()?,
+                    true,
+                    true,
+                )
+                .await?;
+                assert_eq!(
+                    server.await??,
+                    ["server_info", "account_info", "simulate", "submit", "tx"]
+                );
+                Ok(())
             }
-            let burn = || Cmd::NftBurn {
-                nftoken_id: NFT_ID.into(),
-                owner: None,
-            };
-
-            let listener = TcpListener::bind(("127.0.0.1", 0)).await?;
-            let url = format!("http://{}", listener.local_addr()?);
-            let server = tokio::spawn(serve_with(listener, 3, tec_simulate));
-            let err = execute_cli_command(
-                burn(),
-                &url,
-                &Network::Testnet,
-                test_credential()?,
-                true,
-                false,
-            )
-            .await
-            .expect_err("tec simulate must abort");
-            assert!(err.to_string().contains("tecNO_ENTRY"), "{err}");
-            assert_eq!(server.await??, ["server_info", "account_info", "simulate"]);
-
-            let listener = TcpListener::bind(("127.0.0.1", 0)).await?;
-            let url = format!("http://{}", listener.local_addr()?);
-            let server = tokio::spawn(serve_with(listener, 5, validating));
-            execute_cli_command(
-                burn(),
-                &url,
-                &Network::Testnet,
-                test_credential()?,
-                true,
-                true,
-            )
-            .await?;
-            assert_eq!(
-                server.await??,
-                ["server_info", "account_info", "simulate", "submit", "tx"]
-            );
-            Ok(())
         }
 
         const AMM_ACCOUNT: &str = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh";

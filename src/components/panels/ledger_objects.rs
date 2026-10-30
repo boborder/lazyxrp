@@ -86,10 +86,10 @@ impl Component for LedgerObjectsPanel {
             Action::XrplLedgerObjects(all) => {
                 self.apply_filter(all);
             }
-            _ if self
-                .table_state
-                .handle_row_select(action, self.is_focused, len) => {}
-            _ => {}
+            _ => {
+                self.table_state
+                    .handle_row_select(action, self.is_focused, len);
+            }
         }
         Ok(None)
     }

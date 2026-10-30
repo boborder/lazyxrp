@@ -139,52 +139,48 @@ pub fn fmt_local_hms(t: std::time::SystemTime) -> String {
 mod tests {
     use super::*;
 
+    /// Digit grouping and XRP formatting, including remote-supplied and tiny values.
     #[test]
-    fn group_digits_inserts_commas_per_thousands() {
+    fn number_formatting() {
+        // group digits inserts commas per thousands
         assert_eq!(group_digits("0"), "0");
         assert_eq!(group_digits("1234"), "1,234");
         assert_eq!(group_digits("1234567"), "1,234,567");
         assert_eq!(group_digits("123.45"), "123.45");
         assert_eq!(group_digits("1234567.890123"), "1,234,567.890123");
         assert_eq!(group_digits("-1234"), "-1,234");
-    }
 
-    #[test]
-    fn fmt_xrp_trims_trailing_zeros_and_groups() {
+        // fmt xrp trims trailing zeros and groups
         assert_eq!(fmt_xrp(0.0), "0");
         assert_eq!(fmt_xrp(1.5), "1.5");
         assert_eq!(fmt_xrp(55660.60415), "55,660.60415");
         assert_eq!(fmt_xrp(1_000_000.123456), "1,000,000.123456");
+
+        // group digits u64 known values
+        assert_eq!(group_digits_u64(0), "0");
+        assert_eq!(group_digits_u64(1234), "1,234");
+        assert_eq!(group_digits_u64(1_234_567), "1,234,567");
+        assert_eq!(group_digits_u64(u64::MAX), "18,446,744,073,709,551,615");
+
+        // fmt edge cases for remote and tiny values
+        assert_eq!(short_hex("ééééééééééééééééééé", 3, 3), "ééé…ééé");
+        assert_eq!(group_digits(""), "");
+        assert_eq!(fmt_xrp(-0.0000001), "0");
     }
 
+    /// Long keys and domains are shortened in the middle.
     #[test]
-    fn short_hex_truncates_long_keys() {
+    fn text_truncation() {
+        // short hex truncates long keys
         let key = "ED13AAFCB6A87BCB5D093C2EF37F04431C291126D674293305152D9776C6ABA4D6";
         assert_eq!(short_hex(key, 10, 8), "ED13AAFCB6…C6ABA4D6");
         assert_eq!(short_hex("abc", 10, 8), "abc");
-    }
 
-    #[test]
-    fn truncate_middle_shortens_long_domain() {
+        // truncate middle shortens long domain
         let s = "validator.xrpl-labs.example.com";
         assert_eq!(truncate_middle(s, 20), "validator…ample.com");
         assert_eq!(truncate_middle("short", 20), "short");
         assert_eq!(truncate_middle(s, 3), s); // max_chars <= 3 keeps original
         assert_eq!(truncate_middle("あいうえおかきくけこ", 7), "あいう…くけこ");
-    }
-
-    #[test]
-    fn group_digits_u64_known_values() {
-        assert_eq!(group_digits_u64(0), "0");
-        assert_eq!(group_digits_u64(1234), "1,234");
-        assert_eq!(group_digits_u64(1_234_567), "1,234,567");
-        assert_eq!(group_digits_u64(u64::MAX), "18,446,744,073,709,551,615");
-    }
-
-    #[test]
-    fn fmt_edge_cases_for_remote_and_tiny_values() {
-        assert_eq!(short_hex("ééééééééééééééééééé", 3, 3), "ééé…ééé");
-        assert_eq!(group_digits(""), "");
-        assert_eq!(fmt_xrp(-0.0000001), "0");
     }
 }

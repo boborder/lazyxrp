@@ -24,6 +24,14 @@ lazyxrp/
 ├── mise.toml
 ├── deny.toml
 ├── AGENTS.md
+├── LICENSE
+├── benchmark.sh           # benchmark runner (`mise run bench*`)
+├── skills-lock.json       # lock for the vendored `.agents/skills/` (`npx skills update`)
+├── .gitignore
+├── .cargo/audit.toml      # cargo-audit ignores; mirror of deny.toml
+├── .config/
+│   ├── lazyxrp/config.toml                # sample user config (README: copy to ~/.config/lazyxrp/)
+│   └── lazyxrp-test/config.toml.example   # testnet rehearsal template (the copy is gitignored)
 ├── .github/workflows/     # ci.yml / cd.yml / benchmark.yml
 ├── src/
 │   ├── lib.rs                 # shared library (lazyxrp + rp binaries)
@@ -140,7 +148,7 @@ lazyxrp/
 │   ├── security-ja.md
 │   ├── problems.md
 │   └── problems-ja.md
-└── .agents/skills/         # domain skills (xrpl-rust, flare-*)
+└── .agents/skills/         # domain skills (xrpl-rust, flare-*) + verify-lazyxrp (PTY / CLI verification harness)
 ```
 
 **Docs の命名規則:** すべての `docs/*.md` と `ROADMAP.md` は、同じディレクトリに日本語版 `*-ja.md` を持つ。エージェントが基準にするのは英語版。片方を変更する場合は同じ変更内で他方も更新し、ID 集合（TC/FR/NFR/S/R/I/P/F）を一致させなければならない。

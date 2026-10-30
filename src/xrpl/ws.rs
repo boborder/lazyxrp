@@ -15,6 +15,7 @@ use super::types::TxSummary;
 use super::util::{json_u32, next_backoff_secs};
 
 /// No frame for this long = dead socket (ledgers close every ~4s): drop it and reconnect.
+/// Shorter under `cfg(test)` so the silent-socket fixture test does not wait the real 30 s.
 const WS_READ_TIMEOUT: Duration = if cfg!(test) {
     Duration::from_secs(1)
 } else {

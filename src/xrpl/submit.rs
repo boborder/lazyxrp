@@ -2896,11 +2896,21 @@ mod tests {
         }
     }
 
+    /// FXRP execute: refused on Flare mainnet without --yes, on unpaired XRPL / Flare networks, and
+    /// while execute is disabled.
+    ///
     /// TC-088 / TC-348: the Flare executeDirectMinting path has its own gate (different signature,
     /// so it sits outside the table above): Flare mainnet, as reported by the RPC's chain id,
     /// without `--yes` is refused.
+    ///
+    /// TC-348: the Flare write is gated on the XRPL ↔ Flare pairing, not on the XRPL network
+    /// alone (Testnet with `[flare] network = flare` is refused).
+    ///
+    /// TC-348: the Direct Mint Payment and Smart Account instruction paths refuse an unpaired
+    /// XRPL / Flare network before any XRPL RPC call.
     #[tokio::test]
-    async fn fxrp_execute_direct_mint_flare_mainnet_without_yes_is_rejected() {
+    async fn fxrp_execute_direct_mint_gates() {
+        // fxrp execute direct mint flare mainnet without yes is rejected
         let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
             .await
             .expect("bind");
@@ -2937,12 +2947,8 @@ mod tests {
             .await
             .expect("join")
             .expect("one eth_chainId request");
-    }
 
-    /// TC-348: the Flare write is gated on the XRPL ↔ Flare pairing, not on the XRPL network
-    /// alone (Testnet with `[flare] network = flare` is refused).
-    #[tokio::test]
-    async fn fxrp_execute_direct_mint_refuses_unpaired_networks() {
+        // fxrp execute direct mint refuses unpaired networks
         use crate::config::FlareNetwork::{Coston2, Flare};
         let key = secrecy::SecretString::from("11".repeat(32));
         for (xrpl, flare) in [(Network::Testnet, Flare), (Network::Mainnet, Coston2)] {
@@ -2968,13 +2974,8 @@ mod tests {
                 other => panic!("{xrpl:?}/{flare:?}: expected submit error, got {other:?}"),
             }
         }
-    }
 
-    /// TC-348: the Direct Mint Payment and Smart Account instruction paths refuse an unpaired
-    /// XRPL / Flare network before any XRPL RPC call.
-    #[tokio::test]
-    async fn xrpl_writes_refuse_unpaired_flare_network() {
-        use crate::config::FlareNetwork::{Coston2, Flare};
+        // xrpl writes refuse unpaired flare network
         let rpc = RpcClient::connect("http://127.0.0.1:1").expect("rpc client");
         for (xrpl, flare) in [(Network::Testnet, Flare), (Network::Mainnet, Coston2)] {
             let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
@@ -3017,10 +3018,8 @@ mod tests {
                 "{xrpl:?}/{flare:?}"
             );
         }
-    }
 
-    #[tokio::test]
-    async fn fxrp_execute_direct_mint_refuses_when_execute_disabled() {
+        // fxrp execute direct mint refuses when execute disabled
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
         let params = FxrpExecuteDirectMintParams {
             proof_json: r#"{"proof":["0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],"response":"0xbb"}"#.into(),
@@ -3148,14 +3147,20 @@ mod tests {
 
     const NFT_ID: &str = "000B013A95F14B0044F78A264E41713C64B5F89242540EE208C3098E00000D65";
 
+    /// Generic TX writes against a local RPC: the full path, and the stop when simulate refuses.
+    ///
     /// TC-252: generic spec'd submit vs local JSON-RPC — `server_info → account_info → simulate →
     /// submit` per transaction; the simulate request and the signed blob carry the spec's fields;
     /// the blob carries the simulate-chosen Sequence / Fee / LastLedgerSequence (distinct values);
     /// a relative `Expiration` is fixed once (simulate and blob agree); the reported hash is
     /// computed from the signed blob; every refusal (unknown type / field, invalid value) happens
     /// before any RPC.
+    ///
+    /// TC-253: a failing simulate stops the generic flow before sign / submit — a `tec*` result
+    /// and a `Sequence` that differs from the request both end after `simulate`.
     #[tokio::test]
-    async fn generic_tx_against_local_rpc() {
+    async fn generic_tx_paths_against_local_rpc() {
+        // against local rpc
         use crate::test_support::rpc_mock;
         use serde_json::{Value, json};
         use tokio::net::TcpListener;
@@ -3312,66 +3317,66 @@ mod tests {
             (now + 3_590..=now + 3_700).contains(&sim_exp),
             "Expiration {sim_exp} is not ~now + 1h ({now})"
         );
-    }
 
-    /// TC-253: a failing simulate stops the generic flow before sign / submit — a `tec*` result
-    /// and a `Sequence` that differs from the request both end after `simulate`.
-    #[tokio::test]
-    async fn generic_tx_stops_when_simulate_refuses() {
-        use crate::test_support::rpc_mock;
-        use serde_json::{Value, json};
-        use tokio::net::TcpListener;
+        // stops when simulate refuses
+        {
+            use crate::test_support::rpc_mock;
+            use serde_json::{Value, json};
+            use tokio::net::TcpListener;
 
-        fn node(simulate: Value) -> impl Fn(&str) -> Value {
-            move |method| match method {
-                "server_info" => json!({"info": {"network_id": 1, "validated_ledger": {"seq": 1}}}),
-                "account_info" => json!({"account_data": {
-                    "Account": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh", "Balance": "10000000",
-                    "Sequence": 7, "OwnerCount": 0, "Flags": 0
-                }}),
-                "simulate" => simulate.clone(),
-                other => panic!("{other} must not be called after a refused simulate"),
+            fn node(simulate: Value) -> impl Fn(&str) -> Value {
+                move |method| match method {
+                    "server_info" => {
+                        json!({"info": {"network_id": 1, "validated_ledger": {"seq": 1}}})
+                    }
+                    "account_info" => json!({"account_data": {
+                        "Account": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh", "Balance": "10000000",
+                        "Sequence": 7, "OwnerCount": 0, "Flags": 0
+                    }}),
+                    "simulate" => simulate.clone(),
+                    other => panic!("{other} must not be called after a refused simulate"),
+                }
             }
-        }
-        let tec = json!({
-            "engine_result": "tecNO_ENTRY",
-            "engine_result_message": "no such NFT",
-            "tx_json": {}
-        });
-        let wrong_sequence = json!({
-            "engine_result": "tesSUCCESS",
-            "ledger_index": 80_000_000,
-            "tx_json": {"Sequence": 8, "Fee": "15"}
-        });
-        for (simulate, want) in [(tec, "tecNO_ENTRY"), (wrong_sequence, "Sequence")] {
-            let listener = TcpListener::bind(("127.0.0.1", 0)).await.expect("bind");
-            let url = format!("http://{}", listener.local_addr().expect("addr"));
-            let respond = node(simulate);
-            let server = tokio::spawn(rpc_mock::serve_raw(
-                listener,
-                3,
-                move |req| json!({"result": respond(req["method"].as_str().unwrap_or_default())}),
-            ));
-            let rpc = RpcClient::connect(&url).expect("rpc client");
-            let (tx, mut rx) = mpsc::unbounded_channel();
-            submit_generic_transaction(
-                &rpc,
-                &Network::Testnet,
-                generic_params("NFTokenBurn", &[("NFTokenID", NFT_ID)], false),
-                &tx,
-                Some(&test_credential()),
-            )
-            .await;
-            match rx.try_recv() {
-                Ok(Action::GenericTxSubmitErr(m)) => assert!(m.contains(want), "{m}"),
-                other => panic!("expected GenericTxSubmitErr({want}), got {other:?}"),
+            let tec = json!({
+                "engine_result": "tecNO_ENTRY",
+                "engine_result_message": "no such NFT",
+                "tx_json": {}
+            });
+            let wrong_sequence = json!({
+                "engine_result": "tesSUCCESS",
+                "ledger_index": 80_000_000,
+                "tx_json": {"Sequence": 8, "Fee": "15"}
+            });
+            for (simulate, want) in [(tec, "tecNO_ENTRY"), (wrong_sequence, "Sequence")] {
+                let listener = TcpListener::bind(("127.0.0.1", 0)).await.expect("bind");
+                let url = format!("http://{}", listener.local_addr().expect("addr"));
+                let respond = node(simulate);
+                let server = tokio::spawn(rpc_mock::serve_raw(
+                    listener,
+                    3,
+                    move |req| json!({"result": respond(req["method"].as_str().unwrap_or_default())}),
+                ));
+                let rpc = RpcClient::connect(&url).expect("rpc client");
+                let (tx, mut rx) = mpsc::unbounded_channel();
+                submit_generic_transaction(
+                    &rpc,
+                    &Network::Testnet,
+                    generic_params("NFTokenBurn", &[("NFTokenID", NFT_ID)], false),
+                    &tx,
+                    Some(&test_credential()),
+                )
+                .await;
+                match rx.try_recv() {
+                    Ok(Action::GenericTxSubmitErr(m)) => assert!(m.contains(want), "{m}"),
+                    other => panic!("expected GenericTxSubmitErr({want}), got {other:?}"),
+                }
+                assert!(rx.try_recv().is_err(), "exactly one action");
+                let requests = server.await.expect("join").expect("serve");
+                assert_eq!(
+                    rpc_mock::methods(&requests),
+                    ["server_info", "account_info", "simulate"]
+                );
             }
-            assert!(rx.try_recv().is_err(), "exactly one action");
-            let requests = server.await.expect("join").expect("serve");
-            assert_eq!(
-                rpc_mock::methods(&requests),
-                ["server_info", "account_info", "simulate"]
-            );
         }
     }
 }

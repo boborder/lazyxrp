@@ -401,8 +401,13 @@ mod tests {
         );
     }
 
+    /// The detail overlay opens, closes and toggles from state and from the toggle action.
+    ///
+    /// TC-135: TxDetailToggle opens the overlay when a row can supply detail
+    /// JSON, and is ignored when there is nothing to open.
     #[test]
-    fn tx_detail_state_open_close() {
+    fn tx_detail_open_close_and_toggle() {
+        // state open close
         let mut state = TxDetailState::default();
         assert!(!state.visible);
         state.scroll = 5;
@@ -414,10 +419,28 @@ mod tests {
         state.close();
         assert!(!state.visible);
         assert_eq!(state.scroll, 0, "close resets scroll");
+
+        // toggle opens overlay
+        let mut state = TxDetailState::default();
+        assert!(!state.handle_panel_action(&Action::TxDetailToggle, None));
+        assert!(!state.visible);
+
+        assert!(state.handle_panel_action(
+            &Action::TxDetailToggle,
+            Some((arc(json!({"hash": "a"})), arc(json!({}))))
+        ));
+        assert!(state.visible);
+        assert_eq!(state.scroll, 0);
+        assert_eq!(state.tx_json.0["hash"], "a");
     }
 
+    /// Detail lines: hash and result, the result read from meta, u64 ledger index, compact affected
+    /// nodes.
+    ///
+    /// Ledger index renders comma-separated whether JSON is number or string.
     #[test]
-    fn detail_lines_shows_hash_and_result() {
+    fn detail_lines_basic_fields_and_meta_fallbacks() {
+        // shows hash and result
         // Empty tx/meta: result line is always present.
         let empty = json!({});
         let lines = detail_lines_for(&empty, &empty);
@@ -436,34 +459,41 @@ mod tests {
             text.iter()
                 .any(|s| s.contains("Result") && s.contains("tesSUCCESS"))
         );
-    }
 
-    #[test]
-    fn detail_lines_result_from_meta_fallback() {
+        // result from meta fallback
         let tx = json!({});
         let meta = json!({"TransactionResult":"tecPATH_DRY"});
         let lines = detail_lines_for(&tx, &meta);
         let text: Vec<String> = lines.iter().map(|l| l.to_string()).collect();
         assert!(text.iter().any(|s| s.contains("tecPATH_DRY")));
-    }
 
-    /// Ledger index renders comma-separated whether JSON is number or string.
-    #[test]
-    fn detail_lines_ledger_index_as_u64() {
-        let cases: Vec<serde_json::Value> = vec![
-            json!({"ledger_index":12345}),
-            json!({"ledger_index":"67890"}),
-        ];
-        let expected = ["12,345", "67,890"];
-        for (tx, exp) in cases.iter().zip(expected) {
-            let meta = json!({});
-            let lines = detail_lines_for(tx, &meta);
-            let text: Vec<String> = lines.iter().map(|l| l.to_string()).collect();
-            assert!(
-                text.iter().any(|s| s.contains("Ledger") && s.contains(exp)),
-                "expected Ledger line with {exp}, got {text:?}"
-            );
+        // ledger index as u64
+        {
+            let cases: Vec<serde_json::Value> = vec![
+                json!({"ledger_index":12345}),
+                json!({"ledger_index":"67890"}),
+            ];
+            let expected = ["12,345", "67,890"];
+            for (tx, exp) in cases.iter().zip(expected) {
+                let meta = json!({});
+                let lines = detail_lines_for(tx, &meta);
+                let text: Vec<String> = lines.iter().map(|l| l.to_string()).collect();
+                assert!(
+                    text.iter().any(|s| s.contains("Ledger") && s.contains(exp)),
+                    "expected Ledger line with {exp}, got {text:?}"
+                );
+            }
         }
+
+        // meta affected nodes compact
+        let tx = json!({"hash":"abc"});
+        let meta = json!({"AffectedNodes":[1,2,3],"TransactionResult":"tesSUCCESS"});
+        let lines = detail_lines_for(&tx, &meta);
+        let text: Vec<String> = lines.iter().map(|l| l.to_string()).collect();
+        assert!(
+            text.iter()
+                .any(|s| s.contains("AffectedNodes") && s.contains("[3 nodes]"))
+        );
     }
 
     #[test]
@@ -533,21 +563,19 @@ mod tests {
         );
     }
 
-    #[test]
-    fn detail_lines_meta_affected_nodes_compact() {
-        let tx = json!({"hash":"abc"});
-        let meta = json!({"AffectedNodes":[1,2,3],"TransactionResult":"tesSUCCESS"});
-        let lines = detail_lines_for(&tx, &meta);
-        let text: Vec<String> = lines.iter().map(|l| l.to_string()).collect();
-        assert!(
-            text.iter()
-                .any(|s| s.contains("AffectedNodes") && s.contains("[3 nodes]"))
-        );
-    }
-
+    /// While the detail overlay is open: its cache is rebuilt on open, row-select scrolls it, and
+    /// toggle / focus / other actions are handled.
+    ///
     /// TC-093: opening a new tx clears cached render lines and shows the new tx on draw.
+    ///
+    /// TC-134: while open, Select/SelectPrev become scroll +/- and block the
+    /// table underneath; while hidden the state lets actions pass through.
+    ///
+    /// Open overlay swallows every action; Toggle closes, Focus* scroll, Quit/Tick are inert,
+    /// and scrolling far past the content end saturates and still renders.
     #[test]
-    fn tx_detail_cache_invalidated_on_open() {
+    fn tx_detail_overlay_state_contract() {
+        // cache invalidated on open
         let mut state = TxDetailState::default();
         let tx1 = json!({"TransactionType":"Payment","Account":"rPaymentOnly","Amount":"1000000"});
         state.open(arc(tx1), arc(json!({})));
@@ -564,12 +592,8 @@ mod tests {
         assert!(out.contains("AccountSet"));
         assert!(out.contains("rAccountSetOnly"));
         assert!(!out.contains("rPaymentOnly"));
-    }
 
-    /// TC-134: while open, Select/SelectPrev become scroll +/- and block the
-    /// table underneath; while hidden the state lets actions pass through.
-    #[test]
-    fn tx_detail_open_consumes_row_select_as_scroll() {
+        // open consumes row select as scroll
         let mut state = TxDetailState::default();
         assert!(
             !state.handle_action(&Action::SelectNext),
@@ -586,12 +610,8 @@ mod tests {
 
         state.close();
         assert!(!state.handle_action(&Action::SelectNext));
-    }
 
-    /// Open overlay swallows every action; Toggle closes, Focus* scroll, Quit/Tick are inert,
-    /// and scrolling far past the content end saturates and still renders.
-    #[test]
-    fn tx_detail_open_handles_toggle_focus_and_other_actions() {
+        // open handles toggle focus and other actions
         let mut state = TxDetailState::default();
         state.open(arc(json!({"hash": "a"})), arc(json!({})));
         for a in [Action::Quit, Action::Tick] {
@@ -614,22 +634,5 @@ mod tests {
         assert!(state.handle_action(&Action::TxDetailToggle));
         assert!(!state.visible);
         assert_eq!(state.scroll, 0);
-    }
-
-    /// TC-135: TxDetailToggle opens the overlay when a row can supply detail
-    /// JSON, and is ignored when there is nothing to open.
-    #[test]
-    fn tx_detail_toggle_opens_overlay() {
-        let mut state = TxDetailState::default();
-        assert!(!state.handle_panel_action(&Action::TxDetailToggle, None));
-        assert!(!state.visible);
-
-        assert!(state.handle_panel_action(
-            &Action::TxDetailToggle,
-            Some((arc(json!({"hash": "a"})), arc(json!({}))))
-        ));
-        assert!(state.visible);
-        assert_eq!(state.scroll, 0);
-        assert_eq!(state.tx_json.0["hash"], "a");
     }
 }

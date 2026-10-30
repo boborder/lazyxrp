@@ -46,7 +46,7 @@ impl AccountWalletTab {
     }
 
     fn update_focus(&mut self) {
-        // 固定2ペイン: 上( wallet or account ) / 下( tx )
+        // Two fixed panes: wallet (or account when there is no wallet) on top, tx below.
         self.tx.is_focused = self.focus_index == 1;
         if self.has_wallet {
             self.wallet.is_focused = self.focus_index == 0;

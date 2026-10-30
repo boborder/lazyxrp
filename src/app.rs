@@ -111,7 +111,8 @@ pub struct App {
     action_tx: mpsc::UnboundedSender<Action>,
     action_rx: mpsc::UnboundedReceiver<Action>,
     poll_tx: mpsc::UnboundedSender<PollCommand>,
-    /// Populated in `App::new` for unit tests; cleared when `run` starts a fresh channel.
+    /// Lets unit tests read the poll commands `App::new` queues; `run` replaces the channel.
+    #[cfg(test)]
     test_poll_rx: Option<mpsc::UnboundedReceiver<PollCommand>>,
     rpc_server: String,
     ws_server: String,
@@ -173,12 +174,11 @@ impl App {
     ) -> color_eyre::Result<Self> {
         let (action_tx, action_rx) = mpsc::unbounded_channel();
         let (poll_tx, poll_rx) = mpsc::unbounded_channel();
-        let test_poll_rx = if cfg!(test) {
-            Some(poll_rx)
-        } else {
-            drop(poll_rx);
-            None
-        };
+        // `run` replaces this channel; only unit tests keep the receiver to inspect what was queued.
+        #[cfg(test)]
+        let test_poll_rx = Some(poll_rx);
+        #[cfg(not(test))]
+        drop(poll_rx);
         let (net_tx, _net_rx) = watch::channel(network);
         let (tab_tx, _tab_rx) = watch::channel(0usize);
         // Keep wallet UI / config network aligned with the resolved CLI/env network.
@@ -243,6 +243,7 @@ impl App {
             action_tx,
             action_rx,
             poll_tx,
+            #[cfg(test)]
             test_poll_rx,
             rpc_server,
             ws_server,
@@ -281,6 +282,7 @@ impl App {
         let (poll_tx, poll_rx) = mpsc::unbounded_channel();
         let (poll_trigger_tx, poll_trigger_rx) = mpsc::unbounded_channel();
         self.poll_tx = poll_tx;
+        #[cfg(test)]
         drop(self.test_poll_rx.take());
         let cancel = CancellationToken::new();
 
@@ -909,12 +911,29 @@ mod tests {
         )
     }
 
+    /// `q` quits; while the keymap is suppressed (text entry) only Ctrl+C does.
+    ///
     /// TC-061: the `q` key (via the keymap) quits.
+    ///
+    /// Form/modal typing must not treat bare `q` as quit (modal key priority).
     #[tokio::test]
-    async fn q_key_quits() -> color_eyre::Result<()> {
+    async fn quit_keys() -> color_eyre::Result<()> {
+        // q key quits
         let mut app = test_app().await?;
         assert!(!app.should_quit);
         app.on_key_event(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::empty()))?;
+        app.drain_and_dispatch_actions(None)?;
+        assert!(app.should_quit);
+
+        // keymap suppressed ignores bare q but allows ctrl c
+        let mut app = test_app().await?;
+        app.keymap_suppressed = true;
+
+        app.on_key_event(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::empty()))?;
+        app.drain_and_dispatch_actions(None)?;
+        assert!(!app.should_quit);
+
+        app.on_key_event(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL))?;
         app.drain_and_dispatch_actions(None)?;
         assert!(app.should_quit);
         Ok(())
@@ -998,22 +1017,6 @@ mod tests {
         app.drain_and_dispatch_actions(None)?;
         assert_eq!(*net_rx.borrow(), Network::Devnet);
         assert_eq!(app.network, Network::Devnet);
-        Ok(())
-    }
-
-    /// Form/modal typing must not treat bare `q` as quit (modal key priority).
-    #[tokio::test]
-    async fn keymap_suppressed_ignores_bare_q_but_allows_ctrl_c() -> color_eyre::Result<()> {
-        let mut app = test_app().await?;
-        app.keymap_suppressed = true;
-
-        app.on_key_event(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::empty()))?;
-        app.drain_and_dispatch_actions(None)?;
-        assert!(!app.should_quit);
-
-        app.on_key_event(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL))?;
-        app.drain_and_dispatch_actions(None)?;
-        assert!(app.should_quit);
         Ok(())
     }
 

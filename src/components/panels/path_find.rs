@@ -97,10 +97,10 @@ impl Component for PathFindPanel {
                 self.table_state.reset_len(0);
                 self.error = Some(e.to_string());
             }
-            _ if self
-                .table_state
-                .handle_row_select(action, self.is_focused, len) => {}
-            _ => {}
+            _ => {
+                self.table_state
+                    .handle_row_select(action, self.is_focused, len);
+            }
         }
         Ok(None)
     }

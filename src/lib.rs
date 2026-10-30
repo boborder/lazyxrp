@@ -688,9 +688,18 @@ mod network_resolve_tests {
 mod endpoint_security_tests {
     use super::*;
 
+    /// Plain http/ws endpoints need the opt-in flag, and signing is refused over them (XRPL and
+    /// Flare).
+    ///
     /// Insecure endpoint schemes are rejected unless `--allow-insecure-rpc` is set.
+    ///
+    /// TC-101: signing seed refuses plaintext RPC or WebSocket endpoints
+    ///
+    /// TC-175: Flare `http://` RPC rejected without flag, refused for signing
+    /// Flare RPC follows the XRPL endpoint rules: https only, and no signing over http.
     #[test]
-    fn insecure_endpoint_schemes_rejected_without_flag() {
+    fn endpoint_security_policy() {
+        // insecure endpoint schemes rejected without flag
         let cases = [
             (
                 "http://example.com",
@@ -705,21 +714,14 @@ mod endpoint_security_tests {
             assert!(ensure_secure_endpoint(secure_url, kind, false).is_ok());
             assert!(ensure_secure_endpoint(insecure_url, kind, true).is_ok());
         }
-    }
 
-    /// TC-101: signing seed refuses plaintext RPC or WebSocket endpoints
-    #[test]
-    fn insecure_signing_requires_secure_rpc_and_ws() {
+        // insecure signing requires secure rpc and ws
         assert!(refuses_insecure_signing("http://rpc", "wss://ws", true));
         assert!(refuses_insecure_signing("https://rpc", "ws://ws", true));
         assert!(!refuses_insecure_signing("http://rpc", "ws://ws", false));
         assert!(!refuses_insecure_signing("https://rpc", "wss://ws", true));
-    }
 
-    /// TC-175: Flare `http://` RPC rejected without flag, refused for signing
-    /// Flare RPC follows the XRPL endpoint rules: https only, and no signing over http.
-    #[test]
-    fn flare_endpoint_requires_https_and_refuses_insecure_signing() {
+        // flare endpoint requires https and refuses insecure signing
         assert!(check_flare_endpoint("http://flare.example", false, false).is_err());
         assert!(check_flare_endpoint("https://flare.example", false, true).is_ok());
         assert!(check_flare_endpoint("http://flare.example", true, false).is_ok());
@@ -766,10 +768,17 @@ mod command_resolve_tests {
         assert!(ensure_uninstall_standalone(&args).is_ok());
     }
 
+    /// `--watch` refuses write subcommands before any RPC and drops every key from the config while
+    /// keeping the address.
+    ///
     /// TC-234: `--watch` refuses every signing `-x` subcommand before any RPC; reads and the
     /// (non-signing) faucet still run; the TUI path is unaffected.
+    ///
+    /// TC-235: watch mode keeps only the address: every key (seed, mnemonic, Flare EVM key) is
+    /// dropped from the secrets the TUI / CLI receive.
     #[test]
-    fn watch_refuses_write_subcommands() {
+    fn watch_mode_contract() {
+        // refuses write subcommands
         const DEST: &str = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh";
         for argv in [
             vec!["send", DEST],
@@ -804,12 +813,8 @@ mod command_resolve_tests {
         }
         let args = Cli::try_parse_from(["lazyxrp", "--watch"]).unwrap();
         assert!(resolve_lazyxrp_command(&args).unwrap().is_none());
-    }
 
-    /// TC-235: watch mode keeps only the address: every key (seed, mnemonic, Flare EVM key) is
-    /// dropped from the secrets the TUI / CLI receive.
-    #[test]
-    fn watch_mode_drops_all_keys_and_keeps_address() {
+        // mode drops all keys and keeps address
         use secrecy::SecretString;
         let mut secrets = Secrets {
             seed: Some(SecretString::from("sEdSkooMk31MeTjbHVE7vLvgCpEMAdB")),

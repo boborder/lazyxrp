@@ -236,7 +236,7 @@ CI (`.github/workflows/ci.yml`):
 cargo test --locked --all-features --workspace
 cargo fmt --all --check
 cargo clippy --locked --all-targets --all-features --workspace -- -D warnings
-cargo doc --locked --no-deps --document-private-items --all-features --workspace --examples
+cargo doc --locked --no-deps --document-private-items --all-features --workspace
 cargo audit
 cargo deny check
 ```

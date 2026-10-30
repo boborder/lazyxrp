@@ -602,9 +602,17 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    /// `[flare]` presets load from a file, the expected operator parses, and the wallet address is
+    /// validated.
+    ///
     /// TC-113/TC-114: Flare config presets load from a config file and default sensibly
+    ///
+    /// TC-246: `[flare.smart_accounts] expected_operator` parses; unset by default (writes refused).
+    ///
+    /// TC-120: `[flare.wallet] address` validates EVM hex and normalizes to `0x…`
     #[test]
-    fn flare_config_file_presets() {
+    fn flare_config_section_parsing() {
+        // config file presets
         let cfg: FlareConfig =
             toml::from_str("network = \"coston2\"\ndisplay = \"compact\"").unwrap();
         assert_eq!(
@@ -615,11 +623,8 @@ mod tests {
         let cfg: FlareConfig = toml::from_str("").unwrap();
         assert_eq!(cfg.network, FlareNetwork::Flare);
         assert_eq!(cfg.display, FlareDisplay::Full);
-    }
 
-    /// TC-246: `[flare.smart_accounts] expected_operator` parses; unset by default (writes refused).
-    #[test]
-    fn flare_smart_accounts_expected_operator_parses() {
+        // smart accounts expected operator parses
         let cfg: FlareConfig =
             toml::from_str("[smart_accounts]\nexpected_operator = \"rOperator\"").unwrap();
         assert_eq!(
@@ -628,11 +633,8 @@ mod tests {
         );
         let cfg: FlareConfig = toml::from_str("").unwrap();
         assert_eq!(cfg.smart_accounts.expected_operator, None);
-    }
 
-    /// TC-120: `[flare.wallet] address` validates EVM hex and normalizes to `0x…`
-    #[test]
-    fn flare_wallet_address_validation() {
+        // wallet address validation
         assert_eq!(
             normalize_evm_address("0xAbCdEf0123456789AbCdEf0123456789AbCdEf01"),
             Some("0xabcdef0123456789abcdef0123456789abcdef01".to_string())
@@ -843,49 +845,55 @@ network = "mainnet"
         Ok(())
     }
 
+    /// `[xrpl]` network and server merge from the file and the environment.
+    ///
     /// TC-127/TC-042: file `network = "xahau-test"` loads; `XRPL_NETWORK` overrides it; an
     /// unparsable value (garbage or a leading-space typo) is ignored, keeping the file value.
-    #[test]
-    fn xrpl_network_file_and_env_merge() -> color_eyre::Result<()> {
-        let _env_lock = env_lock();
-        let _test_env = TestEnvGuard::new(&["LAZYXRP_CONFIG", "XDG_CONFIG_HOME", XRPL_NETWORK_ENV]);
-        let toml = sample_xrpl_config_toml(5_000).replace("mainnet", "xahau-test");
-        let (root, _root_guard) = write_config_dir("tc042", &toml)?;
-        _test_env.remove("XDG_CONFIG_HOME");
-        _test_env.set("LAZYXRP_CONFIG", root.to_str().unwrap());
-        _test_env.remove(XRPL_NETWORK_ENV);
-        assert_eq!(Config::new()?.xrpl.network, Network::XahauTest);
-        _test_env.set(XRPL_NETWORK_ENV, "testnet");
-        assert_eq!(Config::new()?.xrpl.network, Network::Testnet);
-        for bad in ["not-a-network", " testnet"] {
-            _test_env.set(XRPL_NETWORK_ENV, bad);
-            assert_eq!(Config::new()?.xrpl.network, Network::XahauTest, "{bad:?}");
-        }
-        Ok(())
-    }
-
+    ///
     /// `XRPL_WS_SERVER` / `XRPL_RPC_SERVER` override the file (trimmed); blank values do not.
     #[test]
-    fn xrpl_server_env_merge() -> color_eyre::Result<()> {
-        let _env_lock = env_lock();
-        let _test_env = TestEnvGuard::new(&[
-            "LAZYXRP_CONFIG",
-            "XDG_CONFIG_HOME",
-            XRPL_RPC_SERVER_ENV,
-            XRPL_WS_SERVER_ENV,
-        ]);
-        let (root, _guard) = write_config_dir("xrpl-servers", TOML_WITH_RPC_SERVER)?;
-        _test_env.remove("XDG_CONFIG_HOME");
-        _test_env.set("LAZYXRP_CONFIG", root.to_str().unwrap());
-        _test_env.set(XRPL_RPC_SERVER_ENV, "   ");
-        _test_env.set(XRPL_WS_SERVER_ENV, " wss://ws-env.example ");
-        let c = Config::new()?;
-        assert_eq!(
-            c.xrpl.rpc_server.as_deref(),
-            Some("https://from-file.example")
-        );
-        assert_eq!(c.xrpl.ws_server.as_deref(), Some("wss://ws-env.example"));
-        Ok(())
+    fn xrpl_env_and_file_merge() -> color_eyre::Result<()> {
+        // network file and env merge
+        {
+            let _env_lock = env_lock();
+            let _test_env =
+                TestEnvGuard::new(&["LAZYXRP_CONFIG", "XDG_CONFIG_HOME", XRPL_NETWORK_ENV]);
+            let toml = sample_xrpl_config_toml(5_000).replace("mainnet", "xahau-test");
+            let (root, _root_guard) = write_config_dir("tc042", &toml)?;
+            _test_env.remove("XDG_CONFIG_HOME");
+            _test_env.set("LAZYXRP_CONFIG", root.to_str().unwrap());
+            _test_env.remove(XRPL_NETWORK_ENV);
+            assert_eq!(Config::new()?.xrpl.network, Network::XahauTest);
+            _test_env.set(XRPL_NETWORK_ENV, "testnet");
+            assert_eq!(Config::new()?.xrpl.network, Network::Testnet);
+            for bad in ["not-a-network", " testnet"] {
+                _test_env.set(XRPL_NETWORK_ENV, bad);
+                assert_eq!(Config::new()?.xrpl.network, Network::XahauTest, "{bad:?}");
+            }
+        }
+
+        // server env merge
+        {
+            let _env_lock = env_lock();
+            let _test_env = TestEnvGuard::new(&[
+                "LAZYXRP_CONFIG",
+                "XDG_CONFIG_HOME",
+                XRPL_RPC_SERVER_ENV,
+                XRPL_WS_SERVER_ENV,
+            ]);
+            let (root, _guard) = write_config_dir("xrpl-servers", TOML_WITH_RPC_SERVER)?;
+            _test_env.remove("XDG_CONFIG_HOME");
+            _test_env.set("LAZYXRP_CONFIG", root.to_str().unwrap());
+            _test_env.set(XRPL_RPC_SERVER_ENV, "   ");
+            _test_env.set(XRPL_WS_SERVER_ENV, " wss://ws-env.example ");
+            let c = Config::new()?;
+            assert_eq!(
+                c.xrpl.rpc_server.as_deref(),
+                Some("https://from-file.example")
+            );
+            assert_eq!(c.xrpl.ws_server.as_deref(), Some("wss://ws-env.example"));
+            Ok(())
+        }
     }
 
     /// A malformed config.toml is a hard error, not a silent fallback to defaults.
@@ -901,28 +909,54 @@ network = "mainnet"
         Ok(())
     }
 
+    /// Paths from the environment: `~` expands to home, `..` components are refused.
+    ///
     /// S-004: `..` in `LAZYXRP_CONFIG` / `LAZYXRP_DATA` is rejected (falls through to defaults).
+    ///
+    /// TC-359: `~` paths expand
+    /// A leading `~` in env / file directory settings resolves to HOME.
     #[test]
-    fn env_paths_with_parent_dir_are_rejected() {
-        let _env_lock = env_lock();
-        let _test_env = TestEnvGuard::new(&["LAZYXRP_CONFIG", "LAZYXRP_DATA", "XDG_CONFIG_HOME"]);
-        _test_env.remove("XDG_CONFIG_HOME");
-        _test_env.set("LAZYXRP_CONFIG", "/tmp/lazyxrp-evil/../etc");
-        _test_env.set("LAZYXRP_DATA", "../../etc");
-        assert_ne!(config_dir(), PathBuf::from("/tmp/lazyxrp-evil/../etc"));
-        assert_ne!(data_dir(), PathBuf::from("../../etc"));
-        assert!(
-            !config_dir()
-                .components()
-                .any(|c| c == std::path::Component::ParentDir)
-        );
-        assert!(
-            !data_dir()
-                .components()
-                .any(|c| c == std::path::Component::ParentDir)
-        );
-        _test_env.set("LAZYXRP_CONFIG", "/tmp/lazyxrp-ok/cfg");
-        assert_eq!(config_dir(), PathBuf::from("/tmp/lazyxrp-ok/cfg"));
+    fn config_path_expansion_and_rejection() {
+        // env paths with parent dir are rejected
+        {
+            let _env_lock = env_lock();
+            let _test_env =
+                TestEnvGuard::new(&["LAZYXRP_CONFIG", "LAZYXRP_DATA", "XDG_CONFIG_HOME"]);
+            _test_env.remove("XDG_CONFIG_HOME");
+            _test_env.set("LAZYXRP_CONFIG", "/tmp/lazyxrp-evil/../etc");
+            _test_env.set("LAZYXRP_DATA", "../../etc");
+            assert_ne!(config_dir(), PathBuf::from("/tmp/lazyxrp-evil/../etc"));
+            assert_ne!(data_dir(), PathBuf::from("../../etc"));
+            assert!(
+                !config_dir()
+                    .components()
+                    .any(|c| c == std::path::Component::ParentDir)
+            );
+            assert!(
+                !data_dir()
+                    .components()
+                    .any(|c| c == std::path::Component::ParentDir)
+            );
+            _test_env.set("LAZYXRP_CONFIG", "/tmp/lazyxrp-ok/cfg");
+            assert_eq!(config_dir(), PathBuf::from("/tmp/lazyxrp-ok/cfg"));
+        }
+
+        // tilde paths expand to home
+        {
+            let _env_lock = env_lock();
+            let _test_env = TestEnvGuard::new(&["HOME", "LAZYXRP_CONFIG", "LAZYXRP_DATA"]);
+            let home = std::env::temp_dir().join(format!("lazyxrp-tilde-{}", std::process::id()));
+            _test_env.set("HOME", home.to_str().unwrap());
+            _test_env.set("LAZYXRP_CONFIG", "~/cfg/lazyxrp");
+            assert_eq!(config_dir(), home.join("cfg/lazyxrp"));
+            let mut c = Config::default();
+            c.paths.data_dir = PathBuf::from("~/data/lazyxrp");
+            assert_eq!(c.resolved_data_dir(), home.join("data/lazyxrp"));
+            c.paths.config_dir = PathBuf::from("~");
+            assert_eq!(c.resolved_config_dir(), home);
+            c.paths.config_dir = PathBuf::from("~other/x");
+            assert_eq!(c.resolved_config_dir(), PathBuf::from("~other/x"));
+        }
     }
 
     /// TC-359: only bindable actions allowed
@@ -943,25 +977,6 @@ network = "mainnet"
             c.keybindings.0.get(&parse_key_sequence("<x>").unwrap()),
             Some(&Action::Quit)
         );
-    }
-
-    /// TC-359: `~` paths expand
-    /// A leading `~` in env / file directory settings resolves to HOME.
-    #[test]
-    fn tilde_paths_expand_to_home() {
-        let _env_lock = env_lock();
-        let _test_env = TestEnvGuard::new(&["HOME", "LAZYXRP_CONFIG", "LAZYXRP_DATA"]);
-        let home = std::env::temp_dir().join(format!("lazyxrp-tilde-{}", std::process::id()));
-        _test_env.set("HOME", home.to_str().unwrap());
-        _test_env.set("LAZYXRP_CONFIG", "~/cfg/lazyxrp");
-        assert_eq!(config_dir(), home.join("cfg/lazyxrp"));
-        let mut c = Config::default();
-        c.paths.data_dir = PathBuf::from("~/data/lazyxrp");
-        assert_eq!(c.resolved_data_dir(), home.join("data/lazyxrp"));
-        c.paths.config_dir = PathBuf::from("~");
-        assert_eq!(c.resolved_config_dir(), home);
-        c.paths.config_dir = PathBuf::from("~other/x");
-        assert_eq!(c.resolved_config_dir(), PathBuf::from("~other/x"));
     }
 
     /// TC-359: credential precedence matrix

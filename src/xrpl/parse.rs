@@ -750,9 +750,14 @@ mod tests {
         assert_eq!(rows[0].limit, "1000");
     }
 
+    /// `amm_info` parses assets, pools, LP token and fee; the LP token reads currency and issuer.
+    ///
     /// TC-015: real rippled `amm_info` shape (snake_case, assets implied by the amounts).
+    ///
+    /// TC-224: LP token identity for AMMWithdraw from `amm_info` (`lp_token`, or `LPToken`).
     #[test]
-    fn parse_amm_info_extracts_assets_pools_lp_token_and_fee() {
+    fn parse_amm_info_contract() {
+        // info extracts assets pools lp token and fee
         let v = json!({
             "result": {
                 "amm": {
@@ -770,11 +775,8 @@ mod tests {
         assert_eq!(s.trading_fee, 12);
         assert_eq!(s.pool1, "2.000000");
         assert_eq!(s.pool2, "3 USD");
-    }
 
-    /// TC-224: LP token identity for AMMWithdraw from `amm_info` (`lp_token`, or `LPToken`).
-    #[test]
-    fn parse_amm_lp_token_reads_currency_and_issuer() {
+        // lp token reads currency and issuer
         let lp = json!({"currency": "03AB", "issuer": "rAMM", "value": "10"});
         for key in ["lp_token", "LPToken"] {
             let v = json!({"result": {"amm": {key: lp.clone()}}});
@@ -787,9 +789,18 @@ mod tests {
         assert_eq!(parse_amm_lp_token(&json!({"result": {"amm": {}}})), None);
     }
 
+    /// `account_tx` pages: rows and direction, the paging marker, and the empty page for an unknown
+    /// account.
+    ///
     /// TC-016
+    ///
+    /// TC-104: account_tx marker survives parsing for next-page requests
+    ///
+    /// TC-089 (I-7): `account_tx` RPC not-found maps to an empty page at the
+    /// client boundary; other errors are not treated as not-found.
     #[test]
-    fn parse_account_tx_maps_transactions_and_classifies_direction() {
+    fn parse_account_tx_contract() {
+        // parse account tx maps transactions and classifies direction
         let v = json!({
             "result": {
                 "transactions": [
@@ -837,11 +848,8 @@ mod tests {
         assert_eq!(rows[1].direction, "▲");
         assert_eq!(rows[2].hash, "GHI789");
         assert_eq!(rows[2].direction, "·");
-    }
 
-    /// TC-104: account_tx marker survives parsing for next-page requests
-    #[test]
-    fn parse_account_tx_page_preserves_marker_for_next_request() {
+        // parse account tx page preserves marker for next request
         let page = parse_account_tx_page(
             json!({
                 "result": {
@@ -853,6 +861,14 @@ mod tests {
         );
         assert_eq!(page.rows.len(), 0);
         assert_eq!(page.marker, Some(json!({"ledger": 55, "seq": 2})));
+
+        // empty account tx page on not found contract
+        let page = empty_account_tx_page_on_not_found("actNotFound")
+            .expect("not-found should become empty page");
+        assert!(page.rows.is_empty());
+        assert!(page.marker.is_none());
+
+        assert!(empty_account_tx_page_on_not_found("timeout").is_none());
     }
 
     /// TC-017, TC-140: numeric quality maps to price; a non-numeric quality
@@ -1027,9 +1043,16 @@ mod tests {
         assert_eq!(fs.open_ledger_fee_drops, 15);
     }
 
+    /// `book_currency` maps XRP, issued 3-letter codes and long symbols.
+    ///
     /// TC-001-003: `book_currency` — XRP uppercase/case-insensitive vs issued with issuer
+    ///
+    /// TC-368: CLI book / AMM assets accept a symbol like the TUI config does — `RLUSD`
+    /// goes on the wire as its 160-bit code; 3-letter and 40-hex codes pass unchanged, and
+    /// input that is not plain alphanumeric is never encoded into a lookalike code.
     #[test]
-    fn book_currency_xrp_and_issued() {
+    fn book_currency_encoding() {
+        // xrp and issued
         let cases = [
             ("XRP", None, "XRP", None),
             ("xrp", Some("rIssuer"), "XRP", None),
@@ -1040,31 +1063,29 @@ mod tests {
             assert_eq!(v["currency"], want_currency);
             assert_eq!(v.get("issuer").and_then(Value::as_str), want_issuer);
         }
+
+        // encodes long symbols
+        let rlusd = "524C555344000000000000000000000000000000";
+        assert_eq!(book_currency("RLUSD", Some("rI"))["currency"], rlusd);
+        assert_eq!(book_currency(rlusd, Some("rI"))["currency"], rlusd);
+        assert_eq!(book_currency("USD", Some("rI"))["currency"], "USD");
+        assert_eq!(book_currency("xrp", None), json!({ "currency": "XRP" }));
+        for raw in ["USD ", "US D", "RL-USD", "USD\u{a0}"] {
+            assert_eq!(book_currency(raw, Some("rI"))["currency"], raw, "{raw:?}");
+        }
     }
 
-    /// TC-089 (I-7): `account_tx` RPC not-found maps to an empty page at the
-    /// client boundary; other errors are not treated as not-found.
+    /// Rate-limit, transient node-state and not-found messages are classified from their text.
     #[test]
-    fn empty_account_tx_page_on_not_found_contract() {
-        let page = empty_account_tx_page_on_not_found("actNotFound")
-            .expect("not-found should become empty page");
-        assert!(page.rows.is_empty());
-        assert!(page.marker.is_none());
-
-        assert!(empty_account_tx_page_on_not_found("timeout").is_none());
-    }
-
-    #[test]
-    fn is_rate_limited_error_matches_common_signals() {
+    fn rpc_error_classification_matches_known_signals() {
+        // rate limited error matches common signals
         assert!(is_rate_limited_error("Rate limited"));
         assert!(is_rate_limited_error("HTTP 429 from upstream"));
         assert!(is_rate_limited_error("Error: Too Many Requests"));
         assert!(!is_rate_limited_error("timeout"));
         assert!(!is_rate_limited_error("actNotFound"));
-    }
 
-    #[test]
-    fn is_transient_xrpl_error_matches_node_state_signals() {
+        // transient xrpl error matches node state signals
         assert!(is_transient_xrpl_error("[XRPL-17] InsufficientNetworkMode"));
         assert!(is_transient_xrpl_error("[XRPL-18] noNetwork"));
         assert!(is_transient_xrpl_error("noClosed"));
@@ -1074,10 +1095,8 @@ mod tests {
         assert!(!is_transient_xrpl_error("[XRPL-19] actNotFound"));
         assert!(!is_transient_xrpl_error("[XRPL-5] malformedRequest"));
         assert!(!is_transient_xrpl_error("timeout"));
-    }
 
-    #[test]
-    fn is_not_found_error_matches_skill_substrings() {
+        // not found error matches skill substrings
         assert!(is_not_found_error("actNotFound"));
         assert!(is_not_found_error("entryNotFound"));
         assert!(is_not_found_error("lgrNotFound"));
@@ -1086,21 +1105,24 @@ mod tests {
         assert!(!is_not_found_error("tecUNFUNDED_PAYMENT"));
     }
 
+    /// A submit reply counts as accepted only with tesSUCCESS (or terQUEUED, reported as queued)
+    /// and a hash.
+    ///
     /// TC-353: terQUEUED is queued success
     /// `terQUEUED` is provisional success: reported queued with the hash; other `ter*` still fail.
+    ///
+    /// TC-069
     #[test]
-    fn parse_submit_success_treats_terqueued_as_queued() {
+    fn parse_submit_success_contract() {
+        // treats terqueued as queued
         let submit =
             |code: &str| json!({"result": {"engine_result": code, "tx_json": {"hash": "H1"}}});
         let queued = parse_submit_success(&submit("terQUEUED")).expect("queued is accepted");
         assert_eq!((queued.hash.as_str(), queued.queued), ("H1", true));
         assert!(!parse_submit_success(&submit("tesSUCCESS")).unwrap().queued);
         assert!(parse_submit_success(&submit("terPRE_SEQ")).is_err());
-    }
 
-    /// TC-069
-    #[test]
-    fn parse_submit_success_requires_tes_success_and_hash() {
+        // requires tes success and hash
         let value = json!({
             "result": {
                 "engine_result": "tesSUCCESS",
@@ -1132,11 +1154,21 @@ mod tests {
         }
     }
 
+    /// `parse_simulate_result` tolerates absent meta, fills LastLedgerSequence and sanitizes result
+    /// strings.
+    ///
     /// `parse_simulate_result`: parses tx_json/engine result with meta present,
     /// still parses when a non-TEC result omits meta, and errors when tx_json
     /// is missing.
+    ///
+    /// TC-200: rippled 3.x `simulate` omits `LastLedgerSequence` (testnet 3.4.1) → filled from
+    /// `ledger_index` + window so every sign path gets one; a server-provided value is kept.
+    ///
+    /// TC-208: simulate engine_result(_message) control chars stripped
+    /// Node-supplied simulate result strings are stripped of control chars at parse time.
     #[test]
-    fn parse_simulate_result_meta_absent_ok_and_missing_tx_json_err() {
+    fn parse_simulate_result_contract() {
+        // meta absent ok and missing tx json err
         let value = json!({
             "result": {
                 "tx_json": {
@@ -1178,12 +1210,8 @@ mod tests {
         let missing = json!({"result": {"engine_result": "tesSUCCESS"}});
         let err = parse_simulate_result(&missing).expect_err("missing tx_json should fail");
         assert!(format!("{err}").contains("tx_json"));
-    }
 
-    /// TC-200: rippled 3.x `simulate` omits `LastLedgerSequence` (testnet 3.4.1) → filled from
-    /// `ledger_index` + window so every sign path gets one; a server-provided value is kept.
-    #[test]
-    fn parse_simulate_result_fills_missing_last_ledger_sequence() {
+        // fills missing last ledger sequence
         let live_shape = json!({"result": {
             "applied": false,
             "engine_result": "tesSUCCESS",
@@ -1199,12 +1227,8 @@ mod tests {
         server_filled["result"]["tx_json"]["LastLedgerSequence"] = json!(21_430_170);
         let sim = parse_simulate_result(&server_filled).expect("simulate should parse");
         assert_eq!(sim.tx_json["LastLedgerSequence"], 21_430_170);
-    }
 
-    /// TC-208: simulate engine_result(_message) control chars stripped
-    /// Node-supplied simulate result strings are stripped of control chars at parse time.
-    #[test]
-    fn parse_simulate_result_sanitizes_result_strings() {
+        // sanitizes result strings
         let v = json!({"result": {
             "engine_result": "tec\u{1b}[2J",
             "engine_result_message": "bad\u{1b}]52;c;eA==\u{7}",
@@ -1423,20 +1447,5 @@ mod tests {
         assert_eq!(price.entire_set.mean, "1.0");
         assert!(price.trimmed_set.is_none());
         assert_eq!(price.time, 0);
-    }
-
-    /// TC-368: CLI book / AMM assets accept a symbol like the TUI config does — `RLUSD`
-    /// goes on the wire as its 160-bit code; 3-letter and 40-hex codes pass unchanged, and
-    /// input that is not plain alphanumeric is never encoded into a lookalike code.
-    #[test]
-    fn book_currency_encodes_long_symbols() {
-        let rlusd = "524C555344000000000000000000000000000000";
-        assert_eq!(book_currency("RLUSD", Some("rI"))["currency"], rlusd);
-        assert_eq!(book_currency(rlusd, Some("rI"))["currency"], rlusd);
-        assert_eq!(book_currency("USD", Some("rI"))["currency"], "USD");
-        assert_eq!(book_currency("xrp", None), json!({ "currency": "XRP" }));
-        for raw in ["USD ", "US D", "RL-USD", "USD\u{a0}"] {
-            assert_eq!(book_currency(raw, Some("rI"))["currency"], raw, "{raw:?}");
-        }
     }
 }

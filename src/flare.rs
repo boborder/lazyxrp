@@ -1579,9 +1579,15 @@ fn settings_minting_cap_amg(raw: &[u8]) -> color_eyre::Result<u64> {
 mod tests {
     use super::*;
 
+    /// The Core Vault and the Smart Account operator must match their pinned values.
+    ///
     /// TC-205: the RPC-supplied Core Vault is signed only when it equals the pinned value.
+    ///
+    /// TC-240: the RPC-supplied Smart Account operator is paid only when it equals the pinned
+    /// `[flare.smart_accounts] expected_operator`; mismatch, unset and empty pins are refused.
     #[test]
-    fn check_core_vault_requires_pinned_match() {
+    fn pinned_core_vault_and_operator_must_match() {
+        // core vault requires pinned match
         assert!(check_core_vault("rVault", Some(" rVault ")).is_ok());
         assert!(
             check_core_vault("rEvil", Some("rVault"))
@@ -1594,6 +1600,20 @@ mod tests {
                 .contains("expected_core_vault")
         );
         assert!(check_core_vault("rVault", Some("")).is_err());
+
+        // operator requires pinned match
+        assert!(check_operator("rOperator", Some(" rOperator ")).is_ok());
+        assert!(
+            check_operator("rEvil", Some("rOperator"))
+                .unwrap_err()
+                .contains("differs")
+        );
+        assert!(
+            check_operator("rOperator", None)
+                .unwrap_err()
+                .contains("expected_operator")
+        );
+        assert!(check_operator("rOperator", Some("  ")).is_err());
     }
 
     fn mint_info(min_fee: u128) -> FxrpDirectMintInfo {
@@ -1623,10 +1643,13 @@ mod tests {
         }
     }
 
+    /// A write is refused when the read terms (Direct Mint, Smart Account) changed since the quote.
+    ///
     /// A fee bump / vault change / pause between compose and sign is refused (the composer's
     /// snapshot alone would have let the payment through and minted it all to the fee receiver).
     #[test]
-    fn direct_mint_terms_drift_is_refused() {
+    fn terms_drift_is_refused() {
+        // direct mint terms drift is refused
         assert!(compare_direct_mint_terms(&mint_info(1), &mint_params(1)).is_ok());
         let e = compare_direct_mint_terms(&mint_info(9_000_000), &mint_params(1)).unwrap_err();
         assert!(e.contains("fees changed"), "{e}");
@@ -1644,10 +1667,8 @@ mod tests {
                 .unwrap_err()
                 .contains("paused")
         );
-    }
 
-    #[test]
-    fn smart_account_terms_drift_is_refused() {
+        // smart account terms drift is refused
         let info = SmartAccountInfo {
             xrpl_owner: String::new(),
             controller: String::new(),
@@ -1686,24 +1707,6 @@ mod tests {
                 .unwrap_err()
                 .contains("operator")
         );
-    }
-
-    /// TC-240: the RPC-supplied Smart Account operator is paid only when it equals the pinned
-    /// `[flare.smart_accounts] expected_operator`; mismatch, unset and empty pins are refused.
-    #[test]
-    fn check_operator_requires_pinned_match() {
-        assert!(check_operator("rOperator", Some(" rOperator ")).is_ok());
-        assert!(
-            check_operator("rEvil", Some("rOperator"))
-                .unwrap_err()
-                .contains("differs")
-        );
-        assert!(
-            check_operator("rOperator", None)
-                .unwrap_err()
-                .contains("expected_operator")
-        );
-        assert!(check_operator("rOperator", Some("  ")).is_err());
     }
 
     /// Serve the Flare views `fetch_smart_account_info` reads (registry → controller / AssetManager,
@@ -1892,9 +1895,13 @@ mod tests {
         assert!(err.contains("XRPL owner"), "{err}");
     }
 
+    /// Token, UBA and bips formatters are exact for any decimals and never panic on oversized
+    /// values.
+    ///
     /// An oversized uint256 from the RPC must not panic the display formatters.
     #[test]
-    fn oversized_uint256_does_not_panic_formatters() {
+    fn flare_amount_formatters() {
+        // oversized uint256 does not panic formatters
         // Saturates to u128::MAX rather than panicking or wrapping.
         assert_eq!(
             format_price(U256::MAX, 6),
@@ -1905,10 +1912,8 @@ mod tests {
             format_token_balance(U256::from(u128::MAX), 18)
         );
         assert_eq!(format_price(U256::from(1_500_000_u64), 6), "1.500000");
-    }
 
-    #[test]
-    fn format_token_units_is_exact_for_any_decimals() {
+        // format token units is exact for any decimals
         assert_eq!(format_token_units(12_500_000, 6), "12.5");
         assert_eq!(format_token_units(1_250_000_000, 8), "12.5");
         assert_eq!(format_token_units(1, 6), "0.000001");
@@ -1916,20 +1921,16 @@ mod tests {
         assert_eq!(format_token_units(1_234, 0), "1234");
         assert_eq!(format_token_units(3_000_000, 6), "3");
         assert_eq!(format_token_units(u128::MAX, 18).len(), 40);
-    }
 
-    #[test]
-    fn uba_to_xrp_display_table() {
+        // uba to xrp display table
         assert_eq!(uba_to_xrp_display(0), "0");
         assert_eq!(uba_to_xrp_display(100_000), "0.1");
         assert_eq!(uba_to_xrp_display(200_000), "0.2");
         assert_eq!(uba_to_xrp_display(1_000_000), "1");
         assert_eq!(uba_to_xrp_display(10_500_000), "10.5");
         assert_eq!(uba_to_xrp_display(1), "0.000001");
-    }
 
-    #[test]
-    fn bips_to_percent_display_table() {
+        // bips to percent display table
         assert_eq!(bips_to_percent_display(0), "0.00%");
         assert_eq!(bips_to_percent_display(10), "0.10%");
         assert_eq!(bips_to_percent_display(100), "1.00%");
@@ -2033,11 +2034,17 @@ mod tests {
         }
     }
 
+    /// The write gate checks the reported chain id; the transaction fee is capped.
+    ///
     /// TC-346: write chain gate on reported chain id
     /// TC-360: chain ids are 14 / 19 / 114; a write needs the reported id to equal the configured
     /// network's, and Flare mainnet (by reported id) needs `--yes`.
+    ///
+    /// TC-346: send_capped fee cap
+    /// TC-361: the gas cost cap is `gas × max fee`, saturating.
     #[test]
-    fn write_gate_checks_reported_chain_id() {
+    fn write_gate_chain_id_and_fee_cap() {
+        // write gate checks reported chain id
         use FlareNetwork::{Coston2, Flare, Songbird};
         assert_eq!(
             [Flare, Songbird, Coston2].map(expected_chain_id),
@@ -2056,6 +2063,12 @@ mod tests {
         assert!(check_write_chain(Flare, 14, true).is_ok());
         assert!(check_write_chain(Coston2, 114, false).is_ok());
         assert!(check_write_chain(Songbird, 19, false).is_ok());
+
+        // tx fee cap
+        assert!(check_tx_fee(2_000_000, 100_000_000_000).is_ok());
+        assert!(check_tx_fee(10_000_000, MAX_TX_FEE_WEI / 10_000_000).is_ok());
+        assert!(check_tx_fee(10_000_001, MAX_TX_FEE_WEI / 10_000_000).is_err());
+        assert!(check_tx_fee(u64::MAX, u128::MAX).is_err());
     }
 
     /// TC-360: `executeDirectMinting` asks `eth_chainId` first and stops on a mismatch.
@@ -2081,16 +2094,6 @@ mod tests {
             .unwrap_err();
         assert!(err.to_string().contains("chain id 14"), "{err}");
         server.await.expect("join").expect("exactly one request");
-    }
-
-    /// TC-346: send_capped fee cap
-    /// TC-361: the gas cost cap is `gas × max fee`, saturating.
-    #[test]
-    fn tx_fee_cap() {
-        assert!(check_tx_fee(2_000_000, 100_000_000_000).is_ok());
-        assert!(check_tx_fee(10_000_000, MAX_TX_FEE_WEI / 10_000_000).is_ok());
-        assert!(check_tx_fee(10_000_001, MAX_TX_FEE_WEI / 10_000_000).is_err());
-        assert!(check_tx_fee(u64::MAX, u128::MAX).is_err());
     }
 
     /// TC-172: batched getFeedsById fetch (live)

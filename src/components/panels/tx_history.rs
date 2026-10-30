@@ -113,10 +113,10 @@ impl Component for TxHistoryPanel {
                 self.loading_more = false;
                 self.reapply_filter();
             }
-            _ if self
-                .table_state
-                .handle_row_select(action, self.is_focused, len) => {}
-            _ => {}
+            _ => {
+                self.table_state
+                    .handle_row_select(action, self.is_focused, len);
+            }
         }
         Ok(None)
     }
@@ -258,10 +258,19 @@ mod tests {
         }
     }
 
+    /// The history filter matches by field, renders only matching rows, and takes pasted text only
+    /// while editing.
+    ///
     /// TC-077-079: filter matches by field; empty filter shows all
+    ///
+    /// TC-365: paste goes to filter only while editing
+    /// A pasted tx hash lands in the filter only while it is being edited; otherwise it is dropped.
+    ///
+    /// TC-153: filter input renders matching rows only
     #[test]
     #[allow(clippy::type_complexity)]
-    fn history_filter_matches_by_field_and_empty_shows_all() {
+    fn history_filter() {
+        // history filter matches by field and empty shows all
         /// Rows = expected displayed hashes in order; NoFilter = filtered cache stays empty
         enum Expected {
             Rows(&'static [&'static str]),
@@ -315,6 +324,23 @@ mod tests {
                 }
             }
         }
+
+        // paste goes to filter only while editing
+        let mut panel = panel_with_payment_rows();
+        panel.paste("ignored");
+        assert!(panel.filter_input.is_empty());
+        panel
+            .on_key_event(KeyEvent::from(KeyCode::Char('f')))
+            .unwrap();
+        panel.paste("AB\r\nCD\u{1b}");
+        assert_eq!(panel.filter_input, "ABCD");
+
+        // filter input renders matching rows only
+        let mut panel = panel_with_payment_rows();
+        apply_payment_filter(&mut panel);
+        let rendered = render_tx_history_panel(&mut panel);
+        assert!(rendered.contains("first"));
+        assert!(!rendered.contains("excluded"));
     }
 
     fn render_tx_history_panel(panel: &mut TxHistoryPanel) -> String {
@@ -338,20 +364,6 @@ mod tests {
         panel
     }
 
-    /// TC-365: paste goes to filter only while editing
-    /// A pasted tx hash lands in the filter only while it is being edited; otherwise it is dropped.
-    #[test]
-    fn paste_goes_to_filter_only_while_editing() {
-        let mut panel = panel_with_payment_rows();
-        panel.paste("ignored");
-        assert!(panel.filter_input.is_empty());
-        panel
-            .on_key_event(KeyEvent::from(KeyCode::Char('f')))
-            .unwrap();
-        panel.paste("AB\r\nCD\u{1b}");
-        assert_eq!(panel.filter_input, "ABCD");
-    }
-
     fn apply_payment_filter(panel: &mut TxHistoryPanel) {
         panel
             .on_key_event(KeyEvent::from(KeyCode::Char('f')))
@@ -364,19 +376,14 @@ mod tests {
         panel.on_key_event(KeyEvent::from(KeyCode::Enter)).unwrap();
     }
 
-    /// TC-153: filter input renders matching rows only
-    #[test]
-    fn filter_input_renders_matching_rows_only() {
-        let mut panel = panel_with_payment_rows();
-        apply_payment_filter(&mut panel);
-        let rendered = render_tx_history_panel(&mut panel);
-        assert!(rendered.contains("first"));
-        assert!(!rendered.contains("excluded"));
-    }
-
+    /// Appending keeps the filtered cache; a full replacement invalidates it.
+    ///
     /// TC-154: append preserves filtered cache through redraw
+    ///
+    /// TC-156: full history replace invalidates cached rows
     #[test]
-    fn append_preserves_filtered_cache() {
+    fn history_cache_follows_appends_and_replacements() {
+        // append preserves filtered cache
         let mut panel = panel_with_payment_rows();
         apply_payment_filter(&mut panel);
         panel
@@ -389,27 +396,8 @@ mod tests {
         assert!(rendered.contains("first"));
         assert!(rendered.contains("second"));
         assert!(!rendered.contains("excluded"));
-    }
 
-    /// TC-155: tx detail toggle shows the selected transaction JSON
-    #[test]
-    fn tx_detail_toggle_shows_selected_tx_json() {
-        let mut panel = panel_with_payment_rows();
-        apply_payment_filter(&mut panel);
-        panel
-            .update(&Action::XrplTxHistoryAppend(
-                vec![fixture_tx_row("second", "Payment")],
-                None,
-            ))
-            .unwrap();
-        panel.update(&Action::SelectNext).unwrap();
-        panel.update(&Action::TxDetailToggle).unwrap();
-        assert_eq!(panel.detail.tx_json.0["hash"], "second");
-    }
-
-    /// TC-156: full history replace invalidates cached rows
-    #[test]
-    fn full_history_replace_invalidates_cached_rows() {
+        // full history replace invalidates cached rows
         let mut panel = panel_with_payment_rows();
         apply_payment_filter(&mut panel);
         panel
@@ -428,5 +416,21 @@ mod tests {
         assert!(rendered.contains("replacement"));
         assert!(!rendered.contains("first"));
         assert!(!rendered.contains("second"));
+    }
+
+    /// TC-155: tx detail toggle shows the selected transaction JSON
+    #[test]
+    fn tx_detail_toggle_shows_selected_tx_json() {
+        let mut panel = panel_with_payment_rows();
+        apply_payment_filter(&mut panel);
+        panel
+            .update(&Action::XrplTxHistoryAppend(
+                vec![fixture_tx_row("second", "Payment")],
+                None,
+            ))
+            .unwrap();
+        panel.update(&Action::SelectNext).unwrap();
+        panel.update(&Action::TxDetailToggle).unwrap();
+        assert_eq!(panel.detail.tx_json.0["hash"], "second");
     }
 }

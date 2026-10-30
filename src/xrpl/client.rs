@@ -547,6 +547,7 @@ impl RpcClient {
             Err(e) => e,
         };
         for attempt in 0..SUBMIT_LOOKUP_TRIES {
+            // Skipped in unit tests for the same reason as in `retry_delay_ms`.
             if attempt > 0 && !cfg!(test) {
                 tokio::time::sleep(SUBMIT_LOOKUP_INTERVAL).await;
             }
@@ -823,9 +824,17 @@ mod tests {
         assert!(is_retryable_rpc_error("[XRPL-17] tooBusy"));
     }
 
+    /// Retries: a local HTTP 429 and a transient node error are retried, then it gives up after
+    /// three attempts.
+    ///
     /// TC-105: local HTTP 429 responses are retried before success
+    ///
+    /// TC-102: persistent 429 gives up after exactly 3 attempts and returns the rate-limit error.
+    ///
+    /// TC-102: a transient XRPL error (`tooBusy`, code 17) is retried; success follows.
     #[tokio::test]
-    async fn rpc_value_retries_local_http_429_then_returns_success() {
+    async fn rpc_value_retry_policy() {
+        // retries local http 429 then returns success
         use std::time::Duration;
 
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -859,12 +868,8 @@ mod tests {
         let value = rpc.rpc_value("server_info", json!({})).await.unwrap();
         assert_eq!(value, json!({"result": {}}));
         server.await.unwrap();
-    }
 
-    /// TC-102: persistent 429 gives up after exactly 3 attempts and returns the rate-limit error.
-    #[tokio::test]
-    async fn rpc_value_gives_up_after_three_attempts() {
-        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        // gives up after three attempts
         let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
             .await
             .unwrap();
@@ -889,31 +894,30 @@ mod tests {
         let err = rpc.rpc_value("server_info", json!({})).await.unwrap_err();
         assert!(err.to_string().contains("Rate limited (HTTP 429)"), "{err}");
         assert_eq!(server.await.unwrap(), 3, "exactly 3 attempts");
-    }
 
-    /// TC-102: a transient XRPL error (`tooBusy`, code 17) is retried; success follows.
-    #[tokio::test]
-    async fn rpc_value_retries_transient_xrpl_error() {
-        use crate::test_support::rpc_mock;
-        use std::sync::atomic::{AtomicUsize, Ordering};
-        static CALLS: AtomicUsize = AtomicUsize::new(0);
-        fn result_for(_: &str) -> Value {
-            if CALLS.fetch_add(1, Ordering::SeqCst) == 0 {
-                json!({"error": "tooBusy", "error_code": 17,
-                       "error_message": "Server is tooBusy"})
-            } else {
-                json!({"status": "success"})
+        // retries transient xrpl error
+        {
+            use crate::test_support::rpc_mock;
+            use std::sync::atomic::{AtomicUsize, Ordering};
+            static CALLS: AtomicUsize = AtomicUsize::new(0);
+            fn result_for(_: &str) -> Value {
+                if CALLS.fetch_add(1, Ordering::SeqCst) == 0 {
+                    json!({"error": "tooBusy", "error_code": 17,
+                           "error_message": "Server is tooBusy"})
+                } else {
+                    json!({"status": "success"})
+                }
             }
+            let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+                .await
+                .unwrap();
+            let url = format!("http://{}", listener.local_addr().unwrap());
+            let server = tokio::spawn(rpc_mock::serve(listener, 2, result_for));
+            let rpc = RpcClient::connect(&url).unwrap();
+            let value = rpc.rpc_value("server_info", json!({})).await.unwrap();
+            assert_eq!(value["result"]["status"], "success");
+            server.await.unwrap().unwrap();
         }
-        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
-            .await
-            .unwrap();
-        let url = format!("http://{}", listener.local_addr().unwrap());
-        let server = tokio::spawn(rpc_mock::serve(listener, 2, result_for));
-        let rpc = RpcClient::connect(&url).unwrap();
-        let value = rpc.rpc_value("server_info", json!({})).await.unwrap();
-        assert_eq!(value["result"]["status"], "success");
-        server.await.unwrap().unwrap();
     }
 
     /// TC-229: `account_offers` follows `marker` across pages until the node stops returning one.
@@ -1094,11 +1098,21 @@ mod submit_tests {
         }
     }
 
+    /// A lost submit reply is resolved through a `tx` lookup of the local hash: found, applied-
+    /// with-failure, or an explicit unknown; never replayed.
+    ///
     /// TC-351: lost submit reply → tx lookup, no replay
     /// Lost submit reply: one submit attempt only, then the local hash is looked up and the
     /// real outcome reported.
+    ///
+    /// TC-351: lost submit reply → applied failure
+    /// Applied with a failure code after the reply was lost → error naming the code.
+    ///
+    /// TC-351: lost submit reply → explicit unknown
+    /// Not found after the lookups → explicit unknown-outcome error carrying the hash.
     #[tokio::test]
-    async fn lost_submit_reply_resolves_via_tx_lookup_without_replaying() {
+    async fn lost_submit_reply_resolution() {
+        // resolves via tx lookup without replaying
         let (url, server, seen) = lossy_node(json!({"validated": true,
             "meta": {"TransactionResult": "tesSUCCESS"}}))
         .await;
@@ -1111,12 +1125,8 @@ mod submit_tests {
         assert!(!out.queued);
         assert_eq!(*seen.lock().unwrap(), ["submit", "tx"]);
         server.abort();
-    }
 
-    /// TC-351: lost submit reply → applied failure
-    /// Applied with a failure code after the reply was lost → error naming the code.
-    #[tokio::test]
-    async fn lost_submit_reply_reports_applied_failure() {
+        // reports applied failure
         let (url, server, _) = lossy_node(json!({"validated": true,
             "meta": {"TransactionResult": "tecUNFUNDED_PAYMENT"}}))
         .await;
@@ -1128,12 +1138,8 @@ mod submit_tests {
             .to_string();
         assert!(err.contains("tecUNFUNDED_PAYMENT"), "{err}");
         server.abort();
-    }
 
-    /// TC-351: lost submit reply → explicit unknown
-    /// Not found after the lookups → explicit unknown-outcome error carrying the hash.
-    #[tokio::test]
-    async fn lost_submit_reply_not_found_is_explicit_unknown() {
+        // not found is explicit unknown
         let (url, server, seen) = lossy_node(json!({"error": "txnNotFound", "error_code": 29,
                 "error_message": "Transaction not found."}))
         .await;

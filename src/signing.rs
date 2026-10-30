@@ -8,9 +8,12 @@ use serde_json::Value;
 
 use crate::network::Network;
 use crate::xrpl::GeneratedWalletKeys;
+
 pub const SEED_ENV: &str = "XRPL_SEED";
 pub const MNEMONIC_ENV: &str = "XRPL_MNEMONIC";
 
+/// The signing credential for the configured secrets; `None` means read-only (no wallet).
+/// A family seed and a BIP39 mnemonic are mutually exclusive.
 pub fn credential_from_secrets(
     seed: Option<&SecretString>,
     mnemonic: Option<&SecretString>,
@@ -74,6 +77,7 @@ impl SigningCredential {
             }
         }
     }
+
     pub fn address(&self) -> color_eyre::Result<String> {
         Ok(self.wallet()?.classic_address.clone())
     }
@@ -644,7 +648,6 @@ pub fn build_payment_tx_json_for_simulate(
 }
 
 /// Unsigned AccountSet JSON for `simulate`.
-#[allow(clippy::too_many_arguments)]
 pub fn build_account_set_tx_json_for_simulate(
     account: &str,
     sequence: u32,
@@ -903,7 +906,6 @@ pub fn build_offer_create_tx_json_for_simulate(
 }
 
 /// Create and sign an `OfferCreate` transaction, returning the tx_blob hex.
-#[allow(clippy::too_many_arguments)]
 pub fn create_and_sign_offer_create(
     wallet: &xrpl::wallet::Wallet,
     account: &str,
@@ -1022,7 +1024,6 @@ pub fn validate_escrow_create_input(
     Ok((drops, finish, cancel))
 }
 
-#[allow(clippy::too_many_arguments)]
 fn escrow_create_tx<'a>(
     account: &str,
     destination: &str,
@@ -1652,9 +1653,13 @@ mod tests {
         assert_eq!(d["LastLedgerSequence"], 100);
     }
 
+    /// The credential comes from the seed or the mnemonic (never both) and its Debug output never
+    /// prints a secret.
+    ///
     /// TC-045/TC-046: credential source selection — none, seed, mnemonic, both-rejected
     #[test]
-    fn credential_from_secrets_selects_source() {
+    fn signing_credential_source_and_redaction() {
+        // credential from secrets selects source
         assert!(
             credential_from_secrets(None, None)
                 .expect("no source is ok")
@@ -1690,11 +1695,31 @@ mod tests {
         let bad = SecretString::from("abandon abandon not a real mnemonic".to_string());
         let err = credential_from_secrets(None, Some(&bad)).expect_err("invalid mnemonic");
         assert!(err.to_string().contains("invalid BIP39 mnemonic"), "{err}");
+
+        // signing credential debug never prints secrets
+        let seed = "sEdSkooMk31MeTjbHVE7vLvgCpEMAdB";
+        let mnemonic = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+        for credential in [
+            SigningCredential::FamilySeed(secrecy::SecretString::from(seed)),
+            SigningCredential::Bip39Mnemonic(secrecy::SecretString::from(mnemonic)),
+        ] {
+            let shown = format!("{credential:?}");
+            assert!(
+                !shown.contains(seed) && !shown.contains("abandon"),
+                "{shown}"
+            );
+        }
     }
 
+    /// Ed25519 and secp256k1 family seeds derive their known address; corrupted, truncated or empty
+    /// seeds are refused.
+    ///
     /// A family seed is not validated at credential creation; garbage / bad checksum fails at `wallet()`.
+    ///
+    /// The ed25519 family-seed wallet derives the known address; surrounding whitespace is trimmed.
     #[test]
-    fn bad_family_seed_is_rejected_when_building_wallet() {
+    fn family_seed_wallets_derive_and_bad_seeds_are_rejected() {
+        // bad family seed is rejected when building wallet
         let mut corrupted = sample_family_seed();
         corrupted.pop();
         corrupted.push('1'); // checksum no longer matches
@@ -1705,10 +1730,33 @@ mod tests {
                 .expect("credential");
             assert!(cred.wallet().is_err(), "{bad:?}");
         }
+
+        // ed25519 family seed wallet
+        for seed in [
+            sample_family_seed(),
+            format!("{}  \n", sample_family_seed()),
+        ] {
+            let w = wallet_from_family_seed(&seed, 0).expect("ed25519 wallet");
+            assert_eq!(w.classic_address, "rU3Cw9Vezt3m3E7EonCnfGN1raFdudq4QQ");
+        }
+
+        // secp256k1 family seed known address
+        let seed = "sn259rEFXrQrWyx3Q7XneWcwV6dfL";
+        let wallet = wallet_from_family_seed(seed, 0).expect("wallet");
+        // Known classic address for this fixture seed (not a Wallet::new mirror).
+        assert_eq!(wallet.classic_address, "rJrRMgiRgrU6hDF4pgu5DXQdWyPbY35ErN");
     }
 
+    /// `sequence_fee_ledger_from_simulate` reads Sequence / Fee / LastLedgerSequence (numbers or
+    /// strings, no swapped field) and refuses missing, malformed or over-cap values.
+    ///
+    /// Missing, non-numeric or out-of-u32 fields decide what gets signed → all refused.
+    ///
+    /// TC-176: node Fee above MAX_NODE_FEE_DROPS rejected
+    /// A node-chosen Fee above the cap is refused before anything is signed.
     #[test]
-    fn sequence_fee_ledger_from_simulate_extracts_fields() {
+    fn sequence_fee_ledger_from_simulate_contract() {
+        // extracts fields
         // Distinct values: a swapped field in the tuple would be caught. Numbers and strings both parse.
         let tx = serde_json::json!({
             "Sequence": 42,
@@ -1721,11 +1769,8 @@ mod tests {
         );
         let tx = serde_json::json!({"Sequence": "7", "Fee": 13, "LastLedgerSequence": "8"});
         assert_eq!(sequence_fee_ledger_from_simulate(&tx).unwrap(), (7, 13, 8));
-    }
 
-    /// Missing, non-numeric or out-of-u32 fields decide what gets signed → all refused.
-    #[test]
-    fn sequence_fee_ledger_from_simulate_rejects_bad_fields() {
+        // rejects bad fields
         let good = serde_json::json!({"Sequence": 1, "Fee": "12", "LastLedgerSequence": 10});
         for key in ["Sequence", "Fee", "LastLedgerSequence"] {
             let mut missing = good.clone();
@@ -1748,12 +1793,8 @@ mod tests {
                 );
             }
         }
-    }
 
-    /// TC-176: node Fee above MAX_NODE_FEE_DROPS rejected
-    /// A node-chosen Fee above the cap is refused before anything is signed.
-    #[test]
-    fn sequence_fee_ledger_from_simulate_rejects_excessive_fee() {
+        // rejects excessive fee
         let at_cap = serde_json::json!({
             "Sequence": 1, "Fee": MAX_NODE_FEE_DROPS.to_string(), "LastLedgerSequence": 10
         });
@@ -1777,8 +1818,11 @@ mod tests {
         assert!(tx_hash_from_blob("zz").is_err());
     }
 
+    /// Payment tx_json for simulate: XRP, IOU and optional fields are encoded; a partial IOU is
+    /// refused.
     #[test]
-    fn build_payment_tx_json_for_simulate_xrp() {
+    fn build_payment_tx_json_for_simulate_contract() {
+        // for simulate xrp
         let v = build_payment_tx_json_for_simulate(
             "rSender", "rDest", "1", None, None, None, None, None, 7,
         )
@@ -1788,10 +1832,8 @@ mod tests {
         assert_eq!(v["Account"], "rSender");
         assert_eq!(v["Destination"], "rDest");
         assert_eq!(v["Amount"], "1000000");
-    }
 
-    #[test]
-    fn build_payment_tx_json_for_simulate_iou() {
+        // for simulate iou
         let issuer = "rJrRMgiRgrU6hDF4pgu5DXQdWyPbY35ErN";
         let v = build_payment_tx_json_for_simulate(
             "rSender",
@@ -1812,10 +1854,8 @@ mod tests {
         assert_eq!(v["Amount"]["currency"], "USD");
         assert_eq!(v["Amount"]["issuer"], issuer);
         assert_eq!(v["Amount"]["value"], "12.5");
-    }
 
-    #[test]
-    fn build_payment_tx_json_for_simulate_includes_optional_fields() {
+        // for simulate includes optional fields
         let v = build_payment_tx_json_for_simulate(
             "rSender",
             "rDest",
@@ -1846,27 +1886,34 @@ mod tests {
         .unwrap();
         let data = v["Memos"][0]["Memo"]["MemoData"].as_str().unwrap();
         assert_eq!(data, memo);
+
+        // rejects partial iou
+        {
+            let err = build_payment_tx_json_for_simulate(
+                "rSender",
+                "rDest",
+                "1",
+                Some("USD"),
+                None,
+                None,
+                None,
+                None,
+                1,
+            )
+            .expect_err("partial iou");
+            assert!(format!("{err}").contains("both currency and issuer"));
+        }
     }
 
+    /// Direct Mint memo carries only the recipient; malformed addresses and bad EIP-55 checksums
+    /// are refused.
+    ///
+    /// TC-347: EIP-55 checksum enforced for mixed case
+    /// Mixed-case (any uppercase hex letter) recipients must carry a valid EIP-55 checksum;
+    /// all-lowercase stays accepted.
     #[test]
-    fn build_payment_tx_json_rejects_partial_iou() {
-        let err = build_payment_tx_json_for_simulate(
-            "rSender",
-            "rDest",
-            "1",
-            Some("USD"),
-            None,
-            None,
-            None,
-            None,
-            1,
-        )
-        .expect_err("partial iou");
-        assert!(format!("{err}").contains("both currency and issuer"));
-    }
-
-    #[test]
-    fn build_direct_mint_memo_data_recipient_only() {
+    fn direct_mint_memo_and_eth_address_contract() {
+        // build direct mint memo data recipient only
         // EIP-55 spec vector.
         let memo =
             build_direct_mint_memo_data("0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed").unwrap();
@@ -1874,19 +1921,12 @@ mod tests {
         assert!(memo.starts_with(DIRECT_MINT_MEMO_PREFIX));
         assert_eq!(&memo[16..24], "00000000");
         assert_eq!(&memo[24..], "5aaeb6053f3e94c9b9a09f33669435e7ef1beaed");
-    }
 
-    #[test]
-    fn build_direct_mint_memo_data_rejects_bad_addr() {
+        // build direct mint memo data rejects bad addr
         assert!(build_direct_mint_memo_data("0xabc").is_err());
         assert!(build_direct_mint_memo_data("not-hex-zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz").is_err());
-    }
 
-    /// TC-347: EIP-55 checksum enforced for mixed case
-    /// Mixed-case (any uppercase hex letter) recipients must carry a valid EIP-55 checksum;
-    /// all-lowercase stays accepted.
-    #[test]
-    fn eth_address_checksum_enforced_for_mixed_case() {
+        // eth address checksum enforced for mixed case
         let lower = "5aaeb6053f3e94c9b9a09f33669435e7ef1beaed";
         assert_eq!(
             normalize_eth_address_hex("0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed").unwrap(),
@@ -1905,12 +1945,24 @@ mod tests {
         }
     }
 
+    /// Smart Account instruction bytes match the Flare example and reference vectors; bad values,
+    /// recipients and fees are refused.
+    ///
     /// TC-239: Smart Account payment reference layout — id at byte 0, walletId at 1, value
     /// (10 bytes big-endian) at 2..12, recipient at 12..32 — pinned against the worked example
     /// of the Flare docs (the doc prose shows `000000000000000000000a`, which is 11 bytes; the
     /// 64-hex-char example itself and the byte table agree on a 10-byte value).
+    ///
+    /// TC-239: the value field is 10 bytes — 2^80 − 1 fits, 2^80 and zero are refused — and the
+    /// recipient must be a well-formed, non-zero 20-byte address.
+    ///
+    /// TC-239: a zero or absurd `getInstructionFee` never becomes a Payment amount.
+    ///
+    /// TC-239: vectors from the reference encoder (py_flare_common.smart_accounts, used by
+    /// smart-accounts-cli; no unit conversion — the value is raw FXRP base units / lots).
     #[test]
-    fn smart_account_instruction_layout_matches_flare_example() {
+    fn smart_account_instruction_encoding_contract() {
+        // instruction layout matches flare example
         let example = "01000000000000000000000af5488132432118596fa13800b68df4c0ff25131d";
         assert_eq!(example.len(), 64);
         let recipient = "0xf5488132432118596fa13800b68df4c0ff25131d";
@@ -1939,12 +1991,8 @@ mod tests {
             (decoded.id, decoded.wallet_id, decoded.value, decoded.tail),
             (0x02, 0, 3, [0; 20])
         );
-    }
 
-    /// TC-239: the value field is 10 bytes — 2^80 − 1 fits, 2^80 and zero are refused — and the
-    /// recipient must be a well-formed, non-zero 20-byte address.
-    #[test]
-    fn smart_account_instruction_rejects_bad_value_and_recipient() {
+        // instruction rejects bad value and recipient
         let to = "0xf5488132432118596fa13800b68df4c0ff25131d";
         let max = encode_fxrp_transfer_instruction(0, SMART_ACCOUNT_VALUE_MAX, to).unwrap();
         assert_eq!(max[2..12], [0xff; 10]);
@@ -1986,22 +2034,15 @@ mod tests {
             encode_fxrp_transfer_instruction(0, 1, "  0XF5488132432118596FA13800B68DF4C0FF25131D ")
                 .is_err()
         );
-    }
 
-    /// TC-239: a zero or absurd `getInstructionFee` never becomes a Payment amount.
-    #[test]
-    fn smart_account_fee_bounds() {
+        // fee bounds
         assert!(check_smart_account_fee(0).is_err());
         assert!(check_smart_account_fee(1).is_ok());
         assert!(check_smart_account_fee(MAX_SMART_ACCOUNT_FEE_DROPS).is_ok());
         assert!(check_smart_account_fee(MAX_SMART_ACCOUNT_FEE_DROPS + 1).is_err());
         assert!(check_smart_account_fee(u64::MAX).is_err());
-    }
 
-    /// TC-239: vectors from the reference encoder (py_flare_common.smart_accounts, used by
-    /// smart-accounts-cli; no unit conversion — the value is raw FXRP base units / lots).
-    #[test]
-    fn smart_account_instruction_matches_reference_encoder_vectors() {
+        // instruction matches reference encoder vectors
         let to = "0xf5488132432118596fa13800b68df4c0ff25131d";
         assert_eq!(
             hex::encode(encode_fxrp_transfer_instruction(0, 1_234_567, to).unwrap()),
@@ -2049,9 +2090,14 @@ mod tests {
         }
     }
 
+    /// The production prompt is skipped when safe and otherwise accepts only an explicit yes.
+    ///
     /// TC-047/TC-048: no prompt off production networks, or on mainnet with `--yes`.
+    ///
+    /// Mainnet gate: only an explicit `y`/`yes` proceeds; anything else, including EOF, declines.
     #[test]
-    fn prompt_production_confirmation_skips_when_safe() {
+    fn production_confirmation_prompt_contract() {
+        // prompt production confirmation skips when safe
         assert!(prompt_production_confirmation(
             "Payment",
             &Network::Testnet,
@@ -2067,11 +2113,8 @@ mod tests {
             &Network::Mainnet,
             true
         ));
-    }
 
-    /// Mainnet gate: only an explicit `y`/`yes` proceeds; anything else, including EOF, declines.
-    #[test]
-    fn read_confirmation_accepts_only_explicit_yes() {
+        // read confirmation accepts only explicit yes
         for yes in ["y\n", "YES\n", "  Yes \n"] {
             assert!(read_confirmation(yes.as_bytes()), "{yes:?}");
         }
@@ -2080,29 +2123,13 @@ mod tests {
         }
     }
 
+    /// AccountSet inputs: domain to lowercase hex, flag choices.
     #[test]
-    fn signing_credential_debug_never_prints_secrets() {
-        let seed = "sEdSkooMk31MeTjbHVE7vLvgCpEMAdB";
-        let mnemonic = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
-        for credential in [
-            SigningCredential::FamilySeed(secrecy::SecretString::from(seed)),
-            SigningCredential::Bip39Mnemonic(secrecy::SecretString::from(mnemonic)),
-        ] {
-            let shown = format!("{credential:?}");
-            assert!(
-                !shown.contains(seed) && !shown.contains("abandon"),
-                "{shown}"
-            );
-        }
-    }
-
-    #[test]
-    fn domain_ascii_to_hex_lowercase() {
+    fn account_set_input_parsing() {
+        // domain ascii to hex lowercase
         assert_eq!(domain_ascii_to_hex("Example.COM"), "6578616d706c652e636f6d");
-    }
 
-    #[test]
-    fn parse_account_set_flag_choice_table() {
+        // parse account set flag choice table
         use xrpl::models::transactions::account_set::AccountSetFlag;
         assert_eq!(
             parse_account_set_flag_choice(Some("RequireDest")),
@@ -2123,8 +2150,10 @@ mod tests {
             wallet_from_family_seed(&r.master_seed, 0).expect("wallet from generated seed");
         assert_eq!(wallet.classic_address, r.account_id);
     }
+    /// A BIP39 mnemonic derives the known XRPL wallet and can sign a payment.
     #[test]
-    fn bip39_secp256k1_derives_known_xrpl_wallet() {
+    fn bip39_wallet_derivation_and_signing() {
+        // derives known xrpl wallet
         let credential = SigningCredential::from_bip39_mnemonic(sample_mnemonic())
             .expect("valid BIP39 mnemonic");
         let wallet = credential.wallet().expect("XRPL wallet");
@@ -2140,9 +2169,8 @@ mod tests {
         // Actual deterministic derivation for this mnemonic (index 0). The
         // often-quoted rG1QQv2... address belongs to a different test vector.
         assert_eq!(wallet.classic_address, "rHsMGQEkVNJmpGWs8XUBoTBiAAbwxZN5v3");
-    }
-    #[test]
-    fn bip39_secp256k1_can_sign_payment() {
+
+        // can sign payment
         use xrpl::core::binarycodec::decode;
 
         let credential = SigningCredential::from_bip39_mnemonic(sample_mnemonic())
@@ -2190,9 +2218,13 @@ mod tests {
         assert_eq!(decoded["Account"], serde_json::json!(account));
     }
 
+    /// OfferCreate tx_json (XRP / IOU) and OfferCancel tx_json and signed blob carry the offer
+    /// fields.
+    ///
     /// TC-184: OfferCancel simulate JSON and signed blob carry OfferSequence.
     #[test]
-    fn offer_cancel_tx_json_and_signed_blob_carry_offer_sequence() {
+    fn offer_tx_json_and_signing_contract() {
+        // offer cancel tx json and signed blob carry offer sequence
         use xrpl::core::binarycodec::decode;
 
         let json =
@@ -2211,11 +2243,39 @@ mod tests {
         assert_eq!(decoded["Sequence"], 5);
         assert_eq!(decoded["Fee"], "12");
         assert_eq!(decoded["LastLedgerSequence"], 100);
+
+        // build offer create tx json for simulate xrp iou
+        {
+            let issuer = "rJrRMgiRgrU6hDF4pgu5DXQdWyPbY35ErN";
+            let v = build_offer_create_tx_json_for_simulate(
+                "rSenderxxxxxxxxxxxxxxxxxxxxxxxXX",
+                "XRP:1000000",
+                &format!("USD:{issuer}:10"),
+                5,
+            )
+            .expect("offer create json");
+            assert_eq!(v["TransactionType"], "OfferCreate");
+            assert_eq!(v["Sequence"], 5);
+            assert_eq!(v["TakerGets"], "1000000");
+            assert_eq!(v["TakerPays"]["currency"], "USD");
+            assert_eq!(v["TakerPays"]["issuer"], issuer);
+            assert_eq!(v["TakerPays"]["value"], "10");
+        }
     }
 
+    /// Escrow: relative durations parse, EscrowCreate input is validated, and tx_json and signed
+    /// blobs carry the fields.
+    ///
     /// TC-215: escrow durations — `s`/`m`/`h`/`d` suffix, positive, u32 seconds; anything else rejected.
+    ///
+    /// TC-216: EscrowCreate input — classic destination, XRP > 0, CancelAfter (optional) later
+    /// than FinishAfter.
+    ///
+    /// TC-217: Escrow simulate JSON and signed blobs carry the escrow fields
+    /// (Create: Amount/Destination/FinishAfter/CancelAfter; Finish/Cancel: Owner/OfferSequence).
     #[test]
-    fn parse_relative_duration_table() {
+    fn escrow_inputs_and_signing_contract() {
+        // parse relative duration table
         for (input, secs) in [
             ("90s", 90),
             ("30m", 1_800),
@@ -2227,12 +2287,8 @@ mod tests {
         for bad in ["", "10", "0m", "-1h", "1.5h", "5y", "m", "99999999d"] {
             assert!(parse_relative_duration(bad).is_err(), "{bad}");
         }
-    }
 
-    /// TC-216: EscrowCreate input — classic destination, XRP > 0, CancelAfter (optional) later
-    /// than FinishAfter.
-    #[test]
-    fn validate_escrow_create_input_table() {
+        // validate escrow create input table
         const DEST: &str = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh";
         let ok = validate_escrow_create_input(DEST, "1.5", "1h", "").unwrap();
         assert_eq!(ok, (1_500_000, 3_600, None));
@@ -2248,14 +2304,9 @@ mod tests {
             let err = validate_escrow_create_input(dest, amt, fin, can).unwrap_err();
             assert!(err.to_string().contains(needle), "{needle}: {err}");
         }
-    }
 
-    /// TC-217: Escrow simulate JSON and signed blobs carry the escrow fields
-    /// (Create: Amount/Destination/FinishAfter/CancelAfter; Finish/Cancel: Owner/OfferSequence).
-    #[test]
-    fn escrow_tx_json_and_signed_blobs_carry_fields() {
+        // escrow tx json and signed blobs carry fields
         use xrpl::core::binarycodec::decode;
-        const DEST: &str = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh";
         let wallet = wallet_from_family_seed(&sample_family_seed(), 0).expect("wallet");
         let acct = wallet.classic_address.clone();
 
@@ -2307,10 +2358,16 @@ mod tests {
         }
     }
 
+    /// AMM: inputs are validated, and tx_json and signed blobs carry the fields.
+    ///
     /// TC-222: AMM inputs — asset `XRP` / `CUR:issuer`; deposit = two amount specs of different
     /// assets; withdraw = two different assets + optional positive LP amount.
+    ///
+    /// TC-223: AMMDeposit (tfTwoAsset, Asset/Asset2 from the amount specs) and AMMWithdraw
+    /// (tfWithdrawAll, or tfLPToken + LPTokenIn) JSON and signed blobs.
     #[test]
-    fn validate_amm_inputs_table() {
+    fn amm_inputs_and_signing_contract() {
+        // validate amm inputs table
         const ISS: &str = "rJrRMgiRgrU6hDF4pgu5DXQdWyPbY35ErN";
         let usd = format!("USD:{ISS}");
         assert!(validate_amm_deposit_specs("XRP:1000000", &format!("{usd}:10")).is_ok());
@@ -2337,61 +2394,72 @@ mod tests {
                 "{a1} {a2} {lp}"
             );
         }
+
+        // amm tx json and signed blobs
+        {
+            use serde_json::json;
+            use xrpl::core::binarycodec::decode;
+            const ISS: &str = "rJrRMgiRgrU6hDF4pgu5DXQdWyPbY35ErN";
+            const LP: &str = "03930D02208264E2E40EC1B0C09E4DB96EE197B1";
+            let wallet = wallet_from_family_seed(&sample_family_seed(), 0).expect("wallet");
+            let acct = wallet.classic_address.clone();
+            let usd10 = format!("USD:{ISS}:10");
+
+            let dep = build_amm_deposit_tx_json_for_simulate(&acct, "XRP:1000000", &usd10, 5)
+                .expect("deposit json");
+            assert_eq!(dep["TransactionType"], "AMMDeposit");
+            assert_eq!(dep["Flags"], 0x0010_0000);
+            assert_eq!(dep["Asset"], json!({"currency": "XRP"}));
+            assert_eq!(dep["Asset2"], json!({"currency": "USD", "issuer": ISS}));
+            assert_eq!(dep["Amount"], "1000000");
+            assert_eq!(dep["Amount2"]["value"], "10");
+            let blob =
+                create_and_sign_amm_deposit(&wallet, &acct, "XRP:1000000", &usd10, 5, 12, 100)
+                    .expect("signed deposit");
+            let d = decode(&blob).expect("decode");
+            assert_eq!(d["Flags"], 0x0010_0000);
+            assert_seq_fee_lls(&d);
+
+            let usd = format!("USD:{ISS}");
+            let all = build_amm_withdraw_tx_json_for_simulate(&acct, "XRP", &usd, None, 5)
+                .expect("withdraw all");
+            assert_eq!(all["Flags"], 0x0002_0000);
+            assert!(all.get("LPTokenIn").is_none());
+            let lp_in = (LP, ISS, "12.5");
+            let some = build_amm_withdraw_tx_json_for_simulate(&acct, "XRP", &usd, Some(lp_in), 5)
+                .expect("withdraw lp");
+            assert_eq!(some["Flags"], 0x0001_0000);
+            assert_eq!(
+                some["LPTokenIn"],
+                json!({"currency": LP, "issuer": ISS, "value": "12.5"})
+            );
+            let blob =
+                create_and_sign_amm_withdraw(&wallet, &acct, "XRP", &usd, Some(lp_in), 5, 12, 100)
+                    .expect("signed withdraw");
+            let d = decode(&blob).expect("decode");
+            assert_seq_fee_lls(&d);
+            assert_eq!(
+                (&d["TransactionType"], &d["Flags"]),
+                (&json!("AMMWithdraw"), &json!(0x0001_0000))
+            );
+        }
     }
 
-    /// TC-223: AMMDeposit (tfTwoAsset, Asset/Asset2 from the amount specs) and AMMWithdraw
-    /// (tfWithdrawAll, or tfLPToken + LPTokenIn) JSON and signed blobs.
-    #[test]
-    fn amm_tx_json_and_signed_blobs() {
-        use serde_json::json;
-        use xrpl::core::binarycodec::decode;
-        const ISS: &str = "rJrRMgiRgrU6hDF4pgu5DXQdWyPbY35ErN";
-        const LP: &str = "03930D02208264E2E40EC1B0C09E4DB96EE197B1";
-        let wallet = wallet_from_family_seed(&sample_family_seed(), 0).expect("wallet");
-        let acct = wallet.classic_address.clone();
-        let usd10 = format!("USD:{ISS}:10");
-
-        let dep = build_amm_deposit_tx_json_for_simulate(&acct, "XRP:1000000", &usd10, 5)
-            .expect("deposit json");
-        assert_eq!(dep["TransactionType"], "AMMDeposit");
-        assert_eq!(dep["Flags"], 0x0010_0000);
-        assert_eq!(dep["Asset"], json!({"currency": "XRP"}));
-        assert_eq!(dep["Asset2"], json!({"currency": "USD", "issuer": ISS}));
-        assert_eq!(dep["Amount"], "1000000");
-        assert_eq!(dep["Amount2"]["value"], "10");
-        let blob = create_and_sign_amm_deposit(&wallet, &acct, "XRP:1000000", &usd10, 5, 12, 100)
-            .expect("signed deposit");
-        let d = decode(&blob).expect("decode");
-        assert_eq!(d["Flags"], 0x0010_0000);
-        assert_seq_fee_lls(&d);
-
-        let usd = format!("USD:{ISS}");
-        let all = build_amm_withdraw_tx_json_for_simulate(&acct, "XRP", &usd, None, 5)
-            .expect("withdraw all");
-        assert_eq!(all["Flags"], 0x0002_0000);
-        assert!(all.get("LPTokenIn").is_none());
-        let lp_in = (LP, ISS, "12.5");
-        let some = build_amm_withdraw_tx_json_for_simulate(&acct, "XRP", &usd, Some(lp_in), 5)
-            .expect("withdraw lp");
-        assert_eq!(some["Flags"], 0x0001_0000);
-        assert_eq!(
-            some["LPTokenIn"],
-            json!({"currency": LP, "issuer": ISS, "value": "12.5"})
-        );
-        let blob =
-            create_and_sign_amm_withdraw(&wallet, &acct, "XRP", &usd, Some(lp_in), 5, 12, 100)
-                .expect("signed withdraw");
-        let d = decode(&blob).expect("decode");
-        assert_seq_fee_lls(&d);
-        assert_eq!(
-            (&d["TransactionType"], &d["Flags"]),
-            (&json!("AMMWithdraw"), &json!(0x0001_0000))
-        );
-    }
-
+    /// Payment input and IOU fields are validated; SendMax is set in the right units and an XRP-to-
+    /// XRP SendMax is refused.
+    ///
     /// TC-186: Payment SendMax — set for cross-currency, no Paths, XRP→XRP rejected.
+    ///
+    /// TC-187: send_max_xrp_drops — XRP spec → drops, IOU → 0, invalid → Err.
+    ///
+    /// TC-197: shared Payment input validation (composer preview/submit/quote + poll):
+    /// destination checksum, positive amount, IOU currency/issuer, SendMax spec.
+    ///
+    /// TC-098: IOU issuer checksum and finite positive value validation
+    /// TC-099: IOU currency code validation
     #[test]
-    fn payment_send_max_sets_field_and_rejects_xrp_to_xrp() {
+    fn payment_input_validation_and_send_max_contract() {
+        // payment send max sets field and rejects xrp to xrp
         const ISS: &str = "rJrRMgiRgrU6hDF4pgu5DXQdWyPbY35ErN";
         const DEST: &str = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh";
         let acct = "rG1QQv2nh2gr7RCZ1P8YYcBUKCCN633jCn";
@@ -2437,11 +2505,8 @@ mod tests {
         )
         .expect_err("xrp→xrp sendmax");
         assert!(err.to_string().contains("SendMax"), "{err}");
-    }
 
-    /// TC-187: send_max_xrp_drops — XRP spec → drops, IOU → 0, invalid → Err.
-    #[test]
-    fn send_max_xrp_drops_table() {
+        // send max xrp drops table
         assert_eq!(send_max_xrp_drops("XRP:5000000").unwrap(), 5_000_000);
         assert_eq!(
             send_max_xrp_drops("USD:rJrRMgiRgrU6hDF4pgu5DXQdWyPbY35ErN:1").unwrap(),
@@ -2452,30 +2517,74 @@ mod tests {
         // Trailing segments are rejected, not silently dropped (TC-211).
         assert!(send_max_xrp_drops("XRP:5000000:tail").is_err());
         assert!(validate_offer_specs("XRP:100:tail", "XRP:1").is_err());
-    }
 
-    /// The ed25519 family-seed wallet derives the known address; surrounding whitespace is trimmed.
-    #[test]
-    fn ed25519_family_seed_wallet() {
-        for seed in [
-            sample_family_seed(),
-            format!("{}  \n", sample_family_seed()),
-        ] {
-            let w = wallet_from_family_seed(&seed, 0).expect("ed25519 wallet");
-            assert_eq!(w.classic_address, "rU3Cw9Vezt3m3E7EonCnfGN1raFdudq4QQ");
+        // validate payment input table
+        {
+            const DEST: &str = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh";
+            const ISS: &str = "rJrRMgiRgrU6hDF4pgu5DXQdWyPbY35ErN";
+            let usd = Some(("usd", ISS));
+            // (destination, amount, iou, send_max, expected error substring; None = Ok)
+            type Case<'a> = (
+                &'a str,
+                &'a str,
+                Option<(&'a str, &'a str)>,
+                Option<&'a str>,
+                Option<&'a str>,
+            );
+            let cases: &[Case] = &[
+                ("", "1", None, None, Some("destination")),
+                ("rDest", "1", None, None, Some("address")),
+                (DEST, "", None, None, Some("amount")),
+                (DEST, "0", None, None, Some("amount")),
+                (DEST, "abc", None, None, Some("amount")),
+                (DEST, " 1.5 ", None, None, None),
+                (DEST, "10", usd, None, None),
+                (DEST, "10", Some(("RLUSD", ISS)), None, None), // symbol → 160-bit code (TC-370)
+                (DEST, "10", Some(("US D", ISS)), None, Some("currency")),
+                (DEST, "10", Some(("USD", "rIssuer")), None, Some("issuer")),
+                (DEST, "-1", usd, None, Some("IOU value")),
+                (DEST, "10", usd, Some("XRP:5000000"), None),
+                (DEST, "1", None, Some("XRP:5"), Some("SendMax")),
+                (DEST, "1", None, Some("USD:rBad:1"), Some("issuer")),
+                (DEST, "1", None, Some("   "), None),
+            ];
+            for (dest, amount, iou, send_max, expected) in cases {
+                let got = validate_payment_input(dest, amount, *iou, *send_max);
+                match expected {
+                    None => assert!(
+                        got.is_ok(),
+                        "{dest:?} {amount:?} {iou:?} {send_max:?}: {got:?}"
+                    ),
+                    Some(want) => {
+                        let err = got.expect_err(&format!("{dest:?} {amount:?} {send_max:?}"));
+                        assert!(err.to_string().contains(want), "want {want:?}, got {err}");
+                    }
+                }
+            }
         }
+
+        // validate iou fields rejects invalid
+        let issuer = "rJrRMgiRgrU6hDF4pgu5DXQdWyPbY35ErN";
+        let bad_rows: &[(&str, &str, &str)] = &[
+            ("USD", "rInvalid", "1"), // bad issuer
+            ("USD", issuer, "NaN"),   // non-finite value
+            ("USD", issuer, "0"),     // non-positive value
+            ("XRP", issuer, "1"),     // XRP is not an IOU currency
+            ("TOOLONG", issuer, "1"), // wrong currency shape
+        ];
+        for (currency, issuer, value) in bad_rows {
+            assert!(
+                validate_iou_fields(currency, issuer, value).is_err(),
+                "expected rejection for ({currency}, {issuer}, {value})"
+            );
+        }
+        assert!(validate_iou_fields("USD", issuer, "1").is_ok());
     }
 
+    /// SetRegularKey tx_json reflects the option; a malformed key is refused.
     #[test]
-    fn secp256k1_family_seed_known_address() {
-        let seed = "sn259rEFXrQrWyx3Q7XneWcwV6dfL";
-        let wallet = wallet_from_family_seed(seed, 0).expect("wallet");
-        // Known classic address for this fixture seed (not a Wallet::new mirror).
-        assert_eq!(wallet.classic_address, "rJrRMgiRgrU6hDF4pgu5DXQdWyPbY35ErN");
-    }
-
-    #[test]
-    fn build_set_regular_key_tx_json_for_simulate_reflects_option() {
+    fn build_set_regular_key_tx_json_contract() {
+        // tx json for simulate reflects option
         let account = "rU3Cw9Vezt3m3E7EonCnfGN1raFdudq4QQ";
         let regular_key = "rJrRMgiRgrU6hDF4pgu5DXQdWyPbY35ErN";
         let v = build_set_regular_key_tx_json_for_simulate(account, Some(regular_key), 11)
@@ -2490,57 +2599,8 @@ mod tests {
                 .expect("clear regular key");
         assert_eq!(v["TransactionType"], "SetRegularKey");
         assert!(v.get("RegularKey").is_none(), "clear omits RegularKey: {v}");
-    }
 
-    /// TC-197: shared Payment input validation (composer preview/submit/quote + poll):
-    /// destination checksum, positive amount, IOU currency/issuer, SendMax spec.
-    #[test]
-    fn validate_payment_input_table() {
-        const DEST: &str = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh";
-        const ISS: &str = "rJrRMgiRgrU6hDF4pgu5DXQdWyPbY35ErN";
-        let usd = Some(("usd", ISS));
-        // (destination, amount, iou, send_max, expected error substring; None = Ok)
-        type Case<'a> = (
-            &'a str,
-            &'a str,
-            Option<(&'a str, &'a str)>,
-            Option<&'a str>,
-            Option<&'a str>,
-        );
-        let cases: &[Case] = &[
-            ("", "1", None, None, Some("destination")),
-            ("rDest", "1", None, None, Some("address")),
-            (DEST, "", None, None, Some("amount")),
-            (DEST, "0", None, None, Some("amount")),
-            (DEST, "abc", None, None, Some("amount")),
-            (DEST, " 1.5 ", None, None, None),
-            (DEST, "10", usd, None, None),
-            (DEST, "10", Some(("RLUSD", ISS)), None, None), // symbol → 160-bit code (TC-370)
-            (DEST, "10", Some(("US D", ISS)), None, Some("currency")),
-            (DEST, "10", Some(("USD", "rIssuer")), None, Some("issuer")),
-            (DEST, "-1", usd, None, Some("IOU value")),
-            (DEST, "10", usd, Some("XRP:5000000"), None),
-            (DEST, "1", None, Some("XRP:5"), Some("SendMax")),
-            (DEST, "1", None, Some("USD:rBad:1"), Some("issuer")),
-            (DEST, "1", None, Some("   "), None),
-        ];
-        for (dest, amount, iou, send_max, expected) in cases {
-            let got = validate_payment_input(dest, amount, *iou, *send_max);
-            match expected {
-                None => assert!(
-                    got.is_ok(),
-                    "{dest:?} {amount:?} {iou:?} {send_max:?}: {got:?}"
-                ),
-                Some(want) => {
-                    let err = got.expect_err(&format!("{dest:?} {amount:?} {send_max:?}"));
-                    assert!(err.to_string().contains(want), "want {want:?}, got {err}");
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn build_set_regular_key_rejects_bad_regular_key_shape() {
+        // rejects bad regular key shape
         let err = build_set_regular_key_tx_json_for_simulate(
             "rSenderxxxxxxxxxxxxxxxxxxxxxxxXX",
             Some("not-an-address"),
@@ -2550,26 +2610,13 @@ mod tests {
         assert!(format!("{err}").contains("classic address"));
     }
 
+    /// TrustSet tx_json carries only the limit; an empty or malformed currency is refused.
+    ///
+    /// TC-370: TrustSet refuses an empty or malformed currency (`US D`, a raw `RLUSD` that
+    /// skipped `iou_currency_from_input`) before simulate.
     #[test]
-    fn build_offer_create_tx_json_for_simulate_xrp_iou() {
-        let issuer = "rJrRMgiRgrU6hDF4pgu5DXQdWyPbY35ErN";
-        let v = build_offer_create_tx_json_for_simulate(
-            "rSenderxxxxxxxxxxxxxxxxxxxxxxxXX",
-            "XRP:1000000",
-            &format!("USD:{issuer}:10"),
-            5,
-        )
-        .expect("offer create json");
-        assert_eq!(v["TransactionType"], "OfferCreate");
-        assert_eq!(v["Sequence"], 5);
-        assert_eq!(v["TakerGets"], "1000000");
-        assert_eq!(v["TakerPays"]["currency"], "USD");
-        assert_eq!(v["TakerPays"]["issuer"], issuer);
-        assert_eq!(v["TakerPays"]["value"], "10");
-    }
-
-    #[test]
-    fn build_trust_set_tx_json_for_simulate_limit_only() {
+    fn build_trust_set_tx_json_contract() {
+        // tx json for simulate limit only
         let issuer = "rJrRMgiRgrU6hDF4pgu5DXQdWyPbY35ErN";
         let v = build_trust_set_tx_json_for_simulate(
             "rSenderxxxxxxxxxxxxxxxxxxxxxxxXX",
@@ -2585,12 +2632,8 @@ mod tests {
         assert_eq!(v["LimitAmount"]["issuer"], issuer);
         assert_eq!(v["LimitAmount"]["value"], "1000");
         assert!(v.get("Flags").is_none() || v["Flags"] == 0);
-    }
 
-    /// TC-370: TrustSet refuses an empty or malformed currency (`US D`, a raw `RLUSD` that
-    /// skipped `iou_currency_from_input`) before simulate.
-    #[test]
-    fn build_trust_set_rejects_empty_or_malformed_currency() {
+        // rejects empty or malformed currency
         let issuer = "rJrRMgiRgrU6hDF4pgu5DXQdWyPbY35ErN";
         for bad in ["  ", "US D", "RLUSD"] {
             let err = build_trust_set_tx_json_for_simulate(
@@ -2618,27 +2661,6 @@ mod tests {
         ] {
             assert!(require_classic_address_shape("acct", bad).is_err(), "{bad}");
         }
-    }
-
-    /// TC-098: IOU issuer checksum and finite positive value validation
-    /// TC-099: IOU currency code validation
-    #[test]
-    fn validate_iou_fields_rejects_invalid() {
-        let issuer = "rJrRMgiRgrU6hDF4pgu5DXQdWyPbY35ErN";
-        let bad_rows: &[(&str, &str, &str)] = &[
-            ("USD", "rInvalid", "1"), // bad issuer
-            ("USD", issuer, "NaN"),   // non-finite value
-            ("USD", issuer, "0"),     // non-positive value
-            ("XRP", issuer, "1"),     // XRP is not an IOU currency
-            ("TOOLONG", issuer, "1"), // wrong currency shape
-        ];
-        for (currency, issuer, value) in bad_rows {
-            assert!(
-                validate_iou_fields(currency, issuer, value).is_err(),
-                "expected rejection for ({currency}, {issuer}, {value})"
-            );
-        }
-        assert!(validate_iou_fields("USD", issuer, "1").is_ok());
     }
 
     /// TC-369: CLI write specs take a currency symbol like the reads do — `RLUSD` in an

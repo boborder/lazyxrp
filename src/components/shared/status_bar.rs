@@ -390,28 +390,36 @@ fn freshness_label(secs: u64) -> String {
 mod tests {
     use super::*;
 
+    /// Freshness labels at their boundaries; no timestamp shows a dash.
+    ///
     /// TC-136: freshness_label bucket boundaries — 59s/1m/59m/1h.
+    ///
+    /// TC-136: cached_freshness_label keeps the `-` path when no update was seen.
     #[test]
-    fn freshness_label_boundaries() {
+    fn freshness_label_contract() {
+        // freshness label boundaries
         assert_eq!(freshness_label(0), "0s");
         assert_eq!(freshness_label(59), "59s");
         assert_eq!(freshness_label(60), "1m");
         assert_eq!(freshness_label(3599), "59m");
         assert_eq!(freshness_label(3600), "1h");
-    }
 
-    /// TC-136: cached_freshness_label keeps the `-` path when no update was seen.
-    #[test]
-    fn cached_freshness_label_none_uses_dash() {
+        // cached freshness label none uses dash
         let mut cache = None;
         assert_eq!(StatusBar::cached_freshness_label(&mut cache, None), "-");
         assert!(cache.is_none());
     }
 
+    /// Connection and Flare states go stale on schedule and recover.
+    ///
     /// TC-174: staleness-aware connection state — server_info error wins
     /// (Offline), an aged server update degrades (Stale), fresh stays Online.
+    ///
+    /// TC-174: flare dot — disabled renders nothing, failure arms Offline,
+    /// fresh success restores Online, aged success degrades to Stale.
     #[test]
-    fn connection_state_staleness_transitions() {
+    fn status_state_staleness_transitions() {
+        // connection state staleness transitions
         let mut bar = StatusBar::new(
             "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh".into(),
             Network::Testnet,
@@ -426,12 +434,8 @@ mod tests {
         assert_eq!(bar.connection_state(), ConnectionState::Stale);
         bar.last_server_update = Some(Instant::now());
         assert_eq!(bar.connection_state(), ConnectionState::Online);
-    }
 
-    /// TC-174: flare dot — disabled renders nothing, failure arms Offline,
-    /// fresh success restores Online, aged success degrades to Stale.
-    #[test]
-    fn flare_state_tracks_enabled_failure_and_staleness() {
+        // flare state tracks enabled failure and staleness
         let mut bar = StatusBar::new("acct".into(), Network::Testnet, true);
         assert_eq!(bar.flare_state(), Some(ConnectionState::Connecting));
         bar.last_flare_update = Some(Instant::now());

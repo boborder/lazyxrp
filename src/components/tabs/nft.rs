@@ -369,9 +369,12 @@ mod tests {
         Ok(tab)
     }
 
+    /// An image request is emitted only for an NFT with a URI that was newly selected.
+    ///
     /// TC-109, TC-110: URI present emits `NftImageRequest`; absent emits none.
     #[test]
-    fn account_nfts_emits_image_request_iff_uri() -> color_eyre::Result<()> {
+    fn nft_image_requests_follow_selection() -> color_eyre::Result<()> {
+        // account nfts emits image request iff uri
         let mut tab = focused_tab()?;
         let action = tab.update(&Action::XrplAccountNfts(vec![sample_nft(
             "NFT_A",
@@ -386,13 +389,47 @@ mod tests {
         );
         let action = tab.update(&Action::XrplAccountNfts(vec![sample_nft("NFT_B", "")]))?;
         assert_eq!(action, None);
+
+        // select next emits image request for newly selected nft
+        let mut tab = focused_tab()?;
+        tab.update(&Action::XrplAccountNfts(vec![
+            sample_nft("NFT_A", "ipfs://a"),
+            sample_nft("NFT_B", "ipfs://b"),
+        ]))?;
+        let action = tab.update(&Action::SelectNext)?;
+        assert_eq!(
+            action,
+            Some(Action::NftImageRequest {
+                nft_id: "NFT_B".into(),
+                uri: "ipfs://b".into(),
+            })
+        );
+
+        // duplicate selection emits no image request
+        let mut tab = focused_tab()?;
+        tab.update(&Action::XrplAccountNfts(vec![sample_nft(
+            "NFT_A", "ipfs://a",
+        )]))?;
+        let action = tab.update(&Action::XrplAccountNfts(vec![sample_nft(
+            "NFT_A", "ipfs://a",
+        )]))?;
+        assert_eq!(action, None);
         Ok(())
     }
 
+    /// The NFT table strips control / bidi characters, truncates multibyte remote fields and
+    /// handles an empty list.
+    ///
     /// TC-364: URI control / bidi chars stripped
     /// The issuer controls the URI: ESC / newline / bidi override never reach the screen.
+    ///
+    /// TC-364: width-aware URI column
+    /// TC-178: remote multibyte `nft_id`/`uri` truncate by chars at draw time (no panic, no
+    /// mid-codepoint cut); the URI column uses the available width, so a wide terminal shows
+    /// the whole URI and a narrow one ellipsizes it; an empty list renders the empty state.
     #[test]
-    fn draw_strips_control_and_bidi_chars_from_uri() -> color_eyre::Result<()> {
+    fn nft_table_draw_sanitizes_and_truncates() -> color_eyre::Result<()> {
+        // strips control and bidi chars from uri
         let mut tab = focused_tab()?;
         tab.update(&Action::XrplAccountNfts(vec![sample_nft(
             "NFT_A",
@@ -405,15 +442,8 @@ mod tests {
             !out.contains('\u{1b}') && !out.contains('\u{202e}'),
             "{out}"
         );
-        Ok(())
-    }
 
-    /// TC-364: width-aware URI column
-    /// TC-178: remote multibyte `nft_id`/`uri` truncate by chars at draw time (no panic, no
-    /// mid-codepoint cut); the URI column uses the available width, so a wide terminal shows
-    /// the whole URI and a narrow one ellipsizes it; an empty list renders the empty state.
-    #[test]
-    fn draw_truncates_multibyte_remote_fields_and_handles_empty_list() -> color_eyre::Result<()> {
+        // truncates multibyte remote fields and handles empty list
         let mut tab = focused_tab()?;
         tab.update(&Action::XrplAccountNfts(vec![sample_nft(
             &"é".repeat(30),
@@ -431,37 +461,6 @@ mod tests {
         let out =
             crate::test_support::render_to_string(220, 20, |f| tab.draw(f, f.area()).unwrap());
         assert!(out.contains("(no NFTs)"), "{out}");
-        Ok(())
-    }
-
-    #[test]
-    fn select_next_emits_image_request_for_newly_selected_nft() -> color_eyre::Result<()> {
-        let mut tab = focused_tab()?;
-        tab.update(&Action::XrplAccountNfts(vec![
-            sample_nft("NFT_A", "ipfs://a"),
-            sample_nft("NFT_B", "ipfs://b"),
-        ]))?;
-        let action = tab.update(&Action::SelectNext)?;
-        assert_eq!(
-            action,
-            Some(Action::NftImageRequest {
-                nft_id: "NFT_B".into(),
-                uri: "ipfs://b".into(),
-            })
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn duplicate_selection_emits_no_image_request() -> color_eyre::Result<()> {
-        let mut tab = focused_tab()?;
-        tab.update(&Action::XrplAccountNfts(vec![sample_nft(
-            "NFT_A", "ipfs://a",
-        )]))?;
-        let action = tab.update(&Action::XrplAccountNfts(vec![sample_nft(
-            "NFT_A", "ipfs://a",
-        )]))?;
-        assert_eq!(action, None);
         Ok(())
     }
 

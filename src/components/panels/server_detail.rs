@@ -415,62 +415,70 @@ mod tests {
         assert_eq!(expired.spans[0].style, theme::warning_style());
     }
 
-    /// TC-169: identity + dUNL + fetching
+    /// TC-169: the validator detail renders identity / dUNL / fetching, verified TOML with rotated
+    /// master and raw dump, and the missing-manifest and TOML-error states.
     #[test]
-    fn validator_detail_renders_identity_dunl_and_fetching_state() {
-        let row = row(Some("xrplf.org"), None);
-        let mut state = ValidatorDetail {
-            visible: true,
-            lines: validator_detail_lines(&row, 0, &dunl(), &None, None, 200, Some("text/plain")),
-            ..Default::default()
-        };
+    fn validator_detail_renders_every_state() {
+        // identity dunl and fetching state
+        {
+            let row = row(Some("xrplf.org"), None);
+            let mut state = ValidatorDetail {
+                visible: true,
+                lines: validator_detail_lines(
+                    &row,
+                    0,
+                    &dunl(),
+                    &None,
+                    None,
+                    200,
+                    Some("text/plain"),
+                ),
+                ..Default::default()
+            };
 
-        let out = detail_rendered(&mut state);
-        assert!(out.contains("Validator #1"));
-        assert!(out.contains("xrplf.org"));
-        assert!(out.contains("EDFB01CA58D69A2B"));
-        assert!(out.contains("seq 123"));
-        assert!(out.contains("2 validators"));
-        assert!(out.contains("200"));
-        assert!(out.contains("text/plain"));
-        assert!(!out.contains("Raw TOML"));
-    }
+            let out = detail_rendered(&mut state);
+            assert!(out.contains("Validator #1"));
+            assert!(out.contains("xrplf.org"));
+            assert!(out.contains("EDFB01CA58D69A2B"));
+            assert!(out.contains("seq 123"));
+            assert!(out.contains("2 validators"));
+            assert!(out.contains("200"));
+            assert!(out.contains("text/plain"));
+            assert!(!out.contains("Raw TOML"));
+        }
 
-    /// TC-169: verified TOML, rotated master, raw dump
-    #[test]
-    fn validator_detail_renders_verified_toml_rotated_master_and_raw_dump() {
-        let row = row(Some("xrplf.org"), Some("EDFFFF0099AABBCC"));
-        let toml: Option<Result<XrplTomlData, String>> = Some(Ok(XrplTomlData {
-            domain: "xrplf.org".into(),
-            validator_found: true,
-            attestation: Some("sig 0xAB".into()),
-            validator_count: 3,
-        }));
-        let mut state = ValidatorDetail {
-            visible: true,
-            lines: validator_detail_lines(
-                &row,
-                1,
-                &dunl(),
-                &toml,
-                Some("[SERVER]\nnode = \"wss://a.b\""),
-                200,
-                None,
-            ),
-            ..Default::default()
-        };
+        // verified toml rotated master and raw dump
+        {
+            let row = row(Some("xrplf.org"), Some("EDFFFF0099AABBCC"));
+            let toml: Option<Result<XrplTomlData, String>> = Some(Ok(XrplTomlData {
+                domain: "xrplf.org".into(),
+                validator_found: true,
+                attestation: Some("sig 0xAB".into()),
+                validator_count: 3,
+            }));
+            let mut state = ValidatorDetail {
+                visible: true,
+                lines: validator_detail_lines(
+                    &row,
+                    1,
+                    &dunl(),
+                    &toml,
+                    Some("[SERVER]\nnode = \"wss://a.b\""),
+                    200,
+                    None,
+                ),
+                ..Default::default()
+            };
 
-        let out = detail_rendered(&mut state);
-        assert!(out.contains("Validator #2"));
-        assert!(out.contains("EDFFFF0099AABBCC"));
-        assert!(out.contains("Domain verified:Yes"));
-        assert!(out.contains("sig 0xAB"));
-        assert!(out.contains("node = \"wss://a.b\""));
-    }
+            let out = detail_rendered(&mut state);
+            assert!(out.contains("Validator #2"));
+            assert!(out.contains("EDFFFF0099AABBCC"));
+            assert!(out.contains("Domain verified:Yes"));
+            assert!(out.contains("sig 0xAB"));
+            assert!(out.contains("node = \"wss://a.b\""));
+        }
 
-    /// TC-169: missing manifest + TOML error
-    #[test]
-    fn validator_detail_renders_missing_manifest_and_toml_error_state() {
+        // missing manifest and toml error state
         let row = DunlValidatorRow {
             has_manifest: false,
             ..row(None, None)

@@ -69,21 +69,18 @@ fn extract_modifiers(raw: &str) -> (&str, KeyModifiers) {
     let mut current = raw;
 
     loop {
-        match current {
-            rest if rest.starts_with("ctrl-") => {
-                modifiers.insert(KeyModifiers::CONTROL);
-                current = &rest[5..];
-            }
-            rest if rest.starts_with("alt-") => {
-                modifiers.insert(KeyModifiers::ALT);
-                current = &rest[4..];
-            }
-            rest if rest.starts_with("shift-") => {
-                modifiers.insert(KeyModifiers::SHIFT);
-                current = &rest[6..];
-            }
-            _ => break,
-        };
+        if let Some(rest) = current.strip_prefix("ctrl-") {
+            modifiers.insert(KeyModifiers::CONTROL);
+            current = rest;
+        } else if let Some(rest) = current.strip_prefix("alt-") {
+            modifiers.insert(KeyModifiers::ALT);
+            current = rest;
+        } else if let Some(rest) = current.strip_prefix("shift-") {
+            modifiers.insert(KeyModifiers::SHIFT);
+            current = rest;
+        } else {
+            break;
+        }
     }
 
     (current, modifiers)

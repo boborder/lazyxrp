@@ -4,7 +4,7 @@
 
 **役割:** テスト設計・テストガイド（重要 TC カタログと FR / architecture へのトレース）。
 
-> 最終更新: 2026-10-21（同一コントラクトのテストはテーブル駆動。lib スイートの件数はここでは管理しない — 現在の件数は `cargo test` で確認する）
+> 最終更新: 2026-10-30（1 コントラクト 1 テスト: 同じ関数のケースは 1 つの `#[test]` のセクションにまとめる。lib スイートの件数はここでは管理しない — 現在の件数は `cargo test` で確認する）
 > 対象: lazyxrp（XRPL 向け Rust TUI）
 > カタログ: 重要ケース一覧（すべての `#[test]` との 1:1 索引ではない）
 
@@ -13,6 +13,7 @@
 - 本ファイルは**重要ケース一覧**である。TC を追加するのは、モジュール横断の契約、回帰しやすいロジック、ユーザーに見える挙動のみ。注釈のないヘルパー／単体テストは意図的にカタログ対象外とする。
 - コミットメッセージで `TC-xxx` ID を参照する（例: `test(xrpl): add NFT parse case (TC-013)`）。
 - インライン `#[cfg(test)]` モジュールを優先する。ライブネットワークのケースは `#[ignore]` とし、明示的に実行する。
+- **1 コントラクト 1 テスト。** 同じ関数・同じコントラクトのケースは 1 つの `#[test]` のセクションにまとめ、各セクションに短いコメントを付け、TC タグは doc コメントに残す（失敗時はアサーションの行が分かる）。RAII ガード（`env_lock()`、`TestEnvGuard`、`TempRootGuard`）を持つセクション、または他のセクションがヘルパーとして読む名前を定義するセクションは、独自の `{ }` ブロックに入れる。`let _env = env_lock();` は最初のガードを drop せずにシャドーイングするだけなので、同じテスト内の 2 回目のロックはデッドロックし、最初のガードの環境が次のセクションに漏れる。ライブネットワークのケースは別テストのまま（`#[ignore]`、失敗が独立）。
 - テストは lib（`src/lib.rs`）、`tests/cli_smoke.rs`（バイナリ境界）、`tests/testnet_e2e.rs`（オプトイン、ライブの testnet/devnet: send / offer / NFT mint → burn。`mise run e2e-testnet`、CI では実行しない）に置く。`Cargo.toml` の `[lib] doctest = false` と両 `[[bin]]` ターゲットの `test = false` は、空のテストターゲットをスキップして `cargo test` の再ビルドを速く保つ。単体テストは `main.rs` / `bin/rp.rs` ではなく lib モジュールに置くこと。置く場合は先に `test = false` を外す。
 - **トレーサビリティ:** ユーザーに見える TC は `docs/requirements.md` の FR/NFR、または `docs/architecture.md` の § に対応づける。キー／レイアウトの TC は `DESIGN.md` にトレースする。ネットワーク／Flare の行は [トレーサビリティ](#トレーサビリティ) を参照。
 - **バイリンガル文書:** 本ファイルは英語版 `test.md` の日本語版。ルールは [`AGENTS.md`](../AGENTS.md)（TC の ID 集合を一致させる）。
@@ -26,7 +27,7 @@ cargo test <name>         # one case
 cargo test --locked --all-features --workspace
 cargo fmt --all --check
 cargo clippy --locked --all-targets --all-features --workspace -- -D warnings
-cargo doc --locked --no-deps --document-private-items --all-features --workspace --examples
+cargo doc --locked --no-deps --document-private-items --all-features --workspace
 cargo audit
 cargo deny check
 ```
@@ -169,30 +170,31 @@ cargo deny check
 | TC-343 | P0 | `src/flare.rs` / `src/lib.rs` | `check_network_pair`（`flare.rs` 内。TUI の C2 / Smart Account / C3 にも適用、TC-348 参照）（XRPL Mainnet ↔ Flare、Testnet ↔ Coston2。Songbird / Devnet / Xahau / 交差ペアは拒否）と `check_xrpl_tx_hash`（64 桁の hex、`0x` は任意。短い / 長い / 非 hex は拒否）。execute / key / `--yes` ゲートより前に実行される |
 | TC-344 | P0 | `src/flare_cmd.rs` | upstream の `MemoInstructions.sol` に基づく memo 復元レイアウト: `0xE0` / `0xE1` 42 B、`0xE2` 50 B、`0xD0` 30 B、`0xD1` 10 B（`[op \| walletId 0 \| fee u64 BE \| body]`）。`0xE1` は `newNonce <= current` と `u32::MAX` を超えるジャンプを拒否（境界をテスト）、`--target` の欠落 / 不足、executor ゼロも拒否。op ごとの target 状態（`0xE0` / `0xE2` は `isTransactionIdUsed` が false の間のみ、`0xE1` は true になってからのみ。`check_target_state`） |
 | TC-345 | P0 | `src/flare_cmd.rs` | `0xFE` ユーザー操作: `abi.encode(PackedUserOperation)` が同じ sender / nonce / `executeUserOp(Call[])` にデコードされ、memo は `[0xFE \| 0 \| fee u64 BE \| keccak256(userOp)]`（42 B）。call なし / 不正な target / 不正な hex は拒否。Coston2 live: `sa-call` → 支払いを検証 → `fxrp-execute --data <userOp>` → personal account の `FXRP.transfer` が実行された（recipient 5 → 6 FXRP、`getNonce` 3 → 4） |
-| TC-346 | P0 | `src/flare.rs` | 書き込みのチェーンゲート: Flare ネットワークごとの `expected_chain_id`。`check_write_chain` は**報告された** `eth_chainId` から mainnet の `--yes` 要否を判定（不一致は拒否）。`tx_fee_cap` — `send_capped` は gas × max fee が `MAX_TX_FEE_WEI`（10 FLR）を超えると拒否。誤ったチェーンでの `fxrp-execute` は他のどのステップより前に拒否される |
-| TC-347 | P0 | `src/signing.rs` | `eth_address_checksum_enforced_for_mixed_case`: 全小文字はチェックサム検証を省略、大文字を含む場合は EIP-55 に一致必須（全大文字・誤った大小混在は拒否） |
-| TC-348 | P0 | `src/xrpl/submit.rs` | `xrpl_writes_refuse_unpaired_flare_network`、`fxrp_execute_direct_mint_refuses_unpaired_networks`、`fxrp_execute_direct_mint_flare_mainnet_without_yes_is_rejected`: XRPL の書き込み（C2 / Smart Account / C3）は XRPL ↔ Flare の交差ペアと、`--yes` なしの Flare mainnet を拒否 |
+| TC-346 | P0 | `src/flare.rs` | 書き込みのチェーンゲート: Flare ネットワークごとの `expected_chain_id`。`check_write_chain` は**報告された** `eth_chainId` から mainnet の `--yes` 要否を判定（不一致は拒否）。`write_gate_chain_id_and_fee_cap`（手数料上限の側）— `send_capped` は gas × max fee が `MAX_TX_FEE_WEI`（10 FLR）を超えると拒否。誤ったチェーンでの `fxrp-execute` は他のどのステップより前に拒否される |
+| TC-347 | P0 | `src/signing.rs` | `direct_mint_memo_and_eth_address_contract`（チェックサムの部分）: 全小文字はチェックサム検証を省略、大文字を含む場合は EIP-55 に一致必須（全大文字・誤った大小混在は拒否） |
+| TC-348 | P0 | `src/xrpl/submit.rs` | `fxrp_execute_direct_mint_gates`: XRPL の書き込み（C2 / Smart Account / C3）は XRPL ↔ Flare の交差ペアと、`--yes` なしの Flare mainnet を拒否 |
 | TC-349 | P0 | `src/lib.rs` | `direct_mint_payment_refused_when_paused_or_over_cap`: mint が pause 中、または金額が cap の余裕を超える場合、C2 Payment を拒否 |
 | TC-350 | P0 | `src/xrpl/poll.rs` | `stale_write_refusal_on_network_switch`: ネットワーク A で組み立てた書き込みは、アクティブネットワークが変わった後は（送信せず）拒否される（すべての書き込みパラメータに組み立て時の `network` を含む） |
 | TC-351 | P0 | `src/xrpl/client.rs` | `submit_signed_tx` は単一試行: submit の応答を失った場合は `tx(hash)` の照会で解決（適用成功 / 適用失敗 / 未検出 = 明示的な "unknown"）し、blob は決して再送しない（S-014） |
 | TC-352 | P1 | `src/xrpl/client.rs` | `network_id_is_set_only_above_1024`: 保存された `network_id` が 1024 超の場合のみ、`NetworkID` を tx に注入（simulate と署名）。`NetworkID` 付き `simulate` を Xahau の live が受理するかは**未検証**（problems.md P-007 参照） |
-| TC-353 | P1 | `src/xrpl/parse.rs` | `parse_submit_success_treats_terqueued_as_queued`: `terQUEUED` はキュー投入成功として扱う |
+| TC-353 | P1 | `src/xrpl/parse.rs` | `parse_submit_success_contract`（terQUEUED の部分）: `terQUEUED` はキュー投入成功として扱う |
 | TC-354 | P1 | `src/xrpl/ws.rs` | `ws_silent_socket_times_out_and_reconnects`: 30 s の読み取りタイムアウト（`cfg(test)` では短縮）で無応答ソケットを切断して再接続 |
 | TC-355 | P1 | `src/xrpl/toml.rs` | ドメイン検証は base58 の `nH…` ノードキーと hex を受理し、デコード後のバイト列を比較 |
 | TC-356 | P1 | `src/xrpl/dunl.rs` | dUNL VL のデコード: `field_header_matches_spec_vectors`（1 / 2 バイトのフィールド id）と `vl_length_matches_spec_boundaries`（1 / 2 / 3 バイト長） |
 | TC-357 | P1 | `src/xrpl/txspec/mod.rs` | `parse_drops_is_strict`: 数字のみ、符号 / 空白 / 小数は不可、オーバーフローは拒否 |
-| TC-358 | P1 | `src/xrpl/nft_image.rs` | `client_for_url_handles_ipv6_literals`: IPv6 リテラルの NFT URI が正しく解決 / ピン留めされる |
-| TC-359 | P0 | `src/config/mod.rs` | `keybinding_rejects_payload_and_submit_actions`（`is_bindable` による許可リストのアクションのみ。ロード時に拒否）、`tilde_paths_expand_to_home`（`config_dir` / `data_dir` / `LAZYXRP_*` 内の `~`）、`credential_precedence_matrix`（CLI > env > file。下位ソースのもう一方の種別は破棄。同一レベルで両方 = エラー） |
+| TC-358 | P1 | `src/xrpl/nft_image.rs` | `client_for_url_refuses_loopback_names_and_literals`（IPv6 リテラルの部分）: IPv6 リテラルの NFT URI が正しく解決 / ピン留めされる |
+| TC-359 | P0 | `src/config/mod.rs` | `keybinding_rejects_payload_and_submit_actions`（`is_bindable` による許可リストのアクションのみ。ロード時に拒否）、`config_path_expansion_and_rejection`（`config_dir` / `data_dir` / `LAZYXRP_*` 内の `~`）、`credential_precedence_matrix`（CLI > env > file。下位ソースのもう一方の種別は破棄。同一レベルで両方 = エラー） |
 | TC-360 | P0 | `src/app.rs` | アクティブタブのみへのルーティング: `overview_t_key_does_not_open_hidden_composer`、`account_tab_filter_key_reaches_tx_history`、`composer_open_without_credential_stays_on_tab`。`startup_ends_when_server_info_errors`（`server_info` エラーでスプラッシュが終了） |
-| TC-361 | P0 | `src/components/panels/wallet.rs` | フォームの安全性: `trust_set_default_form_cannot_submit`（TrustSet は空で開始）、`account_set_no_freeze_requires_confirm`（`NOFREEZE` の入力が必要）、`submit_guard_survives_local_errors_and_stale_results`、`stale_or_foreign_network_snapshots_refuse_to_submit`（300 s 超または別ネットワークのスナップショットは拒否）、`paste_inserts_only_while_editing_without_hotkeys`（bracketed paste は編集中のみ） |
-| TC-362 | P2 | `src/components/panels/wallet.rs` / `wallet_keygen.rs` / `tabs/account_wallet.rs` | `keygen_works_unfunded_and_composer_is_gated`、`composer_popup_narrow_terminal_does_not_panic`、`keygen_popup_narrow_terminal_does_not_panic`、`keys_reach_focused_tx_history_pane` |
-| TC-365 | P1 | `src/components/panels/tx_history.rs` | `paste_goes_to_filter_only_while_editing`: bracketed paste は Tx History のフィルタを編集している間のみフィルタに追記され（制御文字は除去）、それ以外は無視される |
-| TC-363 | P0 | `src/flare.rs` | `direct_mint_terms_drift_is_refused`、`smart_account_terms_drift_is_refused`: 組み立てから署名までの間に手数料の引き上げ、Core Vault の変更、pause、operator の変更、命令手数料の変更があれば拒否 |
+| TC-361 | P0 | `src/components/panels/wallet.rs` | フォームの安全性: `trust_set_composer_queue_and_validation`（TrustSet は空で開始）、`dangerous_account_changes_need_typed_confirmation`（`NOFREEZE` の入力が必要）、`submit_guards`（ローカルエラーや古い結果でもガードは維持。300 s 超または別ネットワークのスナップショットは拒否）、`paste_inserts_only_while_editing_without_hotkeys`（bracketed paste は編集中のみ） |
+| TC-362 | P2 | `src/components/panels/wallet.rs` / `wallet_keygen.rs` / `tabs/account_wallet.rs` | `keygen_flow`、`composer_popup_narrow_terminal_does_not_panic`、`keygen_popup_narrow_terminal_does_not_panic`、`keys_reach_focused_tx_history_pane` |
+| TC-365 | P1 | `src/components/panels/tx_history.rs` | `history_filter`（paste の部分）: bracketed paste は Tx History のフィルタを編集している間のみフィルタに追記され（制御文字は除去）、それ以外は無視される |
+| TC-363 | P0 | `src/flare.rs` | `terms_drift_is_refused`（Direct Mint と Smart Account）: 組み立てから署名までの間に手数料の引き上げ、Core Vault の変更、pause、operator の変更、命令手数料の変更があれば拒否 |
 | TC-366 | P1 | `src/flare_cmd.rs`, `src/cli.rs` | `wait_finalized_polls_until_true_then_gives_up`: finalize 待ちはチェックが true になり次第返り、上限を過ぎると（エラーではなく）`false` を返し、読み取り失敗はエラーとして表面化する（`await_public_executor` はこれを stderr のヒントと exit 0 に変換）。`spec_subcommands_parse`: `sa-status` は読み取り専用（`--watch` 下でも拒否されない）、`sa-memo` は署名する。Live スモーク（読み取り専用、2026-10-24）: mainnet の `lazyxrp --watch -x sa-status <tx>` → `DirectMintingExecutedToSmartAccount` から得た最近の Smart Account mint id は `finalized`、未使用のハッシュは `not finalized`。Coston2 の `sa-status FB8556…`（docs/test.md "FXRP C2 + C3" の通常 C2 mint で、公開 executor が finalize 済み）→ `not finalized`、つまりこのビューは通常の C2 mint を対象としない |
-| TC-368 | P1 | `src/xrpl/parse.rs` | `book_currency_encodes_long_symbols`: CLI の `book` / AMM の asset は `RLUSD` を 160-bit コードで送る（config の `quote_code` と同じ規則）。3 文字と 40 hex のコードはそのまま。エンコードするのは 4–20 文字の ASCII 英数字のみ（`USD `・`US D`・`RL-USD`・非 ASCII はそのまま渡し、紛らわしいコードにはしない） |
+| TC-368 | P1 | `src/xrpl/parse.rs` | `book_currency_encoding`（長いシンボルの部分）: CLI の `book` / AMM の asset は `RLUSD` を 160-bit コードで送る（config の `quote_code` と同じ規則）。3 文字と 40 hex のコードはそのまま。エンコードするのは 4–20 文字の ASCII 英数字のみ（`USD `・`US D`・`RL-USD`・非 ASCII はそのまま渡し、紛らわしいコードにはしない） |
 | TC-369 | P1 | `src/signing.rs`, `src/xrpl/txspec/xchain.rs` | `write_specs_encode_currency_symbols`: CLI の書き込み spec（`offer-create` / `amm-deposit` の amount、`amm-withdraw` の asset、`parse_offer_amount` を通る `tx` の amount / bridge issue フィールド）は読み取り（TC-368）と同様に `RLUSD` を検証前に 160-bit コードへ変換。20 バイト超のシンボルと、タイプミス・英数字以外の入力（`USD `・`US D`・非 ASCII）は拒否し、紛らわしいトークンとして署名しない（`bridge_grammar_table`） |
-| TC-370 | P1 | `src/xrpl/util.rs`, `src/signing.rs` | `iou_currency_from_input` / `validate_payment_input_table`: TUI の Payment / TrustSet の通貨欄はシンボルを受け付ける — 3 文字と 40 hex は従来どおり大文字化、`RLUSD` は大文字小文字を保ったまま 160-bit コードで送る（`Rlusd` は別トークン）、`US D` は拒否。Live（testnet、2026-10-28）: composer `5` TrustSet `RLUSD` / `rMxCK…` / 100 → `owner 1`、`-x lines` の currency は `524C5553…` |
-| TC-367 | P0 | `src/components/panels/wallet.rs` | `fxrp_mint_composer_prefills_own_personal_account_only`: FXRP Mint コンポーザは署名者自身の personal account をプリフィルし、"your Smart Account personal account" の注記付きで全桁を表示する。別の XRPL アカウントの読み取り、または 300 s より古い読み取りの場合は recipient を空のままにする（R-019 / S-019） |
+| TC-370 | P1 | `src/xrpl/util.rs`, `src/signing.rs` | `iou_currency_from_input` / `payment_input_validation_and_send_max_contract`: TUI の Payment / TrustSet の通貨欄はシンボルを受け付ける — 3 文字と 40 hex は従来どおり大文字化、`RLUSD` は大文字小文字を保ったまま 160-bit コードで送る（`Rlusd` は別トークン）、`US D` は拒否。Live（testnet、2026-10-28）: composer `5` TrustSet `RLUSD` / `rMxCK…` / 100 → `owner 1`、`-x lines` の currency は `524C5553…` |
+| TC-371 | P1 | `src/components/panels/wallet.rs` | コンポーザのピッカーは 1 つのテーブル（`ComposerKind`）: `composer_picker_shortcut_enter_esc_and_list_agree_for_every_entry` — 15 項目それぞれで、ショートカットキーと該当行での Enter が同じフォームを開き、Esc は同じ行に戻り、選択行は `⟩ [key] title` で描画される; `composer_kind_all_follows_declaration_order_with_unique_keys` — `ALL` が宣言順と一致し、ショートカットとタイトルが重複しない |
+| TC-367 | P0 | `src/components/panels/wallet.rs` | `fxrp_mint_composer_contract`（プリフィルの部分）: FXRP Mint コンポーザは署名者自身の personal account をプリフィルし、"your Smart Account personal account" の注記付きで全桁を表示する。別の XRPL アカウントの読み取り、または 300 s より古い読み取りの場合は recipient を空のままにする（R-019 / S-019） |
 | TC-300 | P0 | `src/xrpl/txspec/identity.rs` | Identity ファミリーのフィールド検証テーブル: CredentialType 64/65 バイト、URI 128/129、DID フィールド 256/257、少なくとも 1 つ必要なルール、Oracle の id / provider / asset class / series 10/11、domain id（長さ、hex、ゼロハッシュ）、AcceptedCredentials 10/11 |
 | TC-301 | P0 | `src/xrpl/txspec/mpt.rs` | MPT ファミリーのフィールド検証テーブル: TransferFee 50000/50001、AssetScale 255/256、MaximumAmount 0 / 1 / i64::MAX / +1、metadata 1024/1025、id 47/48/49、transfer-fee / domain / lock-unlock の組み合わせ |
 | TC-302 | P0 | `src/xrpl/txspec/identity.rs` | identity 型ごとの未署名 `tx_json`: テキストフィールドは hex エンコード、`PriceDataSeries` → `PriceData` エントリ（10 進価格 → hex、scale）、`AcceptedCredentials` → `Credential` エントリ、id は大文字化、Fee / LastLedgerSequence なし |
@@ -275,7 +277,7 @@ cargo deny check
 | TC-176 | P1 | `src/signing.rs` | ノードが選んだ Fee が `MAX_NODE_FEE_DROPS` 超なら署名前に拒否（上限値ちょうどは受理） |
 | TC-177 | P1 | `src/xrpl/toml.rs`, `src/xrpl/nft_image.rs` | toml ドメインは単純なホスト名のみ受理。プライベート/予約済みリテラル（`100.64/10`、`198.18/15`、`240/4` を含む）はリクエストなしで拒否 |
 | TC-178 | P1 | `src/components/shared/fmt.rs`, `src/xrpl/format.rs`, `src/flare.rs` | リモート由来のマルチバイト文字列 / NaN 金額 / 過大な uint256 で表示ヘルパーやソートが panic しない |
-| TC-364 | P1 | `src/xrpl/nft_image.rs`, `src/components/tabs/nft.rs` | `ipfs_spellings_normalize_to_one_gateway_path`（`ipfs://`、`IPFS://`、`ipfs://ipfs/`、`/ipfs/`、素の CIDv0/v1 → 1 つのゲートウェイパス）、`data_uri_decodes_base64_only`、`display_uri_converts_ipfs_to_public_gateway`（`https://ipfs.io/ipfs/…` として表示、他の URI は変更なし）。NFT タブの URI 列は幅対応（広い端末は URI 全体を表示、狭い端末は `…` で終わる、TC-178 のマルチバイトケース）および `draw_strips_control_and_bidi_chars_from_uri` |
+| TC-364 | P1 | `src/xrpl/nft_image.rs`, `src/components/tabs/nft.rs` | `nft_uri_resolution_and_display`（`ipfs://`、`IPFS://`、`ipfs://ipfs/`、`/ipfs/`、素の CIDv0/v1 → 1 つのゲートウェイパス。`data:` URI は base64 のみデコード。IPFS URI は `https://ipfs.io/ipfs/…` として表示、他の URI は変更なし）。NFT タブの URI 列は幅対応（広い端末は URI 全体を表示、狭い端末は `…` で終わる、TC-178 のマルチバイトケース）および `nft_table_draw_sanitizes_and_truncates`（URI から制御文字 / bidi 文字を除去） |
 | TC-179 | P1 | `src/xrpl/client.rs` | 16 MiB 超のチャンク本文はストリーミング中に拒否 |
 | TC-180 | P2 | `src/xrpl/parse.rs` | submit エラーテキストと tx ハッシュから制御文字を除去 |
 | TC-181 | P2 | `src/config/mod.rs` | グループ/ワールド読み取り可能な認証情報 config は（stderr に）警告を出す。0600 は出さない |

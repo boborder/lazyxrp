@@ -362,11 +362,19 @@ fn find_image_uri(value: &Value) -> Option<String> {
 mod tests {
     use super::*;
 
+    /// NFT URIs: every IPFS spelling maps to one gateway path, ar:// resolves, data: URIs decode
+    /// base64 only.
+    ///
     /// TC-364: IPFS spellings normalize
     /// Real-world IPFS spellings (including the doubled `ipfs://ipfs/`) all reach the same
     /// gateway path.
+    ///
+    /// TC-364: display URI via public gateway
+    ///
+    /// TC-364: data URI base64 only
     #[test]
-    fn ipfs_spellings_normalize_to_one_gateway_path() {
+    fn nft_uri_resolution_and_display() {
+        // ipfs spellings normalize to one gateway path
         let cid = "QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG";
         let v1 = "bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi";
         for uri in [
@@ -387,11 +395,8 @@ mod tests {
         assert_eq!(ipfs_path("https://example.com/Qm"), None);
         assert_eq!(ipfs_path("QmShort"), None);
         assert_eq!(ipfs_path("ipfs://日本語"), Some("日本語"));
-    }
 
-    /// TC-364: display URI via public gateway
-    #[test]
-    fn display_uri_converts_ipfs_to_public_gateway() {
+        // display uri converts ipfs to public gateway
         assert_eq!(
             display_uri("ipfs://QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG/1.json"),
             "https://ipfs.io/ipfs/QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG/1.json"
@@ -400,11 +405,8 @@ mod tests {
             display_uri("https://example.com/a.png"),
             "https://example.com/a.png"
         );
-    }
 
-    /// TC-364: data URI base64 only
-    #[test]
-    fn data_uri_decodes_base64_only() {
+        // data uri decodes base64 only
         let (bytes, mime) = decode_data_uri("data:image/png;base64,aGk=").unwrap();
         assert_eq!(
             (bytes.as_slice(), mime.as_deref()),
@@ -413,10 +415,8 @@ mod tests {
         assert!(decode_data_uri("data:image/svg+xml,<svg/>").is_err());
         assert!(decode_data_uri("data:image/png;base64,!!").is_err());
         assert!(decode_data_uri("data:nocomma").is_err());
-    }
 
-    #[test]
-    fn resolves_ipfs_and_ar_uris() {
+        // resolves ipfs and ar uris
         assert_eq!(
             resolve_uri("ipfs://QmExample/image.png").unwrap().as_str(),
             "https://ipfs.io/ipfs/QmExample/image.png"
@@ -603,11 +603,18 @@ mod tests {
         response
     }
 
+    /// Redirects are followed up to the limit; a redirect to loopback is refused by the real client
+    /// factory.
+    ///
     /// TC-146: a redirect chain is followed hop by hop, each hop gets a fresh
     /// client (per-hop `client_for_url` re-verification), and a chain longer
     /// than the limit fails with the redirect-limit error.
+    ///
+    /// TC-146: the SSRF guard runs on a redirect hop through the real `client_for_url`:
+    /// a public-looking first hop that 302s to 127.0.0.1 is refused before any request.
     #[tokio::test]
-    async fn fetch_resource_follows_redirects_until_limit() {
+    async fn fetch_resource_redirect_policy() {
+        // fetch resource follows redirects until limit
         // Boundary first: 5 redirects then success is still accepted.
         {
             let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
@@ -671,12 +678,49 @@ mod tests {
             );
             server.abort();
         }
+
+        // redirect to loopback is refused by real client factory
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(serve_scripted_responses(listener, |_| {
+            plain_response(
+                "HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:9/secret\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".into(),
+                b"",
+            )
+        }));
+        let calls = std::sync::atomic::AtomicUsize::new(0);
+        let url = Url::parse(&format!("http://{address}/start.png")).unwrap();
+        // Hop 0 uses a permissive client (the mock server is on loopback); every later hop
+        // goes through the production guard.
+        let err = fetch_via(url, MAX_RESPONSE_BYTES, |url| {
+            let first = calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0;
+            Box::pin(async move {
+                if first {
+                    Ok(reqwest::Client::builder()
+                        .redirect(reqwest::redirect::Policy::none())
+                        .build()?)
+                } else {
+                    client_for_url(url).await
+                }
+            })
+        })
+        .await
+        .expect_err("redirect to loopback must be refused");
+        assert!(err.to_string().contains("private host"), "{err}");
+        server.abort();
     }
 
+    /// Responses over 4 MiB are refused; a body of exactly the cap is accepted.
+    ///
     /// TC-147: responses declaring more than 4 MiB (via Content-Length or via
     /// an over-long body without Content-Length) are refused.
+    ///
+    /// Exactly `MAX_RESPONSE_BYTES` is accepted (the cap is exclusive of the boundary).
     #[tokio::test]
-    async fn fetch_resource_rejects_responses_over_4mib() {
+    async fn fetch_body_cap_boundary() {
+        // resource rejects responses over 4mib
         let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
             .await
             .unwrap();
@@ -710,11 +754,8 @@ mod tests {
             .expect_err("streamed over-cap body must fail");
         assert!(err.to_string().contains("4 MiB"), "{err}");
         server.abort();
-    }
 
-    /// Exactly `MAX_RESPONSE_BYTES` is accepted (the cap is exclusive of the boundary).
-    #[tokio::test]
-    async fn fetch_via_accepts_body_of_exactly_the_cap() {
+        // via accepts body of exactly the cap
         let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
             .await
             .unwrap();
@@ -735,55 +776,21 @@ mod tests {
         server.abort();
     }
 
-    /// TC-146: the SSRF guard runs on a redirect hop through the real `client_for_url`:
-    /// a public-looking first hop that 302s to 127.0.0.1 is refused before any request.
-    #[tokio::test]
-    async fn redirect_to_loopback_is_refused_by_real_client_factory() {
-        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
-            .await
-            .unwrap();
-        let address = listener.local_addr().unwrap();
-        let server = tokio::spawn(serve_scripted_responses(listener, |_| {
-            plain_response(
-                "HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:9/secret\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".into(),
-                b"",
-            )
-        }));
-        let calls = std::sync::atomic::AtomicUsize::new(0);
-        let url = Url::parse(&format!("http://{address}/start.png")).unwrap();
-        // Hop 0 uses a permissive client (the mock server is on loopback); every later hop
-        // goes through the production guard.
-        let err = fetch_via(url, MAX_RESPONSE_BYTES, |url| {
-            let first = calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0;
-            Box::pin(async move {
-                if first {
-                    Ok(reqwest::Client::builder()
-                        .redirect(reqwest::redirect::Policy::none())
-                        .build()?)
-                } else {
-                    client_for_url(url).await
-                }
-            })
-        })
-        .await
-        .expect_err("redirect to loopback must be refused");
-        assert!(err.to_string().contains("private host"), "{err}");
-        server.abort();
-    }
-
+    /// `client_for_url` refuses loopback hostnames and handles IPv6 literals.
+    ///
     /// `localhost` resolves (offline) to loopback, so the DNS-resolving guard refuses it.
-    #[tokio::test]
-    async fn client_for_url_refuses_hostname_resolving_to_loopback() {
-        let url = Url::parse("http://localhost:80/x.png").unwrap();
-        let err = client_for_url(&url).await.expect_err("localhost refused");
-        assert!(err.to_string().contains("private host"), "{err}");
-    }
-
+    ///
     /// TC-358: IPv6 literal NFT URIs
     /// IPv6 literals keep their brackets in `host_str`: a private one is refused as private (not
     /// a DNS failure) and a public one passes the guard without any lookup.
     #[tokio::test]
-    async fn client_for_url_handles_ipv6_literals() {
+    async fn client_for_url_refuses_loopback_names_and_literals() {
+        // refuses hostname resolving to loopback
+        let url = Url::parse("http://localhost:80/x.png").unwrap();
+        let err = client_for_url(&url).await.expect_err("localhost refused");
+        assert!(err.to_string().contains("private host"), "{err}");
+
+        // handles ipv6 literals
         for private in ["http://[::1]/x.png", "http://[fd00::1]/x.png"] {
             let err = client_for_url(&Url::parse(private).unwrap())
                 .await

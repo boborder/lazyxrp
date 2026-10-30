@@ -130,12 +130,10 @@ impl Component for FlareFtsoPanel {
                 self.prices.sort_by(|a, b| a.pair.cmp(&b.pair));
                 self.table_state.reset_len(self.prices.len());
             }
-            _a if self.table_state.handle_row_select(
-                action,
-                self.is_focused,
-                self.prices.len(),
-            ) => {}
-            _ => {}
+            _ => {
+                self.table_state
+                    .handle_row_select(action, self.is_focused, self.prices.len());
+            }
         }
         Ok(None)
     }

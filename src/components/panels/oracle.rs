@@ -101,12 +101,10 @@ impl Component for OraclePanel {
             Action::XrplOracleNotConfigured => {
                 self.not_configured = true;
             }
-            _a if self.table_state.handle_row_select(
-                action,
-                self.is_focused,
-                self.prices.len(),
-            ) => {}
-            _ => {}
+            _ => {
+                self.table_state
+                    .handle_row_select(action, self.is_focused, self.prices.len());
+            }
         }
         Ok(None)
     }

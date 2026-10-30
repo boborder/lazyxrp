@@ -523,13 +523,48 @@ mod tests {
     use super::{Cli, RpCli};
     use crate::network::Network;
 
+    /// Argument rules: book needs base and quote, --exec conflicts with --self-uninstall, Xahau
+    /// networks parse, --allow-insecure-rpc is off by default.
+    ///
     /// TC-058
+    ///
+    /// TC-125: `--network` public values include `xahau` and `xahau-test`
+    ///
+    /// TC-126: --allow-insecure-rpc defaults off; flag enables TUI and rp
     #[test]
-    fn book_requires_base_and_quote_arguments() {
+    fn cli_flag_rules() {
+        // book requires base and quote arguments
         assert!(Cli::try_parse_from(["lazyxrp", "-x", "book", "--quote", "USD"]).is_err());
         assert!(Cli::try_parse_from(["lazyxrp", "-x", "book", "--base", "XRP"]).is_err());
         // Bare (no `-x`) form is also rejected by clap: `book` requires `--base`.
         assert!(Cli::try_parse_from(["lazyxrp", "book", "--quote", "USD"]).is_err());
+
+        // exec conflicts with self uninstall
+        assert!(Cli::try_parse_from(["lazyxrp", "--self-uninstall", "-x", "info"]).is_err());
+
+        // network flag accepts xahau and xahau test
+        let xahau = Cli::try_parse_from(["lazyxrp", "--network", "xahau"]).expect("parses");
+        assert_eq!(xahau.network, Some(Network::Xahau));
+        let test = Cli::try_parse_from(["lazyxrp", "--network", "xahau-test"]).expect("parses");
+        assert_eq!(test.network, Some(Network::XahauTest));
+        assert!(Cli::try_parse_from(["lazyxrp", "--network", "xahau-testnet"]).is_err());
+
+        // allow insecure rpc defaults off and flag enables it
+        let cases: &[(&[&str], bool)] = &[
+            (&["lazyxrp"], false),
+            (&["lazyxrp", "--allow-insecure-rpc"], true),
+            (&["rp", "-t", "abcd"], false),
+            (&["rp", "--allow-insecure-rpc", "-t", "abcd"], true),
+        ];
+        for &(args, expected) in cases {
+            if args[0] == "rp" {
+                let c = RpCli::try_parse_from(args).expect("parses");
+                assert_eq!(c.allow_insecure_rpc, expected, "{args:?}");
+            } else {
+                let c = Cli::try_parse_from(args).expect("parses");
+                assert_eq!(c.allow_insecure_rpc, expected, "{args:?}");
+            }
+        }
     }
 
     /// TC-190: DEX CLI — `offers <ADDR>`, `offer-cancel <SEQ>`, `offer-create <GETS> <PAYS>` parse;
@@ -662,41 +697,6 @@ mod tests {
             let c = Cli::try_parse_from(["lazyxrp", "-x"].into_iter().chain(argv.clone()))
                 .expect("parses");
             assert_eq!(c.command.expect("cmd").signs(), signs, "{argv:?}");
-        }
-    }
-
-    #[test]
-    fn exec_conflicts_with_self_uninstall() {
-        assert!(Cli::try_parse_from(["lazyxrp", "--self-uninstall", "-x", "info"]).is_err());
-    }
-
-    /// TC-125: `--network` public values include `xahau` and `xahau-test`
-    #[test]
-    fn network_flag_accepts_xahau_and_xahau_test() {
-        let xahau = Cli::try_parse_from(["lazyxrp", "--network", "xahau"]).expect("parses");
-        assert_eq!(xahau.network, Some(Network::Xahau));
-        let test = Cli::try_parse_from(["lazyxrp", "--network", "xahau-test"]).expect("parses");
-        assert_eq!(test.network, Some(Network::XahauTest));
-        assert!(Cli::try_parse_from(["lazyxrp", "--network", "xahau-testnet"]).is_err());
-    }
-
-    /// TC-126: --allow-insecure-rpc defaults off; flag enables TUI and rp
-    #[test]
-    fn allow_insecure_rpc_defaults_off_and_flag_enables_it() {
-        let cases: &[(&[&str], bool)] = &[
-            (&["lazyxrp"], false),
-            (&["lazyxrp", "--allow-insecure-rpc"], true),
-            (&["rp", "-t", "abcd"], false),
-            (&["rp", "--allow-insecure-rpc", "-t", "abcd"], true),
-        ];
-        for &(args, expected) in cases {
-            if args[0] == "rp" {
-                let c = RpCli::try_parse_from(args).expect("parses");
-                assert_eq!(c.allow_insecure_rpc, expected, "{args:?}");
-            } else {
-                let c = Cli::try_parse_from(args).expect("parses");
-                assert_eq!(c.allow_insecure_rpc, expected, "{args:?}");
-            }
         }
     }
 

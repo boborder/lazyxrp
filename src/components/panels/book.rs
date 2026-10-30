@@ -47,10 +47,10 @@ impl Component for BookPanel {
                 self.table_state.reset_len(self.offers.len());
                 self.has_received_offers = true;
             }
-            _ if self
-                .table_state
-                .handle_row_select(action, self.is_focused, len) => {}
-            _ => {}
+            _ => {
+                self.table_state
+                    .handle_row_select(action, self.is_focused, len);
+            }
         }
         Ok(None)
     }

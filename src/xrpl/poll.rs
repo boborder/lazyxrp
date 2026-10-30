@@ -772,7 +772,7 @@ async fn drive_poll_loop(
                         warn!(?err, "rpc reconnect after network switch failed");
                         continue;
                     }
-                };
+                }
             }
             _ = tick.tick() => {
                 if is_backoff_active(backoff_until) {
