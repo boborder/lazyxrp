@@ -140,21 +140,18 @@ pub(super) async fn finalize_simulate_sign_submit<E, FO, FS>(
     on_ok: FO,
 ) where
     E: Fn(String) -> Action,
-    FS: FnOnce(u32, u32, u32) -> color_eyre::Result<String>,
+    FS: FnOnce(signing::SimulatedFill) -> color_eyre::Result<String>,
     FO: FnOnce(String) -> Vec<Action>,
 {
-    let (sequence, fee_drops, last_ledger_sequence) =
-        match signing::sequence_fee_ledger_from_simulate(&sim.tx_json) {
-            Ok(v) => v,
-            Err(e) => {
-                send_action(action_tx, submit_err(format!("{e}")));
-                return;
-            }
-        };
+    let fill = match signing::sequence_fee_ledger_from_simulate(&sim.tx_json) {
+        Ok(v) => v,
+        Err(e) => {
+            send_action(action_tx, submit_err(format!("{e}")));
+            return;
+        }
+    };
 
-    let blob = match signing::with_network_id(rpc.network_id(), || {
-        sign_blob(sequence, fee_drops, last_ledger_sequence)
-    }) {
+    let blob = match signing::with_network_id(rpc.network_id(), || sign_blob(fill)) {
         Ok(b) => b,
         Err(e) => {
             send_action(action_tx, submit_err(format!("sign: {e}")));
@@ -168,7 +165,10 @@ pub(super) async fn finalize_simulate_sign_submit<E, FO, FS>(
         Ok(tx) => {
             // Show the node-chosen (simulate) fee that was signed next to the hash.
             let queued = if tx.queued { " · queued" } else { "" };
-            for action in on_ok(format!("{} · fee {fee_drops} drops{queued}", tx.hash)) {
+            for action in on_ok(format!(
+                "{} · fee {} drops{queued}",
+                tx.hash, fill.fee_drops
+            )) {
                 send_action(action_tx, action);
             }
         }
@@ -206,7 +206,7 @@ pub(super) async fn simulate_then_finalize<E, FS, FO>(
     on_ok: FO,
 ) where
     E: Fn(String) -> Action + Copy,
-    FS: FnOnce(u32, u32, u32) -> color_eyre::Result<String>,
+    FS: FnOnce(signing::SimulatedFill) -> color_eyre::Result<String>,
     FO: FnOnce(String) -> Vec<Action>,
 {
     let tx_json = match tx_json {
@@ -227,7 +227,7 @@ pub(super) async fn simulate_then_finalize<E, FS, FO>(
 }
 
 /// Account fetch → build tx_json → simulate → sign → submit for an already-resolved wallet.
-/// `build(account, sequence)`, `sign(wallet, account, sequence, fee, last_ledger_sequence)`.
+/// `build(account, sequence)`, `sign(wallet, account, fill)`.
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn run_submit_with_wallet<E, B, S, O>(
     rpc: &RpcClient,
@@ -241,7 +241,7 @@ pub(super) async fn run_submit_with_wallet<E, B, S, O>(
 ) where
     E: Fn(String) -> Action + Copy,
     B: FnOnce(&str, u32) -> color_eyre::Result<Value>,
-    S: FnOnce(&xrpl::wallet::Wallet, &str, u32, u32, u32) -> color_eyre::Result<String>,
+    S: FnOnce(&xrpl::wallet::Wallet, &str, signing::SimulatedFill) -> color_eyre::Result<String>,
     O: FnOnce(String) -> Vec<Action>,
 {
     let account: &str = &wallet.classic_address;
@@ -255,9 +255,7 @@ pub(super) async fn run_submit_with_wallet<E, B, S, O>(
         action_tx,
         submit_err,
         build(account, account_info.sequence),
-        |sequence, fee_drops, last_ledger_sequence| {
-            sign(wallet, account, sequence, fee_drops, last_ledger_sequence)
-        },
+        |fill| sign(wallet, account, fill),
         on_ok,
     )
     .await;
@@ -279,7 +277,7 @@ pub(super) async fn run_submit<E, B, S, O>(
 ) where
     E: Fn(String) -> Action + Copy,
     B: FnOnce(&str, u32) -> color_eyre::Result<Value>,
-    S: FnOnce(&xrpl::wallet::Wallet, &str, u32, u32, u32) -> color_eyre::Result<String>,
+    S: FnOnce(&xrpl::wallet::Wallet, &str, signing::SimulatedFill) -> color_eyre::Result<String>,
     O: FnOnce(String) -> Vec<Action>,
 {
     let Some(wallet) = resolve_submit_wallet(
@@ -378,6 +376,13 @@ pub(super) async fn submit_account_set_transaction(
     let set_flag = signing::parse_account_set_flag_choice(params.set_flag.as_deref());
     let clear_flag = signing::parse_account_set_flag_choice(params.clear_flag.as_deref());
 
+    let changes = signing::AccountSetChanges {
+        set_flag,
+        clear_flag,
+        domain_hex: domain_hex.as_deref(),
+        tick_size,
+        transfer_rate,
+    };
     run_submit_with_wallet(
         rpc,
         network,
@@ -385,29 +390,10 @@ pub(super) async fn submit_account_set_transaction(
         submit_err,
         action_tx,
         |account, sequence| {
-            signing::build_account_set_tx_json_for_simulate(
-                account,
-                sequence,
-                set_flag,
-                clear_flag,
-                domain_hex.as_deref(),
-                tick_size,
-                transfer_rate,
-            )
+            signing::build_account_set_tx_json_for_simulate(account, sequence, &changes)
         },
-        |wallet, account, sequence, fee_drops, last_ledger_sequence| {
-            signing::create_and_sign_account_set(
-                wallet,
-                account,
-                sequence,
-                fee_drops,
-                last_ledger_sequence,
-                set_flag,
-                clear_flag,
-                domain_hex.as_deref(),
-                tick_size,
-                transfer_rate,
-            )
+        |wallet, account, fill| {
+            signing::create_and_sign_account_set(wallet, account, fill, &changes)
         },
         |hash| {
             vec![
@@ -463,17 +449,8 @@ pub(super) async fn submit_trust_set_transaction(
                 account, &currency, &issuer, &limit, sequence,
             )
         },
-        |wallet, account, sequence, fee_drops, last_ledger_sequence| {
-            signing::create_and_sign_trust_set(
-                wallet,
-                account,
-                &currency,
-                &issuer,
-                &limit,
-                sequence,
-                fee_drops,
-                last_ledger_sequence,
-            )
+        |wallet, account, fill| {
+            signing::create_and_sign_trust_set(wallet, account, &currency, &issuer, &limit, fill)
         },
         |hash| {
             vec![
@@ -526,16 +503,8 @@ pub(super) async fn submit_offer_create_transaction(
                 sequence,
             )
         },
-        |wallet, account, sequence, fee_drops, last_ledger_sequence| {
-            signing::create_and_sign_offer_create(
-                wallet,
-                account,
-                &taker_gets,
-                &taker_pays,
-                sequence,
-                fee_drops,
-                last_ledger_sequence,
-            )
+        |wallet, account, fill| {
+            signing::create_and_sign_offer_create(wallet, account, &taker_gets, &taker_pays, fill)
         },
         |hash| {
             vec![
@@ -571,15 +540,8 @@ pub(super) async fn submit_offer_cancel_transaction(
                 sequence,
             )
         },
-        |wallet, account, sequence, fee_drops, last_ledger_sequence| {
-            signing::create_and_sign_offer_cancel(
-                wallet,
-                account,
-                params.offer_sequence,
-                sequence,
-                fee_drops,
-                last_ledger_sequence,
-            )
+        |wallet, account, fill| {
+            signing::create_and_sign_offer_cancel(wallet, account, params.offer_sequence, fill)
         },
         |hash| {
             vec![
@@ -656,7 +618,7 @@ pub(super) async fn submit_escrow_create_transaction(
                 sequence,
             )
         },
-        |wallet, account, sequence, fee_drops, last_ledger_sequence| {
+        |wallet, account, fill| {
             signing::create_and_sign_escrow_create(
                 wallet,
                 account,
@@ -664,9 +626,7 @@ pub(super) async fn submit_escrow_create_transaction(
                 amount_drops,
                 finish_after,
                 cancel_after,
-                sequence,
-                fee_drops,
-                last_ledger_sequence,
+                fill,
             )
         },
         |hash| {
@@ -713,16 +673,14 @@ pub(super) async fn submit_escrow_close_transaction(
                 sequence,
             )
         },
-        |wallet, account, sequence, fee_drops, last_ledger_sequence| {
+        |wallet, account, fill| {
             signing::create_and_sign_escrow_close(
                 wallet,
                 account,
                 &owner,
                 params.offer_sequence,
                 params.cancel,
-                sequence,
-                fee_drops,
-                last_ledger_sequence,
+                fill,
             )
         },
         |hash| {
@@ -766,16 +724,8 @@ pub(super) async fn submit_amm_deposit_transaction(
         |account, sequence| {
             signing::build_amm_deposit_tx_json_for_simulate(account, amount, amount2, sequence)
         },
-        |wallet, account, sequence, fee_drops, last_ledger_sequence| {
-            signing::create_and_sign_amm_deposit(
-                wallet,
-                account,
-                amount,
-                amount2,
-                sequence,
-                fee_drops,
-                last_ledger_sequence,
-            )
+        |wallet, account, fill| {
+            signing::create_and_sign_amm_deposit(wallet, account, amount, amount2, fill)
         },
         |hash| {
             vec![
@@ -855,18 +805,7 @@ pub(super) async fn submit_amm_withdraw_transaction(
             lp_in,
             account_info.sequence,
         ),
-        |sequence, fee_drops, last_ledger_sequence| {
-            signing::create_and_sign_amm_withdraw(
-                &wallet,
-                &account,
-                asset,
-                asset2,
-                lp_in,
-                sequence,
-                fee_drops,
-                last_ledger_sequence,
-            )
-        },
+        |fill| signing::create_and_sign_amm_withdraw(&wallet, &account, asset, asset2, lp_in, fill),
         |hash| {
             vec![
                 Action::AmmSubmitOk(format!("AMMWithdraw · {hash}")),
@@ -915,15 +854,13 @@ pub(super) async fn submit_account_delete_transaction(
                 sequence,
             )
         },
-        |wallet, account, sequence, fee_drops, last_ledger_sequence| {
+        |wallet, account, fill| {
             signing::create_and_sign_account_delete(
                 wallet,
                 account,
                 &destination.classic,
                 destination.destination_tag,
-                sequence,
-                fee_drops,
-                last_ledger_sequence,
+                fill,
             )
         },
         |hash| {
@@ -980,16 +917,7 @@ pub(super) async fn submit_generic_transaction(
         submit_err,
         action_tx,
         |account, sequence| (spec.build_json)(account, &fields, sequence),
-        |wallet, account, sequence, fee_drops, last_ledger_sequence| {
-            (spec.sign)(
-                wallet,
-                account,
-                &fields,
-                sequence,
-                fee_drops,
-                last_ledger_sequence,
-            )
-        },
+        |wallet, account, fill| (spec.sign)(wallet, account, &fields, fill),
         |hash| {
             let mut actions = vec![
                 Action::GenericTxSubmitOk(format!("{} · {hash}", spec.tx_type)),
@@ -1059,15 +987,8 @@ pub(super) async fn submit_set_regular_key_transaction(
                 sequence,
             )
         },
-        |wallet, account, sequence, fee_drops, last_ledger_sequence| {
-            signing::create_and_sign_set_regular_key(
-                wallet,
-                account,
-                regular_key.as_deref(),
-                sequence,
-                fee_drops,
-                last_ledger_sequence,
-            )
+        |wallet, account, fill| {
+            signing::create_and_sign_set_regular_key(wallet, account, regular_key.as_deref(), fill)
         },
         |hash| {
             vec![
@@ -1156,15 +1077,18 @@ pub(super) async fn submit_payment_transaction(
         return;
     };
 
+    let payment = signing::PaymentSpec {
+        destination: &destination_resolved,
+        amount_spec: params.amount.trim(),
+        iou_currency: params.iou_currency.as_deref(),
+        iou_issuer: params.iou_issuer.as_deref(),
+        send_max_spec: params.send_max.as_deref(),
+        destination_tag,
+        memo_data: None,
+    };
     let tx_json = match signing::build_payment_tx_json_for_simulate(
         &account,
-        &destination_resolved,
-        params.amount.trim(),
-        params.iou_currency.as_deref(),
-        params.iou_issuer.as_deref(),
-        params.send_max.as_deref(),
-        destination_tag,
-        None,
+        &payment,
         account_info.sequence,
     ) {
         Ok(j) => j,
@@ -1183,7 +1107,7 @@ pub(super) async fn submit_payment_transaction(
     };
 
     let fee_drops = match signing::sequence_fee_ledger_from_simulate(&sim.tx_json) {
-        Ok((_, fee, _)) => fee,
+        Ok(fill) => fill.fee_drops,
         Err(e) => {
             send_action(action_tx, submit_err(format!("{e}")));
             return;
@@ -1212,22 +1136,7 @@ pub(super) async fn submit_payment_transaction(
         rpc,
         action_tx,
         sim,
-        |sequence, fee_drops, last_ledger_sequence| {
-            signing::create_and_sign_payment(
-                &wallet,
-                &account,
-                &destination_resolved,
-                params.amount.trim(),
-                params.iou_currency.as_deref(),
-                params.iou_issuer.as_deref(),
-                params.send_max.as_deref(),
-                destination_tag,
-                None,
-                sequence,
-                fee_drops,
-                last_ledger_sequence,
-            )
-        },
+        |fill| signing::create_and_sign_payment(&wallet, &account, &payment, fill),
         submit_err,
         |hash| {
             vec![
@@ -1334,15 +1243,15 @@ pub(super) async fn submit_fxrp_direct_mint_payment(
         return;
     };
 
+    let payment = signing::PaymentSpec {
+        destination: &destination_resolved,
+        amount_spec: params.amount_xrp.trim(),
+        memo_data: Some(memo.as_str()),
+        ..Default::default()
+    };
     let tx_json = match signing::build_payment_tx_json_for_simulate(
         &account,
-        &destination_resolved,
-        params.amount_xrp.trim(),
-        None,
-        None,
-        None,
-        None,
-        Some(memo.as_str()),
+        &payment,
         account_info.sequence,
     ) {
         Ok(j) => j,
@@ -1361,7 +1270,7 @@ pub(super) async fn submit_fxrp_direct_mint_payment(
     };
 
     let fee_drops = match signing::sequence_fee_ledger_from_simulate(&sim.tx_json) {
-        Ok((_, fee, _)) => fee,
+        Ok(fill) => fill.fee_drops,
         Err(e) => {
             send_action(action_tx, submit_err(format!("{e}")));
             return;
@@ -1384,22 +1293,7 @@ pub(super) async fn submit_fxrp_direct_mint_payment(
         rpc,
         action_tx,
         sim,
-        |sequence, fee_drops, last_ledger_sequence| {
-            signing::create_and_sign_payment(
-                &wallet,
-                &account,
-                &destination_resolved,
-                params.amount_xrp.trim(),
-                None,
-                None,
-                None,
-                None,
-                Some(memo.as_str()),
-                sequence,
-                fee_drops,
-                last_ledger_sequence,
-            )
-        },
+        |fill| signing::create_and_sign_payment(&wallet, &account, &payment, fill),
         submit_err,
         |hash| {
             vec![
@@ -1528,15 +1422,15 @@ pub(super) async fn submit_smart_account_instruction(
     };
 
     let amount_xrp = super::format::drops_to_xrp(&params.fee_drops.to_string());
+    let payment = signing::PaymentSpec {
+        destination: &operator,
+        amount_spec: &amount_xrp,
+        memo_data: Some(memo.as_str()),
+        ..Default::default()
+    };
     let tx_json = match signing::build_payment_tx_json_for_simulate(
         &account,
-        &operator,
-        &amount_xrp,
-        None,
-        None,
-        None,
-        None,
-        Some(memo.as_str()),
+        &payment,
         account_info.sequence,
     ) {
         Ok(j) => j,
@@ -1555,7 +1449,7 @@ pub(super) async fn submit_smart_account_instruction(
     };
 
     let network_fee_drops = match signing::sequence_fee_ledger_from_simulate(&sim.tx_json) {
-        Ok((_, fee, _)) => fee,
+        Ok(fill) => fill.fee_drops,
         Err(e) => {
             send_action(action_tx, submit_err(format!("{e}")));
             return;
@@ -1581,22 +1475,7 @@ pub(super) async fn submit_smart_account_instruction(
         rpc,
         action_tx,
         sim,
-        |sequence, fee_drops, last_ledger_sequence| {
-            signing::create_and_sign_payment(
-                &wallet,
-                &account,
-                &operator,
-                &amount_xrp,
-                None,
-                None,
-                None,
-                None,
-                Some(memo.as_str()),
-                sequence,
-                fee_drops,
-                last_ledger_sequence,
-            )
-        },
+        |fill| signing::create_and_sign_payment(&wallet, &account, &payment, fill),
         submit_err,
         |hash| {
             vec![

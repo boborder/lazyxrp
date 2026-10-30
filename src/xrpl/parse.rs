@@ -1219,9 +1219,16 @@ mod tests {
             "tx_json": {"Fee": "10", "Sequence": 21_430_113, "TransactionType": "OfferCancel"}
         }});
         let sim = parse_simulate_result(&live_shape).expect("simulate should parse");
-        let (seq, fee, lls) = crate::signing::sequence_fee_ledger_from_simulate(&sim.tx_json)
+        let fill = crate::signing::sequence_fee_ledger_from_simulate(&sim.tx_json)
             .expect("signing inputs present");
-        assert_eq!((seq, fee, lls), (21_430_113, 10, 21_430_162 + 20));
+        assert_eq!(
+            fill,
+            crate::signing::SimulatedFill {
+                sequence: 21_430_113,
+                fee_drops: 10,
+                last_ledger_sequence: 21_430_162 + 20
+            }
+        );
 
         let mut server_filled = live_shape;
         server_filled["result"]["tx_json"]["LastLedgerSequence"] = json!(21_430_170);

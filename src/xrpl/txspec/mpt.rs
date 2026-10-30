@@ -564,7 +564,17 @@ mod tests {
         for (tx_type, fields) in samples() {
             let s = spec(tx_type);
             let prepared = s.prepare(&fields, 0).expect("valid");
-            let blob = (s.sign)(&wallet, &account, &prepared, sequence, fee, lls).expect(tx_type);
+            let blob = (s.sign)(
+                &wallet,
+                &account,
+                &prepared,
+                crate::signing::SimulatedFill {
+                    sequence,
+                    fee_drops: fee,
+                    last_ledger_sequence: lls,
+                },
+            )
+            .expect(tx_type);
             let d = decode(&blob).expect("decode");
             assert_eq!(d["TransactionType"], tx_type);
             assert_eq!(d["Sequence"], sequence, "{tx_type}");

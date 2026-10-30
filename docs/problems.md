@@ -48,15 +48,18 @@
 - `ensure_no_xrpl_rpc_error` builds `"[XRPL-<kind>] <message>"` as a plain `eyre` message and callers decide by its text: `is_retryable_rpc_error` and `submit_signed_tx` test `starts_with("[XRPL-")`, while `is_not_found_error` / `is_rate_limited_error` / `is_transient_xrpl_error` match substrings (`client.rs`, `parse.rs`, `poll.rs`, about eight production sites).
 - It works and the strings are pinned by tests, but a reworded node message silently changes retry or not-found behaviour. A typed error read with `downcast_ref` would make the classification explicit; it also means rewriting the tests that pass bare strings.
 
-### P-012: `(sequence, fee_drops, last_ledger_sequence)` travels as three bare `u32`s
+### ~~P-012: `(sequence, fee_drops, last_ledger_sequence)` travels as three bare `u32`s~~ → resolved (2026-10-30)
 
-- `signing::sequence_fee_ledger_from_simulate` returns a tuple, and every `create_and_sign_*`, the `txspec` `sign` pointers and the CLI `sign` closures take the three values positionally, so swapping two of them still compiles. Fourteen `#[allow(clippy::too_many_arguments)]` remain (seven in `signing.rs`, the rest in `submit.rs`, `poll.rs`, `app.rs` and two panels), mostly this triple plus the optional Payment fields.
-- A small struct for the triple (and one for the Payment arguments) would remove most of them, but it changes the signing API at about 40 call sites plus the `txspec` macros, so it is not done piecemeal.
+- `signing::SimulatedFill { sequence, fee_drops, last_ledger_sequence }` is what `sequence_fee_ledger_from_simulate` returns and what every `create_and_sign_*`, the `txspec` `sign` pointers and the CLI / submit `sign` closures take, so a swapped pair no longer compiles. `PaymentSpec` and `AccountSetChanges` carry the Payment and AccountSet fields shared by the simulate request and the signed transaction (each flow builds it once and passes it to both). Verified against the previous code: 31 signed blobs, simulate JSON and refusals are byte-identical for distinct values per field. `signing.rs` has no `#[allow(clippy::too_many_arguments)]` left.
 
 ### P-013: Functions over 150 lines remain
 
 - Already split: `render_composer` (983 → 104 lines), the wallet `key_action`, `execute_cli_command` (483 → 123). Still long: `poll.rs::drive_poll_loop` (370) and `poll_batch` (309), `lib.rs::run_flare_command` (324), `app.rs::drain_and_dispatch_actions` (280), `tx_detail::detail_lines_for` (214), `validator_detail_lines` (184), `wallet.rs::update` (174), `submit_fxrp_direct_mint_payment` (171), `server.rs::draw` (164), `submit_smart_account_instruction` (160), `submit_payment_transaction` (159), `account.rs::draw` (150).
 - `run_flare_command` has no automated test (its writes need a live Flare node), so split it together with a way to exercise it.
+
+### P-014: Seven `too_many_arguments` allows remain outside `signing.rs`
+
+- `poll.rs::run_scheduled_poll` / `execute_scheduled_poll` (four `&mut` backoff variables: a `Backoff { secs, until }` pair would do), `submit.rs::run_submit` / `run_submit_with_wallet` (rpc, network, action channel: a shared context), `App::new` (8 settings), `server_detail::set_toml` (the TOML fetch outcome) and `wallet_keys::payment_edit_keys` (five `&mut String` fields). Each is a local change with no API impact, so none is urgent.
 
 ## Operational notes
 

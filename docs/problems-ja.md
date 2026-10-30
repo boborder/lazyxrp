@@ -48,15 +48,18 @@
 - `ensure_no_xrpl_rpc_error` は `"[XRPL-<kind>] <message>"` を素の `eyre` メッセージとして作り、呼び出し側はその文面で判断する: `is_retryable_rpc_error` と `submit_signed_tx` は `starts_with("[XRPL-")`、`is_not_found_error` / `is_rate_limited_error` / `is_transient_xrpl_error` は部分文字列一致（`client.rs`・`parse.rs`・`poll.rs`、本番コードで約 8 箇所）。
 - 動作しており文字列はテストで固定されているが、ノード側の文言が変わるとリトライや not-found の挙動が黙って変わる。型付きエラーを `downcast_ref` で読めば分類が明示されるが、素の文字列を渡すテストも書き換えることになる。
 
-### P-012: `(sequence, fee_drops, last_ledger_sequence)` が 3 つの素の `u32` で流れている
+### ~~P-012: `(sequence, fee_drops, last_ledger_sequence)` が 3 つの素の `u32` で流れている~~ → 解決（2026-10-30）
 
-- `signing::sequence_fee_ledger_from_simulate` はタプルを返し、すべての `create_and_sign_*`、`txspec` の `sign` ポインタ、CLI の `sign` クロージャが 3 つの値を位置引数で受け取るため、2 つを入れ替えてもコンパイルが通る。`#[allow(clippy::too_many_arguments)]` が 14 個残っている（`signing.rs` に 7 個、残りは `submit.rs`・`poll.rs`・`app.rs`・2 つのパネル）。大半はこの 3 つ組と Payment の任意フィールド。
-- 3 つ組（と Payment の引数）を小さな構造体にすれば大半は消えるが、署名 API が約 40 箇所の呼び出しと `txspec` のマクロにまたがって変わるため、部分的には行わない。
+- `signing::SimulatedFill { sequence, fee_drops, last_ledger_sequence }` を `sequence_fee_ledger_from_simulate` が返し、すべての `create_and_sign_*`、`txspec` の `sign` ポインタ、CLI / submit の `sign` クロージャが受け取る。2 つを入れ替えるとコンパイルが通らない。`PaymentSpec` と `AccountSetChanges` は simulate リクエストと署名済みトランザクションで共通の Payment / AccountSet のフィールドを持ち、各フローが 1 回作って両方に渡す。変更前のコードと照合済み: フィールドごとに異なる値で、署名済み blob 31 件・simulate JSON・拒否メッセージがバイト単位で一致。`signing.rs` に `#[allow(clippy::too_many_arguments)]` は残っていない。
 
 ### P-013: 150 行を超える関数がまだ残っている
 
 - 分割済み: `render_composer`（983 → 104 行）、wallet の `key_action`、`execute_cli_command`（483 → 123）。まだ長い: `poll.rs::drive_poll_loop`（370）と `poll_batch`（309）、`lib.rs::run_flare_command`（324）、`app.rs::drain_and_dispatch_actions`（280）、`tx_detail::detail_lines_for`（214）、`validator_detail_lines`（184）、`wallet.rs::update`（174）、`submit_fxrp_direct_mint_payment`（171）、`server.rs::draw`（164）、`submit_smart_account_instruction`（160）、`submit_payment_transaction`（159）、`account.rs::draw`（150）。
 - `run_flare_command` には自動テストがない（書き込みに live の Flare ノードが要る）ため、実行手段と合わせて分割する。
+
+### P-014: `signing.rs` 以外に `too_many_arguments` の allow が 7 個残っている
+
+- `poll.rs::run_scheduled_poll` / `execute_scheduled_poll`（`&mut` の backoff 変数 4 個: `Backoff { secs, until }` の組で足りる）、`submit.rs::run_submit` / `run_submit_with_wallet`（rpc・network・action チャネル: 共有コンテキスト）、`App::new`（設定 8 個）、`server_detail::set_toml`（TOML 取得結果）、`wallet_keys::payment_edit_keys`（`&mut String` 5 個）。いずれも局所的な変更で API への影響はなく、急ぎではない。
 
 ## 運用メモ
 

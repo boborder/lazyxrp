@@ -104,9 +104,7 @@ pub struct TxSpec {
         &xrpl::wallet::Wallet,
         account: &str,
         &Fields,
-        sequence: u32,
-        fee_drops: u32,
-        last_ledger_sequence: u32,
+        crate::signing::SimulatedFill,
     ) -> color_eyre::Result<String>,
 }
 

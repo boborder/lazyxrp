@@ -564,37 +564,49 @@ macro_rules! sign_blob {
 }
 pub(crate) use sign_blob;
 
+/// The Payment fields shared by the `simulate` request and the signed transaction.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct PaymentSpec<'a> {
+    pub destination: &'a str,
+    /// XRP value (XRP mode) or IOU value (IOU mode).
+    pub amount_spec: &'a str,
+    /// If `Some`, triggers IOU mode (e.g. "USD").
+    pub iou_currency: Option<&'a str>,
+    /// If `Some`, the issuer address for IOU mode.
+    pub iou_issuer: Option<&'a str>,
+    /// Optional SendMax (`XRP:drops` / `CUR:issuer:value`) → cross-currency, default paths.
+    pub send_max_spec: Option<&'a str>,
+    pub destination_tag: Option<u32>,
+    pub memo_data: Option<&'a str>,
+}
+
 /// Create, sign, and encode a Payment transaction as a submit-ready blob.
-///
-/// `amount_spec`: XRP value (XRP mode) or IOU value (IOU mode).
-/// `iou_currency`: If Some, triggers IOU mode (e.g. "USD").
-/// `iou_issuer`: If Some, issuer address for IOU mode.
-/// `send_max_spec`: optional SendMax (`XRP:drops` / `CUR:issuer:value`) → cross-currency, default paths.
-#[allow(clippy::too_many_arguments)]
 pub fn create_and_sign_payment(
     wallet: &xrpl::wallet::Wallet,
     account: &str,
-    destination: &str,
-    amount_spec: &str,
-    iou_currency: Option<&str>,
-    iou_issuer: Option<&str>,
-    send_max_spec: Option<&str>,
-    destination_tag: Option<u32>,
-    memo_data: Option<&str>,
-    sequence: u32,
-    fee_drops: u32,
-    last_ledger_sequence: u32,
+    spec: &PaymentSpec<'_>,
+    fill: SimulatedFill,
 ) -> color_eyre::Result<String> {
     use xrpl::models::XRPAmount;
     use xrpl::models::transactions::payment::Payment;
     use xrpl::models::transactions::{CommonFields, TransactionType};
 
+    let PaymentSpec {
+        destination,
+        amount_spec,
+        iou_currency,
+        iou_issuer,
+        send_max_spec,
+        destination_tag,
+        memo_data,
+    } = *spec;
+
     let amount = payment_amount(amount_spec, iou_currency, iou_issuer)?;
     let mut common = CommonFields::from_account(account.to_string())
         .with_transaction_type(TransactionType::Payment)
-        .with_sequence(sequence)
-        .with_fee(XRPAmount::from(fee_drops.to_string()))
-        .with_last_ledger_sequence(last_ledger_sequence);
+        .with_sequence(fill.sequence)
+        .with_fee(XRPAmount::from(fill.fee_drops.to_string()))
+        .with_last_ledger_sequence(fill.last_ledger_sequence);
     if let Some(memos) = payment_memos_from_memo_data(memo_data) {
         common = common.with_memos(memos);
     }
@@ -612,20 +624,23 @@ pub fn create_and_sign_payment(
 }
 
 /// Unsigned Payment JSON for `simulate` (XRP or IOU; `send_max_spec` → cross-currency via default paths).
-#[allow(clippy::too_many_arguments)]
 pub fn build_payment_tx_json_for_simulate(
     account: &str,
-    destination: &str,
-    amount_spec: &str,
-    iou_currency: Option<&str>,
-    iou_issuer: Option<&str>,
-    send_max_spec: Option<&str>,
-    destination_tag: Option<u32>,
-    memo_data: Option<&str>,
+    spec: &PaymentSpec<'_>,
     sequence: u32,
 ) -> color_eyre::Result<Value> {
     use xrpl::models::transactions::payment::Payment;
     use xrpl::models::transactions::{CommonFields, TransactionType};
+
+    let PaymentSpec {
+        destination,
+        amount_spec,
+        iou_currency,
+        iou_issuer,
+        send_max_spec,
+        destination_tag,
+        memo_data,
+    } = *spec;
 
     let amount = payment_amount(amount_spec, iou_currency, iou_issuer)?;
     let mut common = CommonFields::from_account(account.to_string())
@@ -647,19 +662,33 @@ pub fn build_payment_tx_json_for_simulate(
     serde_json::to_value(&payment).map_err(|e| color_eyre::eyre::eyre!("payment tx_json: {e}"))
 }
 
+/// The AccountSet fields to change; `None` leaves a field untouched.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct AccountSetChanges<'a> {
+    pub set_flag: Option<xrpl::models::transactions::account_set::AccountSetFlag>,
+    pub clear_flag: Option<xrpl::models::transactions::account_set::AccountSetFlag>,
+    pub domain_hex: Option<&'a str>,
+    pub tick_size: Option<u32>,
+    pub transfer_rate: Option<u32>,
+}
+
 /// Unsigned AccountSet JSON for `simulate`.
 pub fn build_account_set_tx_json_for_simulate(
     account: &str,
     sequence: u32,
-    set_flag: Option<xrpl::models::transactions::account_set::AccountSetFlag>,
-    clear_flag: Option<xrpl::models::transactions::account_set::AccountSetFlag>,
-    domain_hex: Option<&str>,
-    tick_size: Option<u32>,
-    transfer_rate: Option<u32>,
+    changes: &AccountSetChanges<'_>,
 ) -> color_eyre::Result<Value> {
     use std::borrow::Cow;
     use xrpl::models::transactions::account_set::AccountSet;
     use xrpl::models::transactions::{CommonFields, TransactionType};
+
+    let AccountSetChanges {
+        set_flag,
+        clear_flag,
+        domain_hex,
+        tick_size,
+        transfer_rate,
+    } = *changes;
 
     let tx = AccountSet {
         common_fields: CommonFields::from_account(account.to_string())
@@ -679,9 +708,18 @@ pub fn build_account_set_tx_json_for_simulate(
 /// Highest `Fee` (drops) we sign when the node picks it: 2 XRP, the xrpl.js default `maxFeeXRP`.
 pub const MAX_NODE_FEE_DROPS: u32 = 2_000_000;
 
+/// `Sequence`, `Fee` and `LastLedgerSequence` as chosen by `simulate`, to be signed into the blob.
+/// Named fields because the three are all `u32` and a swapped pair would still compile.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SimulatedFill {
+    pub sequence: u32,
+    pub fee_drops: u32,
+    pub last_ledger_sequence: u32,
+}
+
 /// Extract `Sequence`, `Fee`, and `LastLedgerSequence` from a successful simulate response.
 /// A node-chosen `Fee` above [`MAX_NODE_FEE_DROPS`] is rejected before signing.
-pub fn sequence_fee_ledger_from_simulate(tx_json: &Value) -> color_eyre::Result<(u32, u32, u32)> {
+pub fn sequence_fee_ledger_from_simulate(tx_json: &Value) -> color_eyre::Result<SimulatedFill> {
     fn field_u32(tx: &Value, key: &str) -> color_eyre::Result<u32> {
         let v = tx
             .get(key)
@@ -698,11 +736,11 @@ pub fn sequence_fee_ledger_from_simulate(tx_json: &Value) -> color_eyre::Result<
             "refusing to sign: node-chosen Fee {fee} drops exceeds the {MAX_NODE_FEE_DROPS} drops cap"
         );
     }
-    Ok((
-        field_u32(tx_json, "Sequence")?,
-        fee,
-        field_u32(tx_json, "LastLedgerSequence")?,
-    ))
+    Ok(SimulatedFill {
+        sequence: field_u32(tx_json, "Sequence")?,
+        fee_drops: fee,
+        last_ledger_sequence: field_u32(tx_json, "LastLedgerSequence")?,
+    })
 }
 
 /// Transaction ID of a signed blob: SHA-512Half(`TXN\0` ‖ blob), uppercase hex. Computed locally
@@ -747,9 +785,7 @@ pub fn create_and_sign_set_regular_key(
     wallet: &xrpl::wallet::Wallet,
     account: &str,
     regular_key: Option<&str>,
-    sequence: u32,
-    fee_drops: u32,
-    last_ledger_sequence: u32,
+    fill: SimulatedFill,
 ) -> color_eyre::Result<String> {
     use xrpl::models::XRPAmount;
     use xrpl::models::transactions::set_regular_key::SetRegularKey;
@@ -758,9 +794,9 @@ pub fn create_and_sign_set_regular_key(
     let mut tx = SetRegularKey {
         common_fields: CommonFields::from_account(account.to_string())
             .with_transaction_type(TransactionType::SetRegularKey)
-            .with_sequence(sequence)
-            .with_fee(XRPAmount::from(fee_drops.to_string()))
-            .with_last_ledger_sequence(last_ledger_sequence),
+            .with_sequence(fill.sequence)
+            .with_fee(XRPAmount::from(fill.fee_drops.to_string()))
+            .with_last_ledger_sequence(fill.last_ledger_sequence),
         regular_key: regular_key.map(|k| k.to_string().into()),
     };
 
@@ -911,9 +947,7 @@ pub fn create_and_sign_offer_create(
     account: &str,
     taker_gets_spec: &str,
     taker_pays_spec: &str,
-    sequence: u32,
-    fee_drops: u32,
-    last_ledger_sequence: u32,
+    fill: SimulatedFill,
 ) -> color_eyre::Result<String> {
     use xrpl::models::XRPAmount;
     use xrpl::models::transactions::offer_create::OfferCreate;
@@ -926,9 +960,9 @@ pub fn create_and_sign_offer_create(
     let mut tx = OfferCreate {
         common_fields: CommonFields::from_account(account.to_string())
             .with_transaction_type(TransactionType::OfferCreate)
-            .with_sequence(sequence)
-            .with_fee(XRPAmount::from(fee_drops.to_string()))
-            .with_last_ledger_sequence(last_ledger_sequence),
+            .with_sequence(fill.sequence)
+            .with_fee(XRPAmount::from(fill.fee_drops.to_string()))
+            .with_last_ledger_sequence(fill.last_ledger_sequence),
         taker_gets,
         taker_pays,
         ..Default::default()
@@ -961,9 +995,7 @@ pub fn create_and_sign_offer_cancel(
     wallet: &xrpl::wallet::Wallet,
     account: &str,
     offer_sequence: u32,
-    sequence: u32,
-    fee_drops: u32,
-    last_ledger_sequence: u32,
+    fill: SimulatedFill,
 ) -> color_eyre::Result<String> {
     use xrpl::models::XRPAmount;
     use xrpl::models::transactions::offer_cancel::OfferCancel;
@@ -972,9 +1004,9 @@ pub fn create_and_sign_offer_cancel(
     let mut tx = OfferCancel {
         common_fields: CommonFields::from_account(account.to_string())
             .with_transaction_type(TransactionType::OfferCancel)
-            .with_sequence(sequence)
-            .with_fee(XRPAmount::from(fee_drops.to_string()))
-            .with_last_ledger_sequence(last_ledger_sequence),
+            .with_sequence(fill.sequence)
+            .with_fee(XRPAmount::from(fill.fee_drops.to_string()))
+            .with_last_ledger_sequence(fill.last_ledger_sequence),
         offer_sequence,
     };
 
@@ -1077,7 +1109,6 @@ pub fn build_escrow_create_tx_json_for_simulate(
     serde_json::to_value(&tx).map_err(|e| color_eyre::eyre::eyre!("escrow_create tx_json: {e}"))
 }
 
-#[allow(clippy::too_many_arguments)]
 pub fn create_and_sign_escrow_create(
     wallet: &xrpl::wallet::Wallet,
     account: &str,
@@ -1085,9 +1116,7 @@ pub fn create_and_sign_escrow_create(
     amount_drops: u64,
     finish_after: u32,
     cancel_after: Option<u32>,
-    sequence: u32,
-    fee_drops: u32,
-    last_ledger_sequence: u32,
+    fill: SimulatedFill,
 ) -> color_eyre::Result<String> {
     let mut tx = escrow_create_tx(
         account,
@@ -1095,8 +1124,8 @@ pub fn create_and_sign_escrow_create(
         amount_drops,
         finish_after,
         cancel_after,
-        sequence,
-        Some((fee_drops, last_ledger_sequence)),
+        fill.sequence,
+        Some((fill.fee_drops, fill.last_ledger_sequence)),
     );
     sign_blob!(tx, wallet)
 }
@@ -1158,16 +1187,13 @@ pub fn build_escrow_close_tx_json_for_simulate(
     value.map_err(|e| color_eyre::eyre::eyre!("escrow tx_json: {e}"))
 }
 
-#[allow(clippy::too_many_arguments)]
 pub fn create_and_sign_escrow_close(
     wallet: &xrpl::wallet::Wallet,
     account: &str,
     owner: &str,
     offer_sequence: u32,
     cancel: bool,
-    sequence: u32,
-    fee_drops: u32,
-    last_ledger_sequence: u32,
+    fill: SimulatedFill,
 ) -> color_eyre::Result<String> {
     use xrpl::models::transactions::escrow_cancel::EscrowCancel;
     use xrpl::models::transactions::escrow_finish::EscrowFinish;
@@ -1175,8 +1201,8 @@ pub fn create_and_sign_escrow_close(
     let common_fields = escrow_close_common(
         account,
         cancel,
-        sequence,
-        Some((fee_drops, last_ledger_sequence)),
+        fill.sequence,
+        Some((fill.fee_drops, fill.last_ledger_sequence)),
     );
     let owner = owner.to_string().into();
     if cancel {
@@ -1318,16 +1344,14 @@ pub fn create_and_sign_amm_deposit(
     account: &str,
     amount: &str,
     amount2: &str,
-    sequence: u32,
-    fee_drops: u32,
-    last_ledger_sequence: u32,
+    fill: SimulatedFill,
 ) -> color_eyre::Result<String> {
     let mut tx = amm_deposit_tx(
         account,
         amount,
         amount2,
-        sequence,
-        Some((fee_drops, last_ledger_sequence)),
+        fill.sequence,
+        Some((fill.fee_drops, fill.last_ledger_sequence)),
     )?;
     sign_blob!(tx, wallet)
 }
@@ -1389,24 +1413,21 @@ pub fn build_amm_withdraw_tx_json_for_simulate(
     serde_json::to_value(&tx).map_err(|e| color_eyre::eyre::eyre!("amm_withdraw tx_json: {e}"))
 }
 
-#[allow(clippy::too_many_arguments)]
 pub fn create_and_sign_amm_withdraw(
     wallet: &xrpl::wallet::Wallet,
     account: &str,
     asset: &str,
     asset2: &str,
     lp_token_in: LpTokenIn<'_>,
-    sequence: u32,
-    fee_drops: u32,
-    last_ledger_sequence: u32,
+    fill: SimulatedFill,
 ) -> color_eyre::Result<String> {
     let mut tx = amm_withdraw_tx(
         account,
         asset,
         asset2,
         lp_token_in,
-        sequence,
-        Some((fee_drops, last_ledger_sequence)),
+        fill.sequence,
+        Some((fill.fee_drops, fill.last_ledger_sequence)),
     )?;
     sign_blob!(tx, wallet)
 }
@@ -1454,31 +1475,26 @@ pub fn create_and_sign_account_delete(
     account: &str,
     destination: &str,
     destination_tag: Option<u32>,
-    sequence: u32,
-    fee_drops: u32,
-    last_ledger_sequence: u32,
+    fill: SimulatedFill,
 ) -> color_eyre::Result<String> {
     let mut tx = account_delete_tx(
         account,
         destination,
         destination_tag,
-        sequence,
-        Some((fee_drops, last_ledger_sequence)),
+        fill.sequence,
+        Some((fill.fee_drops, fill.last_ledger_sequence)),
     );
     sign_blob!(tx, wallet)
 }
 
 /// Create and sign a TrustSet transaction, returning the tx_blob hex (v1: limit only).
-#[allow(clippy::too_many_arguments)]
 pub fn create_and_sign_trust_set(
     wallet: &xrpl::wallet::Wallet,
     account: &str,
     currency: &str,
     issuer: &str,
     limit: &str,
-    sequence: u32,
-    fee_drops: u32,
-    last_ledger_sequence: u32,
+    fill: SimulatedFill,
 ) -> color_eyre::Result<String> {
     use xrpl::models::IssuedCurrencyAmount;
     use xrpl::models::XRPAmount;
@@ -1493,9 +1509,9 @@ pub fn create_and_sign_trust_set(
     let mut tx = TrustSet {
         common_fields: CommonFields::from_account(account.to_string())
             .with_transaction_type(TransactionType::TrustSet)
-            .with_sequence(sequence)
-            .with_fee(XRPAmount::from(fee_drops.to_string()))
-            .with_last_ledger_sequence(last_ledger_sequence),
+            .with_sequence(fill.sequence)
+            .with_fee(XRPAmount::from(fill.fee_drops.to_string()))
+            .with_last_ledger_sequence(fill.last_ledger_sequence),
         limit_amount: IssuedCurrencyAmount {
             currency: currency.to_string().into(),
             issuer: issuer.to_string().into(),
@@ -1595,30 +1611,31 @@ pub fn parse_account_set_flag_choice(
 }
 
 /// Serialize, sign, and encode an AccountSet transaction.
-#[allow(clippy::too_many_arguments)]
 pub fn create_and_sign_account_set(
     wallet: &xrpl::wallet::Wallet,
     account: &str,
-    sequence: u32,
-    fee_drops: u32,
-    last_ledger_sequence: u32,
-    set_flag: Option<xrpl::models::transactions::account_set::AccountSetFlag>,
-    clear_flag: Option<xrpl::models::transactions::account_set::AccountSetFlag>,
-    domain_hex: Option<&str>,
-    tick_size: Option<u32>,
-    transfer_rate: Option<u32>,
+    fill: SimulatedFill,
+    changes: &AccountSetChanges<'_>,
 ) -> color_eyre::Result<String> {
     use std::borrow::Cow;
     use xrpl::models::transactions::account_set::AccountSet;
     use xrpl::models::transactions::{CommonFields, TransactionType};
     use xrpl::models::{Model, XRPAmount};
 
+    let AccountSetChanges {
+        set_flag,
+        clear_flag,
+        domain_hex,
+        tick_size,
+        transfer_rate,
+    } = *changes;
+
     let mut tx = AccountSet {
         common_fields: CommonFields::from_account(account.to_string())
             .with_transaction_type(TransactionType::AccountSet)
-            .with_sequence(sequence)
-            .with_fee(XRPAmount::from(fee_drops.to_string()))
-            .with_last_ledger_sequence(last_ledger_sequence),
+            .with_sequence(fill.sequence)
+            .with_fee(XRPAmount::from(fill.fee_drops.to_string()))
+            .with_last_ledger_sequence(fill.last_ledger_sequence),
         set_flag,
         clear_flag,
         domain: domain_hex.map(|s| Cow::Owned(s.to_string())),
@@ -1765,10 +1782,21 @@ mod tests {
         });
         assert_eq!(
             sequence_fee_ledger_from_simulate(&tx).unwrap(),
-            (42, 12, 9_999_999)
+            SimulatedFill {
+                sequence: 42,
+                fee_drops: 12,
+                last_ledger_sequence: 9_999_999
+            }
         );
         let tx = serde_json::json!({"Sequence": "7", "Fee": 13, "LastLedgerSequence": "8"});
-        assert_eq!(sequence_fee_ledger_from_simulate(&tx).unwrap(), (7, 13, 8));
+        assert_eq!(
+            sequence_fee_ledger_from_simulate(&tx).unwrap(),
+            SimulatedFill {
+                sequence: 7,
+                fee_drops: 13,
+                last_ledger_sequence: 8
+            }
+        );
 
         // rejects bad fields
         let good = serde_json::json!({"Sequence": 1, "Fee": "12", "LastLedgerSequence": 10});
@@ -1824,7 +1852,13 @@ mod tests {
     fn build_payment_tx_json_for_simulate_contract() {
         // for simulate xrp
         let v = build_payment_tx_json_for_simulate(
-            "rSender", "rDest", "1", None, None, None, None, None, 7,
+            "rSender",
+            &PaymentSpec {
+                destination: "rDest",
+                amount_spec: "1",
+                ..Default::default()
+            },
+            7,
         )
         .expect("payment json");
         assert_eq!(v["TransactionType"], "Payment");
@@ -1837,13 +1871,13 @@ mod tests {
         let issuer = "rJrRMgiRgrU6hDF4pgu5DXQdWyPbY35ErN";
         let v = build_payment_tx_json_for_simulate(
             "rSender",
-            "rDest",
-            "12.5",
-            Some("USD"),
-            Some(issuer),
-            None,
-            None,
-            None,
+            &PaymentSpec {
+                destination: "rDest",
+                amount_spec: "12.5",
+                iou_currency: Some("USD"),
+                iou_issuer: Some(issuer),
+                ..Default::default()
+            },
             9,
         )
         .expect("iou payment json");
@@ -1858,13 +1892,12 @@ mod tests {
         // for simulate includes optional fields
         let v = build_payment_tx_json_for_simulate(
             "rSender",
-            "rDest",
-            "1",
-            None,
-            None,
-            None,
-            Some(12345),
-            None,
+            &PaymentSpec {
+                destination: "rDest",
+                amount_spec: "1",
+                destination_tag: Some(12345),
+                ..Default::default()
+            },
             3,
         )
         .expect("tagged payment json");
@@ -1874,13 +1907,12 @@ mod tests {
             build_direct_mint_memo_data("0xabcdef0123456789abcdef0123456789abcdef01").unwrap();
         let v = build_payment_tx_json_for_simulate(
             "rSender",
-            "rDest",
-            "1",
-            None,
-            None,
-            None,
-            None,
-            Some(memo.as_str()),
+            &PaymentSpec {
+                destination: "rDest",
+                amount_spec: "1",
+                memo_data: Some(memo.as_str()),
+                ..Default::default()
+            },
             9,
         )
         .unwrap();
@@ -1891,13 +1923,12 @@ mod tests {
         {
             let err = build_payment_tx_json_for_simulate(
                 "rSender",
-                "rDest",
-                "1",
-                Some("USD"),
-                None,
-                None,
-                None,
-                None,
+                &PaymentSpec {
+                    destination: "rDest",
+                    amount_spec: "1",
+                    iou_currency: Some("USD"),
+                    ..Default::default()
+                },
                 1,
             )
             .expect_err("partial iou");
@@ -2180,16 +2211,16 @@ mod tests {
         let blob = create_and_sign_payment(
             &wallet,
             &account,
-            "rG1QQv2nh2gr7RCZ1P8YYcBUKCCN633jCn",
-            "1",
-            None,
-            None,
-            None,
-            None,
-            None,
-            1,
-            12,
-            100,
+            &PaymentSpec {
+                destination: "rG1QQv2nh2gr7RCZ1P8YYcBUKCCN633jCn",
+                amount_spec: "1",
+                ..Default::default()
+            },
+            SimulatedFill {
+                sequence: 1,
+                fee_drops: 12,
+                last_ledger_sequence: 100,
+            },
         )
         .expect("signed payment");
 
@@ -2235,8 +2266,17 @@ mod tests {
         assert_eq!(json["Sequence"], 5);
 
         let wallet = wallet_from_family_seed(&sample_family_seed(), 0).expect("wallet");
-        let blob = create_and_sign_offer_cancel(&wallet, &wallet.classic_address, 42, 5, 12, 100)
-            .expect("signed");
+        let blob = create_and_sign_offer_cancel(
+            &wallet,
+            &wallet.classic_address,
+            42,
+            SimulatedFill {
+                sequence: 5,
+                fee_drops: 12,
+                last_ledger_sequence: 100,
+            },
+        )
+        .expect("signed");
         let decoded = decode(&blob).expect("decodes");
         assert_eq!(decoded["TransactionType"], "OfferCancel");
         assert_eq!(decoded["OfferSequence"], 42);
@@ -2323,9 +2363,11 @@ mod tests {
             1_000_000,
             800,
             Some(900),
-            5,
-            12,
-            100,
+            SimulatedFill {
+                sequence: 5,
+                fee_drops: 12,
+                last_ledger_sequence: 100,
+            },
         )
         .expect("signed");
         let d = decode(&blob).expect("decodes");
@@ -2347,8 +2389,19 @@ mod tests {
                 (&json["Owner"], &json["OfferSequence"]),
                 (&serde_json::json!(DEST), &serde_json::json!(42))
             );
-            let blob = create_and_sign_escrow_close(&wallet, &acct, DEST, 42, cancel, 5, 12, 100)
-                .expect("signed");
+            let blob = create_and_sign_escrow_close(
+                &wallet,
+                &acct,
+                DEST,
+                42,
+                cancel,
+                SimulatedFill {
+                    sequence: 5,
+                    fee_drops: 12,
+                    last_ledger_sequence: 100,
+                },
+            )
+            .expect("signed");
             let d = decode(&blob).expect("decodes");
             assert_seq_fee_lls(&d);
             assert_eq!(
@@ -2413,9 +2466,18 @@ mod tests {
             assert_eq!(dep["Asset2"], json!({"currency": "USD", "issuer": ISS}));
             assert_eq!(dep["Amount"], "1000000");
             assert_eq!(dep["Amount2"]["value"], "10");
-            let blob =
-                create_and_sign_amm_deposit(&wallet, &acct, "XRP:1000000", &usd10, 5, 12, 100)
-                    .expect("signed deposit");
+            let blob = create_and_sign_amm_deposit(
+                &wallet,
+                &acct,
+                "XRP:1000000",
+                &usd10,
+                SimulatedFill {
+                    sequence: 5,
+                    fee_drops: 12,
+                    last_ledger_sequence: 100,
+                },
+            )
+            .expect("signed deposit");
             let d = decode(&blob).expect("decode");
             assert_eq!(d["Flags"], 0x0010_0000);
             assert_seq_fee_lls(&d);
@@ -2433,9 +2495,19 @@ mod tests {
                 some["LPTokenIn"],
                 json!({"currency": LP, "issuer": ISS, "value": "12.5"})
             );
-            let blob =
-                create_and_sign_amm_withdraw(&wallet, &acct, "XRP", &usd, Some(lp_in), 5, 12, 100)
-                    .expect("signed withdraw");
+            let blob = create_and_sign_amm_withdraw(
+                &wallet,
+                &acct,
+                "XRP",
+                &usd,
+                Some(lp_in),
+                SimulatedFill {
+                    sequence: 5,
+                    fee_drops: 12,
+                    last_ledger_sequence: 100,
+                },
+            )
+            .expect("signed withdraw");
             let d = decode(&blob).expect("decode");
             assert_seq_fee_lls(&d);
             assert_eq!(
@@ -2465,13 +2537,14 @@ mod tests {
         let acct = "rG1QQv2nh2gr7RCZ1P8YYcBUKCCN633jCn";
         let iou = build_payment_tx_json_for_simulate(
             acct,
-            DEST,
-            "10",
-            Some("USD"),
-            Some(ISS),
-            Some("XRP:5000000"),
-            None,
-            None,
+            &PaymentSpec {
+                destination: DEST,
+                amount_spec: "10",
+                iou_currency: Some("USD"),
+                iou_issuer: Some(ISS),
+                send_max_spec: Some("XRP:5000000"),
+                ..Default::default()
+            },
             1,
         )
         .expect("iou with xrp sendmax");
@@ -2480,13 +2553,12 @@ mod tests {
 
         let xrp = build_payment_tx_json_for_simulate(
             acct,
-            DEST,
-            "1",
-            None,
-            None,
-            Some(&format!("USD:{ISS}:3")),
-            None,
-            None,
+            &PaymentSpec {
+                destination: DEST,
+                amount_spec: "1",
+                send_max_spec: Some(&format!("USD:{ISS}:3")),
+                ..Default::default()
+            },
             1,
         )
         .expect("xrp with iou sendmax");
@@ -2494,13 +2566,12 @@ mod tests {
 
         let err = build_payment_tx_json_for_simulate(
             acct,
-            DEST,
-            "1",
-            None,
-            None,
-            Some("XRP:5000000"),
-            None,
-            None,
+            &PaymentSpec {
+                destination: DEST,
+                amount_spec: "1",
+                send_max_spec: Some("XRP:5000000"),
+                ..Default::default()
+            },
             1,
         )
         .expect_err("xrp→xrp sendmax");

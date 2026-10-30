@@ -8,6 +8,7 @@
 //! Not supported: `CredentialIDs` on PaymentChannelClaim (deposit-auth credentials); AMMClawback
 //! (no typed model, see `coverage.rs`).
 
+use crate::signing::SimulatedFill;
 use color_eyre::eyre::eyre;
 use serde_json::Value;
 use xrpl::models::transactions::AuthAccount;
@@ -294,11 +295,14 @@ fn channel_create_sign(
     wallet: &xrpl::wallet::Wallet,
     account: &str,
     f: &Fields,
-    sequence: u32,
-    fee: u32,
-    lls: u32,
+    fill: SimulatedFill,
 ) -> color_eyre::Result<String> {
-    let mut tx = channel_create_tx(account, f, sequence, Some((fee, lls)))?;
+    let mut tx = channel_create_tx(
+        account,
+        f,
+        fill.sequence,
+        Some((fill.fee_drops, fill.last_ledger_sequence)),
+    )?;
     sign_blob!(tx, wallet)
 }
 
@@ -360,11 +364,14 @@ fn channel_fund_sign(
     wallet: &xrpl::wallet::Wallet,
     account: &str,
     f: &Fields,
-    sequence: u32,
-    fee: u32,
-    lls: u32,
+    fill: SimulatedFill,
 ) -> color_eyre::Result<String> {
-    let mut tx = channel_fund_tx(account, f, sequence, Some((fee, lls)))?;
+    let mut tx = channel_fund_tx(
+        account,
+        f,
+        fill.sequence,
+        Some((fill.fee_drops, fill.last_ledger_sequence)),
+    )?;
     sign_blob!(tx, wallet)
 }
 
@@ -488,11 +495,14 @@ fn channel_claim_sign(
     wallet: &xrpl::wallet::Wallet,
     account: &str,
     f: &Fields,
-    sequence: u32,
-    fee: u32,
-    lls: u32,
+    fill: SimulatedFill,
 ) -> color_eyre::Result<String> {
-    let mut tx = channel_claim_tx(account, f, sequence, Some((fee, lls)))?;
+    let mut tx = channel_claim_tx(
+        account,
+        f,
+        fill.sequence,
+        Some((fill.fee_drops, fill.last_ledger_sequence)),
+    )?;
     sign_blob!(tx, wallet)
 }
 
@@ -569,11 +579,14 @@ fn amm_create_sign(
     wallet: &xrpl::wallet::Wallet,
     account: &str,
     f: &Fields,
-    sequence: u32,
-    fee: u32,
-    lls: u32,
+    fill: SimulatedFill,
 ) -> color_eyre::Result<String> {
-    let mut tx = amm_create_tx(account, f, sequence, Some((fee, lls)))?;
+    let mut tx = amm_create_tx(
+        account,
+        f,
+        fill.sequence,
+        Some((fill.fee_drops, fill.last_ledger_sequence)),
+    )?;
     sign_blob!(tx, wallet)
 }
 
@@ -627,11 +640,14 @@ fn amm_vote_sign(
     wallet: &xrpl::wallet::Wallet,
     account: &str,
     f: &Fields,
-    sequence: u32,
-    fee: u32,
-    lls: u32,
+    fill: SimulatedFill,
 ) -> color_eyre::Result<String> {
-    let mut tx = amm_vote_tx(account, f, sequence, Some((fee, lls)))?;
+    let mut tx = amm_vote_tx(
+        account,
+        f,
+        fill.sequence,
+        Some((fill.fee_drops, fill.last_ledger_sequence)),
+    )?;
     sign_blob!(tx, wallet)
 }
 
@@ -732,11 +748,14 @@ fn amm_bid_sign(
     wallet: &xrpl::wallet::Wallet,
     account: &str,
     f: &Fields,
-    sequence: u32,
-    fee: u32,
-    lls: u32,
+    fill: SimulatedFill,
 ) -> color_eyre::Result<String> {
-    let mut tx = amm_bid_tx(account, f, sequence, Some((fee, lls)))?;
+    let mut tx = amm_bid_tx(
+        account,
+        f,
+        fill.sequence,
+        Some((fill.fee_drops, fill.last_ledger_sequence)),
+    )?;
     sign_blob!(tx, wallet)
 }
 
@@ -780,11 +799,14 @@ fn amm_delete_sign(
     wallet: &xrpl::wallet::Wallet,
     account: &str,
     f: &Fields,
-    sequence: u32,
-    fee: u32,
-    lls: u32,
+    fill: SimulatedFill,
 ) -> color_eyre::Result<String> {
-    let mut tx = amm_delete_tx(account, f, sequence, Some((fee, lls)))?;
+    let mut tx = amm_delete_tx(
+        account,
+        f,
+        fill.sequence,
+        Some((fill.fee_drops, fill.last_ledger_sequence)),
+    )?;
     sign_blob!(tx, wallet)
 }
 
@@ -1460,7 +1482,17 @@ mod tests {
         for (tx_type, fields) in samples() {
             let s = spec(tx_type);
             let prepared = s.prepare(&fields, 0).expect("valid");
-            let blob = (s.sign)(&wallet, &account, &prepared, sequence, fee, lls).expect(tx_type);
+            let blob = (s.sign)(
+                &wallet,
+                &account,
+                &prepared,
+                crate::signing::SimulatedFill {
+                    sequence,
+                    fee_drops: fee,
+                    last_ledger_sequence: lls,
+                },
+            )
+            .expect(tx_type);
             let d = decode(&blob).expect("decode");
             assert_eq!(d["TransactionType"], tx_type);
             assert_eq!(d["Account"], account.as_str());

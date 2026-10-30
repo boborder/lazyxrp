@@ -278,11 +278,14 @@ macro_rules! json_and_sign {
             wallet: &xrpl::wallet::Wallet,
             account: &str,
             f: &Fields,
-            sequence: u32,
-            fee: u32,
-            lls: u32,
+            fill: $crate::signing::SimulatedFill,
         ) -> color_eyre::Result<String> {
-            let mut tx = $tx(account, f, sequence, Some((fee, lls)))?;
+            let mut tx = $tx(
+                account,
+                f,
+                fill.sequence,
+                Some((fill.fee_drops, fill.last_ledger_sequence)),
+            )?;
             sign_blob!(tx, wallet)
         }
     };
@@ -1290,7 +1293,17 @@ mod tests {
             fields.insert("XChainBridge".into(), xb.clone());
             let s = spec(tx_type);
             let prepared = s.prepare(&fields, 0).expect("valid");
-            let blob = (s.sign)(&wallet, &me, &prepared, sequence, fee, lls).expect(tx_type);
+            let blob = (s.sign)(
+                &wallet,
+                &me,
+                &prepared,
+                crate::signing::SimulatedFill {
+                    sequence,
+                    fee_drops: fee,
+                    last_ledger_sequence: lls,
+                },
+            )
+            .expect(tx_type);
             let d = decode(&blob).expect("decode");
             assert_eq!(d["TransactionType"], tx_type);
             assert_eq!(d["Account"], me.as_str());
@@ -1355,7 +1368,17 @@ mod tests {
             ("Amount", &format!("USD:{ISSUER}:12.5")),
         ]);
         let p = COMMIT.prepare(&fields, 0).expect("valid");
-        let blob = (COMMIT.sign)(&wallet, &me, &p, 3, 12, 99).expect("sign");
+        let blob = (COMMIT.sign)(
+            &wallet,
+            &me,
+            &p,
+            crate::signing::SimulatedFill {
+                sequence: 3,
+                fee_drops: 12,
+                last_ledger_sequence: 99,
+            },
+        )
+        .expect("sign");
         let d = decode(&blob).expect("decode");
         assert_eq!(d["XChainBridge"]["LockingChainIssue"]["currency"], "USD");
         assert_eq!(d["XChainBridge"]["LockingChainIssue"]["issuer"], ISSUER);

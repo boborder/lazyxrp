@@ -294,7 +294,7 @@ impl WriteFlow<'_> {
         announce_success: bool,
         tx_json: serde_json::Value,
         describe: impl FnOnce(&str, u32, u32) -> color_eyre::Result<String>,
-        sign: impl FnOnce(u32, u32, u32) -> color_eyre::Result<String>,
+        sign: impl FnOnce(signing::SimulatedFill) -> color_eyre::Result<String>,
     ) -> color_eyre::Result<()> {
         let Self {
             rpc,
@@ -306,16 +306,13 @@ impl WriteFlow<'_> {
         let sim = super::submit::simulate_tx_requiring_tes_success(rpc, tx_json)
             .await
             .map_err(|e| color_eyre::eyre::eyre!(e))?;
-        let (tx_sequence, fee_drops, last_ledger_sequence) =
-            signing::sequence_fee_ledger_from_simulate(&sim.tx_json)?;
-        let prompt = describe(&sim.engine_result, fee_drops, tx_sequence)?;
+        let fill = signing::sequence_fee_ledger_from_simulate(&sim.tx_json)?;
+        let prompt = describe(&sim.engine_result, fill.fee_drops, fill.sequence)?;
         if !prompt_production_confirmation(&prompt, network, yes) {
             println!("Transaction cancelled by user.");
             return Ok(());
         }
-        let blob = signing::with_network_id(rpc.network_id(), || {
-            sign(tx_sequence, fee_drops, last_ledger_sequence)
-        })?;
+        let blob = signing::with_network_id(rpc.network_id(), || sign(fill))?;
         // Sign/submit failures propagate so scripts see a non-zero exit.
         let summary = rpc.submit_signed_tx(&blob).await?;
         println!("Transaction Hash: {}", summary.hash);
@@ -328,7 +325,7 @@ impl WriteFlow<'_> {
             let result = wait_validated(
                 rpc,
                 &summary.hash,
-                last_ledger_sequence,
+                fill.last_ledger_sequence,
                 WAIT_POLL,
                 WAIT_LIMIT,
             )
@@ -479,16 +476,7 @@ async fn cmd_offer_cancel(flow: &WriteFlow<'_>, sequence: u32) -> color_eyre::Re
             println!("OfferCancel #{sequence} from {account} (fee {fee_drops} drops)");
             Ok(format!("Cancel offer #{sequence} of {account}"))
         },
-        |tx_sequence, fee_drops, last_ledger_sequence| {
-            signing::create_and_sign_offer_cancel(
-                &wallet,
-                &account,
-                sequence,
-                tx_sequence,
-                fee_drops,
-                last_ledger_sequence,
-            )
-        },
+        |fill| signing::create_and_sign_offer_cancel(&wallet, &account, sequence, fill),
     )
     .await?;
     Ok(())
@@ -516,15 +504,13 @@ async fn cmd_offer_create(
             );
             Ok(format!("Place offer: give {taker_gets}, want {taker_pays}"))
         },
-        |tx_sequence, fee_drops, last_ledger_sequence| {
+        |fill| {
             signing::create_and_sign_offer_create(
                 &wallet,
                 &account,
                 &taker_gets,
                 &taker_pays,
-                tx_sequence,
-                fee_drops,
-                last_ledger_sequence,
+                fill,
             )
         },
     )
@@ -554,17 +540,7 @@ async fn cmd_amm_deposit(
             );
             Ok(format!("AMM deposit up to {amount} + {amount2}"))
         },
-        |tx_sequence, fee_drops, last_ledger_sequence| {
-            signing::create_and_sign_amm_deposit(
-                &wallet,
-                &account,
-                &amount,
-                &amount2,
-                tx_sequence,
-                fee_drops,
-                last_ledger_sequence,
-            )
-        },
+        |fill| signing::create_and_sign_amm_deposit(&wallet, &account, &amount, &amount2, fill),
     )
     .await?;
     Ok(())
@@ -602,17 +578,8 @@ async fn cmd_amm_withdraw(
             );
             Ok(format!("AMM withdraw {what} of {asset}/{asset2}"))
         },
-        |tx_sequence, fee_drops, last_ledger_sequence| {
-            signing::create_and_sign_amm_withdraw(
-                &wallet,
-                &account,
-                &asset,
-                &asset2,
-                lp_in,
-                tx_sequence,
-                fee_drops,
-                last_ledger_sequence,
-            )
+        |fill| {
+            signing::create_and_sign_amm_withdraw(&wallet, &account, &asset, &asset2, lp_in, fill)
         },
     )
     .await?;
@@ -646,15 +613,13 @@ async fn cmd_account_delete(flow: &WriteFlow<'_>, destination: String) -> color_
                 "AccountDelete {account} (remaining XRP to {dest}{tag_note})"
             ))
         },
-        |tx_sequence, fee_drops, last_ledger_sequence| {
+        |fill| {
             signing::create_and_sign_account_delete(
                 &wallet,
                 &account,
                 &dest,
                 tag,
-                tx_sequence,
-                fee_drops,
-                last_ledger_sequence,
+                fill,
             )
         },
     )
@@ -678,16 +643,7 @@ async fn cmd_generic_tx(flow: &WriteFlow<'_>, generic: Cmd) -> color_eyre::Resul
                 None => summary,
             })
         },
-        |tx_sequence, fee_drops, last_ledger_sequence| {
-            (spec.sign)(
-                &wallet,
-                &account,
-                &fields,
-                tx_sequence,
-                fee_drops,
-                last_ledger_sequence,
-            )
-        },
+        |fill| (spec.sign)(&wallet, &account, &fields, fill),
     )
     .await?;
     Ok(())
@@ -722,17 +678,14 @@ async fn cmd_send(
 
     // Never sign without simulate: Sequence/Fee/LastLedgerSequence come from simulate
     // (fee capped by `sequence_fee_ledger_from_simulate`).
-    let tx_json = signing::build_payment_tx_json_for_simulate(
-        &account,
-        &destination_classic,
-        &amount,
-        None,
-        None,
-        None,
+    let payment = signing::PaymentSpec {
+        destination: &destination_classic,
+        amount_spec: &amount,
         destination_tag,
-        None,
-        account_info.sequence,
-    )?;
+        ..Default::default()
+    };
+    let tx_json =
+        signing::build_payment_tx_json_for_simulate(&account, &payment, account_info.sequence)?;
     flow.simulate_confirm_submit(
         true,
         tx_json,
@@ -751,22 +704,7 @@ async fn cmd_send(
             }
             Ok(format!("Send {} XRP to {}", amount, destination_classic))
         },
-        |sequence, fee_drops, last_ledger_sequence| {
-            signing::create_and_sign_payment(
-                &wallet,
-                &account,
-                &destination_classic,
-                &amount,
-                None, // iou_currency: XRP-only
-                None, // iou_issuer: XRP-only
-                None, // send_max
-                destination_tag,
-                None, // memo_data
-                sequence,
-                fee_drops,
-                last_ledger_sequence,
-            )
-        },
+        |fill| signing::create_and_sign_payment(&wallet, &account, &payment, fill),
     )
     .await?;
     Ok(())

@@ -971,13 +971,12 @@ mod tests {
         .unwrap();
         let tx_json = crate::signing::build_payment_tx_json_for_simulate(
             "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
-            "rJrRMgiRgrU6hDF4pgu5DXQdWyPbY35ErN",
-            "1",
-            None,
-            None,
-            None,
-            None,
-            Some(&memo),
+            &crate::signing::PaymentSpec {
+                destination: "rJrRMgiRgrU6hDF4pgu5DXQdWyPbY35ErN",
+                amount_spec: "1",
+                memo_data: Some(&memo),
+                ..Default::default()
+            },
             7,
         )
         .unwrap();
@@ -1083,9 +1082,11 @@ mod submit_tests {
                     &wallet,
                     &wallet.classic_address,
                     1,
-                    2,
-                    12,
-                    99,
+                    crate::signing::SimulatedFill {
+                        sequence: 2,
+                        fee_drops: 12,
+                        last_ledger_sequence: 99,
+                    },
                 )
             })
             .unwrap();
