@@ -196,22 +196,22 @@ async fn poll_batch(
     action_tx: &UnboundedSender<Action>,
     flare_backoff: &mut Backoff,
 ) -> bool {
+    let xrpl_succeeded = poll_xrpl(&inputs, action_tx).await;
+    let oracle_succeeded = poll_oracle_prices(&inputs, action_tx).await;
+    poll_flare(&inputs, action_tx, flare_backoff).await;
+    xrpl_succeeded || oracle_succeeded
+}
+
+/// The XRPL reads for the active tab, fetched together; true when any of them succeeded.
+async fn poll_xrpl(inputs: &PollBatchInputs<'_>, action_tx: &UnboundedSender<Action>) -> bool {
     let PollBatchInputs {
         rpc,
         watch_address,
         book_pair,
-        oracles,
-        oracle_pairs,
-        flare_rpc_url,
-        flare_feeds,
-        flare_display,
-        flare_wallet_address,
-        smart_account_owner,
-        flare_fassets_execute,
-        flare_evm_key_set,
         skip_account_tx,
         active_tab,
-    } = inputs;
+        ..
+    } = *inputs;
     let skip_market = !should_poll_market_book(active_tab);
     let skip_account_tx = skip_account_tx || !should_poll_account_panels(active_tab);
     let skip_assets = !should_poll_asset_panels(active_tab);
@@ -347,55 +347,88 @@ async fn poll_batch(
             }
         }
     }
-    // Oracle aggregate prices (opt-in)
-    if !oracles.is_empty() && !oracle_pairs.is_empty() {
-        let futs: Vec<_> = oracle_pairs
-            .iter()
-            .map(|pair| async move {
-                let result = tokio::time::timeout(
-                    RPC_TIMEOUT,
-                    rpc.get_aggregate_price(oracles, &pair.base_asset, &pair.quote_asset),
-                )
-                .await;
-                (pair, result)
-            })
-            .collect();
-        let results = futures::future::join_all(futs).await;
-        let mut prices = Vec::new();
-        for (pair, result) in results {
-            let label = format!(
-                "get_aggregate_price({}/{})",
-                pair.base_asset, pair.quote_asset
-            );
-            match result {
-                Ok(Ok(price)) => {
-                    any_rpc_succeeded = true;
-                    prices.push(price);
+    any_rpc_succeeded
+}
+
+/// Opt-in `get_aggregate_price` for each configured pair; true when at least one price arrived.
+async fn poll_oracle_prices(
+    inputs: &PollBatchInputs<'_>,
+    action_tx: &UnboundedSender<Action>,
+) -> bool {
+    let PollBatchInputs {
+        rpc,
+        oracles,
+        oracle_pairs,
+        ..
+    } = *inputs;
+    if oracles.is_empty() || oracle_pairs.is_empty() {
+        return false;
+    }
+    let mut any_succeeded = false;
+    let futs: Vec<_> = oracle_pairs
+        .iter()
+        .map(|pair| async move {
+            let result = tokio::time::timeout(
+                RPC_TIMEOUT,
+                rpc.get_aggregate_price(oracles, &pair.base_asset, &pair.quote_asset),
+            )
+            .await;
+            (pair, result)
+        })
+        .collect();
+    let results = futures::future::join_all(futs).await;
+    let mut prices = Vec::new();
+    for (pair, result) in results {
+        let label = format!(
+            "get_aggregate_price({}/{})",
+            pair.base_asset, pair.quote_asset
+        );
+        match result {
+            Ok(Ok(price)) => {
+                any_succeeded = true;
+                prices.push(price);
+            }
+            Ok(Err(e)) => {
+                if let Err(e2) = action_tx.send(Action::XrplError(format!("{label}: {e}"))) {
+                    warn!(?e2, "action channel closed");
                 }
-                Ok(Err(e)) => {
-                    if let Err(e2) = action_tx.send(Action::XrplError(format!("{label}: {e}"))) {
-                        warn!(?e2, "action channel closed");
-                    }
-                }
-                Err(_) => {
-                    if let Err(e2) = action_tx.send(Action::XrplError(format!("{label}: timeout")))
-                    {
-                        warn!(?e2, "action channel closed");
-                    }
+            }
+            Err(_) => {
+                if let Err(e2) = action_tx.send(Action::XrplError(format!("{label}: timeout"))) {
+                    warn!(?e2, "action channel closed");
                 }
             }
         }
-        if !prices.is_empty()
-            && let Err(e) = action_tx.send(Action::XrplOraclePrices(prices))
-        {
-            warn!(?e, "action channel closed (get_aggregate_price)");
-        }
+    }
+    if !prices.is_empty()
+        && let Err(e) = action_tx.send(Action::XrplOraclePrices(prices))
+    {
+        warn!(?e, "action channel closed (get_aggregate_price)");
     }
 
-    // FTSO + FXRP AssetManager are shown on Overview; skip when another tab is
-    // focused or a flare-specific backoff window is open. Failures stay
-    // non-fatal (warn only) so XRPL polling continues; flare health never
-    // feeds the XRPL backoff decision.
+    any_succeeded
+}
+
+/// FTSO + FXRP AssetManager are shown on Overview; skip when another tab is
+/// focused or a flare-specific backoff window is open. Failures stay
+/// non-fatal (warn only) so XRPL polling continues; flare health never
+/// feeds the XRPL backoff decision.
+async fn poll_flare(
+    inputs: &PollBatchInputs<'_>,
+    action_tx: &UnboundedSender<Action>,
+    flare_backoff: &mut Backoff,
+) {
+    let PollBatchInputs {
+        flare_rpc_url,
+        flare_feeds,
+        flare_display,
+        flare_wallet_address,
+        smart_account_owner,
+        flare_fassets_execute,
+        flare_evm_key_set,
+        active_tab,
+        ..
+    } = *inputs;
     if active_tab == 0
         && flare_display != crate::config::FlareDisplay::Off
         && !flare_backoff.is_active()
@@ -496,8 +529,6 @@ async fn poll_batch(
             send_action(action_tx, Action::FlareFetchFailed);
         }
     }
-
-    any_rpc_succeeded
 }
 
 async fn poll_wallet_overview(
@@ -653,41 +684,40 @@ fn stale_write_refusal(cmd: &PollCommand, active: Network) -> Option<Action> {
     })
 }
 
+/// What one scheduled poll reads, taken from the task's settings for the active tab.
+fn batch_inputs<'a>(
+    ctx: &'a PollContext,
+    rpc: &'a RpcClient,
+    active_tab: usize,
+) -> PollBatchInputs<'a> {
+    PollBatchInputs {
+        rpc,
+        watch_address: &ctx.watch_address,
+        book_pair: &ctx.book_pair,
+        oracles: &ctx.oracles,
+        oracle_pairs: &ctx.oracle_pairs,
+        flare_rpc_url: ctx.flare_rpc_url.as_deref(),
+        flare_feeds: &ctx.flare_feeds,
+        flare_display: ctx.flare_display,
+        flare_wallet_address: ctx.flare_wallet_address.as_deref(),
+        smart_account_owner: ctx.seed_address.as_deref().unwrap_or(&ctx.watch_address),
+        flare_fassets_execute: ctx.flare_fassets_execute,
+        flare_evm_key_set: ctx.flare_evm_key.is_some(),
+        skip_account_tx: ctx.seed_address.is_some(),
+        active_tab,
+    }
+}
+
 async fn drive_poll_loop(
-    ctx: PollContext,
+    mut ctx: PollContext,
     mut refresh_rx: UnboundedReceiver<PollCommand>,
     mut poll_trigger_rx: UnboundedReceiver<()>,
     action_tx: UnboundedSender<Action>,
     cancel: CancellationToken,
 ) {
-    let PollContext {
-        rpc_url,
-        custom_rpc,
-        watch_address,
-        book_pair,
-        poll_interval,
-        seed_address,
-        signing_credential,
-        mut network_watch,
-        oracles,
-        oracle_pairs,
-        flare_rpc_url,
-        flare_feeds,
-        flare_fassets_execute,
-        flare_network,
-        flare_expected_core_vault,
-        flare_expected_operator,
-        flare_display,
-        flare_evm_key_env,
-        flare_evm_key,
-        flare_wallet_address,
-        tab_watch,
-        submit_lock,
-    } = ctx;
-    let signing_credential = signing_credential.as_ref();
     // Wrapped in an async RwLock so the network-switch arm can swap the client
     // mid-loop; read guards are Send and safe across awaits.
-    let rpc_cell = tokio::sync::RwLock::new(match RpcClient::connect(&rpc_url) {
+    let rpc_cell = tokio::sync::RwLock::new(match RpcClient::connect(&ctx.rpc_url) {
         Ok(rpc) => rpc,
         Err(err) => {
             if let Err(e) = action_tx.send(Action::XrplError(format!("rpc init failed: {err}"))) {
@@ -696,10 +726,10 @@ async fn drive_poll_loop(
             return;
         }
     });
-    let mut current_network = *network_watch.borrow();
+    let mut current_network = *ctx.network_watch.borrow();
     let mut backoff = Backoff::default();
     let mut flare_backoff = Backoff::default();
-    let mut tick = tokio::time::interval(poll_interval.max(Duration::from_millis(500)));
+    let mut tick = tokio::time::interval(ctx.poll_interval.max(Duration::from_millis(500)));
     let mut price_tick = tokio::time::interval(Duration::from_secs(90));
     // A slow poll must push the next one back, not trigger a catch-up burst of RPC calls.
     tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
@@ -711,24 +741,9 @@ async fn drive_poll_loop(
             let rpc = &*rpc_cell.read().await;
             last_poll = run_scheduled_poll(
                 rpc,
-                &tab_watch,
-                &|active_tab| PollBatchInputs {
-                    rpc,
-                    watch_address: &watch_address,
-                    book_pair: &book_pair,
-                    oracles: &oracles,
-                    oracle_pairs: &oracle_pairs,
-                    flare_rpc_url: flare_rpc_url.as_deref(),
-                    flare_feeds: &flare_feeds,
-                    flare_display,
-                    flare_wallet_address: flare_wallet_address.as_deref(),
-                    smart_account_owner: seed_address.as_deref().unwrap_or(&watch_address),
-                    flare_fassets_execute,
-                    flare_evm_key_set: flare_evm_key.is_some(),
-                    skip_account_tx: seed_address.is_some(),
-                    active_tab,
-                },
-                seed_address.as_deref(),
+                &ctx.tab_watch,
+                &|active_tab| batch_inputs(&ctx, rpc, active_tab),
+                ctx.seed_address.as_deref(),
                 &action_tx,
                 &mut backoff,
                 &mut flare_backoff,
@@ -739,16 +754,16 @@ async fn drive_poll_loop(
     loop {
         tokio::select! {
             _ = cancel.cancelled() => return,
-            network_res = network_watch.changed() => {
+            network_res = ctx.network_watch.changed() => {
                 if network_res.is_err() {
                     continue;
                 }
-                let new_network = *network_watch.borrow();
+                let new_network = *ctx.network_watch.borrow();
                 if new_network == current_network {
                     continue;
                 }
                 current_network = new_network;
-                if custom_rpc {
+                if ctx.custom_rpc {
                     continue;
                 }
                 match RpcClient::connect(new_network.rpc_url()) {
@@ -784,7 +799,7 @@ async fn drive_poll_loop(
             _ = price_tick.tick() => {
                 let price = tokio::time::timeout(
                     RPC_TIMEOUT,
-                    rpc_cell.read().await.book_mid_price(book_pair.pays_currency(), &book_pair.issuer),
+                    rpc_cell.read().await.book_mid_price(ctx.book_pair.pays_currency(), &ctx.book_pair.issuer),
                 )
                 .await;
                 match price {
@@ -794,228 +809,266 @@ async fn drive_poll_loop(
                 };
             }
             Some(cmd) = refresh_rx.recv() => {
-                let network = *network_watch.borrow();
+                let network = *ctx.network_watch.borrow();
                 if let Some(refusal) = stale_write_refusal(&cmd, network) {
                     send_action(&action_tx, refusal);
                     continue;
                 }
-                macro_rules! submit {
-                    ($submit_fn:ident, $params:expr $(, $extra:expr)*) => {{
-                        let _guard = submit_lock.lock().await;
-                        $submit_fn(&*rpc_cell.read().await, &network, $params, $($extra,)* &action_tx, signing_credential).await
-                    }};
-                }
-                match cmd {
-                    PollCommand::Account => dispatch_timed(
-                        &action_tx,
-                        "account_info",
-                        tokio::time::timeout(RPC_TIMEOUT, rpc_cell.read().await.account_info(&watch_address)).await,
-                        |account| Action::XrplAccount(Box::new(account)),
-                    ),
-                    PollCommand::Book => dispatch_timed(
-                        &action_tx,
-                        "book_offers",
-                        tokio::time::timeout(
-                            RPC_TIMEOUT,
-                            rpc_cell.read().await.book_offers(
-                                book_pair.gets_currency(),
-                                book_pair.gets_issuer(),
-                                book_pair.pays_currency(),
-                                book_pair.pays_issuer(),
-                                book_pair.limit,
-                            ),
-                        )
-                        .await,
-                        Action::XrplBookOffers,
-                    ),
-                    PollCommand::Nfts => dispatch_timed(
-                        &action_tx,
-                        "account_nfts",
-                        tokio::time::timeout(RPC_TIMEOUT, rpc_cell.read().await.account_nfts(&watch_address)).await,
-                        Action::XrplAccountNfts,
-                    ),
-                    PollCommand::Lines => dispatch_timed(
-                        &action_tx,
-                        "account_lines",
-                        tokio::time::timeout(RPC_TIMEOUT, rpc_cell.read().await.account_lines(&watch_address)).await,
-                        Action::XrplTrustLines,
-                    ),
-                    PollCommand::TxHistory => {
-                        dispatch_account_tx(&*rpc_cell.read().await, &watch_address, None, false, &action_tx)
-                            .await;
-                    }
-                    PollCommand::TxHistoryMore(marker) => {
-                        dispatch_account_tx(&*rpc_cell.read().await, &watch_address, marker, true, &action_tx)
-                            .await;
-                    }
-                    PollCommand::LedgerObjects => dispatch_timed(
-                        &action_tx,
-                        "account_objects",
-                        tokio::time::timeout(RPC_TIMEOUT, rpc_cell.read().await.account_objects(&watch_address)).await,
-                        Action::XrplLedgerObjects,
-                    ),
-                    PollCommand::AccountSetSubmit(params) => {
-                        submit!(submit_account_set_transaction, params);
-                    }
-                    PollCommand::PaymentSubmit(params) => {
-                        submit!(submit_payment_transaction, params);
-                    }
-                    PollCommand::FxrpDirectMintPayment(params) => {
-                        let _guard = submit_lock.lock().await;
-                        let fresh = match flare_rpc_url.as_deref() {
-                            Some(url) => tokio::time::timeout(
-                                RPC_TIMEOUT,
-                                crate::flare::verify_direct_mint_terms(url, &params),
-                            )
-                            .await
-                            .unwrap_or_else(|_| Err("Flare re-check before signing timed out".into())),
-                            None => Err("flare RPC URL not configured".into()),
-                        };
-                        match fresh {
-                            Err(e) => {
-                                send_action(&action_tx, Action::FxrpDirectMintPaymentSubmitErr(e));
-                            }
-                            Ok(()) => {
-                                submit_fxrp_direct_mint_payment(
-                                    &*rpc_cell.read().await,
-                                    &network,
-                                    flare_network,
-                                    params,
-                                    flare_expected_core_vault.as_deref(),
-                                    &action_tx,
-                                    signing_credential,
-                                )
-                                .await;
-                            }
-                        }
-                    }
-                    PollCommand::SmartAccountInstruction(params) => {
-                        let _guard = submit_lock.lock().await;
-                        let owner = signing_credential.and_then(|c| c.address().ok());
-                        let fresh = match (flare_rpc_url.as_deref(), owner) {
-                            (Some(url), Some(owner)) => tokio::time::timeout(
-                                RPC_TIMEOUT,
-                                crate::flare::verify_smart_account_terms(url, &owner, &params),
-                            )
-                            .await
-                            .unwrap_or_else(|_| Err("Flare re-check before signing timed out".into())),
-                            _ => Err("flare RPC URL or signing key not configured".into()),
-                        };
-                        match fresh {
-                            Err(e) => {
-                                send_action(&action_tx, Action::SmartAccountInstructionSubmitErr(e));
-                            }
-                            Ok(()) => {
-                                submit_smart_account_instruction(
-                                    &*rpc_cell.read().await,
-                                    &network,
-                                    flare_network,
-                                    params,
-                                    flare_expected_operator.as_deref(),
-                                    &action_tx,
-                                    signing_credential,
-                                )
-                                .await;
-                            }
-                        }
-                    }
-                    PollCommand::FxrpExecuteDirectMint(params) => {
-                        submit_fxrp_execute_direct_mint(
-                            flare_rpc_url.as_deref(),
-                            flare_fassets_execute,
-                            flare_network,
-                            &flare_evm_key_env,
-                            flare_evm_key.as_ref(),
-                            params,
-                            &action_tx,
-                        ).await;
-                    }
-                    PollCommand::SetRegularKeySubmit(params) => {
-                        submit!(submit_set_regular_key_transaction, params);
-                    }
-                    PollCommand::OfferCreateSubmit(params) => {
-                        submit!(submit_offer_create_transaction, params);
-                    }
-                    PollCommand::AccountOffers => match seed_address.as_deref() {
-                        Some(addr) => dispatch_timed(
-                            &action_tx,
-                            "account_offers",
-                            tokio::time::timeout(RPC_TIMEOUT, rpc_cell.read().await.account_offers(addr)).await,
-                            Action::XrplAccountOffers,
-                        ),
-                        None => {
-                            send_action(
-                                &action_tx,
-                                Action::XrplError("account_offers: no signing credential".into()),
-                            );
-                        }
-                    },
-                    PollCommand::OfferCancelSubmit(params) => {
-                        submit!(submit_offer_cancel_transaction, params);
-                    }
-                    PollCommand::PaymentQuote(params) => {
-                        let action = match seed_address.as_deref() {
-                            None => Action::PaymentQuoteErr("no signing credential".into()),
-                            Some(source) => match quote_payment(&*rpc_cell.read().await, source, params).await {
-                                Ok(spec) => Action::PaymentQuoteOk(spec),
-                                Err(e) => Action::PaymentQuoteErr(e),
-                            },
-                        };
-                        send_action(&action_tx, action);
-                    }
-                    PollCommand::TrustSetSubmit(params) => {
-                        submit!(submit_trust_set_transaction, params);
-                    }
-                    PollCommand::GenerateWalletKeys(key_type) => {
-                        match crate::signing::generate_wallet_keys_local(&key_type) {
-                            Ok(result) => {
-                                if let Err(e) = action_tx.send(Action::GenerateWalletKeysOk(result)) {
-                                    warn!(?e, "action channel closed");
-                                }
-                            }
-                            Err(e) => {
-                                if let Err(e) =
-                                    action_tx.send(Action::GenerateWalletKeysErr(format!("{e}")))
-                                {
-                                    warn!(?e, "action channel closed");
-                                }
-                            }
-                        }
-                    }
-                    PollCommand::EscrowCreateSubmit(params) => {
-                        submit!(submit_escrow_create_transaction, params);
-                    }
-                    PollCommand::AccountEscrows => match seed_address.as_deref() {
-                        Some(addr) => dispatch_timed(
-                            &action_tx,
-                            "account_escrows",
-                            tokio::time::timeout(RPC_TIMEOUT, rpc_cell.read().await.account_escrows(addr)).await,
-                            Action::XrplAccountEscrows,
-                        ),
-                        None => {
-                            send_action(
-                                &action_tx,
-                                Action::XrplError("account_escrows: no signing credential".into()),
-                            );
-                        }
-                    },
-                    PollCommand::EscrowCloseSubmit(params) => {
-                        submit!(submit_escrow_close_transaction, params);
-                    }
-                    PollCommand::AmmDepositSubmit(params) => {
-                        submit!(submit_amm_deposit_transaction, params);
-                    }
-                    PollCommand::AmmWithdrawSubmit(params) => {
-                        submit!(submit_amm_withdraw_transaction, params);
-                    }
-                    PollCommand::AccountDeleteSubmit(params) => {
-                        submit!(submit_account_delete_transaction, params);
-                    }
-                    PollCommand::GenericTx(params) => {
-                        submit!(submit_generic_transaction, params);
-                    }
+                run_command(cmd, network, &ctx, &rpc_cell, &action_tx).await;
+            }
+        }
+    }
+}
+
+/// Run one queued command against the live client. A write holds `submit_lock` for its whole
+/// account_info → simulate → sign → submit sequence so two writes never share a sequence number.
+async fn run_command(
+    cmd: PollCommand,
+    network: Network,
+    ctx: &PollContext,
+    rpc_cell: &tokio::sync::RwLock<RpcClient>,
+    action_tx: &UnboundedSender<Action>,
+) {
+    let watch_address = &ctx.watch_address;
+    let signing_credential = ctx.signing_credential.as_ref();
+    // One bounded read against the live client, reported as `ctor(value)` or an error action.
+    macro_rules! read {
+        ($label:literal, $call:expr, $ctor:expr) => {
+            dispatch_timed(
+                action_tx,
+                $label,
+                tokio::time::timeout(RPC_TIMEOUT, $call).await,
+                $ctor,
+            )
+        };
+    }
+    // A signing-account read, refused when no credential is configured.
+    macro_rules! read_signer {
+        ($label:literal, $call:ident, $ctor:expr) => {
+            match ctx.seed_address.as_deref() {
+                Some(addr) => read!($label, rpc_cell.read().await.$call(addr), $ctor),
+                None => {
+                    let reason = concat!($label, ": no signing credential");
+                    send_action(action_tx, Action::XrplError(reason.into()));
                 }
             }
+        };
+    }
+    macro_rules! submit {
+        ($submit_fn:ident, $params:expr) => {{
+            let _guard = ctx.submit_lock.lock().await;
+            $submit_fn(
+                &*rpc_cell.read().await,
+                &network,
+                $params,
+                action_tx,
+                signing_credential,
+            )
+            .await
+        }};
+    }
+    match cmd {
+        PollCommand::Account => read!(
+            "account_info",
+            rpc_cell.read().await.account_info(watch_address),
+            |account| Action::XrplAccount(Box::new(account))
+        ),
+        PollCommand::Book => read!(
+            "book_offers",
+            rpc_cell.read().await.book_offers(
+                ctx.book_pair.gets_currency(),
+                ctx.book_pair.gets_issuer(),
+                ctx.book_pair.pays_currency(),
+                ctx.book_pair.pays_issuer(),
+                ctx.book_pair.limit,
+            ),
+            Action::XrplBookOffers
+        ),
+        PollCommand::Nfts => read!(
+            "account_nfts",
+            rpc_cell.read().await.account_nfts(watch_address),
+            Action::XrplAccountNfts
+        ),
+        PollCommand::Lines => read!(
+            "account_lines",
+            rpc_cell.read().await.account_lines(watch_address),
+            Action::XrplTrustLines
+        ),
+        PollCommand::LedgerObjects => read!(
+            "account_objects",
+            rpc_cell.read().await.account_objects(watch_address),
+            Action::XrplLedgerObjects
+        ),
+        PollCommand::TxHistory => {
+            let rpc = rpc_cell.read().await;
+            dispatch_account_tx(&rpc, watch_address, None, false, action_tx).await;
+        }
+        PollCommand::TxHistoryMore(marker) => {
+            let rpc = rpc_cell.read().await;
+            dispatch_account_tx(&rpc, watch_address, marker, true, action_tx).await;
+        }
+        PollCommand::AccountOffers => {
+            read_signer!("account_offers", account_offers, Action::XrplAccountOffers)
+        }
+        PollCommand::AccountEscrows => {
+            read_signer!(
+                "account_escrows",
+                account_escrows,
+                Action::XrplAccountEscrows
+            )
+        }
+        PollCommand::PaymentQuote(params) => {
+            run_payment_quote(params, ctx.seed_address.as_deref(), rpc_cell, action_tx).await;
+        }
+        PollCommand::GenerateWalletKeys(key_type) => {
+            let action = match crate::signing::generate_wallet_keys_local(&key_type) {
+                Ok(result) => Action::GenerateWalletKeysOk(result),
+                Err(e) => Action::GenerateWalletKeysErr(format!("{e}")),
+            };
+            send_action(action_tx, action);
+        }
+        PollCommand::FxrpDirectMintPayment(params) => {
+            run_fxrp_direct_mint_payment(params, network, ctx, rpc_cell, action_tx).await;
+        }
+        PollCommand::SmartAccountInstruction(params) => {
+            run_smart_account_instruction(params, network, ctx, rpc_cell, action_tx).await;
+        }
+        PollCommand::FxrpExecuteDirectMint(params) => {
+            submit_fxrp_execute_direct_mint(
+                ctx.flare_rpc_url.as_deref(),
+                ctx.flare_fassets_execute,
+                ctx.flare_network,
+                &ctx.flare_evm_key_env,
+                ctx.flare_evm_key.as_ref(),
+                params,
+                action_tx,
+            )
+            .await;
+        }
+        PollCommand::AccountSetSubmit(params) => submit!(submit_account_set_transaction, params),
+        PollCommand::PaymentSubmit(params) => submit!(submit_payment_transaction, params),
+        PollCommand::SetRegularKeySubmit(params) => {
+            submit!(submit_set_regular_key_transaction, params)
+        }
+        PollCommand::OfferCreateSubmit(params) => submit!(submit_offer_create_transaction, params),
+        PollCommand::OfferCancelSubmit(params) => submit!(submit_offer_cancel_transaction, params),
+        PollCommand::TrustSetSubmit(params) => submit!(submit_trust_set_transaction, params),
+        PollCommand::EscrowCreateSubmit(params) => {
+            submit!(submit_escrow_create_transaction, params)
+        }
+        PollCommand::EscrowCloseSubmit(params) => submit!(submit_escrow_close_transaction, params),
+        PollCommand::AmmDepositSubmit(params) => submit!(submit_amm_deposit_transaction, params),
+        PollCommand::AmmWithdrawSubmit(params) => submit!(submit_amm_withdraw_transaction, params),
+        PollCommand::AccountDeleteSubmit(params) => {
+            submit!(submit_account_delete_transaction, params)
+        }
+        PollCommand::GenericTx(params) => submit!(submit_generic_transaction, params),
+    }
+}
+
+/// `ripple_path_find` quote for the Payment composer; the signing account is the source.
+async fn run_payment_quote(
+    params: crate::xrpl::PaymentQuoteParams,
+    source: Option<&str>,
+    rpc_cell: &tokio::sync::RwLock<RpcClient>,
+    action_tx: &UnboundedSender<Action>,
+) {
+    let quote = match source {
+        None => Err("no signing credential".into()),
+        Some(source) => quote_payment(&*rpc_cell.read().await, source, params).await,
+    };
+    let action = match quote {
+        Ok(spec) => Action::PaymentQuoteOk(spec),
+        Err(e) => Action::PaymentQuoteErr(e),
+    };
+    send_action(action_tx, action);
+}
+
+/// FXRP Direct Mint Payment: re-verify the pinned terms on Flare, then sign and submit on XRPL.
+async fn run_fxrp_direct_mint_payment(
+    params: crate::xrpl::FxrpDirectMintPaymentParams,
+    network: Network,
+    ctx: &PollContext,
+    rpc_cell: &tokio::sync::RwLock<RpcClient>,
+    action_tx: &UnboundedSender<Action>,
+) {
+    let (flare_network, signing_credential) = (ctx.flare_network, ctx.signing_credential.as_ref());
+    let PollContext {
+        flare_rpc_url,
+        flare_expected_core_vault,
+        submit_lock,
+        ..
+    } = ctx;
+    let _guard = submit_lock.lock().await;
+    let fresh = match flare_rpc_url.as_deref() {
+        Some(url) => tokio::time::timeout(
+            RPC_TIMEOUT,
+            crate::flare::verify_direct_mint_terms(url, &params),
+        )
+        .await
+        .unwrap_or_else(|_| Err("Flare re-check before signing timed out".into())),
+        None => Err("flare RPC URL not configured".into()),
+    };
+    match fresh {
+        Err(e) => {
+            send_action(action_tx, Action::FxrpDirectMintPaymentSubmitErr(e));
+        }
+        Ok(()) => {
+            submit_fxrp_direct_mint_payment(
+                &*rpc_cell.read().await,
+                &network,
+                flare_network,
+                params,
+                flare_expected_core_vault.as_deref(),
+                action_tx,
+                signing_credential,
+            )
+            .await;
+        }
+    }
+}
+
+/// Smart Account instruction: re-verify the pinned terms on Flare, then sign and submit on XRPL.
+async fn run_smart_account_instruction(
+    params: crate::xrpl::SmartAccountInstructionParams,
+    network: Network,
+    ctx: &PollContext,
+    rpc_cell: &tokio::sync::RwLock<RpcClient>,
+    action_tx: &UnboundedSender<Action>,
+) {
+    let (flare_network, signing_credential) = (ctx.flare_network, ctx.signing_credential.as_ref());
+    let PollContext {
+        flare_rpc_url,
+        flare_expected_operator,
+        submit_lock,
+        ..
+    } = ctx;
+    let _guard = submit_lock.lock().await;
+    let owner = signing_credential.and_then(|c| c.address().ok());
+    let fresh = match (flare_rpc_url.as_deref(), owner) {
+        (Some(url), Some(owner)) => tokio::time::timeout(
+            RPC_TIMEOUT,
+            crate::flare::verify_smart_account_terms(url, &owner, &params),
+        )
+        .await
+        .unwrap_or_else(|_| Err("Flare re-check before signing timed out".into())),
+        _ => Err("flare RPC URL or signing key not configured".into()),
+    };
+    match fresh {
+        Err(e) => {
+            send_action(action_tx, Action::SmartAccountInstructionSubmitErr(e));
+        }
+        Ok(()) => {
+            submit_smart_account_instruction(
+                &*rpc_cell.read().await,
+                &network,
+                flare_network,
+                params,
+                flare_expected_operator.as_deref(),
+                action_tx,
+                signing_credential,
+            )
+            .await;
         }
     }
 }
@@ -1342,5 +1395,167 @@ mod tests {
             matches!(no_pool, Ok(Action::XrplAmmInfo(None))),
             "{no_pool:?}"
         );
+    }
+
+    /// TC-372: `run_command` sends each read command to its own RPC and reports a node error under
+    /// that command's label; reads that need the signing account refuse without one, before any
+    /// RPC. Commands that make no RPC (`PaymentQuote` without an account, key generation) answer
+    /// with their own action.
+    #[tokio::test]
+    async fn run_command_routes_each_read_to_its_rpc_and_label() {
+        use crate::test_support::rpc_mock;
+        use crate::xrpl::PaymentQuoteParams;
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.expect("bind");
+        let url = format!("http://{}", listener.local_addr().expect("addr"));
+        // 7 reads without a signing account, 9 with one.
+        let server = tokio::spawn(rpc_mock::serve(
+            listener,
+            16,
+            |_| serde_json::json!({"error": "slowDown", "error_code": 10, "error_message": "busy"}),
+        ));
+        let rpc_cell = tokio::sync::RwLock::new(RpcClient::connect(&url).expect("rpc client"));
+        let (_net_tx, network_watch) = tokio::sync::watch::channel(Network::Testnet);
+        let (_tab_tx, tab_watch) = tokio::sync::watch::channel(0_usize);
+        let ctx = |seed: Option<&str>| PollContext {
+            rpc_url: url.clone(),
+            custom_rpc: true,
+            watch_address: "rWatch".into(),
+            book_pair: BookPair {
+                base: "XRP".into(),
+                quote: "rIss".into(),
+                quote_code: "USD".into(),
+                issuer: "rIss".into(),
+                limit: 10,
+            },
+            poll_interval: Duration::from_secs(3600),
+            seed_address: seed.map(str::to_string),
+            signing_credential: None,
+            network_watch: network_watch.clone(),
+            tab_watch: tab_watch.clone(),
+            oracles: vec![],
+            oracle_pairs: vec![],
+            flare_rpc_url: None,
+            flare_feeds: vec![],
+            flare_expected_core_vault: None,
+            flare_fassets_execute: false,
+            flare_network: Default::default(),
+            flare_expected_operator: None,
+            flare_display: Default::default(),
+            flare_evm_key_env: "FLARE_EVM_KEY".into(),
+            flare_evm_key: None,
+            flare_wallet_address: None,
+            submit_lock: std::sync::Arc::new(tokio::sync::Mutex::new(())),
+        };
+        let run_reads = |seed: Option<&'static str>| {
+            let ctx = ctx(seed);
+            let rpc_cell = &rpc_cell;
+            async move {
+                let (tx, mut rx) = mpsc::unbounded_channel();
+                for cmd in [
+                    PollCommand::Account,
+                    PollCommand::Book,
+                    PollCommand::Nfts,
+                    PollCommand::Lines,
+                    PollCommand::LedgerObjects,
+                    PollCommand::TxHistory,
+                    PollCommand::TxHistoryMore(None),
+                    PollCommand::AccountOffers,
+                    PollCommand::AccountEscrows,
+                ] {
+                    run_command(cmd, Network::Testnet, &ctx, rpc_cell, &tx).await;
+                }
+                drop(tx);
+                let mut actions = Vec::new();
+                while let Some(action) = rx.recv().await {
+                    actions.push(format!("{action:?}"));
+                }
+                actions
+            }
+        };
+
+        let node_error = |label: &str| format!("XrplError(\"{label}: [XRPL-10] busy\")");
+        let refused = |label: &str| format!("XrplError(\"{label}: no signing credential\")");
+        let watched = vec![
+            node_error("account_info"),
+            node_error("book_offers"),
+            node_error("account_nfts"),
+            node_error("account_lines"),
+            node_error("account_objects"),
+            node_error("account_tx"),
+            node_error("account_tx"),
+        ];
+        assert_eq!(
+            run_reads(None).await,
+            [
+                watched.clone(),
+                vec![refused("account_offers"), refused("account_escrows")]
+            ]
+            .concat()
+        );
+        assert_eq!(
+            run_reads(Some("rSeed")).await,
+            [
+                watched,
+                vec![node_error("account_offers"), node_error("account_escrows")]
+            ]
+            .concat()
+        );
+        let requests = server.await.expect("join").expect("server");
+        let methods = rpc_mock::methods(&requests);
+        let watched_methods = [
+            "account_info",
+            "book_offers",
+            "account_nfts",
+            "account_lines",
+            "account_objects",
+            "account_tx",
+            "account_tx",
+        ];
+        assert_eq!(
+            methods[..7],
+            watched_methods,
+            "no signing account: no extra RPC"
+        );
+        assert_eq!(
+            methods[7..],
+            [
+                watched_methods.as_slice(),
+                &["account_offers", "account_objects"]
+            ]
+            .concat()
+        );
+
+        // no RPC at all
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let quote = PaymentQuoteParams {
+            destination: "rDest".into(),
+            amount: "1".into(),
+            iou_currency: None,
+            iou_issuer: None,
+            send_max: String::new(),
+            slippage_bps: 0,
+        };
+        run_command(
+            PollCommand::PaymentQuote(quote),
+            Network::Testnet,
+            &ctx(None),
+            &rpc_cell,
+            &tx,
+        )
+        .await;
+        assert!(
+            matches!(rx.try_recv(), Ok(Action::PaymentQuoteErr(m)) if m == "no signing credential")
+        );
+        run_command(
+            PollCommand::GenerateWalletKeys("ed25519".into()),
+            Network::Testnet,
+            &ctx(None),
+            &rpc_cell,
+            &tx,
+        )
+        .await;
+        assert!(matches!(rx.try_recv(), Ok(Action::GenerateWalletKeysOk(_))));
     }
 }

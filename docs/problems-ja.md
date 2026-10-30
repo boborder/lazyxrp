@@ -54,7 +54,7 @@
 
 ### P-013: 150 行を超える関数がまだ残っている
 
-- 分割済み: `render_composer`（983 → 104 行）、wallet の `key_action`、`execute_cli_command`（483 → 123）。まだ長い: `poll.rs::drive_poll_loop`（370）と `poll_batch`（309）、`lib.rs::run_flare_command`（324）、`app.rs::drain_and_dispatch_actions`（280）、`tx_detail::detail_lines_for`（214）、`validator_detail_lines`（184）、`wallet.rs::update`（174）、`submit_fxrp_direct_mint_payment`（171）、`server.rs::draw`（164）、`submit_smart_account_instruction`（160）、`submit_payment_transaction`（159）、`account.rs::draw`（150）。
+- 分割済み: `render_composer`（983 → 104 行）、wallet の `key_action`、`execute_cli_command`（483 → 123）、`poll.rs::drive_poll_loop`（366 → 111。コマンドの振り分けは `run_command`、143 行で TC-372 が検証）と `poll_batch`（308 → 3 段階）、`app.rs::drain_and_dispatch_actions`（280 → 11 行と `handle_action` の 132 行）。まだ長い: `lib.rs::run_flare_command`（324）、`tx_detail::detail_lines_for`（214）、`validator_detail_lines`（184）、`wallet.rs::update`（174）、`submit_fxrp_direct_mint_payment`（171）、`server.rs::draw`（164）、`submit_smart_account_instruction`（160）、`submit_payment_transaction`（159）、`account.rs::draw`（150）。
 - `run_flare_command` には自動テストがない（書き込みに live の Flare ノードが要る）ため、実行手段と合わせて分割する。
 
 ### ~~P-014: `signing.rs` 以外に `too_many_arguments` の allow が 7 個残っている~~ → 解決（2026-10-30）

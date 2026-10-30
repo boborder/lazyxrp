@@ -160,6 +160,38 @@ fn resolve_flare_feeds() -> Vec<String> {
         .collect()
 }
 
+/// The poll-task command an action asks for, if it is one of the actions forwarded to the task.
+fn poll_command_for(action: &Action) -> Option<PollCommand> {
+    Some(match action {
+        Action::AccountSetSubmit(params) => PollCommand::AccountSetSubmit(params.clone()),
+        Action::PaymentSubmit(params) => PollCommand::PaymentSubmit(params.clone()),
+        Action::PaymentQuote(params) => PollCommand::PaymentQuote(params.clone()),
+        Action::SetRegularKeySubmit(params) => PollCommand::SetRegularKeySubmit(params.clone()),
+        Action::EscrowCreateSubmit(params) => PollCommand::EscrowCreateSubmit(params.clone()),
+        Action::EscrowCloseSubmit(params) => PollCommand::EscrowCloseSubmit(params.clone()),
+        Action::AmmDepositSubmit(params) => PollCommand::AmmDepositSubmit(params.clone()),
+        Action::AmmWithdrawSubmit(params) => PollCommand::AmmWithdrawSubmit(params.clone()),
+        Action::AccountDeleteSubmit(params) => PollCommand::AccountDeleteSubmit(params.clone()),
+        Action::GenericTxSubmit(params) => PollCommand::GenericTx(params.clone()),
+        Action::OfferCreateSubmit(params) => PollCommand::OfferCreateSubmit(params.clone()),
+        Action::OfferCancelSubmit(params) => PollCommand::OfferCancelSubmit(params.clone()),
+        Action::TrustSetSubmit(params) => PollCommand::TrustSetSubmit(params.clone()),
+        Action::FxrpDirectMintPaymentSubmit(params) => {
+            PollCommand::FxrpDirectMintPayment(params.clone())
+        }
+        Action::FxrpExecuteDirectMintSubmit(params) => {
+            PollCommand::FxrpExecuteDirectMint(params.clone())
+        }
+        Action::SmartAccountInstructionSubmit(params) => {
+            PollCommand::SmartAccountInstruction(params.clone())
+        }
+        Action::RefreshAccountEscrows => PollCommand::AccountEscrows,
+        Action::RefreshAccountOffers => PollCommand::AccountOffers,
+        Action::GenerateWalletKeys => PollCommand::GenerateWalletKeys("ed25519".into()),
+        _ => return None,
+    })
+}
+
 /// The resolved network and the RPC / WebSocket URLs to use for it (CLI, env and config
 /// overrides already applied).
 pub struct Endpoints {
@@ -498,278 +530,249 @@ impl App {
             if !matches!(&action, Action::Tick | Action::NftImageLoaded { .. }) {
                 debug!("{action:?}");
             }
-            // Dirty policy: keys/resize/data/UI => always; Tick => splash only here;
-            // FPS label refresh marks dirty after fps.note_action. `run()` draws once
-            // per loop iteration when dirty (`draw_frame`), coalescing queued actions.
-            // The FPS frame counter is fed directly by `draw_frame`.
-            match &action {
-                Action::Tick => {
-                    self.last_tick_key_events.drain(..);
-                    if !self.startup_done {
-                        self.needs_draw = true;
-                    }
-                }
-                _ => {
+            self.mark_dirty(&action);
+            self.handle_action(&action, tui.as_deref_mut())?;
+            self.fan_out(&action)?;
+        }
+        Ok(())
+    }
+
+    /// Dirty policy: keys/resize/data/UI => always; Tick => splash only here; FPS label refresh
+    /// marks dirty after fps.note_action. `run()` draws once per loop iteration when dirty
+    /// (`draw_frame`), coalescing queued actions. The FPS frame counter is fed directly by
+    /// `draw_frame`.
+    fn mark_dirty(&mut self, action: &Action) {
+        match action {
+            Action::Tick => {
+                self.last_tick_key_events.drain(..);
+                if !self.startup_done {
                     self.needs_draw = true;
                 }
             }
-            match &action {
-                Action::Tick => {}
-                Action::Quit => self.should_quit = true,
-                Action::Suspend => self.should_suspend = true,
-                Action::Resume => self.should_suspend = false,
-                Action::ClearScreen => {
-                    if let Some(tui) = tui.as_deref_mut() {
-                        tui.terminal.clear()?;
-                    }
-                }
-                Action::Resize(w, h) => {
-                    if let Some(tui) = tui.as_deref_mut() {
-                        self.on_resize(tui, *w, *h)?;
-                    }
-                }
-                Action::TabNext => {
-                    self.active_tab = (self.active_tab + 1) % TAB_TITLES.len();
-                    let _ = self.tab_tx.send(self.active_tab);
-                }
-                Action::TabPrev => {
-                    self.active_tab = if self.active_tab == 0 {
-                        TAB_TITLES.len() - 1
-                    } else {
-                        self.active_tab - 1
-                    };
-                    let _ = self.tab_tx.send(self.active_tab);
-                }
-                Action::TabJump(i) if *i < TAB_TITLES.len() => {
-                    self.active_tab = *i;
-                    let _ = self.tab_tx.send(self.active_tab);
-                }
-                Action::NetworkChange(net) => {
-                    self.network = *net;
-                    if let Err(err) = self.net_tx.send(*net) {
-                        warn!(?err, "network watch channel closed");
-                    }
-                }
-                Action::NetworkSwitchCycle => {
-                    let next = self.network.next_network();
-                    if self.action_tx.send(Action::NetworkChange(next)).is_err() {
-                        warn!("action channel closed (network switch)");
-                    }
-                }
-                Action::NftImageRequest { nft_id, uri } => {
-                    if self.nft_images_inflight.insert(nft_id.clone()) {
-                        let action_tx = self.action_tx.clone();
-                        let nft_id = nft_id.clone();
-                        let uri = uri.clone();
-                        tokio::spawn(async move {
-                            match crate::xrpl::fetch_nft_image(&uri).await {
-                                Ok(image) => {
-                                    if let Err(err) = action_tx.send(Action::NftImageLoaded {
-                                        nft_id,
-                                        bytes: Arc::new(image.bytes),
-                                    }) {
-                                        warn!(?err, "action channel closed (nft image)");
-                                    }
-                                }
-                                Err(err) => {
-                                    let _ = action_tx.send(Action::NftImageError {
-                                        nft_id,
-                                        message: err.to_string(),
-                                    });
-                                }
-                            }
-                        });
-                    }
-                }
-                Action::RequestXrplToml {
-                    domain,
-                    expected_pubkey,
-                } => {
-                    if self.toml_inflight.insert(domain.clone()) {
-                        let domain = domain.clone();
-                        let expected_pubkey = expected_pubkey.clone();
-                        let tx = self.action_tx.clone();
-                        tokio::spawn(async move {
-                            let fetched = fetch_xrpl_toml_with_meta(
-                                &domain,
-                                &expected_pubkey,
-                                Duration::from_secs(10),
-                            )
-                            .await;
-                            if tx
-                                .send(Action::XrplTomlFetched {
-                                    domain,
-                                    status: fetched.status,
-                                    content_type: fetched.content_type,
-                                    raw: fetched.raw,
-                                    result: fetched.result,
-                                })
-                                .is_err()
-                            {
-                                warn!("action channel closed (xrpl toml fetch)");
-                            }
-                        });
-                    }
-                }
-                Action::XrplTomlFetched { domain, .. } => {
-                    self.toml_inflight.remove(domain);
-                }
-                Action::NftImageLoaded { nft_id, .. } | Action::NftImageError { nft_id, .. } => {
-                    self.nft_images_inflight.remove(nft_id);
-                }
-                Action::RefreshAccount => {
-                    Self::send_debounced_poll(
-                        &mut self.last_refresh_account,
-                        &self.poll_tx,
-                        PollCommand::Account,
-                    );
-                }
-                Action::RefreshBook => {
-                    Self::send_debounced_poll(
-                        &mut self.last_refresh_book,
-                        &self.poll_tx,
-                        PollCommand::Book,
-                    );
-                }
-                Action::RefreshNfts => {
-                    Self::send_debounced_poll(
-                        &mut self.last_refresh_nfts,
-                        &self.poll_tx,
-                        PollCommand::Nfts,
-                    );
-                }
-                Action::RefreshLines => {
-                    Self::send_debounced_poll(
-                        &mut self.last_refresh_lines,
-                        &self.poll_tx,
-                        PollCommand::Lines,
-                    );
-                }
-                Action::RefreshTxHistory => {
-                    Self::send_debounced_poll(
-                        &mut self.last_refresh_tx_history,
-                        &self.poll_tx,
-                        PollCommand::TxHistory,
-                    );
-                }
-                Action::RefreshTxHistoryMore(marker) => {
-                    if let Err(err) = self
-                        .poll_tx
-                        .send(PollCommand::TxHistoryMore(marker.clone()))
-                    {
-                        warn!(?err, "poll command channel closed");
-                    }
-                }
-                Action::RefreshLedgerObjects => {
-                    Self::send_debounced_poll(
-                        &mut self.last_refresh_ledger_objects,
-                        &self.poll_tx,
-                        PollCommand::LedgerObjects,
-                    );
-                }
-                Action::SetKeymapSuppression(on) => {
-                    self.keymap_suppressed = *on;
-                }
-                Action::AccountSetSubmit(params) => {
-                    self.send_poll(PollCommand::AccountSetSubmit(params.clone()))
-                }
-                Action::PaymentSubmit(params) => {
-                    self.send_poll(PollCommand::PaymentSubmit(params.clone()))
-                }
-                Action::PaymentQuote(params) => {
-                    self.send_poll(PollCommand::PaymentQuote(params.clone()))
-                }
-                Action::SetRegularKeySubmit(params) => {
-                    self.send_poll(PollCommand::SetRegularKeySubmit(params.clone()))
-                }
-                Action::EscrowCreateSubmit(params) => {
-                    self.send_poll(PollCommand::EscrowCreateSubmit(params.clone()))
-                }
-                Action::RefreshAccountEscrows => self.send_poll(PollCommand::AccountEscrows),
-                Action::EscrowCloseSubmit(params) => {
-                    self.send_poll(PollCommand::EscrowCloseSubmit(params.clone()))
-                }
-                Action::AmmDepositSubmit(params) => {
-                    self.send_poll(PollCommand::AmmDepositSubmit(params.clone()))
-                }
-                Action::AmmWithdrawSubmit(params) => {
-                    self.send_poll(PollCommand::AmmWithdrawSubmit(params.clone()))
-                }
-                Action::AccountDeleteSubmit(params) => {
-                    self.send_poll(PollCommand::AccountDeleteSubmit(params.clone()))
-                }
-                Action::GenericTxSubmit(params) => {
-                    self.send_poll(PollCommand::GenericTx(params.clone()))
-                }
-                Action::TxComposerOpen { .. } => {
-                    // Only the signing wallet answers it (--watch has none): never jump to
-                    // an Account tab that would show no composer.
-                    if self.has_wallet {
-                        self.active_tab = ACCOUNT_TAB;
-                        let _ = self.tab_tx.send(self.active_tab);
-                    }
-                }
-                Action::OfferCreateSubmit(params) => {
-                    self.send_poll(PollCommand::OfferCreateSubmit(params.clone()))
-                }
-                Action::RefreshAccountOffers => self.send_poll(PollCommand::AccountOffers),
-                Action::OfferCancelSubmit(params) => {
-                    self.send_poll(PollCommand::OfferCancelSubmit(params.clone()))
-                }
-                Action::TrustSetSubmit(params) => {
-                    self.send_poll(PollCommand::TrustSetSubmit(params.clone()))
-                }
-                Action::FxrpDirectMintPaymentSubmit(params) => {
-                    self.send_poll(PollCommand::FxrpDirectMintPayment(params.clone()))
-                }
-                Action::FxrpExecuteDirectMintSubmit(params) => {
-                    self.send_poll(PollCommand::FxrpExecuteDirectMint(params.clone()))
-                }
-                Action::SmartAccountInstructionSubmit(params) => {
-                    self.send_poll(PollCommand::SmartAccountInstruction(params.clone()))
-                }
-                Action::GenerateWalletKeys => {
-                    self.send_poll(PollCommand::GenerateWalletKeys("ed25519".into()))
-                }
-                Action::XrplServerInfo(_) => self.startup_done = true,
-                // Unreachable RPC: leave the splash so the error UI is visible.
-                Action::XrplError(msg)
-                    if msg.starts_with("server_info") || msg.starts_with("rpc init failed") =>
-                {
-                    self.startup_done = true;
-                }
-                Action::Help => self.show_help = !self.show_help,
-                _ => {}
-            }
-            // Nav/selection/overlay actions belong to the visible tab; data and results fan out.
-            let targets = if matches!(
-                action,
-                Action::FocusNext
-                    | Action::FocusPrev
-                    | Action::SelectNext
-                    | Action::SelectPrev
-                    | Action::TxDetailToggle
-                    | Action::NftBurnStart
-            ) {
-                self.active_tab..self.active_tab + 1
-            } else {
-                0..self.panels.len()
-            };
-            for panel in &mut self.panels[targets] {
-                if let Some(a) = panel.update(&action)? {
-                    self.action_tx.send(a)?;
-                }
-            }
-            if let Some(a) = self.status_bar.update(&action)? {
-                self.action_tx.send(a)?;
-            }
-            // FPS tick-rate label: dirty at most once/sec when the text changes.
-            if matches!(action, Action::Tick) && self.fps.note_action(&action) {
+            _ => {
                 self.needs_draw = true;
             }
-            if !self.startup_done {
-                self.splash.update(&action)?;
+        }
+    }
+
+    /// App-level effects of one action: quit/suspend, tab and network switches, background fetches,
+    /// poll commands. Panels see every action afterwards, in [`App::fan_out`].
+    fn handle_action(&mut self, action: &Action, tui: Option<&mut Tui>) -> color_eyre::Result<()> {
+        match action {
+            Action::Tick => {}
+            Action::Quit => self.should_quit = true,
+            Action::Suspend => self.should_suspend = true,
+            Action::Resume => self.should_suspend = false,
+            Action::ClearScreen => {
+                if let Some(tui) = tui {
+                    tui.terminal.clear()?;
+                }
             }
+            Action::Resize(w, h) => {
+                if let Some(tui) = tui {
+                    self.on_resize(tui, *w, *h)?;
+                }
+            }
+            Action::TabNext => {
+                self.active_tab = (self.active_tab + 1) % TAB_TITLES.len();
+                let _ = self.tab_tx.send(self.active_tab);
+            }
+            Action::TabPrev => {
+                self.active_tab = if self.active_tab == 0 {
+                    TAB_TITLES.len() - 1
+                } else {
+                    self.active_tab - 1
+                };
+                let _ = self.tab_tx.send(self.active_tab);
+            }
+            Action::TabJump(i) if *i < TAB_TITLES.len() => {
+                self.active_tab = *i;
+                let _ = self.tab_tx.send(self.active_tab);
+            }
+            Action::NetworkChange(net) => {
+                self.network = *net;
+                if let Err(err) = self.net_tx.send(*net) {
+                    warn!(?err, "network watch channel closed");
+                }
+            }
+            Action::NetworkSwitchCycle => {
+                let next = self.network.next_network();
+                if self.action_tx.send(Action::NetworkChange(next)).is_err() {
+                    warn!("action channel closed (network switch)");
+                }
+            }
+            Action::NftImageRequest { nft_id, uri } => self.request_nft_image(nft_id, uri),
+            Action::RequestXrplToml {
+                domain,
+                expected_pubkey,
+            } => self.request_xrpl_toml(domain, expected_pubkey),
+            Action::XrplTomlFetched { domain, .. } => {
+                self.toml_inflight.remove(domain);
+            }
+            Action::NftImageLoaded { nft_id, .. } | Action::NftImageError { nft_id, .. } => {
+                self.nft_images_inflight.remove(nft_id);
+            }
+            Action::RefreshAccount => {
+                Self::send_debounced_poll(
+                    &mut self.last_refresh_account,
+                    &self.poll_tx,
+                    PollCommand::Account,
+                );
+            }
+            Action::RefreshBook => {
+                Self::send_debounced_poll(
+                    &mut self.last_refresh_book,
+                    &self.poll_tx,
+                    PollCommand::Book,
+                );
+            }
+            Action::RefreshNfts => {
+                Self::send_debounced_poll(
+                    &mut self.last_refresh_nfts,
+                    &self.poll_tx,
+                    PollCommand::Nfts,
+                );
+            }
+            Action::RefreshLines => {
+                Self::send_debounced_poll(
+                    &mut self.last_refresh_lines,
+                    &self.poll_tx,
+                    PollCommand::Lines,
+                );
+            }
+            Action::RefreshTxHistory => {
+                Self::send_debounced_poll(
+                    &mut self.last_refresh_tx_history,
+                    &self.poll_tx,
+                    PollCommand::TxHistory,
+                );
+            }
+            Action::RefreshTxHistoryMore(marker) => {
+                if let Err(err) = self
+                    .poll_tx
+                    .send(PollCommand::TxHistoryMore(marker.clone()))
+                {
+                    warn!(?err, "poll command channel closed");
+                }
+            }
+            Action::RefreshLedgerObjects => {
+                Self::send_debounced_poll(
+                    &mut self.last_refresh_ledger_objects,
+                    &self.poll_tx,
+                    PollCommand::LedgerObjects,
+                );
+            }
+            Action::SetKeymapSuppression(on) => {
+                self.keymap_suppressed = *on;
+            }
+            Action::TxComposerOpen { .. } => {
+                // Only the signing wallet answers it (--watch has none): never jump to
+                // an Account tab that would show no composer.
+                if self.has_wallet {
+                    self.active_tab = ACCOUNT_TAB;
+                    let _ = self.tab_tx.send(self.active_tab);
+                }
+            }
+            Action::XrplServerInfo(_) => self.startup_done = true,
+            // Unreachable RPC: leave the splash so the error UI is visible.
+            Action::XrplError(msg)
+                if msg.starts_with("server_info") || msg.starts_with("rpc init failed") =>
+            {
+                self.startup_done = true;
+            }
+            Action::Help => self.show_help = !self.show_help,
+            _ => {
+                if let Some(command) = poll_command_for(action) {
+                    self.send_poll(command);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Fetch an NFT image in the background; a request already in flight is ignored.
+    fn request_nft_image(&mut self, nft_id: &str, uri: &str) {
+        if self.nft_images_inflight.insert(nft_id.to_string()) {
+            let action_tx = self.action_tx.clone();
+            let nft_id = nft_id.to_string();
+            let uri = uri.to_string();
+            tokio::spawn(async move {
+                match crate::xrpl::fetch_nft_image(&uri).await {
+                    Ok(image) => {
+                        if let Err(err) = action_tx.send(Action::NftImageLoaded {
+                            nft_id,
+                            bytes: Arc::new(image.bytes),
+                        }) {
+                            warn!(?err, "action channel closed (nft image)");
+                        }
+                    }
+                    Err(err) => {
+                        let _ = action_tx.send(Action::NftImageError {
+                            nft_id,
+                            message: err.to_string(),
+                        });
+                    }
+                }
+            });
+        }
+    }
+
+    /// Fetch a validator's xrp-ledger.toml in the background; a request already in flight is ignored.
+    fn request_xrpl_toml(&mut self, domain: &str, expected_pubkey: &str) {
+        if self.toml_inflight.insert(domain.to_string()) {
+            let domain = domain.to_string();
+            let expected_pubkey = expected_pubkey.to_string();
+            let tx = self.action_tx.clone();
+            tokio::spawn(async move {
+                let fetched =
+                    fetch_xrpl_toml_with_meta(&domain, &expected_pubkey, Duration::from_secs(10))
+                        .await;
+                if tx
+                    .send(Action::XrplTomlFetched {
+                        domain,
+                        status: fetched.status,
+                        content_type: fetched.content_type,
+                        raw: fetched.raw,
+                        result: fetched.result,
+                    })
+                    .is_err()
+                {
+                    warn!("action channel closed (xrpl toml fetch)");
+                }
+            });
+        }
+    }
+
+    /// Hand the action to the panels, the status bar and the splash.
+    fn fan_out(&mut self, action: &Action) -> color_eyre::Result<()> {
+        // Nav/selection/overlay actions belong to the visible tab; data and results fan out.
+        let targets = if matches!(
+            action,
+            Action::FocusNext
+                | Action::FocusPrev
+                | Action::SelectNext
+                | Action::SelectPrev
+                | Action::TxDetailToggle
+                | Action::NftBurnStart
+        ) {
+            self.active_tab..self.active_tab + 1
+        } else {
+            0..self.panels.len()
+        };
+        for panel in &mut self.panels[targets] {
+            if let Some(a) = panel.update(action)? {
+                self.action_tx.send(a)?;
+            }
+        }
+        if let Some(a) = self.status_bar.update(action)? {
+            self.action_tx.send(a)?;
+        }
+        // FPS tick-rate label: dirty at most once/sec when the text changes.
+        if matches!(action, Action::Tick) && self.fps.note_action(action) {
+            self.needs_draw = true;
+        }
+        if !self.startup_done {
+            self.splash.update(action)?;
         }
         Ok(())
     }
@@ -1180,5 +1183,27 @@ mod tests {
         app.drain_and_dispatch_actions(None)?;
         assert_eq!(app.active_tab, 0);
         Ok(())
+    }
+
+    /// TC-373: the actions the poll task serves are forwarded as their own poll command; the
+    /// debounced refreshes and everything else are not (payload-carrying ones are matched to their
+    /// command by type at compile time).
+    #[test]
+    fn poll_command_for_forwards_only_poll_task_actions() {
+        assert!(matches!(
+            poll_command_for(&Action::RefreshAccountEscrows),
+            Some(PollCommand::AccountEscrows)
+        ));
+        assert!(matches!(
+            poll_command_for(&Action::RefreshAccountOffers),
+            Some(PollCommand::AccountOffers)
+        ));
+        assert!(matches!(
+            poll_command_for(&Action::GenerateWalletKeys),
+            Some(PollCommand::GenerateWalletKeys(key_type)) if key_type == "ed25519"
+        ));
+        for action in [Action::Tick, Action::RefreshAccount, Action::Help] {
+            assert!(poll_command_for(&action).is_none(), "{action:?}");
+        }
     }
 }
