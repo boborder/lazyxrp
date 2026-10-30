@@ -36,59 +36,15 @@ pub struct AccountPanel {
     pub is_focused: bool,
 }
 
-impl Component for AccountPanel {
-    fn register_config_handler(&mut self, config: Arc<Config>) -> color_eyre::Result<()> {
-        self.config = Some(config);
-        Ok(())
-    }
-
-    fn update(&mut self, action: &Action) -> color_eyre::Result<Option<Action>> {
-        match action {
-            Action::Tick => self.tick = self.tick.wrapping_add(1),
-            Action::XrplAccount(account) => self.account = Some((**account).clone()),
-            Action::XrplAccountTx(tx) => self.last_tx_hash = Some(tx.hash.clone()),
-            Action::XrplBookOffers(offers) => {
-                if let Some(o) = offers.first() {
-                    self.last_quality = Some(o.quality.clone());
-                    self.last_price = Some(o.price.clone());
-                }
-            }
-            Action::XrplLedgerClose {
-                reserve_base,
-                reserve_inc,
-                ..
-            } => {
-                self.reserve_base_drops = Some(*reserve_base);
-                self.reserve_inc_drops = Some(*reserve_inc);
-            }
-            _ => {}
-        }
-        Ok(None)
-    }
-
-    fn draw(&mut self, frame: &mut Frame, area: Rect) -> color_eyre::Result<()> {
-        let Some(account) = &self.account else {
-            render_loading(
-                frame,
-                area,
-                "Account",
-                self.tick,
-                "loading account...",
-                self.is_focused,
-            );
-            return Ok(());
-        };
-
-        let block = theme::panel_block("Account", self.is_focused);
-        let inner = block.inner(area);
-        frame.render_widget(block, area);
-
-        // Two columns: identity (left) | balance / reserve (right)
-        let [left, right] =
-            Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)])
-                .areas(inner);
-
-        // ── Left: identity / activity ─────────────────────────────────────
+impl AccountPanel {
+    /// Left column: identity and activity.
+    fn draw_identity(
+        &self,
+        frame: &mut Frame,
+        area: Rect,
+        account: &AccountSummary,
+        balance_xrp: f64,
+    ) {
         let label_style = theme::dim_style();
         let value_style = theme::accent_style();
         let currency = self
@@ -96,7 +52,6 @@ impl Component for AccountPanel {
             .as_ref()
             .map(|c| c.xrpl.currency.clone())
             .unwrap_or_else(|| "CCY".to_string());
-        let balance_xrp: f64 = account.balance_xrp.parse().unwrap_or(0.0);
         let est_value = if let Some(price) = self.last_price.as_ref() {
             if let Ok(p) = price.parse::<f64>() {
                 format!("{:.3} {}", balance_xrp * p, currency)
@@ -133,16 +88,25 @@ impl Component for AccountPanel {
             ]),
         ];
 
-        frame.render_widget(Paragraph::new(id_lines), left);
+        frame.render_widget(Paragraph::new(id_lines), area);
+    }
 
-        // ── Right: balance + reserve gauge ────────────────────────────────
+    /// Right column: balance, reserve and how much of the balance the reserve takes.
+    fn draw_reserve(
+        &self,
+        frame: &mut Frame,
+        area: Rect,
+        account: &AccountSummary,
+        balance_xrp: f64,
+    ) {
+        let label_style = theme::dim_style();
         let [balance_area, gauge_label_area, gauge_area, footnote_area] = Layout::vertical([
             Constraint::Length(3),
             Constraint::Length(1),
             Constraint::Length(1),
             Constraint::Min(0),
         ])
-        .areas(right);
+        .areas(area);
 
         let reserve_base = self
             .reserve_base_drops
@@ -213,6 +177,64 @@ impl Component for AccountPanel {
                 footnote_area,
             );
         }
+    }
+}
+
+impl Component for AccountPanel {
+    fn register_config_handler(&mut self, config: Arc<Config>) -> color_eyre::Result<()> {
+        self.config = Some(config);
+        Ok(())
+    }
+
+    fn update(&mut self, action: &Action) -> color_eyre::Result<Option<Action>> {
+        match action {
+            Action::Tick => self.tick = self.tick.wrapping_add(1),
+            Action::XrplAccount(account) => self.account = Some((**account).clone()),
+            Action::XrplAccountTx(tx) => self.last_tx_hash = Some(tx.hash.clone()),
+            Action::XrplBookOffers(offers) => {
+                if let Some(o) = offers.first() {
+                    self.last_quality = Some(o.quality.clone());
+                    self.last_price = Some(o.price.clone());
+                }
+            }
+            Action::XrplLedgerClose {
+                reserve_base,
+                reserve_inc,
+                ..
+            } => {
+                self.reserve_base_drops = Some(*reserve_base);
+                self.reserve_inc_drops = Some(*reserve_inc);
+            }
+            _ => {}
+        }
+        Ok(None)
+    }
+
+    fn draw(&mut self, frame: &mut Frame, area: Rect) -> color_eyre::Result<()> {
+        let Some(account) = &self.account else {
+            render_loading(
+                frame,
+                area,
+                "Account",
+                self.tick,
+                "loading account...",
+                self.is_focused,
+            );
+            return Ok(());
+        };
+
+        let block = theme::panel_block("Account", self.is_focused);
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
+
+        // Two columns: identity (left) | balance / reserve (right)
+        let [left, right] =
+            Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)])
+                .areas(inner);
+
+        let balance_xrp: f64 = account.balance_xrp.parse().unwrap_or(0.0);
+        self.draw_identity(frame, left, account, balance_xrp);
+        self.draw_reserve(frame, right, account, balance_xrp);
 
         Ok(())
     }

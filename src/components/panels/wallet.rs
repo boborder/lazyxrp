@@ -438,23 +438,15 @@ impl Component for WalletPanel {
             self.set_submit_flash(SubmitFlash::Error(format!("{label} · {msg}")));
             return Ok(None);
         }
+        if let Some((text, queued_by)) = submit_success(action) {
+            let closes_composer = self.composer.as_ref().is_some_and(queued_by);
+            return self.submit_ok(text, closes_composer);
+        }
         match action {
             Action::Tick => self.tick = self.tick.wrapping_add(1),
             Action::XrplWalletOverview(acc) => {
                 self.account = acc.clone();
                 self.has_received_wallet_data = true;
-            }
-            Action::AccountSetSubmitOk(hash) => {
-                return self.submit_ok(
-                    format!("AccountSet submitted · {hash}"),
-                    matches!(&self.composer, Some(ComposerPhase::AccountSet)),
-                );
-            }
-            Action::PaymentSubmitOk(hash) => {
-                return self.submit_ok(
-                    format!("Payment sent · {hash} (see Recent Transactions below)"),
-                    matches!(&self.composer, Some(ComposerPhase::Payment { .. })),
-                );
             }
             Action::PaymentQuoteOk(spec) => {
                 if let Some(ComposerPhase::Payment { send_max, .. }) = &mut self.composer {
@@ -467,24 +459,6 @@ impl Component for WalletPanel {
             Action::PaymentQuoteErr(msg) => {
                 self.set_submit_flash(SubmitFlash::Error(format!("Quote · {msg}")));
             }
-            Action::SetRegularKeySubmitOk(hash) => {
-                return self.submit_ok(
-                    format!("SetRegularKey submitted · {hash}"),
-                    matches!(&self.composer, Some(ComposerPhase::SetRegularKey { .. })),
-                );
-            }
-            Action::AccountDeleteSubmitOk(hash) => {
-                return self.submit_ok(
-                    format!("AccountDelete submitted · {hash}"),
-                    matches!(&self.composer, Some(ComposerPhase::AccountDelete { .. })),
-                );
-            }
-            Action::OfferCreateSubmitOk(hash) => {
-                return self.submit_ok(
-                    format!("OfferCreate submitted · {hash}"),
-                    matches!(&self.composer, Some(ComposerPhase::OfferCreate { .. })),
-                );
-            }
             Action::XrplAccountOffers(rows) => {
                 if let Some(ComposerPhase::OfferCancel { offers, selected }) = &mut self.composer {
                     *selected = (*selected).min(rows.len().saturating_sub(1));
@@ -495,12 +469,6 @@ impl Component for WalletPanel {
                 if let Some(ComposerPhase::OfferCancel { offers, .. }) = &mut self.composer {
                     *offers = Some(Err(e.clone()));
                 }
-            }
-            Action::OfferCancelSubmitOk(hash) => {
-                return self.submit_ok(
-                    format!("OfferCancel submitted · {hash}"),
-                    matches!(&self.composer, Some(ComposerPhase::OfferCancel { .. })),
-                );
             }
             Action::XrplAccountEscrows(rows) => {
                 if let Some(ComposerPhase::Escrows { escrows, selected }) = &mut self.composer {
@@ -513,74 +481,16 @@ impl Component for WalletPanel {
                     *escrows = Some(Err(e.clone()));
                 }
             }
-            Action::EscrowCreateSubmitOk(hash) => {
-                return self.submit_ok(
-                    format!("EscrowCreate submitted · {hash}"),
-                    matches!(&self.composer, Some(ComposerPhase::EscrowCreate { .. })),
-                );
-            }
-            Action::EscrowCloseSubmitOk(hash) => {
-                return self.submit_ok(
-                    format!("Escrow closed · {hash}"),
-                    matches!(&self.composer, Some(ComposerPhase::Escrows { .. })),
-                );
-            }
-            Action::AmmSubmitOk(msg) => {
-                return self.submit_ok(
-                    format!("{msg} submitted"),
-                    matches!(
-                        &self.composer,
-                        Some(ComposerPhase::AmmDeposit { .. } | ComposerPhase::AmmWithdraw { .. })
-                    ),
-                );
-            }
-            Action::TrustSetSubmitOk(hash) => {
-                return self.submit_ok(
-                    format!("TrustSet submitted · {hash}"),
-                    matches!(&self.composer, Some(ComposerPhase::TrustSet { .. })),
-                );
-            }
             Action::FxrpDirectMintInfo(info) => {
                 self.fxrp_direct_mint = Some((**info).clone());
                 self.fxrp_direct_mint_at = Some(Instant::now());
-            }
-            Action::FxrpDirectMintPaymentSubmitOk(hash) => {
-                return self.submit_ok(
-                    format!(
-                        "FXRP Direct Mint Payment · {hash} · a public executor usually finalizes it within minutes (not guaranteed; no fee floor is known). Check the recipient's FXRP on Overview, or finalize it yourself: composer [7] / `-x fxrp-execute` (needs flare.fassets.execute=true, an EVM key and FLR)"
-                    ),
-                    matches!(&self.composer, Some(ComposerPhase::FxrpDirectMint { .. })),
-                );
-            }
-            Action::FxrpExecuteDirectMintSubmitOk(hash) => {
-                return self.submit_ok(
-                    format!("FXRP executeDirectMinting · {hash}"),
-                    matches!(
-                        &self.composer,
-                        Some(ComposerPhase::FxrpExecuteDirectMint { .. })
-                    ),
-                );
             }
             Action::SmartAccountInfo(info) => {
                 self.smart_account = Some((**info).clone());
                 self.smart_account_at = Some(Instant::now());
             }
-            Action::SmartAccountInstructionSubmitOk(hash) => {
-                return self.submit_ok(
-                    format!(
-                        "Smart Account instruction sent · {hash} · the operator executes it on Flare; check the personal-account FXRP balance on Overview"
-                    ),
-                    matches!(&self.composer, Some(ComposerPhase::SmartAccount { .. })),
-                );
-            }
             Action::GenerateWalletKeysOk(result) => {
                 self.keygen_result = Some(result.clone());
-            }
-            Action::GenericTxSubmitOk(msg) => {
-                return self.submit_ok(
-                    format!("{msg} submitted"),
-                    matches!(&self.composer, Some(ComposerPhase::Tx { .. })),
-                );
             }
             Action::TxComposerOpen { tx_type, fields } => {
                 if matches!(self.seed_address, Some(Ok(_)))
@@ -1378,6 +1288,76 @@ fn is_write_submit(action: &Action) -> bool {
             | Action::AccountDeleteSubmit(_)
             | Action::GenericTxSubmit(_)
     )
+}
+
+/// Tells whether a composer phase is the one that queued a write.
+type QueuedBy = fn(&ComposerPhase) -> bool;
+
+/// A write's success action as its flash text and a test for the composer phase that queued it.
+fn submit_success(action: &Action) -> Option<(String, QueuedBy)> {
+    Some(match action {
+        Action::AccountSetSubmitOk(hash) => (format!("AccountSet submitted · {hash}"), |phase| {
+            matches!(phase, ComposerPhase::AccountSet)
+        }),
+        Action::PaymentSubmitOk(hash) => (
+            format!("Payment sent · {hash} (see Recent Transactions below)"),
+            |phase| matches!(phase, ComposerPhase::Payment { .. }),
+        ),
+        Action::SetRegularKeySubmitOk(hash) => {
+            (format!("SetRegularKey submitted · {hash}"), |phase| {
+                matches!(phase, ComposerPhase::SetRegularKey { .. })
+            })
+        }
+        Action::AccountDeleteSubmitOk(hash) => {
+            (format!("AccountDelete submitted · {hash}"), |phase| {
+                matches!(phase, ComposerPhase::AccountDelete { .. })
+            })
+        }
+        Action::OfferCreateSubmitOk(hash) => (format!("OfferCreate submitted · {hash}"), |phase| {
+            matches!(phase, ComposerPhase::OfferCreate { .. })
+        }),
+        Action::OfferCancelSubmitOk(hash) => (format!("OfferCancel submitted · {hash}"), |phase| {
+            matches!(phase, ComposerPhase::OfferCancel { .. })
+        }),
+        Action::EscrowCreateSubmitOk(hash) => {
+            (format!("EscrowCreate submitted · {hash}"), |phase| {
+                matches!(phase, ComposerPhase::EscrowCreate { .. })
+            })
+        }
+        Action::EscrowCloseSubmitOk(hash) => (format!("Escrow closed · {hash}"), |phase| {
+            matches!(phase, ComposerPhase::Escrows { .. })
+        }),
+        Action::AmmSubmitOk(msg) => (format!("{msg} submitted"), |phase| {
+            matches!(
+                phase,
+                ComposerPhase::AmmDeposit { .. } | ComposerPhase::AmmWithdraw { .. }
+            )
+        }),
+        Action::TrustSetSubmitOk(hash) => (format!("TrustSet submitted · {hash}"), |phase| {
+            matches!(phase, ComposerPhase::TrustSet { .. })
+        }),
+        Action::FxrpDirectMintPaymentSubmitOk(hash) => (
+            format!(
+                "FXRP Direct Mint Payment · {hash} · a public executor usually finalizes it within minutes (not guaranteed; no fee floor is known). Check the recipient's FXRP on Overview, or finalize it yourself: composer [7] / `-x fxrp-execute` (needs flare.fassets.execute=true, an EVM key and FLR)"
+            ),
+            |phase| matches!(phase, ComposerPhase::FxrpDirectMint { .. }),
+        ),
+        Action::FxrpExecuteDirectMintSubmitOk(hash) => {
+            (format!("FXRP executeDirectMinting · {hash}"), |phase| {
+                matches!(phase, ComposerPhase::FxrpExecuteDirectMint { .. })
+            })
+        }
+        Action::SmartAccountInstructionSubmitOk(hash) => (
+            format!(
+                "Smart Account instruction sent · {hash} · the operator executes it on Flare; check the personal-account FXRP balance on Overview"
+            ),
+            |phase| matches!(phase, ComposerPhase::SmartAccount { .. }),
+        ),
+        Action::GenericTxSubmitOk(msg) => (format!("{msg} submitted"), |phase| {
+            matches!(phase, ComposerPhase::Tx { .. })
+        }),
+        _ => return None,
+    })
 }
 
 fn is_write_result(action: &Action) -> bool {

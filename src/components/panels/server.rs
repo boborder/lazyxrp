@@ -86,6 +86,130 @@ impl ServerPanel {
     }
 }
 
+impl ServerPanel {
+    /// The metrics block: URL, version, ledger, fees, quorum and dUNL, plus the node's own UNL.
+    fn metrics_lines(&self) -> Vec<Line<'static>> {
+        let label_style = theme::dim_style();
+        let server_info = self.server_info.as_ref();
+        let ledger = server_info
+            .map(|s| fmt::group_digits_u64(u64::from(s.ledger_index)))
+            .unwrap_or_else(|| "-".to_string());
+        let host = server_info
+            .map(|s| crate::xrpl::sanitize_text(&s.hostid, 64))
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "-".to_string());
+        let version = server_info
+            .map(|s| crate::xrpl::sanitize_text(&s.build_version, 64))
+            .filter(|v| !v.is_empty())
+            .unwrap_or_else(|| "-".to_string());
+        let fee = self
+            .base_fee
+            .map(|v| fmt::group_digits_u64(v as u64))
+            .unwrap_or_else(|| "-".to_string());
+        let reserve = self
+            .reserve_base
+            .map(|v| fmt::fmt_xrp(v as f64 / 1_000_000.0))
+            .unwrap_or_else(|| "-".to_string());
+        let quorum = server_info
+            .and_then(|s| s.validation_quorum)
+            .map(|q| q.to_string())
+            .unwrap_or_else(|| "-".to_string());
+
+        let dunl_count = self.dunl.as_ref().map(|d| d.validator_count).unwrap_or(0);
+        let dunl_seq = self
+            .dunl
+            .as_ref()
+            .map(|d| d.sequence.to_string())
+            .unwrap_or_else(|| "-".to_string());
+        let dunl_exp = self.dunl.as_ref().map(dunl_expiry_tag).unwrap_or_default();
+
+        let mut lines = vec![
+            Line::from(vec![
+                Span::styled("URL:     ", label_style),
+                Span::styled(
+                    fmt::truncate_middle(&self.server_url, 48),
+                    theme::accent_style(),
+                ),
+            ]),
+            Line::from(vec![
+                Span::styled("rippled: ", label_style),
+                Span::styled(version, theme::accent_style()),
+            ]),
+            Line::from(vec![
+                Span::styled("Ledger:  ", label_style),
+                Span::styled(ledger, theme::accent_style()),
+                Span::styled("  Host: ", label_style),
+                Span::raw(host),
+            ]),
+            Line::from(vec![
+                Span::styled("Fee:     ", label_style),
+                Span::raw(format!("{fee} drops")),
+                Span::styled("  Reserve: ", label_style),
+                Span::raw(format!("{reserve} XRP")),
+            ]),
+            Line::from(vec![
+                Span::styled("Quorum:  ", label_style),
+                Span::raw(quorum),
+                Span::styled("  dUNL: ", label_style),
+                Span::styled(
+                    format!("{dunl_count} · seq {dunl_seq}"),
+                    theme::accent_style(),
+                ),
+                Span::styled("  ", label_style),
+                Span::styled(
+                    dunl_exp.clone(),
+                    if dunl_exp.contains('!') {
+                        theme::warning_style()
+                    } else {
+                        theme::dim_style()
+                    },
+                ),
+            ]),
+        ];
+
+        if let Some(vl) = server_info.and_then(|s| s.validator_list.as_ref()) {
+            let match_note =
+                quorum_match_tag(server_info.and_then(|s| s.validation_quorum), vl.count);
+            let mut spans = vec![
+                Span::styled("Node UNL:", label_style),
+                Span::raw(" "),
+                Span::styled(
+                    format!("{} · {} val", vl.status, vl.count),
+                    theme::accent_style(),
+                ),
+                Span::styled(format!(" · exp {}", vl.expiration), theme::dim_style()),
+            ];
+            if let Some(note) = match_note {
+                let style = if note == "matches dUNL" {
+                    theme::success_style()
+                } else {
+                    theme::warning_style()
+                };
+                spans.push(Span::raw(" · "));
+                spans.push(Span::styled(note, style));
+            }
+            lines.push(Line::from(spans));
+        }
+        lines
+    }
+
+    /// Bar chart of the open-ledger fee over the last [`FEE_HISTORY_LEN`] polls.
+    fn draw_fee_history(&self, frame: &mut Frame, area: Rect) {
+        let fee_chart_data: Vec<(&str, u64)> = self.fee_history.iter().map(|&v| ("", v)).collect();
+        let spark_block = Block::default()
+            .title_style(theme::dim_style())
+            .title(" open-ledger fee history (drops) ");
+        let barchart = BarChart::default()
+            .data(&fee_chart_data)
+            .bar_width(2)
+            .bar_gap(1)
+            .bar_style(theme::accent_style())
+            .value_style(theme::chart_value_style())
+            .block(spark_block);
+        frame.render_widget(barchart, area);
+    }
+}
+
 impl Component for ServerPanel {
     fn update(&mut self, action: &Action) -> color_eyre::Result<Option<Action>> {
         if self.detail.visible {
@@ -228,108 +352,7 @@ impl Component for ServerPanel {
         ])
         .areas(inner);
 
-        let label_style = theme::dim_style();
-        let server_info = self.server_info.as_ref();
-        let ledger = server_info
-            .map(|s| fmt::group_digits_u64(u64::from(s.ledger_index)))
-            .unwrap_or_else(|| "-".to_string());
-        let host = server_info
-            .map(|s| crate::xrpl::sanitize_text(&s.hostid, 64))
-            .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| "-".to_string());
-        let version = server_info
-            .map(|s| crate::xrpl::sanitize_text(&s.build_version, 64))
-            .filter(|v| !v.is_empty())
-            .unwrap_or_else(|| "-".to_string());
-        let fee = self
-            .base_fee
-            .map(|v| fmt::group_digits_u64(v as u64))
-            .unwrap_or_else(|| "-".to_string());
-        let reserve = self
-            .reserve_base
-            .map(|v| fmt::fmt_xrp(v as f64 / 1_000_000.0))
-            .unwrap_or_else(|| "-".to_string());
-        let quorum = server_info
-            .and_then(|s| s.validation_quorum)
-            .map(|q| q.to_string())
-            .unwrap_or_else(|| "-".to_string());
-
-        let dunl_count = self.dunl.as_ref().map(|d| d.validator_count).unwrap_or(0);
-        let dunl_seq = self
-            .dunl
-            .as_ref()
-            .map(|d| d.sequence.to_string())
-            .unwrap_or_else(|| "-".to_string());
-        let dunl_exp = self.dunl.as_ref().map(dunl_expiry_tag).unwrap_or_default();
-
-        let mut lines = vec![
-            Line::from(vec![
-                Span::styled("URL:     ", label_style),
-                Span::styled(
-                    fmt::truncate_middle(&self.server_url, 48),
-                    theme::accent_style(),
-                ),
-            ]),
-            Line::from(vec![
-                Span::styled("rippled: ", label_style),
-                Span::styled(version, theme::accent_style()),
-            ]),
-            Line::from(vec![
-                Span::styled("Ledger:  ", label_style),
-                Span::styled(ledger, theme::accent_style()),
-                Span::styled("  Host: ", label_style),
-                Span::raw(host),
-            ]),
-            Line::from(vec![
-                Span::styled("Fee:     ", label_style),
-                Span::raw(format!("{fee} drops")),
-                Span::styled("  Reserve: ", label_style),
-                Span::raw(format!("{reserve} XRP")),
-            ]),
-            Line::from(vec![
-                Span::styled("Quorum:  ", label_style),
-                Span::raw(&quorum),
-                Span::styled("  dUNL: ", label_style),
-                Span::styled(
-                    format!("{dunl_count} · seq {dunl_seq}"),
-                    theme::accent_style(),
-                ),
-                Span::styled("  ", label_style),
-                Span::styled(
-                    dunl_exp.clone(),
-                    if dunl_exp.contains('!') {
-                        theme::warning_style()
-                    } else {
-                        theme::dim_style()
-                    },
-                ),
-            ]),
-        ];
-
-        if let Some(vl) = server_info.and_then(|s| s.validator_list.as_ref()) {
-            let match_note =
-                quorum_match_tag(server_info.and_then(|s| s.validation_quorum), vl.count);
-            let mut spans = vec![
-                Span::styled("Node UNL:", label_style),
-                Span::raw(" "),
-                Span::styled(
-                    format!("{} · {} val", vl.status, vl.count),
-                    theme::accent_style(),
-                ),
-                Span::styled(format!(" · exp {}", vl.expiration), theme::dim_style()),
-            ];
-            if let Some(note) = match_note {
-                let style = if note == "matches dUNL" {
-                    theme::success_style()
-                } else {
-                    theme::warning_style()
-                };
-                spans.push(Span::raw(" · "));
-                spans.push(Span::styled(note, style));
-            }
-            lines.push(Line::from(spans));
-        }
-        frame.render_widget(Paragraph::new(lines), metrics_area);
+        frame.render_widget(Paragraph::new(self.metrics_lines()), metrics_area);
 
         match self.dunl.as_ref() {
             None => dunl::draw_dunl_loading(frame, list_area, self.tick, self.is_focused),
@@ -339,19 +362,7 @@ impl Component for ServerPanel {
         }
 
         if sparkline_height > 0 {
-            let fee_chart_data: Vec<(&str, u64)> =
-                self.fee_history.iter().map(|&v| ("", v)).collect();
-            let spark_block = Block::default()
-                .title_style(theme::dim_style())
-                .title(" open-ledger fee history (drops) ");
-            let barchart = BarChart::default()
-                .data(&fee_chart_data)
-                .bar_width(2)
-                .bar_gap(1)
-                .bar_style(theme::accent_style())
-                .value_style(theme::chart_value_style())
-                .block(spark_block);
-            frame.render_widget(barchart, spark_area);
+            self.draw_fee_history(frame, spark_area);
         }
 
         Ok(())
