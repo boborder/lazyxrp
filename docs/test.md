@@ -79,7 +79,7 @@ cargo deny check
 | TC-064 | P2 | `src/app.rs` | Watch mode — TabNext/TabPrev wrap around panels |
 | TC-065 | P3 | `src/app.rs` | Watch mode — HelpOverlay toggles on `?` and Esc |
 | TC-066 | P1 | `src/xrpl/cli_exec.rs` | CLI — `account-status` against local JSON-RPC |
-| TC-068 | P1 | `src/xrpl/client.rs` | XRPL RPC error — not found is not silently swallowed |
+| TC-068 | P1 | `src/xrpl/client.rs` | XRPL RPC error — not found is not silently swallowed; `node_errors_are_classified_by_type_and_error_token`: "not found" follows the node's `error` token (`actNotFound`, `entryNotFound`, `lgrNotFound`, `actMalformed`, …) and a transport error is never "not found" |
 | TC-069 | P1 | `src/xrpl/parse.rs` | XRPL submit response — requires `tesSUCCESS` and hash |
 | TC-070 | P1 | `src/xrpl/types.rs` | book_offers — issued quote uses `currency_code` |
 | TC-071-072 | P1 | `src/xrpl/parse.rs` | account_objects — empty array parses; mixed Check / Ticket / MPT / PayChannel / Escrow |
@@ -99,7 +99,7 @@ cargo deny check
 | TC-099 | P1 | `src/signing.rs` | IOU validation — XRP / overlong currency code rejected, 3-letter ok |
 | TC-100 | P2 | `src/xrpl/nft_image.rs` | NFT metadata traversal stops at depth limit |
 | TC-101 | P1 | `src/lib.rs` | Signing seed refuses plaintext RPC/WS endpoints |
-| TC-102 | P1 | `src/xrpl/client.rs` | Rate-limited RPC errors retryable; permanent XRPL errors not |
+| TC-102 | P1 | `src/xrpl/client.rs` | Rate-limited RPC errors retryable; permanent XRPL errors not; transient node errors are retried by their `error` token as a real node words them (`tooBusy`, `noNetwork`, `noCurrent`, `noClosed`, `failedToForward`, `amendmentBlocked`), not by the message text |
 | TC-103 | P2 | `src/xrpl/ws.rs`, `src/components/shared/fps.rs` | Duplicate ledger-close emits one trigger; FPS counts draws not ticks |
 | TC-227 | P1 | `src/xrpl/ws.rs` | Local WebSocket fixture (real rippled frame shapes): subscribe has account + `ledger` stream; ledger close → `XrplLedgerClose` + one poll trigger (duplicate dropped); account tx → `XrplAccountTx`; server close → reconnect + resubscribe; cancel stops the task |
 | TC-228 | P1 | `src/components/panels/wallet.rs` | Double-submit guard: identical write params refused (flash) until that write's Ok/Err arrives; different params or a retry after the result go through |

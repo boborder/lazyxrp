@@ -535,6 +535,62 @@ pub(crate) fn is_transient_xrpl_error(message: &str) -> bool {
     .any(|k| lower.contains(k))
 }
 
+/// An error reply from the node (`result.error`). Its own type, so callers tell it from a
+/// transport failure (timeout, HTTP 429, bad JSON) by type rather than by parsing the message,
+/// and so the node's stable `error` token is classified as well as the free-text message: the
+/// message of `tooBusy` or `entryNotFound` does not contain the token.
+///
+/// Displays as `[XRPL-<kind>] <message>`; `kind` is `NOT_FOUND` or the numeric `error_code`.
+#[derive(Debug)]
+pub(crate) struct NodeError {
+    token: String,
+    kind: String,
+    message: String,
+}
+
+impl NodeError {
+    pub(crate) fn new(token: &str, code: u64, message: String) -> Self {
+        let kind = if is_not_found_error(token) {
+            "NOT_FOUND".to_string()
+        } else {
+            code.to_string()
+        };
+        Self {
+            token: token.to_string(),
+            kind,
+            message,
+        }
+    }
+
+    /// Account / object / ledger not found (see [`is_not_found_error`]).
+    pub(crate) fn is_not_found(&self) -> bool {
+        is_not_found_error(&self.token) || is_not_found_error(&self.message)
+    }
+
+    /// The node is starting up, lagging or overloaded (see [`is_transient_xrpl_error`]).
+    pub(crate) fn is_transient(&self) -> bool {
+        is_transient_xrpl_error(&self.token) || is_transient_xrpl_error(&self.message)
+    }
+}
+
+impl std::fmt::Display for NodeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "[XRPL-{}] {}", self.kind, self.message)
+    }
+}
+
+impl std::error::Error for NodeError {}
+
+/// The node's own error reply behind `e`, if that is what it is (not a transport failure).
+pub(crate) fn node_error(e: &color_eyre::Report) -> Option<&NodeError> {
+    e.downcast_ref()
+}
+
+/// `e` is the node saying the account, object or ledger does not exist.
+pub(crate) fn is_not_found(e: &color_eyre::Report) -> bool {
+    node_error(e).is_some_and(NodeError::is_not_found)
+}
+
 /// Best XRP-quoted price (IOU per 1 XRP) from the first `book_offers` entry. `quality` is
 /// TakerPays/TakerGets: the bid book (gets XRP drops, pays IOU) is IOU/drop → ×1e6; the ask book
 /// (gets IOU, pays XRP drops) is drops/IOU, so `invert` gives IOU per XRP = 1e6/quality.
@@ -556,9 +612,9 @@ pub(crate) fn book_offer_best_price(value: &Value, invert: bool) -> Option<f64> 
 }
 
 pub(crate) fn empty_account_tx_page_on_not_found(
-    err: impl std::fmt::Display,
+    err: &color_eyre::Report,
 ) -> Option<AccountTxPage> {
-    if is_not_found_error(&format!("{err}")) {
+    if is_not_found(err) {
         Some(AccountTxPage {
             rows: vec![],
             marker: None,
@@ -863,12 +919,17 @@ mod tests {
         assert_eq!(page.marker, Some(json!({"ledger": 55, "seq": 2})));
 
         // empty account tx page on not found contract
-        let page = empty_account_tx_page_on_not_found("actNotFound")
+        let not_found = color_eyre::Report::new(NodeError::new(
+            "actNotFound",
+            19,
+            "Account not found.".into(),
+        ));
+        let page = empty_account_tx_page_on_not_found(&not_found)
             .expect("not-found should become empty page");
         assert!(page.rows.is_empty());
         assert!(page.marker.is_none());
 
-        assert!(empty_account_tx_page_on_not_found("timeout").is_none());
+        assert!(empty_account_tx_page_on_not_found(&color_eyre::eyre::eyre!("timeout")).is_none());
     }
 
     /// TC-017, TC-140: numeric quality maps to price; a non-numeric quality

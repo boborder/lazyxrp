@@ -79,7 +79,7 @@ cargo deny check
 | TC-064 | P2 | `src/app.rs` | Watch モード — TabNext/TabPrev でパネルを巡回する |
 | TC-065 | P3 | `src/app.rs` | Watch モード — HelpOverlay は `?` と Esc で切り替わる |
 | TC-066 | P1 | `src/xrpl/cli_exec.rs` | CLI — ローカル JSON-RPC に対する `account-status` |
-| TC-068 | P1 | `src/xrpl/client.rs` | XRPL RPC エラー — not found が気づかれないまま握りつぶされることはない |
+| TC-068 | P1 | `src/xrpl/client.rs` | XRPL RPC エラー — not found が気づかれないまま握りつぶされることはない。`node_errors_are_classified_by_type_and_error_token`: 「not found」はノードの `error` トークン（`actNotFound`、`entryNotFound`、`lgrNotFound`、`actMalformed` など）で判定し、トランスポートエラーが「not found」になることはない |
 | TC-069 | P1 | `src/xrpl/parse.rs` | XRPL submit レスポンス — `tesSUCCESS` と hash が必須 |
 | TC-070 | P1 | `src/xrpl/types.rs` | book_offers — issued の quote は `currency_code` を使う |
 | TC-071-072 | P1 | `src/xrpl/parse.rs` | account_objects — 空配列をパースできる。Check / Ticket / MPT / PayChannel / Escrow の混在 |
@@ -99,7 +99,7 @@ cargo deny check
 | TC-099 | P1 | `src/signing.rs` | IOU 検証 — XRP／長すぎる通貨コードは拒否される。3 文字は OK |
 | TC-100 | P2 | `src/xrpl/nft_image.rs` | NFT メタデータの走査は深さ上限で止まる |
 | TC-101 | P1 | `src/lib.rs` | 署名用 seed は平文の RPC/WS エンドポイントを拒否する |
-| TC-102 | P1 | `src/xrpl/client.rs` | レート制限された RPC エラーは再試行可能。恒久的な XRPL エラーは再試行しない |
+| TC-102 | P1 | `src/xrpl/client.rs` | レート制限された RPC エラーは再試行可能。恒久的な XRPL エラーは再試行しない。一時的なノードエラーは、実際のノードの言い回しのまま `error` トークンで再試行する（`tooBusy`、`noNetwork`、`noCurrent`、`noClosed`、`failedToForward`、`amendmentBlocked`）。メッセージ文面では判定しない |
 | TC-103 | P2 | `src/xrpl/ws.rs`, `src/components/shared/fps.rs` | 重複した ledger-close は 1 回だけトリガーを出す。FPS は tick ではなく描画を数える |
 | TC-227 | P1 | `src/xrpl/ws.rs` | ローカル WebSocket フィクスチャ（実際の rippled フレーム形状）: subscribe は account + `ledger` ストリームを含む。ledger close → `XrplLedgerClose` + poll トリガー 1 回（重複は破棄）。account tx → `XrplAccountTx`。サーバーによる close → 再接続 + 再 subscribe。cancel でタスクが止まる |
 | TC-228 | P1 | `src/components/panels/wallet.rs` | 二重 submit ガード: 同一の書き込みパラメータは、その書き込みの Ok/Err が届くまで拒否される（flash）。パラメータが異なる場合、または結果後の再試行は通る |

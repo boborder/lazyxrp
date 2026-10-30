@@ -43,10 +43,10 @@
 - 別の仮説: 2 件とも `-x faucet` で資金供給した直後の最初の書き込みだった（`LastLedgerSequence` の基準が閉じた直後の ledger）。12 件の追試も faucet 直後の 1 件目が validated だったため弱まったが、否定はされていない。
 - 再発時（特に mainnet）の次の手: 変更する前に、失敗した hash と並べて `-x info` の `OpenLedgerFee` を記録する。
 
-### P-011: RPC エラーが文字列プロトコルになっている
+### ~~P-011: RPC エラーが文字列プロトコルになっている~~ → 解決（2026-10-30）
 
-- `ensure_no_xrpl_rpc_error` は `"[XRPL-<kind>] <message>"` を素の `eyre` メッセージとして作り、呼び出し側はその文面で判断する: `is_retryable_rpc_error` と `submit_signed_tx` は `starts_with("[XRPL-")`、`is_not_found_error` / `is_rate_limited_error` / `is_transient_xrpl_error` は部分文字列一致（`client.rs`・`parse.rs`・`poll.rs`、本番コードで約 8 箇所）。
-- 動作しており文字列はテストで固定されているが、ノード側の文言が変わるとリトライや not-found の挙動が黙って変わる。型付きエラーを `downcast_ref` で読めば分類が明示されるが、素の文字列を渡すテストも書き換えることになる。
+- `parse::NodeError` がノード自身のエラー応答（`result.error`）で、`[XRPL-<kind>] <message>` はその `Display` に過ぎない。呼び出し側は、整形済み文字列への `starts_with("[XRPL-")` や部分文字列一致ではなく、型（`node_error`、`is_not_found`、`is_retryable_rpc_error`）に問い合わせる。トランスポートエラーが「not found」と誤判定されることもなくなった。
+- **挙動変更（バグ修正）。** 旧分類器は、ノードの `error` *トークン*（`tooBusy`、`entryNotFound` など）を整形後のメッセージから探していたが、そこには散文の `error_message`（"The server is too busy to help you now."）しか入っていない。そのため `tooBusy`、`noNetwork`、`noCurrent`、`noClosed`、`failedToForward`、`amendmentBlocked` は、実ノードに対して一度も再試行されなかった（散文がトークンを繰り返す場合にだけ一致した。旧テストのフィクスチャがそうだった）。また `entryNotFound` / `lgrNotFound` / `actMalformed` は `NOT_FOUND` とラベルされるのに、そう扱われていなかった。どちらもトークンに従うようになった。表示テキストは変わらない。24 通りのエラー形で確認: 変わったのはこの 9 件のノードエラーと、以前は「not found」と読まれていたトランスポート文字列 1 件だけ。
 
 ### ~~P-012: `(sequence, fee_drops, last_ledger_sequence)` が 3 つの素の `u32` で流れている~~ → 解決（2026-10-30）
 

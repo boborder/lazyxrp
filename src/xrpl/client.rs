@@ -12,12 +12,12 @@ pub use super::format::{path_find_snapshot, xrp_to_drops};
 pub use super::parse::SubmitOutcome;
 pub(crate) use super::parse::empty_account_tx_page_on_not_found;
 use super::parse::{
-    book_currency, book_offer_best_price, escrow_offer_sequence_from_tx, is_not_found_error,
-    is_rate_limited_error, is_transient_xrpl_error, parse_account_escrows_value,
-    parse_account_lines_value, parse_account_nfts_value, parse_account_objects_value,
-    parse_account_offers_value, parse_account_tx_page, parse_aggregate_price_value,
-    parse_amm_info_value, parse_amm_lp_token, parse_book_offers_value, parse_fee_value,
-    parse_ripple_path_find, parse_server_info_value, parse_simulate_result, parse_submit_success,
+    NodeError, book_currency, book_offer_best_price, escrow_offer_sequence_from_tx, is_not_found,
+    is_rate_limited_error, node_error, parse_account_escrows_value, parse_account_lines_value,
+    parse_account_nfts_value, parse_account_objects_value, parse_account_offers_value,
+    parse_account_tx_page, parse_aggregate_price_value, parse_amm_info_value, parse_amm_lp_token,
+    parse_book_offers_value, parse_fee_value, parse_ripple_path_find, parse_server_info_value,
+    parse_simulate_result, parse_submit_success,
 };
 use super::types::{
     AccountOfferRow, AccountSummary, AccountTxPage, AggregatePrice, AmmSummary, BookMidPrice,
@@ -33,14 +33,14 @@ const SUBMIT_LOOKUP_INTERVAL: Duration = Duration::from_secs(3);
 /// Hard cap for JSON-RPC / dUNL response bodies (DoS guard).
 pub(crate) const MAX_RPC_BODY_BYTES: usize = 16 * 1024 * 1024;
 
-fn retry_delay_ms(attempt: usize, message: &str) -> u64 {
+fn retry_delay_ms(attempt: usize, error: &color_eyre::Report) -> u64 {
     // Unit tests retry against local fixtures; skip the real backoff.
     if cfg!(test) {
         return 0;
     }
-    let delay = if is_rate_limited_error(message) {
+    let delay = if is_rate_limited_error(&error.to_string()) {
         Duration::from_secs(2 * (attempt + 1) as u64)
-    } else if is_transient_xrpl_error(message) {
+    } else if node_error(error).is_some_and(NodeError::is_transient) {
         // A node that is lagging or starting up needs seconds,
         // not milliseconds, to become servable.
         Duration::from_secs((attempt + 1) as u64)
@@ -133,10 +133,10 @@ impl RpcClient {
         for attempt in 0..3 {
             match self.rpc_once(method, &params).await {
                 Ok(value) => return Ok(value),
-                Err(e) if attempt < 2 && is_retryable_rpc_error(&format!("{e}")) => {
+                Err(e) if attempt < 2 && is_retryable_rpc_error(&e) => {
                     let message = format!("{e}");
+                    let delay_ms = retry_delay_ms(attempt, &e);
                     last_error = Some(e);
-                    let delay_ms = retry_delay_ms(attempt, &message);
                     tracing::warn!(
                         attempt = attempt + 1,
                         delay_ms,
@@ -158,7 +158,7 @@ impl RpcClient {
     ) -> color_eyre::Result<Option<Value>> {
         match self.rpc_value(method, params).await {
             Ok(value) => Ok(Some(value)),
-            Err(e) if is_not_found_error(&format!("{e}")) => Ok(None),
+            Err(e) if is_not_found(&e) => Ok(None),
             Err(e) => Err(e),
         }
     }
@@ -354,14 +354,14 @@ impl RpcClient {
 
         let account = match info_res {
             Ok(Ok(acc)) => Some(acc),
-            Ok(Err(e)) if is_not_found_error(&format!("{e}")) => None,
+            Ok(Err(e)) if is_not_found(&e) => None,
             Ok(Err(e)) => return Err(e),
             Err(_) => return Err(color_eyre::eyre::eyre!("account_info timeout")),
         };
 
         let (txs, marker) = match tx_res {
             Ok(Ok(page)) => (page.rows, page.marker),
-            Ok(Err(e)) if is_not_found_error(&format!("{e}")) => (vec![], None),
+            Ok(Err(e)) if is_not_found(&e) => (vec![], None),
             Ok(Err(e)) => return Err(e),
             Err(_) => return Err(color_eyre::eyre::eyre!("account_tx timeout")),
         };
@@ -516,7 +516,7 @@ impl RpcClient {
     pub async fn fetch_account_activation_status(&self, address: &str) -> color_eyre::Result<bool> {
         match self.account_info(address).await {
             Ok(_) => Ok(true),
-            Err(e) if is_not_found_error(&format!("{e}")) => Ok(false),
+            Err(e) if is_not_found(&e) => Ok(false),
             Err(e) => Err(e),
         }
     }
@@ -543,7 +543,7 @@ impl RpcClient {
                 let accepted = parse_submit_success(&value)?;
                 return Ok(SubmitOutcome { hash, ..accepted });
             }
-            Err(e) if format!("{e}").starts_with("[XRPL-") => return Err(e),
+            Err(e) if node_error(&e).is_some() => return Err(e),
             Err(e) => e,
         };
         for attempt in 0..SUBMIT_LOOKUP_TRIES {
@@ -660,12 +660,8 @@ fn drop_nulls(value: &mut Value) {
 /// Whether an RPC attempt is worth retrying. Transport/parse/HTTP errors
 /// always retry; XRPL-level errors only when the server signals a transient
 /// node state (lagging, starting up, overloaded).
-fn is_retryable_rpc_error(message: &str) -> bool {
-    if message.starts_with("[XRPL-") {
-        is_transient_xrpl_error(message)
-    } else {
-        true
-    }
+fn is_retryable_rpc_error(error: &color_eyre::Report) -> bool {
+    node_error(error).is_none_or(NodeError::is_transient)
 }
 
 fn ensure_no_xrpl_rpc_error(value: &Value) -> color_eyre::Result<()> {
@@ -682,12 +678,7 @@ fn ensure_no_xrpl_rpc_error(value: &Value) -> color_eyre::Result<()> {
                 .and_then(Value::as_str)
                 .unwrap_or(error),
         );
-        let kind = if is_not_found_error(error) {
-            "NOT_FOUND".to_string()
-        } else {
-            code.to_string()
-        };
-        return Err(color_eyre::eyre::eyre!("[XRPL-{kind}] {error_message}"));
+        return Err(NodeError::new(error, code, error_message).into());
     }
     Ok(())
 }
@@ -813,15 +804,67 @@ mod tests {
         assert!(ensure_no_xrpl_rpc_error(&json!({"result": {"status": "success"}})).is_ok());
     }
 
-    /// TC-102: rate-limited RPC errors remain retryable while permanent XRPL errors do not
+    /// TC-102: transport failures stay retryable; a node reply is retried only when it is
+    /// transient, judged by the node's `error` token (a real node's message does not contain it).
+    ///
+    /// TC-068: "not found" follows the same token, and a transport error is never "not found".
     #[test]
-    fn rate_limited_rpc_errors_are_retryable_but_nontransient_xrpl_errors_are_not() {
-        assert!(is_retryable_rpc_error(
+    fn node_errors_are_classified_by_type_and_error_token() {
+        use color_eyre::eyre::eyre;
+        let node = |token: &str, code, message: &str| {
+            color_eyre::Report::new(NodeError::new(token, code, message.into()))
+        };
+
+        // retry: transport failures always, permanent node replies never
+        assert!(is_retryable_rpc_error(&eyre!(
             "account_info Rate limited (HTTP 429)"
-        ));
-        assert!(is_retryable_rpc_error("request error: connection reset"));
-        assert!(!is_retryable_rpc_error("[XRPL-12] malformed transaction"));
-        assert!(is_retryable_rpc_error("[XRPL-17] tooBusy"));
+        )));
+        assert!(is_retryable_rpc_error(&eyre!(
+            "request error: connection reset"
+        )));
+        assert!(!is_retryable_rpc_error(&node(
+            "malformedRequest",
+            12,
+            "malformed transaction"
+        )));
+        assert!(!is_retryable_rpc_error(&node(
+            "actNotFound",
+            19,
+            "Account not found."
+        )));
+        // transient replies, worded as rippled words them
+        for (token, code, message) in [
+            ("tooBusy", 9, "The server is too busy to help you now."),
+            ("noNetwork", 17, "Not synced to the network."),
+            ("noCurrent", 18, "Current ledger is unavailable."),
+            ("noClosed", 18, "Closed ledger is unavailable."),
+            ("failedToForward", 18, "Failed to forward."),
+            ("amendmentBlocked", 14, "Amendment blocked."),
+            ("InsufficientNetworkMode", 17, "InsufficientNetworkMode"),
+        ] {
+            assert!(
+                is_retryable_rpc_error(&node(token, code, message)),
+                "{token}"
+            );
+        }
+
+        // not found
+        for (token, code, message) in [
+            ("actNotFound", 19, "Account not found."),
+            ("entryNotFound", 21, "Entry not found."),
+            ("lgrNotFound", 21, "ledgerNotFound"),
+            ("actMalformed", 35, "Account malformed."),
+            ("objectNotFound", 21, "Object not found."),
+            ("badIssuer", 1, "Bad issuer."),
+        ] {
+            assert!(is_not_found(&node(token, code, message)), "{token}");
+        }
+        assert!(!is_not_found(&node(
+            "tooBusy",
+            9,
+            "The server is too busy."
+        )));
+        assert!(!is_not_found(&eyre!("account not found")), "transport text");
     }
 
     /// Retries: a local HTTP 429 and a transient node error are retried, then it gives up after
@@ -903,7 +946,7 @@ mod tests {
             fn result_for(_: &str) -> Value {
                 if CALLS.fetch_add(1, Ordering::SeqCst) == 0 {
                     json!({"error": "tooBusy", "error_code": 17,
-                           "error_message": "Server is tooBusy"})
+                           "error_message": "The server is too busy to help you now."})
                 } else {
                     json!({"status": "success"})
                 }

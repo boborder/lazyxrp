@@ -145,7 +145,7 @@ async fn fetch_amm_info(
     .await?;
     Ok(match res {
         Ok(s) => Ok(Some(s)),
-        Err(e) if super::parse::is_not_found_error(&e.to_string()) => Ok(None),
+        Err(e) if super::parse::is_not_found(&e) => Ok(None),
         Err(e) => Err(e),
     })
 }
@@ -1172,7 +1172,11 @@ mod tests {
         )> = vec![
             (
                 "not-found without append yields an empty history",
-                Err(color_eyre::eyre::eyre!("actNotFound")),
+                Err(color_eyre::Report::new(crate::xrpl::parse::NodeError::new(
+                    "actNotFound",
+                    19,
+                    "Account not found.".into(),
+                ))),
                 false,
                 Expect::History {
                     append: false,
@@ -1205,7 +1209,11 @@ mod tests {
             ),
             (
                 "not-found with append yields an empty append",
-                Err(color_eyre::eyre::eyre!("actNotFound")),
+                Err(color_eyre::Report::new(crate::xrpl::parse::NodeError::new(
+                    "actNotFound",
+                    19,
+                    "Account not found.".into(),
+                ))),
                 true,
                 Expect::History {
                     append: true,

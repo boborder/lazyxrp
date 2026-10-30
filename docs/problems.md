@@ -43,10 +43,10 @@
 - Second hypothesis: both expiries were the first write right after `-x faucet` funded the account (`LastLedgerSequence` anchored on a ledger that had just closed). Weakened, not ruled out, by the 12-send run, whose first send also followed a faucet and validated.
 - Next step if it recurs (especially on mainnet): record `-x info`'s `OpenLedgerFee` next to the failing hash before changing anything.
 
-### P-011: RPC errors are a string protocol
+### ~~P-011: RPC errors are a string protocol~~ → resolved (2026-10-30)
 
-- `ensure_no_xrpl_rpc_error` builds `"[XRPL-<kind>] <message>"` as a plain `eyre` message and callers decide by its text: `is_retryable_rpc_error` and `submit_signed_tx` test `starts_with("[XRPL-")`, while `is_not_found_error` / `is_rate_limited_error` / `is_transient_xrpl_error` match substrings (`client.rs`, `parse.rs`, `poll.rs`, about eight production sites).
-- It works and the strings are pinned by tests, but a reworded node message silently changes retry or not-found behaviour. A typed error read with `downcast_ref` would make the classification explicit; it also means rewriting the tests that pass bare strings.
+- `parse::NodeError` is the node's own error reply (`result.error`); `[XRPL-<kind>] <message>` is only its `Display`. Callers ask the type (`node_error`, `is_not_found`, `is_retryable_rpc_error`) instead of `starts_with("[XRPL-")` / substring matches on a formatted string, and a transport error can no longer be taken for "not found".
+- **Behaviour change (bug fix).** The old classifiers looked for the node's `error` *token* (`tooBusy`, `entryNotFound`, …) in the formatted message, which holds only the prose `error_message` ("The server is too busy to help you now."). So `tooBusy`, `noNetwork`, `noCurrent`, `noClosed`, `failedToForward` and `amendmentBlocked` were never retried against a real node (they matched only when the prose repeated the token, as the old test fixture did), and `entryNotFound` / `lgrNotFound` / `actMalformed` were labelled `NOT_FOUND` but not treated as such. Both now follow the token; the displayed text is unchanged. Checked on 24 error shapes: exactly those 9 node cases (plus a transport string that used to read as "not found") changed.
 
 ### ~~P-012: `(sequence, fee_drops, last_ledger_sequence)` travels as three bare `u32`s~~ → resolved (2026-10-30)
 
