@@ -449,12 +449,6 @@ offer_install_mise() {
     fi
 }
 
-sleep_tick() {
-    if [ "$IS_TTY" = 1 ]; then
-        sleep "${1:-0.06}"
-    fi
-}
-
 # ── ASCII Art Banner ─────────────────────────────────────────────────────────
 print_banner() {
     [ "$IS_TTY" = 0 ] && return
@@ -470,34 +464,6 @@ print_banner() {
 BANNER
     printf '%b' "$RESET"
     printf '\n'
-}
-
-# ── Animated Banner ─────────────────────────────────────────────────────────
-print_animated_banner() {
-    [ "$IS_TTY" = 0 ] && { print_banner; return; }
-
-    printf '%b' "$HIDE_CURSOR"
-
-    local logo_lines
-    logo_lines=(
-        '         _                   __  ______  ____'
-        '        | |    __ _ _____   _\ \/ /  _ \|  _ \'
-        '        | |   / _` |_  / | | |\  /| |_) | |_) |'
-        '        | |__| (_| |/ /| |_| |/  \|  _ <|  __/'
-        '        |_____\__,_/___|\__, /_/\_\_| \_\_|'
-        '                        |___/'
-    )
-
-    printf '\n'
-
-    local row
-    for ((row = 0; row < ${#logo_lines[@]}; row++)); do
-        printf '%b  %s%b\n' "$CYAN" "${logo_lines[$row]}" "$RESET"
-        sleep_tick 0.05
-    done
-
-    printf '\n'
-    printf '%b' "$SHOW_CURSOR"
 }
 
 # ── Subtitle ─────────────────────────────────────────────────────────────────
@@ -537,24 +503,6 @@ spinner_stop() {
         printf '%b' "$CLEAR_LINE"
     fi
     printf '%b' "$SHOW_CURSOR"
-}
-
-# ── Progress Bar ─────────────────────────────────────────────────────────────
-progress_bar() {
-    [ "$IS_TTY" = 0 ] && return
-    local current="$1" total="$2" label="${3:-}"
-    local width=30
-    local filled=$(( current * width / total ))
-    local empty=$(( width - filled ))
-    local pct=$(( current * 100 / total ))
-
-    printf '%b  ' "$CLEAR_LINE"
-    printf '%b' "$CYAN"
-    local i
-    for ((i = 0; i < filled; i++)); do printf '█'; done
-    for ((i = 0; i < empty; i++)); do printf '░'; done
-    printf '%b %3d%%' "$RESET" "$pct"
-    [ -n "$label" ] && printf '  %b%s%b' "$DIM" "$label" "$RESET"
 }
 
 # ── Interactive Prompt ───────────────────────────────────────────────────────
@@ -790,17 +738,8 @@ Install from source instead:
     chmod 700 "$TMP_DIR"
     TMP_DOWNLOAD_DIR="$TMP_DIR"
 
-    if [ "$IS_TTY" = 1 ]; then
-        printf '\n'
-        progress_bar 0 4 "Preparing..."
-        sleep_tick 0.2
-        progress_bar 1 4 "Downloading archive..."
-    fi
     fetch_file "$DOWNLOAD_URL" "${TMP_DIR}/${ARCHIVE}"
-    [ "$IS_TTY" = 1 ] && progress_bar 2 4 "Downloading checksum..."
     fetch_file "$CHECKSUM_URL" "${TMP_DIR}/${CHECKSUM}"
-    [ "$IS_TTY" = 1 ] && progress_bar 3 4 "Verifying..."
-    printf '\n\n'
 
     ok "Download complete"
 
@@ -1078,8 +1017,7 @@ trap cleanup EXIT INT TERM
 
 # ── Main ─────────────────────────────────────────────────────────────────────
 main() {
-    # Animated banner
-    print_animated_banner
+    print_banner
     print_subtitle
 
     # Hard requirement: curl or wget
@@ -1173,7 +1111,6 @@ main() {
     else
         ok "wget $(wget --version 2>/dev/null | head -1 | sed 's/^GNU Wget //' | cut -d' ' -f1)"
     fi
-    sleep_tick 0.1
 
     if has tar; then
         ok "tar"
@@ -1181,7 +1118,6 @@ main() {
         [ "$method" = "binary" ] && die "tar is required for binary install"
         warn "tar not found (binary fallback unavailable)"
     fi
-    sleep_tick 0.1
 
     if [ "$method" = "cargo" ]; then
         ok "cargo $(cargo --version 2>/dev/null | sed 's/cargo //')"

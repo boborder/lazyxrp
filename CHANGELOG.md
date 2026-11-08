@@ -11,6 +11,7 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 ### Changed
 
 - Built-in defaults moved from `config.json5` to `config.default.toml`, parsed by the `toml` crate already in use; the `json5` dependency is gone.
+- `install.sh`: removed the animated banner and the fake download progress bar and sleeps; installs are no longer slowed on a TTY.
 
 ## [0.10.0] - 2026-10-28
 
