@@ -147,7 +147,9 @@ lazyxrp/
 │   ├── security.md
 │   ├── security-ja.md
 │   ├── problems.md
-│   └── problems-ja.md
+│   ├── problems-ja.md
+│   ├── demo.tape  # README デモ用の vhs スクリプト（`mise run demo`）
+│   └── demo.gif   # README デモ。demo.tape から生成
 └── .agents/skills/         # domain skills (xrpl-rust, flare-*) + verify-lazyxrp (PTY / CLI verification harness)
 ```
 
@@ -256,6 +258,7 @@ lazyxrp/
 | `mise run bench` | ベンチマーク一式（約 10 分） |
 | `mise run bench-fast` | 簡易ベンチマーク |
 | `mise run bench-ci` | CI 相当のベンチマーク（`benchmark.sh --json --fast --perf-only`） |
+| `mise run demo` | `docs/demo.tape` から `docs/demo.gif` を生成（vhs。環境変数を除いた読み取り専用の実行） |
 
 | エントリ | ファイル | 説明 |
 |-------|------|-------------|

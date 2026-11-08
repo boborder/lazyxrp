@@ -4,6 +4,10 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ## [Unreleased]
 
+### Added
+
+- README demo: `docs/demo.tape` (vhs) renders `docs/demo.gif` with `mise run demo`; it runs the debug binary read-only with a scrubbed environment and throwaway config/data dirs. `vhs` is added to the mise tools.
+
 ### Changed
 
 - `config.default.toml` no longer carries the `[xrpl]` block: `Config::new` only ever merged its keybindings and styles, so the block (account, issuer, oracles, pairs) had no effect and could drift from `config/defaults.rs`. The I-5 precedence row in `docs/security*.md` now says so.

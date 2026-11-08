@@ -10,6 +10,8 @@ rust = "stable"
 "cargo:cargo-deny" = "latest"
 # benchmark.sh --full runs cargo bloat; without it that step SKIPs.
 "cargo:cargo-bloat" = "latest"
+# `mise run demo` renders docs/demo.gif with vhs (it also needs ttyd and ffmpeg on PATH, plus a Nerd Font).
+"aqua:charmbracelet/vhs" = "latest"
 
 # https://mise.jdx.dev/tasks/ — run from repo root: mise run install
 [tasks.install]
@@ -131,6 +133,10 @@ fi
 [tasks.bench]
 description = "Full benchmark (cold build + check/test/clippy/doc; ~10 min)"
 run = "./benchmark.sh --full"
+
+[tasks.demo]
+description = "Render docs/demo.gif (README demo) from docs/demo.tape with vhs; read-only, scrubbed env, throwaway config dirs"
+run = "cargo build --locked && vhs docs/demo.tape"
 
 [tasks.bench-fast]
 description = "Fast perf benchmark (skips clean build + quality gates; ~3 min)"

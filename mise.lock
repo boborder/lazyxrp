@@ -2,6 +2,17 @@
 
 lockfile_version = 4
 
+[[tools."aqua:charmbracelet/vhs"]]
+version = "0.12.1"
+backend = "aqua:charmbracelet/vhs"
+specifiers = ["latest"]
+
+[tools."aqua:charmbracelet/vhs"."platforms.macos-arm64"]
+checksum = "sha256:b5b524ed60c949eb80dfb685a18eeb135eb863c97f7279689b4e153363cd27c5"
+url = "https://github.com/charmbracelet/vhs/releases/download/v0.12.1/vhs_0.12.1_Darwin_arm64.tar.gz"
+url_api = "https://api.github.com/repos/charmbracelet/vhs/releases/assets/585610194"
+provenance = "cosign"
+
 [[tools."cargo:cargo-audit"]]
 version = "0.22.2"
 backend = "cargo:cargo-audit"

@@ -147,7 +147,9 @@ lazyxrp/
 │   ├── security.md
 │   ├── security-ja.md
 │   ├── problems.md
-│   └── problems-ja.md
+│   ├── problems-ja.md
+│   ├── demo.tape  # vhs script for the README demo (`mise run demo`)
+│   └── demo.gif   # README demo, rendered from demo.tape
 └── .agents/skills/         # domain skills (xrpl-rust, flare-*) + verify-lazyxrp (PTY / CLI verification harness)
 ```
 
@@ -256,6 +258,7 @@ The index of documents (the question each doc answers) has [`AGENTS.md`](../AGEN
 | `mise run bench` | Full benchmark suite (~10 min) |
 | `mise run bench-fast` | Quick benchmarks |
 | `mise run bench-ci` | CI-equivalent benchmark (`benchmark.sh --json --fast --perf-only`) |
+| `mise run demo` | Render `docs/demo.gif` from `docs/demo.tape` (vhs; read-only run with a scrubbed env) |
 
 | Entry | File | Description |
 |-------|------|-------------|

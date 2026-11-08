@@ -9,6 +9,8 @@ Terminal UI and script CLI for the XRP Ledger — watch accounts, order books, N
 
 Repository: https://github.com/boborder/lazyxrp · Changes: [`CHANGELOG.md`](CHANGELOG.md) · Security: [`SECURITY.md`](SECURITY.md)
 
+![lazyxrp demo](https://raw.githubusercontent.com/boborder/lazyxrp/main/docs/demo.gif)
+
 ## Features
 
 Watch mode uses **four top-level tabs** (jump with `1`–`4`):
