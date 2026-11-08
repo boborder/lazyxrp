@@ -42,4 +42,4 @@
 
 **定期 CI:** 毎週月曜 00:00 UTC に CI 全体を実行し、yanked crate や新しい advisory を push 前に検出する（2026-10-03 の yanked `yoke-derive` は push 時に初めて失敗した）。auto-tag は push 時のみ動く。
 
-**依存更新:** [`.github/dependabot.yml`](../.github/dependabot.yml) が週次で PR を作る。GitHub Actions はコミット SHA 固定（`# vN` コメント付き）なので、その更新もこの PR 経由。cargo は minor/patch をまとめた 1 PR、major は個別。例外: `tokio-tungstenite >=0.25` は dependabot で ignore、かつ `deny.toml` の `[bans] deny`（`tungstenite` / `tokio-tungstenite` `>=0.25`）で fail し、xrpl-rust の 0.24 ツリーとの二重化を防ぐ。xrpl-rust が上げたら両方外す。
+**依存更新:** [`.github/dependabot.yml`](../.github/dependabot.yml) が週次で PR を作る。GitHub Actions はコミット SHA 固定（`# vN` コメント付き）なので、その更新もこの PR 経由。cargo は minor/patch をまとめた 1 PR、major は個別。 `tokio-tungstenite`（dev 専用、0.30）は据え置かない。xrpl-rust の 0.24 ツリーと並存し、重複バージョンは警告のみ（`deny.toml` の `multiple-versions = "warn"`）。

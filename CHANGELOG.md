@@ -12,6 +12,7 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 - Built-in defaults moved from `config.json5` to `config.default.toml`, parsed by the `toml` crate already in use; the `json5` dependency is gone.
 - `install.sh`: removed the animated banner and the fake download progress bar and sleeps; installs are no longer slowed on a TTY.
+- Dependencies: `cargo update` within semver; dev-dependency `tokio-tungstenite` 0.24 → 0.30. The `deny.toml` ban and the Dependabot ignore that kept it on xrpl-rust's 0.24 tree are removed; the lockfile now holds both versions (test fixture only, not in the release binary).
 
 ## [0.10.0] - 2026-10-28
 

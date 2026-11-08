@@ -87,8 +87,8 @@ image = { version = "0.25", default-features = false, features = ["gif", "jpeg",
 openssl = { version = "0.10", features = ["vendored"] }
 
 [dev-dependencies]
-# Already in the tree via xrpl-rust; local WebSocket fixture server for ws.rs tests.
-tokio-tungstenite = "0.24"
+# Local WebSocket fixture server for ws.rs tests (dev only; xrpl-rust keeps its own 0.24 tree).
+tokio-tungstenite = "0.30"
 
 [build-dependencies]
 vergen-gix = { version = "10", features = ["build"] }

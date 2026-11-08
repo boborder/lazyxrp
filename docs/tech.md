@@ -26,7 +26,7 @@
 - `reqwest` (`0.13` in `Cargo.toml`, direct dependency `0.13.5` in `Cargo.lock`; `default-features = false`, `features = ["json", "stream", "native-tls", "charset", "http2", "system-proxy"]` — JSON-RPC and bounded NFT metadata/image streaming). TLS is **native-tls**, not the default rustls/`aws-lc-rs` (the C build of `aws-lc-sys` alone dominated a clean build; `reqwest 0.12.x` on the `xrpl-rust` path is also native-tls). On the `xrpl-rust` path, **`reqwest 0.12.x` may coexist in the lock** (`Cargo.lock` is authoritative for resolution).
 - `xrpl-rust` (`1.1` in `Cargo.toml`, `1.3.0` in `Cargo.lock`)
 - `kobe-xrpl = 4` / `kobe-core = 4` (was `kobe-primitives` before 4.0) — BIP39 secp256k1 mnemonic → BIP44 `m/44'/144'/0'/0/0` account derivation.
-- `tokio-tungstenite` — dev-dependency only (local WS server for `ws.rs` tests). The WS in the main binary goes through xrpl-rust
+- `tokio-tungstenite = 0.30` — dev-dependency only (local WS server for `ws.rs` tests; separate from the 0.24 tree xrpl-rust uses). The WS in the main binary goes through xrpl-rust
 - URL parsing uses `reqwest::Url` (a re-export of the `url` crate; there is no direct dependency)
 - `base64 = 0.23` — XRPLF dUNL blob / validator manifest decode (`base64::engine::general_purpose::STANDARD`)
 - `hex = 0.4` — hex encode/decode of seed / domain / validator key
