@@ -56,12 +56,75 @@ description = "CI Security Advisories gate: cargo-audit + cargo-deny (ignores in
 run = "cargo audit && cargo deny check"
 
 [tasks.update]
-description = "Update Cargo.lock within semver, then rebuild-check + advisory rescan"
-run = "cargo update && mise run check && mise run audit"
+description = "Update Cargo.lock within semver, then rebuild-check + advisory rescan + stale-cache sweep (replaced dependency versions leave their old builds behind)"
+run = "cargo update && mise run check && mise run audit && mise run gc-auto"
 
 [tasks.clean]
 description = "Remove build artifacts (target/, benchmark outputs)"
 run = "cargo clean && rm -f benchmark-summary.json"
+
+# --- Local build-cache hygiene (dev machines only; no CI workflow runs these) ---
+
+[tasks.gates]
+description = "The dev loop's finish line, in order: lint, test, doc, then gc-auto"
+run = ["mise run lint", "mise run test", "mise run doc", "mise run gc-auto"]
+
+[tasks.gc]
+description = "Free disk by dropping stale build cache: orphaned debug objects, idle incremental sessions, files unread for DAYS (default 3). Keeps what the last build used. Usage: mise run gc [days]"
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+DAYS="${1:-3}"
+[[ "$DAYS" =~ ^[0-9]+$ ]] || { echo "error: days must be a whole number" >&2; exit 1; }
+[ -d target ] || { echo "gc: no target/ — nothing to do"; exit 0; }
+kb() { du -sk target | cut -f1; }
+before=$(kb)
+
+# 1. macOS keeps one debug object (.o) per codegen unit per build and cargo never removes the old
+# ones: ~6 GB after a day of edits. Only debuggers read them (cargo does not track them), so drop
+# each unit's .o files that predate its newest lib/exe by more than 10 minutes. Linux leaves none.
+if [ "$(uname)" = Darwin ]; then
+  find target -type d -name deps -not -path '*/build/*' | while read -r deps; do
+    find "$deps" -maxdepth 1 -type f -exec stat -f '%m %N' {} + 2>/dev/null | awk '
+      { m = $1; n = $0; sub(/^[0-9]+ /, "", n); f = n; sub(/.*\//, "", f)
+        if (f ~ /\.o$/) { u = f; sub(/\..*/, "", u); obj[++c] = n; om[c] = m; ou[c] = u; next }
+        if (f ~ /\.(d|rmeta|json)$/) next
+        u = f; sub(/^lib/, "", u); sub(/\.(rlib|dylib|a)$/, "", u)
+        if (u ~ /^[A-Za-z0-9_]+-[0-9a-f]{16}$/ && m > newest[u]) newest[u] = m }
+      END { for (i = 1; i <= c; i++) if ((ou[i] in newest) && om[i] < newest[ou[i]] - 600) print obj[i] }' \
+      | tr '\n' '\0' | xargs -0 rm -f
+  done
+fi
+
+# 2. Incremental sessions nobody has touched for DAYS (cargo never prunes them).
+find target -type d -path '*/incremental/*/s-*' -mtime +"$DAYS" -prune -exec rm -rf {} +
+
+# 3. Anything else no build has read for DAYS (cargo-sweep's rule): old profiles, other targets,
+# superseded dependency versions. Cargo rebuilds a missing artifact; it never fails on one.
+find target -type f -atime +"$DAYS" -not -name CACHEDIR.TAG -delete
+find target -type d -empty -delete
+
+after=$(kb)
+printf 'gc: target %.1f -> %.1f GB (freed %.1f GB), %.1f GB free on disk\n' \
+  "$(echo "$before / 1048576" | bc -l)" "$(echo "$after / 1048576" | bc -l)" \
+  "$(echo "($before - $after) / 1048576" | bc -l)" \
+  "$(df -k . | awk 'NR==2 {print $4 / 1048576}')"
+'''
+
+[tasks.gc-auto]
+description = "Run gc only when target/ is over GC_MAX_GB (default 8) or the disk has less than GC_MIN_FREE_GB (default 20) free"
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+[ -d target ] || exit 0
+used=$(( $(du -sk target | cut -f1) / 1048576 ))
+free=$(( $(df -k . | awk 'NR==2 {print $4}') / 1048576 ))
+if [ "$used" -ge "${GC_MAX_GB:-8}" ] || [ "$free" -lt "${GC_MIN_FREE_GB:-20}" ]; then
+  mise run gc
+else
+  echo "gc-auto: target ${used} GB, ${free} GB free — nothing to do"
+fi
+'''
 
 # --- Benchmarks ---
 

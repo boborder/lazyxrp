@@ -34,7 +34,8 @@ When shipping behavior: update root `ROADMAP.md` and `docs/` (`architecture.md`,
 4. After `cargo check` → sync related **`docs/`**.
 5. Changes to **`src/config/`** keys or behavior → update every **`docs/`** file that mentions them in the same change.
 6. Parallel agents: one integrator edits shared files (`CHANGELOG.md`, the `ROADMAP.md` coverage table, README counts); regenerate the table with `lazyxrp -x coverage`, never by hand.
-7. Dependency updates → `mise run update` (cargo update + check + audit).
+7. Dependency updates → `mise run update` (cargo update + check + audit + gc-auto).
+8. Finishing a work session → `mise run gates` (lint + test + doc, then `gc-auto`); or `mise run gc-auto` alone. Local only, never run by CI: `gc-auto` frees stale build cache (orphaned debug objects, idle incremental sessions, files unread for 3 days) when `target/` is over 8 GB or the disk is under 20 GB free; `mise run gc [days]` forces it.
 
 If assumptions are unavoidable, state them explicitly before proceeding.
 
