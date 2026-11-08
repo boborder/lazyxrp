@@ -4,6 +4,8 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ## [Unreleased]
 
+## [0.10.1] - 2026-11-08
+
 ### Fixed
 
 - TUI TrustSet refuses a malformed currency (e.g. `US D`) before simulate with `invalid IOU currency code`, like Payment; before, it went to the node raw and only the node rejected it.
@@ -233,7 +235,8 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 See [GitHub Releases](https://github.com/boborder/lazyxrp/releases) for 0.2.11 and older.
 
-[Unreleased]: https://github.com/boborder/lazyxrp/compare/v0.10.0...HEAD
+[Unreleased]: https://github.com/boborder/lazyxrp/compare/v0.10.1...HEAD
+[0.10.1]: https://github.com/boborder/lazyxrp/compare/v0.10.0...v0.10.1
 [0.10.0]: https://github.com/boborder/lazyxrp/compare/v0.9.1...v0.10.0
 [0.9.1]: https://github.com/boborder/lazyxrp/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/boborder/lazyxrp/compare/v0.8.0...v0.9.0
