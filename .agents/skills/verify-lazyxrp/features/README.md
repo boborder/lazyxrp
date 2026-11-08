@@ -3,7 +3,7 @@
 This directory is the maintained source for verifying lazyxrp's user-facing behavior. Read the index, then use the matching feature file as the recipe. The harness is `verify.py` (see [`../SKILL.md`](../SKILL.md)); every recipe assumes:
 
 ```text
-H=.omp/skills/verify-lazyxrp/scripts/verify.py   # `recipes` exports H and VERIFY_RUN itself
+H=.agents/skills/verify-lazyxrp/scripts/verify.py   # `recipes` exports H and VERIFY_RUN itself
 export VERIFY_RUN=<unique id>
 ```
 

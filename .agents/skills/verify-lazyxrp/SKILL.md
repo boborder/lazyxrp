@@ -8,7 +8,7 @@ description: Drive the real lazyxrp binary (ratatui TUI and `lazyxrp -x` CLI) ag
 lazyxrp is a terminal app with two surfaces: the **TUI** (`lazyxrp`, 4 tabs) and the **CLI** (`lazyxrp -x <subcommand>`). There is no server to keep alive. Each drive is a fresh process in its own PTY (TUI) or subprocess (CLI), against **public XRPL testnet**. Everything goes through one helper:
 
 ```sh
-H=.omp/skills/verify-lazyxrp/scripts/verify.py   # run from the repo root; needs `uv` (pulls pyte on first run)
+H=.agents/skills/verify-lazyxrp/scripts/verify.py   # run from the repo root; needs `uv` (pulls pyte on first run)
 export VERIFY_RUN=$(date +%Y%m%d-%H%M%S)          # one id per verification run
 ```
 
@@ -73,7 +73,7 @@ $H tui --name tour \
 **Recipes.** Every feature file's `sh` blocks are self-checking: each ends in `grep -q` assertions, so a failed assertion fails the block. Run them verbatim, one bash process per file:
 
 ```sh
-$H recipes .omp/skills/verify-lazyxrp/features/order-book.md      # or features/*.md for the whole map
+$H recipes .agents/skills/verify-lazyxrp/features/order-book.md      # or features/*.md for the whole map
 ```
 
 `--args "…"` replaces the lazyxrp argv; the default is `--network testnet`. For watch mode use `--args "--network testnet --watch --account rADDR"`. When the steps finish, the helper sends `Ctrl-c` if the app is still running, and kills it after 3 s.
