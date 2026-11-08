@@ -22,7 +22,7 @@ use defaults::{
 pub use keybindings::KeyBindings;
 pub use styles::Styles;
 
-const CONFIG: &str = include_str!("../../config.json5");
+const CONFIG: &str = include_str!("../../config.default.toml");
 const CONFIG_DIR_BASENAME: &str = "lazyxrp";
 
 #[derive(Clone, Debug, Deserialize, Default)]
@@ -401,8 +401,8 @@ impl Config {
         use color_eyre::eyre::WrapErr as _;
         // Security (S-007): embedded config is a compile-time constant — parse failure
         // indicates a build-time bug, not a runtime condition.
-        let default_config: Config = json5::from_str(CONFIG)
-            .expect("embedded config.json5 is malformed — this is a build-time bug");
+        let default_config: Config = toml::from_str(CONFIG)
+            .expect("embedded config.default.toml is malformed — this is a build-time bug");
         let config_dir = config_dir();
         let config_file = config_dir.join("config.toml");
         // Empty / missing `paths` fall back to `data_dir()` / `config_dir()` in `resolved_*_dir`.

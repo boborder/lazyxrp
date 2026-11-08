@@ -157,7 +157,7 @@ rp --network testnet -t <txid|r-address>
 
 ## Key Bindings
 
-Global defaults: [`config.json5`](config.json5) (merged into `~/.config/lazyxrp/config.toml`). **Full keymap** (global + panel-local, composer, TX overlay): [`DESIGN.md`](DESIGN.md).
+Global defaults: [`config.default.toml`](config.default.toml) (merged into `~/.config/lazyxrp/config.toml`). **Full keymap** (global + panel-local, composer, TX overlay): [`DESIGN.md`](DESIGN.md).
 
 Highlights: `Tab` / `1`–`4` tabs · `h`/`l` focus · `j`/`k` rows · `Enter` TX detail · `t` composer · `Ctrl-n` cycle network (session) · `?` help · `q` quit.
 

@@ -1,0 +1,46 @@
+[keybindings.Splash]
+"<q>" = "Quit"  # Quit the application
+"<Ctrl-d>" = "Quit"  # Another way to quit
+"<Ctrl-c>" = "Quit"  # Yet another way to quit
+"<Ctrl-z>" = "Suspend"  # Suspend the application
+"<r>" = "RefreshAccount"
+"<b>" = "RefreshBook"
+"<o>" = "RefreshLedgerObjects"
+"<Ctrl-n>" = "NetworkSwitchCycle"
+"<j>" = "SelectNext"
+"<k>" = "SelectPrev"
+"<down>" = "SelectNext"
+"<up>" = "SelectPrev"
+"<h>" = "FocusPrev"
+"<l>" = "FocusNext"
+"<right>" = "FocusNext"
+"<left>" = "FocusPrev"
+"<enter>" = "TxDetailToggle"
+"<?>" = "Help"
+
+# Signing credentials are intentionally not stored in this example.
+# Use XRPL_SEED / XRPL_MNEMONIC or [xrpl.signing] seed / mnemonic.
+# BIP39 mnemonic uses secp256k1 account index 0.
+[xrpl]
+# Network: mainnet | testnet | devnet | xahau | xahau-test
+# Xahau presets (XRPL-compatible): mainnet https://xahau.network, testnet https://xahau-test.net
+network = "mainnet"
+account = "r3kmLJN5D28dHuH8vZNUZpMC43pEHpaocV"
+issuer = "rMxCKbEDwqr76QuheSUMdEGf4B9xJ8m5De"
+currency = "RLUSD"
+offer_limit = 5
+poll_interval_ms = 5000
+# Payment composer `p` quote: slippage (basis points) added to the path cost. 100 = 1%.
+slippage_bps = 100
+oracles = [
+  # DIA mainnet oracle
+  { account = "rP24Lp7bcUHvEW7T7c8xkxtQKKd9fZyra7", oracle_document_id = 42 },
+]
+oracle_pairs = [
+  { base_asset = "XRP", quote_asset = "USD" },
+  { base_asset = "BTC", quote_asset = "USD" },
+  { base_asset = "ETH", quote_asset = "USD" },
+  { base_asset = "524C555344000000000000000000000000000000", quote_asset = "USD" },
+  { base_asset = "5553444300000000000000000000000000000000", quote_asset = "USD" },
+  { base_asset = "5553445400000000000000000000000000000000", quote_asset = "USD" },
+]

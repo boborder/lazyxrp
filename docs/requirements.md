@@ -49,7 +49,7 @@ Product **requirements** (what). Behavioral design: [`architecture.md`](architec
 
 - Settings are loaded from a file; defaults are used when unspecified.
 - The config file is looked up at `$XDG_CONFIG_HOME/lazyxrp/config.toml` first, and at `~/.config/lazyxrp/config.toml` when that is unset.
-- Key bindings (global defaults in `config.json5`, details in [`DESIGN.md`](../DESIGN.md)) and XRPL connection settings (RPC/WS, currency, issuer, poll interval) are supported.
+- Key bindings (global defaults in `config.default.toml`, details in [`DESIGN.md`](../DESIGN.md)) and XRPL connection settings (RPC/WS, currency, issuer, poll interval) are supported.
 
 ## 4. Non-Functional Requirements
 

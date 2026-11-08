@@ -38,7 +38,7 @@ Publishing is a tag-driven automated release. `version` in `Cargo.toml` is the S
 
 **Normal release procedure:** `mise run release <x.y.z>` (checks main, clean worktree, unused tag, and that `[Unreleased]` has entries → `Cargo.toml` bump + `Cargo.lock` sync + finalizes `[Unreleased]` in `CHANGELOG.md` as `[x.y.z] - date` and updates the compare links → lint / test → one `chore: release <x.y.z>` commit. It does not push) → `git push` → all CI green → auto-tag creates the tag → CD publishes (rule of thumb: about 11 minutes from push to crates.io; CI about 1 min, build 4–6.5 min, crates.io publish about 3.5 min). A manual tag is generally unnecessary because auto-tag detects the duplicate and skips.
 
-**crates.io package:** `include` in `Cargo.toml` is the allowlist (`src/`, `tests/`, `build.rs`, `config.json5`, `DESIGN.md` (read by TC-128), `CHANGELOG.md`, `SECURITY.md`, `LICENSE`, `README.md`, `ROADMAP.md` (read by TC-248), `.env.example`). `docs/` is on GitHub only. Check: `cargo package --list` (must show 0 warnings).
+**crates.io package:** `include` in `Cargo.toml` is the allowlist (`src/`, `tests/`, `build.rs`, `config.default.toml`, `DESIGN.md` (read by TC-128), `CHANGELOG.md`, `SECURITY.md`, `LICENSE`, `README.md`, `ROADMAP.md` (read by TC-248), `.env.example`). `docs/` is on GitHub only. Check: `cargo package --list` (must show 0 warnings).
 
 **Scheduled CI:** runs the whole CI every Monday 00:00 UTC to catch yanked crates and new advisories before a push (the yanked `yoke-derive` on 2026-10-03 first failed at push time). auto-tag runs only on push.
 

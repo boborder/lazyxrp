@@ -18,7 +18,7 @@ lazyxrp/
 ├── ROADMAP-ja.md          # Japanese twin of ROADMAP.md
 ├── CHANGELOG.md           # user-facing changes per release (Keep a Changelog)
 ├── SECURITY.md            # vulnerability reporting + safety model (details: docs/security.md)
-├── config.json5
+├── config.default.toml
 ├── .env.example
 ├── install.sh
 ├── mise.toml
@@ -157,7 +157,7 @@ lazyxrp/
 
 - `Cargo.toml`: crate definition, dependencies, and features.
 - `rust-toolchain.toml`: the Rust channel **shared by CI and local builds** (currently `stable`). `dtolnay/rust-toolchain` in `.github/workflows/ci.yml` (SHA-pinned, `# v1`) is given the same string as this file's `channel` as its `toolchain` input (required in v1; `rustfmt` / `clippy` are specified via `components` in the relevant jobs). Actions SHA updates are handled by `.github/dependabot.yml`.
-- `config.json5`: built-in defaults such as keybindings (the `include_str!` target of `src/config/mod.rs`). Separate from the user config `config.toml`.
+- `config.default.toml`: built-in defaults such as keybindings (the `include_str!` target of `src/config/mod.rs`). Separate from the user config `config.toml`.
 - `Cargo.lock`: pinned dependency versions (**committed for the binary**; CI runs `cargo … --locked`).
 - `build.rs`: build-time helper.
 - `README.md`: user-facing overview and startup steps.

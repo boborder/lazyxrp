@@ -43,11 +43,10 @@
 
 ### 設定・シリアライズ
 
-- `toml`（ユーザー `config.toml` を `std::fs` + `toml::from_str` で読む。旧 `config` crate は 0.6.1 で削除）
+- `toml`（ユーザー `config.toml` を `std::fs` + `toml::from_str` で読み、同じ crate が埋め込み `config.default.toml` もパースする。旧 `config` crate は 0.6.1 で削除）
 - `directories`（`Cargo.toml` `6`、`Cargo.lock` `6.0.0` — `ProjectDirs`）
 - `serde`（`Cargo.toml` `1`、`Cargo.lock` `1.0.229`、`derive`）
 - `serde_json`（`Cargo.toml` `1`、`Cargo.lock` `1.0.154`）
-- `json5`（`Cargo.toml` `1`、`Cargo.lock` 直接依存 `1.3.4` — リポジトリ直下の埋め込み `config.json5` のパース）
 
 ### 監視性・障害対応
 
@@ -123,7 +122,7 @@ TUI セッション内の `<Ctrl-n>` は `Network::next_network()` で XRPL ネ�
 ## 5. 開発コマンド
 
 - 依存解決: `cargo build`
-- タスクランナー: ルート `mise.toml`（`mise run <task>`）。`check` / `fmt` / `lint`（fmt+clippy が CI 基準）/ `test` / `test-serial` / `e2e-testnet`（opt-in の live write、[`test-ja.md`](test-ja.md)）/ `doc` / `audit`（cargo-audit + cargo-deny — CI と同一、無視リストは cargo-deny が `deny.toml`、cargo-audit が `.cargo/audit.toml`）/ `update`（`cargo update` 後に check + audit を再実行）/ `clean`（target/ と benchmark 出力を削除）/ `bench*` / `release` / `tag-push`（[`maintenance-ja.md`](maintenance-ja.md)）。ツール実体は `[tools]`（rust は [`rust-toolchain.toml`](../rust-toolchain.toml) と同一チャンネル `stable`、`hyperfine`、`cargo-audit`、`cargo-deny`、`cargo-bloat`）。
+- タスクランナー: ルート `mise.toml`（`mise run <task>`）。`check` / `fmt` / `lint`（fmt+clippy が CI 基準）/ `test` / `test-serial` / `e2e-testnet`（opt-in の live write、[`test-ja.md`](test-ja.md)）/ `doc` / `audit`（cargo-audit + cargo-deny — CI と同一、無視リストは cargo-deny が `deny.toml`、cargo-audit が `.cargo/audit.toml`）/ `update`（`cargo update` 後に check + audit を再実行し、続けて `gc-auto`）/ `clean`（target/ と benchmark 出力を削除）/ `gates`（lint + test + doc のあと `gc-auto`）/ `gc [days]` と `gc-auto`（ローカル専用で CI は使わない。古いビルドキャッシュを解放する — macOS の孤立したデバッグオブジェクト、放置された incremental セッション、`days` 日（既定 3）どのビルドにも読まれなかったファイル。`gc-auto` は `target/` が `GC_MAX_GB`（既定 8）を超えるか、ディスクの空きが `GC_MIN_FREE_GB`（既定 20）未満のときだけ `gc` を実行）/ `bench*` / `release` / `tag-push`（[`maintenance-ja.md`](maintenance-ja.md)）。ツール実体は `[tools]`（rust は [`rust-toolchain.toml`](../rust-toolchain.toml) と同一チャンネル `stable`、`hyperfine`、`cargo-audit`、`cargo-deny`、`cargo-bloat`）。
 - コンパイルチェック: `cargo check`
 - ローカルインストール（任意）: ルート `./install.sh`（**HTTP 取得には `curl` または `wget` のいずれかが必須**）。英語プロンプト。`--help` でオプション確認（`--method cargo|binary`、`--install-rust` / `--no-install-rust` など）。ソースビルドはクローン済みツリーのルートから（`Cargo.toml` / `rust-toolchain.toml` と同階）。`curl | bash` だけのとき rustup で入れる既定ツールチェーンは **リポにある `rust-toolchain.toml` の `channel` を読めるかぎりそれ**で揃える（読めずに素の stdin 経路なら **`stable`** フォールバック）。GitHub Releases REST は **公開 API の無認証だと環境によりレート制限**になりうるので、任意で **`GITHUB_TOKEN` / `GITHUB_API_TOKEN`**。バイナリ配置は INSTALL_DIR 上の **`*.partial.*` にコピーしてから `mv`（失敗や中断時の掃除は EXIT の `cleanup`）。** **手動アンインストール**は `./install.sh --uninstall-help`（**PATH 上のバイナリから** `lazyxrp --self-uninstall` / `--yes` も可。バイナリ／`cargo uninstall` に加え、任意でユーザ設定・データ directory の削除例 Linux/macOS 別、`LAZYXRP_CONFIG` / `LAZYXRP_DATA` と `config.toml` の `data_dir` / `config_dir` 上書きの注意。README の Uninstall と同様）。TTY は対話 + アニメ; `-q` または非 TTY は非対話。ダウンロードは `curl` 優先（無ければ `wget`）でリトライ／タイムアウトあり。GitHub のタグ／コミット SHA 解決は **`jq` があれば優先**（無ければ従来の grep/sed）。`BINARY_INSTALL=1 ./install.sh -q` でプリビルト優先の例は従来どおり。または **[mise](https://mise.jdx.dev/)** `mise run install`（`mise.toml` のタスク経由; 詳細は `README.md`）
 - 実行（TUI）: `cargo run --bin lazyxrp -- --account <r-address>`

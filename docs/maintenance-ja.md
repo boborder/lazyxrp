@@ -38,7 +38,7 @@
 
 **通常リリース手順:** `mise run release <x.y.z>`（main・clean worktree・未使用タグ・`[Unreleased]` に項目があることを検査 → `Cargo.toml` bump + `Cargo.lock` 同期 + `CHANGELOG.md` の `[Unreleased]` を `[x.y.z] - 日付` に確定し compare リンク更新 → lint / test → `chore: release <x.y.z>` を 1 コミット。push はしない）→ `git push` → CI 全緑 → auto-tag がタグ作成 → CD 公開（目安: push から crates.io まで約 11 分。内訳は CI 約 1 分、ビルド 4〜6.5 分、crates.io 公開 約 3.5 分）。手動タグは auto-tag が重複を検知して skip するため原則不要。
 
-**crates.io パッケージ:** `Cargo.toml` の `include` が allowlist（`src/`、`tests/`、`build.rs`、`config.json5`、`DESIGN.md`（TC-128 が読む）、`CHANGELOG.md`、`SECURITY.md`、`LICENSE`、`README.md`、`ROADMAP.md`（TC-248 が読む）、`.env.example`）。`docs/` は GitHub のみ。確認: `cargo package --list`（警告 0 であること）。
+**crates.io パッケージ:** `Cargo.toml` の `include` が allowlist（`src/`、`tests/`、`build.rs`、`config.default.toml`、`DESIGN.md`（TC-128 が読む）、`CHANGELOG.md`、`SECURITY.md`、`LICENSE`、`README.md`、`ROADMAP.md`（TC-248 が読む）、`.env.example`）。`docs/` は GitHub のみ。確認: `cargo package --list`（警告 0 であること）。
 
 **定期 CI:** 毎週月曜 00:00 UTC に CI 全体を実行し、yanked crate や新しい advisory を push 前に検出する（2026-10-03 の yanked `yoke-derive` は push 時に初めて失敗した）。auto-tag は push 時のみ動く。
 

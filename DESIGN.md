@@ -132,7 +132,7 @@ Guard: `TAB_TITLES.len() == panels.len() == 4` (`debug_assert_eq!` in `App::new`
 
 ## 6. Keys (operated)
 
-Defaults: [`config.json5`](config.json5) `keybindings.Splash`. User merge: `~/.config/lazyxrp/config.toml` — same-key entries override, new keys add, unlisted defaults stay (no unbind). `Tab` / `Shift+Tab` / `1`–`4` and panel-local keys below are hard-coded.
+Defaults: [`config.default.toml`](config.default.toml) `keybindings.Splash`. User merge: `~/.config/lazyxrp/config.toml` — same-key entries override, new keys add, unlisted defaults stay (no unbind). `Tab` / `Shift+Tab` / `1`–`4` and panel-local keys below are hard-coded.
 
 ```toml
 [keybindings.Splash]
@@ -186,7 +186,7 @@ Defaults: [`config.json5`](config.json5) `keybindings.Splash`. User merge: `~/.c
 
 **TX detail** (also the dUNL `Validator #N` overlay): `j`/`k` scroll; `Enter` closes (`TxDetailToggle`; `Esc` is not bound). Consumes actions so tables underneath stay put.
 
-New global binding: `config.json5` + `Action` + `app.rs` dispatch; document here and in [`docs/test.md`](docs/test.md) when user-visible.
+New global binding: `config.default.toml` + `Action` + `app.rs` dispatch; document here and in [`docs/test.md`](docs/test.md) when user-visible.
 
 ---
 

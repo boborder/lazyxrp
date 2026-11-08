@@ -49,7 +49,7 @@
 
 - 設定はファイルから読み込み、未指定時は既定値を利用すること。
 - 設定ファイル探索先は `$XDG_CONFIG_HOME/lazyxrp/config.toml` を優先し、未設定時は `~/.config/lazyxrp/config.toml` を利用すること。
-- キーバインド（グローバル既定は `config.json5`、詳細は [`DESIGN.md`](../DESIGN.md)）と XRPL 接続情報（RPC/WS、通貨、issuer、poll 間隔）を扱えること。
+- キーバインド（グローバル既定は `config.default.toml`、詳細は [`DESIGN.md`](../DESIGN.md)）と XRPL 接続情報（RPC/WS、通貨、issuer、poll 間隔）を扱えること。
 
 ## 4. 非機能要件（Non-Functional Requirements）
 
