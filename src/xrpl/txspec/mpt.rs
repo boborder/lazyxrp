@@ -7,8 +7,6 @@
 //! keys. `MPTokenMetadata` is plain text, hex-encoded here.
 
 use color_eyre::eyre::eyre;
-use serde_json::Value;
-use xrpl::models::Model;
 use xrpl::models::transactions::mptoken_authorize::{MPTokenAuthorize, MPTokenAuthorizeFlag};
 use xrpl::models::transactions::mptoken_issuance_create::{
     MPTokenIssuanceCreate, MPTokenIssuanceCreateFlag,
@@ -18,17 +16,15 @@ use xrpl::models::transactions::mptoken_issuance_set::{
     MPTokenIssuanceSet, MPTokenIssuanceSetFlag,
 };
 
-use super::identity::{
-    address, eyre_model, no_check, non_zero_id, text_hex, to_json, tx_fns, uint, upper,
+use super::identity::{non_zero_id, text_hex};
+use super::{
+    Confirm, FieldKind, FieldSpec, Fields, MAX_TRANSFER_FEE, TxSpec, address, common_fields,
+    flag_bits, is_nonzero, no_check, tx_fns, uint, upper, val,
 };
-use super::{Confirm, FieldKind, FieldSpec, Fields, TxSpec, common_fields, flag_bits, val};
-use crate::signing::sign_blob;
 
 const FAMILY: &str = "MPT";
 /// `MPTokenIssuanceID`: 192-bit (sequence + issuer) id.
 const ISSUANCE_ID_LEN: usize = 48;
-/// rippled `maxTransferFee`.
-const MAX_TRANSFER_FEE: u32 = 50_000;
 /// rippled `maxMPTokenMetadataLength`.
 const MAX_METADATA_BYTES: usize = 1024;
 const MAX_ASSET_SCALE: u32 = 255;
@@ -133,9 +129,9 @@ fn maximum_amount_ok(v: &str) -> Result<(), String> {
     }
 }
 
-fn create_check(f: &Fields) -> Result<(), String> {
+fn create_check(f: &Fields, _account: Option<&str>) -> Result<(), String> {
     let bits = val(f, "Flags").map_or(0, |v| flag_bits(CREATE_FLAGS, v));
-    if val(f, "TransferFee").is_some_and(|v| v != "0") && bits & CAN_TRANSFER == 0 {
+    if val(f, "TransferFee").is_some_and(is_nonzero) && bits & CAN_TRANSFER == 0 {
         return Err("TransferFee: a non-zero fee needs the canTransfer flag".into());
     }
     if val(f, "DomainID").is_some() && bits & REQUIRE_AUTH == 0 {
@@ -168,7 +164,7 @@ fn create_tx(
         immutable_flags: None,
     })
 }
-tx_fns!(create_json, create_sign, create_tx, "MPTokenIssuanceCreate");
+tx_fns!(create_tx, create_json, create_sign, "MPTokenIssuanceCreate");
 
 // ---------------------------------------------------------- MPTokenIssuanceDestroy
 
@@ -198,9 +194,9 @@ fn destroy_tx(
     })
 }
 tx_fns!(
+    destroy_tx,
     destroy_json,
     destroy_sign,
-    destroy_tx,
     "MPTokenIssuanceDestroy"
 );
 
@@ -230,11 +226,10 @@ pub const SET: TxSpec = TxSpec {
     sign: set_sign,
 };
 
-fn set_check(f: &Fields) -> Result<(), String> {
+fn set_check(f: &Fields, _account: Option<&str>) -> Result<(), String> {
     match val(f, "Flags").map_or(0, |v| flag_bits(SET_FLAGS, v)) {
         0b01 | 0b10 => Ok(()),
-        0 => Err("Flags: choose lock or unlock".into()),
-        _ => Err("Flags: lock and unlock are mutually exclusive".into()),
+        _ => Err("Flags: set exactly one of lock or unlock".into()),
     }
 }
 
@@ -249,7 +244,7 @@ fn set_tx(
         common_fields: common_fields!(account, MPTokenIssuanceSet, sequence, fee_lls)
             .with_flags(MPTokenIssuanceSetFlag::from_bits(bits)),
         mptoken_issuance_id: issuance_id(f)?.into(),
-        holder: address(f, "Holder").map(Into::into),
+        holder: address(f, "Holder")?.map(Into::into),
         issuer_encryption_key: None,
         auditor_encryption_key: None,
         domain_id: None,
@@ -258,7 +253,7 @@ fn set_tx(
         immutable_flags: None,
     })
 }
-tx_fns!(set_json, set_sign, set_tx, "MPTokenIssuanceSet");
+tx_fns!(set_tx, set_json, set_sign, "MPTokenIssuanceSet");
 
 // ----------------------------------------------------------------- MPTokenAuthorize
 
@@ -297,19 +292,19 @@ fn authorize_tx(
         common_fields: common_fields!(account, MPTokenAuthorize, sequence, fee_lls)
             .with_flags(MPTokenAuthorizeFlag::from_bits(bits)),
         mptoken_issuance_id: issuance_id(f)?.into(),
-        holder: address(f, "Holder").map(Into::into),
+        holder: address(f, "Holder")?.map(Into::into),
     })
 }
 tx_fns!(
+    authorize_tx,
     authorize_json,
     authorize_sign,
-    authorize_tx,
     "MPTokenAuthorize"
 );
 
 #[cfg(test)]
 mod tests {
-    use serde_json::json;
+    use serde_json::{Value, json};
     use xrpl::core::binarycodec::decode;
 
     use super::super::identity::tests::{B, f, run_cases, spec, wallet};
@@ -379,6 +374,8 @@ mod tests {
                 Some("canTransfer"),
             ),
             ("MPTokenIssuanceCreate", f(&[("TransferFee", "0")]), None),
+            // Leading zeros are zero: `"00"` must not be treated as a non-zero fee.
+            ("MPTokenIssuanceCreate", f(&[("TransferFee", "00")]), None),
             (
                 "MPTokenIssuanceCreate",
                 f(&[("MPTokenMetadata", &"m".repeat(1025))]),
@@ -437,7 +434,7 @@ mod tests {
             (
                 "MPTokenIssuanceSet",
                 f(&[("MPTokenIssuanceID", ID), ("Flags", "lock,unlock")]),
-                Some("mutually exclusive"),
+                Some("set exactly one"),
             ),
             (
                 "MPTokenIssuanceSet",
@@ -678,9 +675,7 @@ mod tests {
         let server = tokio::spawn(rpc_mock::serve(listener, 4, result_for));
         let rpc = RpcClient::connect(&url).expect("rpc client");
         let credential = crate::signing::credential_from_secrets(
-            Some(&secrecy::SecretString::from(
-                "sEdSkooMk31MeTjbHVE7vLvgCpEMAdB",
-            )),
+            Some(&secrecy::SecretString::from(crate::test_support::TEST_SEED)),
             None,
         )
         .expect("credential")

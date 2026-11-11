@@ -7,6 +7,7 @@
 
 use std::collections::BTreeMap;
 
+use color_eyre::eyre::eyre;
 use serde_json::Value;
 
 pub(crate) mod channel_amm;
@@ -96,7 +97,7 @@ pub struct TxSpec {
     pub confirm: Option<Confirm>,
     /// Cross-field rules, run after every field passed its own validation. Values are `prepare`d
     /// (trimmed, empty dropped, times absolute).
-    pub check: fn(&Fields) -> Result<(), String>,
+    pub check: fn(&Fields, Option<&str>) -> Result<(), String>,
     /// Unsigned `tx_json` for `simulate` (`Sequence` set, no `Fee` / `LastLedgerSequence`).
     pub build_json: fn(account: &str, &Fields, sequence: u32) -> color_eyre::Result<Value>,
     /// Sign with the typed `xrpl::models` struct → tx blob hex.
@@ -119,6 +120,47 @@ impl std::fmt::Debug for TxSpec {
 /// Trimmed value, `None` when unset / blank.
 pub(crate) fn val<'a>(fields: &'a Fields, name: &str) -> Option<&'a str> {
     fields.get(name).map(|v| v.trim()).filter(|v| !v.is_empty())
+}
+
+pub(crate) const ID_LEN: usize = 64;
+pub(crate) const MAX_TRANSFER_FEE: u32 = 50_000;
+
+pub(crate) fn required<'a>(fields: &'a Fields, name: &str) -> color_eyre::Result<&'a str> {
+    val(fields, name).ok_or_else(|| eyre!("{name}: required"))
+}
+
+pub(crate) fn to_json<T: serde::Serialize>(tx: &T, what: &str) -> color_eyre::Result<Value> {
+    serde_json::to_value(tx).map_err(|e| eyre!("{what} tx_json: {e}"))
+}
+
+pub(crate) fn eyre_model<E: std::fmt::Debug>(e: E) -> color_eyre::Report {
+    eyre!("{e:?}")
+}
+
+pub(crate) fn no_check(_: &Fields, _: Option<&str>) -> Result<(), String> {
+    Ok(())
+}
+
+pub(crate) fn uint(fields: &Fields, name: &str) -> color_eyre::Result<Option<u32>> {
+    val(fields, name)
+        .map(|v| v.parse::<u32>().map_err(|e| eyre!("{name}: {e}")))
+        .transpose()
+}
+
+pub(crate) fn upper(fields: &Fields, name: &str) -> Option<String> {
+    val(fields, name).map(str::to_ascii_uppercase)
+}
+
+/// Optional classic address. Required-address callers add their field-specific `required` error.
+pub(crate) fn address(fields: &Fields, name: &str) -> color_eyre::Result<Option<String>> {
+    Ok(val(fields, name).map(str::to_string))
+}
+
+/// `true` when the text parses as an integer other than zero. `FieldKind::Uint` accepts
+/// leading zeros (`"00"`), so checks that mean "non-zero" must compare the parsed value,
+/// not the string.
+pub(crate) fn is_nonzero(v: &str) -> bool {
+    v.parse::<u64>().is_ok_and(|n| n != 0)
 }
 
 /// Largest legal XRP amount in drops (100 billion XRP).
@@ -262,20 +304,50 @@ impl FieldSpec {
 }
 
 impl TxSpec {
-    /// Field-by-field check plus the cross-field rules. Errors name the field.
+    /// Field-by-field check plus account-independent cross-field rules. Errors name the field.
     pub fn validate(&self, fields: &Fields) -> Result<(), String> {
+        self.validate_inner(fields, None)
+    }
+
+    /// Validate all rules, including those that depend on the sender (for example AMMBid
+    /// `AuthAccounts`). Generic submit builders call this even when preflight only used `validate`.
+    pub fn check_for_account(&self, account: &str, fields: &Fields) -> Result<(), String> {
+        self.validate_inner(fields, Some(account))
+    }
+
+    fn validate_inner(&self, fields: &Fields, account: Option<&str>) -> Result<(), String> {
         let prepared = self.trimmed(fields)?;
         for f in self.fields {
             f.validate_value(prepared.get(f.name).map_or("", String::as_str))
                 .map_err(|e| format!("{}: {e}", f.name))?;
         }
-        (self.check)(&prepared)
+        (self.check)(&prepared, account)
     }
 
     /// Validate, then return the fields as signed: trimmed, blanks dropped, `Time` fields turned
     /// into absolute Ripple-epoch seconds (`ripple_now` + duration). Call once per submit.
     pub fn prepare(&self, fields: &Fields, ripple_now: u64) -> Result<Fields, String> {
-        self.validate(fields)?;
+        self.prepare_inner(fields, ripple_now, None)
+    }
+
+    /// Account-aware form of [`prepare`](Self::prepare), including sender-dependent cross-field
+    /// rules before simulation and signing.
+    pub fn prepare_for_account(
+        &self,
+        account: &str,
+        fields: &Fields,
+        ripple_now: u64,
+    ) -> Result<Fields, String> {
+        self.prepare_inner(fields, ripple_now, Some(account))
+    }
+
+    fn prepare_inner(
+        &self,
+        fields: &Fields,
+        ripple_now: u64,
+        account: Option<&str>,
+    ) -> Result<Fields, String> {
+        self.validate_inner(fields, account)?;
         let mut out = self.trimmed(fields)?;
         for f in self
             .fields
@@ -376,6 +448,37 @@ macro_rules! common_fields {
     }};
 }
 pub(crate) use common_fields;
+
+/// Generate the unsigned simulate JSON and typed-signing functions from one transaction builder.
+macro_rules! tx_fns {
+    ($tx:ident, $json:ident, $sign:ident, $what:literal) => {
+        fn $json(
+            account: &str,
+            f: &$crate::xrpl::txspec::Fields,
+            sequence: u32,
+        ) -> color_eyre::Result<serde_json::Value> {
+            let tx = $tx(account, f, sequence, None)?;
+            xrpl::models::Model::validate(&tx).map_err($crate::xrpl::txspec::eyre_model)?;
+            $crate::xrpl::txspec::to_json(&tx, $what)
+        }
+
+        fn $sign(
+            wallet: &xrpl::wallet::Wallet,
+            account: &str,
+            f: &$crate::xrpl::txspec::Fields,
+            fill: $crate::signing::SimulatedFill,
+        ) -> color_eyre::Result<String> {
+            let mut tx = $tx(
+                account,
+                f,
+                fill.sequence,
+                Some((fill.fee_drops, fill.last_ledger_sequence)),
+            )?;
+            $crate::signing::sign_blob!(tx, wallet)
+        }
+    };
+}
+pub(crate) use tx_fns;
 
 #[cfg(test)]
 mod tests {

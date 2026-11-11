@@ -9,7 +9,6 @@
 //! signatures cannot be authored in a form; see `coverage.rs`).
 
 use color_eyre::eyre::eyre;
-use serde_json::Value;
 use xrpl::models::transactions::xchain_account_create_commit::XChainAccountCreateCommit;
 use xrpl::models::transactions::xchain_claim::XChainClaim;
 use xrpl::models::transactions::xchain_commit::XChainCommit;
@@ -18,12 +17,13 @@ use xrpl::models::transactions::xchain_create_claim_id::XChainCreateClaimID;
 use xrpl::models::transactions::xchain_modify_bridge::{
     XChainModifyBridge, XChainModifyBridgeFlags,
 };
-use xrpl::models::{Amount, Currency, IssuedCurrency, Model, XChainBridge, XRP, XRPAmount};
+use xrpl::models::{Amount, Currency, IssuedCurrency, XChainBridge, XRP, XRPAmount};
 
 use super::{
-    Confirm, FieldKind, FieldSpec, Fields, TxSpec, common_fields, flag_bits, parse_drops, val,
+    Confirm, FieldKind, FieldSpec, Fields, TxSpec, address, common_fields, flag_bits, no_check,
+    parse_drops, required, tx_fns, val,
 };
-use crate::signing::{parse_offer_amount, sign_blob};
+use crate::signing::parse_offer_amount;
 
 const FAMILY: &str = "XChain";
 const MODIFY_FLAGS: &[(&str, u32)] = &[("ClearAccountCreateAmount", 0x0001_0000)];
@@ -164,16 +164,17 @@ fn claim_id(v: &str) -> Result<(), String> {
             "expected 1..=16 hex digits (the id from XChainCreateClaimID, e.g. 13f)".into(),
         );
     }
-    match u64::from_str_radix(v, 16) {
-        Ok(0) | Err(_) => Err("claim id must be non-zero".into()),
-        Ok(_) => Ok(()),
+    if v.bytes().all(|b| b == b'0') {
+        Err("claim id must be non-zero".into())
+    } else {
+        Ok(())
     }
 }
 
 fn drops(f: &Fields, name: &str) -> color_eyre::Result<Option<XRPAmount<'static>>> {
     val(f, name)
         .map(|v| {
-            v.parse::<u64>()
+            parse_drops(v)
                 .map(|n| XRPAmount::from(n.to_string()))
                 .map_err(|e| eyre!("{name}: {e}"))
         })
@@ -188,38 +189,23 @@ fn xrp(a: XRPAmount<'static>) -> Amount<'static> {
     Amount::XRPAmount(a)
 }
 
-fn required<'a>(f: &'a Fields, name: &str) -> color_eyre::Result<&'a str> {
-    val(f, name).ok_or_else(|| eyre!("{name}: required"))
-}
-
-fn address(f: &Fields, name: &str) -> color_eyre::Result<String> {
-    required(f, name).map(str::to_string)
-}
-
 fn amount(f: &Fields) -> color_eyre::Result<Amount<'static>> {
     parse_offer_amount(required(f, "Amount")?)
 }
 
 /// Normalised claim id (upper-case hex, no leading zeros) as the codec expects.
 fn claim_id_hex(f: &Fields) -> color_eyre::Result<String> {
-    let n = u64::from_str_radix(required(f, "XChainClaimID")?, 16)?;
-    Ok(format!("{n:X}"))
-}
-
-fn eyre_model<E: std::fmt::Debug>(e: E) -> color_eyre::Report {
-    eyre!("{e:?}")
-}
-
-fn to_json<T: serde::Serialize>(tx: &T, what: &str) -> color_eyre::Result<Value> {
-    serde_json::to_value(tx).map_err(|e| eyre!("{what} tx_json: {e}"))
+    let value = required(f, "XChainClaimID")?;
+    claim_id(value).map_err(|e| eyre!("XChainClaimID: {e}"))?;
+    Ok(value.trim_start_matches('0').to_ascii_uppercase())
 }
 
 /// Commit / Claim move `Amount` of one of the bridge's issues.
-fn amount_matches_bridge(f: &Fields) -> Result<(), String> {
+fn amount_matches_bridge(f: &Fields, _account: Option<&str>) -> Result<(), String> {
     let (Some(b), Some(a)) = (val(f, "XChainBridge"), val(f, "Amount")) else {
         return Ok(());
     };
-    let bridge = parse_bridge(b)?;
+    let bridge = parse_bridge(b).map_err(|e| format!("XChainBridge: {e}"))?;
     let mut parts = a.splitn(3, ':');
     let issue = match (parts.next(), parts.next()) {
         (Some("XRP"), _) => Issue::Xrp,
@@ -234,10 +220,6 @@ fn amount_matches_bridge(f: &Fields) -> Result<(), String> {
     } else {
         Err("Amount: must be the bridge's locking or issuing chain issue".into())
     }
-}
-
-fn no_check(_: &Fields) -> Result<(), String> {
-    Ok(())
 }
 
 const fn field(
@@ -264,32 +246,6 @@ const BRIDGE_FIELD: FieldSpec = field(
     true,
     BRIDGE_HELP,
 );
-
-/// `<tx>_json` (simulate) and `<tx>_sign` (typed signer) from a `<tx>_tx` builder.
-macro_rules! json_and_sign {
-    ($tx:ident, $json:ident, $sign:ident, $what:literal) => {
-        fn $json(account: &str, f: &Fields, sequence: u32) -> color_eyre::Result<Value> {
-            let tx = $tx(account, f, sequence, None)?;
-            tx.validate().map_err(eyre_model)?;
-            to_json(&tx, $what)
-        }
-
-        fn $sign(
-            wallet: &xrpl::wallet::Wallet,
-            account: &str,
-            f: &Fields,
-            fill: $crate::signing::SimulatedFill,
-        ) -> color_eyre::Result<String> {
-            let mut tx = $tx(
-                account,
-                f,
-                fill.sequence,
-                Some((fill.fee_drops, fill.last_ledger_sequence)),
-            )?;
-            sign_blob!(tx, wallet)
-        }
-    };
-}
 
 // ------------------------------------------------------------ XChainCreateBridge
 
@@ -321,9 +277,11 @@ pub const CREATE_BRIDGE: TxSpec = TxSpec {
     sign: create_bridge_sign,
 };
 
-fn create_bridge_check(f: &Fields) -> Result<(), String> {
+fn create_bridge_check(f: &Fields, _account: Option<&str>) -> Result<(), String> {
     if let (Some(b), Some(_)) = (val(f, "XChainBridge"), val(f, "MinAccountCreateAmount"))
-        && !parse_bridge(b)?.is_xrp()
+        && !parse_bridge(b)
+            .map_err(|e| format!("XChainBridge: {e}"))?
+            .is_xrp()
     {
         return Err("MinAccountCreateAmount: only XRP-XRP bridges".into());
     }
@@ -344,7 +302,7 @@ fn create_bridge_tx(
     })
 }
 
-json_and_sign!(
+tx_fns!(
     create_bridge_tx,
     create_bridge_json,
     create_bridge_sign,
@@ -388,18 +346,21 @@ fn modify_clears(f: &Fields) -> bool {
     val(f, "Flags").is_some_and(|v| flag_bits(MODIFY_FLAGS, v) != 0)
 }
 
-fn modify_bridge_check(f: &Fields) -> Result<(), String> {
+fn modify_bridge_check(f: &Fields, _account: Option<&str>) -> Result<(), String> {
     let min = val(f, "MinAccountCreateAmount");
     if min.is_none() && val(f, "SignatureReward").is_none() && !modify_clears(f) {
         return Err(
-            "set SignatureReward, MinAccountCreateAmount or Flags=ClearAccountCreateAmount".into(),
+            "SignatureReward/MinAccountCreateAmount/Flags: set at least one change (Flags=ClearAccountCreateAmount)"
+                .into(),
         );
     }
     if min.is_some() && modify_clears(f) {
         return Err("MinAccountCreateAmount: cannot combine with ClearAccountCreateAmount".into());
     }
     if let (Some(b), Some(_)) = (val(f, "XChainBridge"), min)
-        && !parse_bridge(b)?.is_xrp()
+        && !parse_bridge(b)
+            .map_err(|e| format!("XChainBridge: {e}"))?
+            .is_xrp()
     {
         return Err("MinAccountCreateAmount: only XRP-XRP bridges".into());
     }
@@ -424,7 +385,7 @@ fn modify_bridge_tx(
     })
 }
 
-json_and_sign!(
+tx_fns!(
     modify_bridge_tx,
     modify_bridge_json,
     modify_bridge_sign,
@@ -466,13 +427,15 @@ fn create_claim_id_tx(
 ) -> color_eyre::Result<XChainCreateClaimID<'static>> {
     Ok(XChainCreateClaimID {
         common_fields: common_fields!(account, XChainCreateClaimID, sequence, fee_lls),
-        other_chain_source: address(f, "OtherChainSource")?.into(),
+        other_chain_source: address(f, "OtherChainSource")?
+            .ok_or_else(|| eyre!("OtherChainSource: required"))?
+            .into(),
         signature_reward: drops_required(f, "SignatureReward")?,
         xchain_bridge: bridge_model(f)?,
     })
 }
 
-json_and_sign!(
+tx_fns!(
     create_claim_id_tx,
     create_claim_id_json,
     create_claim_id_sign,
@@ -530,7 +493,7 @@ fn commit_tx(
     })
 }
 
-json_and_sign!(commit_tx, commit_json, commit_sign, "XChainCommit");
+tx_fns!(commit_tx, commit_json, commit_sign, "XChainCommit");
 
 // ------------------------------------------------------------------ XChainClaim
 
@@ -583,7 +546,9 @@ fn claim_tx(
     Ok(XChainClaim {
         common_fields: common_fields!(account, XChainClaim, sequence, fee_lls),
         amount: amount(f)?,
-        destination: address(f, "Destination")?.into(),
+        destination: address(f, "Destination")?
+            .ok_or_else(|| eyre!("Destination: required"))?
+            .into(),
         xchain_bridge: bridge_model(f)?,
         xchain_claim_id: claim_id_hex(f)?.into(),
         destination_tag: val(f, "DestinationTag")
@@ -592,7 +557,7 @@ fn claim_tx(
     })
 }
 
-json_and_sign!(claim_tx, claim_json, claim_sign, "XChainClaim");
+tx_fns!(claim_tx, claim_json, claim_sign, "XChainClaim");
 
 // ------------------------------------------------- XChainAccountCreateCommit
 
@@ -630,8 +595,11 @@ pub const ACCOUNT_CREATE_COMMIT: TxSpec = TxSpec {
     sign: account_create_commit_sign,
 };
 
-fn account_create_commit_check(f: &Fields) -> Result<(), String> {
-    match val(f, "XChainBridge").map(parse_bridge).transpose()? {
+fn account_create_commit_check(f: &Fields, _account: Option<&str>) -> Result<(), String> {
+    match val(f, "XChainBridge")
+        .map(|v| parse_bridge(v).map_err(|e| format!("XChainBridge: {e}")))
+        .transpose()?
+    {
         Some(b) if !b.is_xrp() => {
             Err("XChainBridge: account creation needs an XRP-XRP bridge".into())
         }
@@ -648,13 +616,15 @@ fn account_create_commit_tx(
     Ok(XChainAccountCreateCommit {
         common_fields: common_fields!(account, XChainAccountCreateCommit, sequence, fee_lls),
         amount: xrp(drops_required(f, "Amount")?),
-        destination: address(f, "Destination")?.into(),
+        destination: address(f, "Destination")?
+            .ok_or_else(|| eyre!("Destination: required"))?
+            .into(),
         xchain_bridge: bridge_model(f)?,
         signature_reward: drops(f, "SignatureReward")?.map(xrp),
     })
 }
 
-json_and_sign!(
+tx_fns!(
     account_create_commit_tx,
     account_create_commit_json,
     account_create_commit_sign,
@@ -663,7 +633,7 @@ json_and_sign!(
 
 #[cfg(test)]
 mod tests {
-    use serde_json::json;
+    use serde_json::{Value, json};
     use xrpl::core::binarycodec::decode;
 
     use super::super::MAX_DROPS;
@@ -683,9 +653,7 @@ mod tests {
 
     fn wallet() -> xrpl::wallet::Wallet {
         crate::signing::credential_from_secrets(
-            Some(&secrecy::SecretString::from(
-                "sEdSkooMk31MeTjbHVE7vLvgCpEMAdB",
-            )),
+            Some(&secrecy::SecretString::from(crate::test_support::TEST_SEED)),
             None,
         )
         .expect("credential")
@@ -856,7 +824,7 @@ mod tests {
             (
                 "XChainModifyBridge",
                 f(&[("XChainBridge", &xb)]),
-                Some("set SignatureReward"),
+                Some("set at least one"),
             ),
             (
                 "XChainModifyBridge",
@@ -1140,6 +1108,37 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// Builder conversions use the same canonical drops grammar as field validation.
+    #[test]
+    fn builder_drops_and_hex_errors_are_strict() {
+        let max = MAX_DROPS.to_string();
+        let over = (MAX_DROPS + 1).to_string();
+        let cases = [
+            ("0", true),
+            ("5", true),
+            (max.as_str(), true),
+            ("+5", false),
+            ("01", false),
+            ("00", false),
+            ("-1", false),
+            ("1.5", false),
+            (over.as_str(), false),
+        ];
+        for name in ["Amount", "SignatureReward", "MinAccountCreateAmount"] {
+            for (value, valid) in cases {
+                let got = drops(&f(&[(name, value)]), name);
+                assert_eq!(got.is_ok(), valid, "{name}={value:?}: {got:?}");
+                if let Err(e) = got {
+                    assert!(e.to_string().starts_with(&format!("{name}:")), "{e}");
+                }
+            }
+        }
+
+        let e = claim_id_hex(&f(&[("XChainClaimID", "xyz")]))
+            .expect_err("malformed hex must be rejected by the builder");
+        assert!(e.to_string().starts_with("XChainClaimID:"), "{e}");
     }
 
     /// Valid forms (as typed) per type. Claim-id is typed lower-case to prove normalisation.
@@ -1483,9 +1482,7 @@ mod tests {
         let server = tokio::spawn(rpc_mock::serve(listener, 4, result_for));
         let rpc = RpcClient::connect(&url).expect("rpc client");
         let credential = crate::signing::credential_from_secrets(
-            Some(&secrecy::SecretString::from(
-                "sEdSkooMk31MeTjbHVE7vLvgCpEMAdB",
-            )),
+            Some(&secrecy::SecretString::from(crate::test_support::TEST_SEED)),
             None,
         )
         .expect("credential")

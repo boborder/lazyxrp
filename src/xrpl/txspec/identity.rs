@@ -9,15 +9,13 @@
 //! Limits follow the locked xrpl-rust 1.3.0 model where it is stricter than rippled: its
 //! `CredentialCreate` caps the URI at 256 *hex* characters, i.e. 128 bytes.
 //!
-//! Deliberately flat grammars: `PriceDataSeries` = `BASE/QUOTE=price@scale[,…]` (decimal price,
+//! Deliberately flat grammars: `PriceDataSeries` = `BASE/QUOTE=price@scale[,…]` (integer price,
 //! sent as hex; `BASE/QUOTE` alone deletes that pair), `AcceptedCredentials` =
 //! `rIssuer:CredentialType[,…]` (type text without spaces / commas).
 
 use std::collections::BTreeSet;
 
 use color_eyre::eyre::eyre;
-use serde_json::Value;
-use xrpl::models::Model;
 use xrpl::models::transactions::credential_accept::CredentialAccept;
 use xrpl::models::transactions::credential_create::CredentialCreate;
 use xrpl::models::transactions::credential_delete::CredentialDelete;
@@ -29,11 +27,12 @@ use xrpl::models::transactions::permissioned_domain_delete::PermissionedDomainDe
 use xrpl::models::transactions::permissioned_domain_set::PermissionedDomainSet;
 use xrpl::models::transactions::{Credential, PriceData};
 
-use super::{Confirm, FieldKind, FieldSpec, Fields, TxSpec, common_fields, split_list, val};
-use crate::signing::sign_blob;
+use super::{
+    Confirm, FieldKind, FieldSpec, Fields, ID_LEN, TxSpec, address, common_fields, no_check,
+    required, split_list, tx_fns, uint, upper, val,
+};
 
 const FAMILY: &str = "Identity";
-const ID_LEN: usize = 64;
 /// rippled `maxCredentialTypeLength` (bytes).
 const MAX_CREDENTIAL_TYPE_BYTES: usize = 64;
 /// xrpl-rust model cap (128 bytes); rippled allows 256.
@@ -58,38 +57,8 @@ pub static SPECS: &[TxSpec] = &[
     DOMAIN_DELETE,
 ];
 
-pub(super) fn eyre_model<E: std::fmt::Debug>(e: E) -> color_eyre::Report {
-    eyre!("{e:?}")
-}
-
-pub(super) fn to_json<T: serde::Serialize>(tx: &T, what: &str) -> color_eyre::Result<Value> {
-    serde_json::to_value(tx).map_err(|e| eyre!("{what} tx_json: {e}"))
-}
-
-pub(super) fn required<'a>(fields: &'a Fields, name: &str) -> color_eyre::Result<&'a str> {
-    val(fields, name).ok_or_else(|| eyre!("{name}: required"))
-}
-
-pub(super) fn upper(fields: &Fields, name: &str) -> Option<String> {
-    val(fields, name).map(str::to_ascii_uppercase)
-}
-
-pub(super) fn address(fields: &Fields, name: &str) -> Option<String> {
-    val(fields, name).map(str::to_string)
-}
-
-pub(super) fn uint(fields: &Fields, name: &str) -> color_eyre::Result<Option<u32>> {
-    val(fields, name)
-        .map(|v| v.parse::<u32>().map_err(|e| eyre!("{name}: {e}")))
-        .transpose()
-}
-
 pub(super) fn text_hex(fields: &Fields, name: &str) -> Option<String> {
     val(fields, name).map(|t| hex::encode_upper(t.as_bytes()))
-}
-
-pub(super) fn no_check(_: &Fields) -> Result<(), String> {
-    Ok(())
 }
 
 /// 64-hex ledger-object id that is not all zeros (the crate rejects the zero hash).
@@ -100,34 +69,6 @@ pub(super) fn non_zero_id(v: &str) -> Result<(), String> {
     }
     Ok(())
 }
-
-/// `<name>_json` (unsigned, model-validated) and `<name>_sign` from a `fn tx(account, fields,
-/// sequence, fee_lls) -> Result<Tx>`.
-macro_rules! tx_fns {
-    ($json:ident, $sign:ident, $tx:ident, $what:literal) => {
-        fn $json(account: &str, f: &Fields, sequence: u32) -> color_eyre::Result<Value> {
-            let tx = $tx(account, f, sequence, None)?;
-            tx.validate().map_err(eyre_model)?;
-            to_json(&tx, $what)
-        }
-
-        fn $sign(
-            wallet: &xrpl::wallet::Wallet,
-            account: &str,
-            f: &Fields,
-            fill: $crate::signing::SimulatedFill,
-        ) -> color_eyre::Result<String> {
-            let mut tx = $tx(
-                account,
-                f,
-                fill.sequence,
-                Some((fill.fee_drops, fill.last_ledger_sequence)),
-            )?;
-            sign_blob!(tx, wallet)
-        }
-    };
-}
-pub(super) use tx_fns;
 
 const fn field(
     name: &'static str,
@@ -201,9 +142,9 @@ fn credential_create_tx(
     })
 }
 tx_fns!(
+    credential_create_tx,
     credential_create_json,
     credential_create_sign,
-    credential_create_tx,
     "CredentialCreate"
 );
 
@@ -243,9 +184,9 @@ fn credential_accept_tx(
     })
 }
 tx_fns!(
+    credential_accept_tx,
     credential_accept_json,
     credential_accept_sign,
-    credential_accept_tx,
     "CredentialAccept"
 );
 
@@ -279,9 +220,9 @@ pub const CREDENTIAL_DELETE: TxSpec = TxSpec {
     sign: credential_delete_sign,
 };
 
-fn credential_delete_check(f: &Fields) -> Result<(), String> {
+fn credential_delete_check(f: &Fields, _account: Option<&str>) -> Result<(), String> {
     if val(f, "Subject").is_none() && val(f, "Issuer").is_none() {
-        return Err("Subject or Issuer: set at least one".into());
+        return Err("Subject/Issuer: set at least one".into());
     }
     Ok(())
 }
@@ -294,17 +235,17 @@ fn credential_delete_tx(
 ) -> color_eyre::Result<CredentialDelete<'static>> {
     Ok(CredentialDelete {
         common_fields: common_fields!(account, CredentialDelete, sequence, fee_lls),
-        subject: address(f, "Subject").map(Into::into),
-        issuer: address(f, "Issuer").map(Into::into),
+        subject: address(f, "Subject")?.map(Into::into),
+        issuer: address(f, "Issuer")?.map(Into::into),
         credential_type: text_hex(f, "CredentialType")
             .ok_or_else(|| eyre!("CredentialType: required"))?
             .into(),
     })
 }
 tx_fns!(
+    credential_delete_tx,
     credential_delete_json,
     credential_delete_sign,
-    credential_delete_tx,
     "CredentialDelete"
 );
 
@@ -342,12 +283,12 @@ pub const DID_SET: TxSpec = TxSpec {
     sign: did_set_sign,
 };
 
-fn did_set_check(f: &Fields) -> Result<(), String> {
+fn did_set_check(f: &Fields, _account: Option<&str>) -> Result<(), String> {
     if ["Data", "DIDDocument", "URI"]
         .iter()
         .all(|n| val(f, n).is_none())
     {
-        return Err("set at least one of Data, DIDDocument, URI".into());
+        return Err("Data/DIDDocument/URI: set at least one".into());
     }
     Ok(())
 }
@@ -365,7 +306,7 @@ fn did_set_tx(
         uri: text_hex(f, "URI").map(Into::into),
     })
 }
-tx_fns!(did_set_json, did_set_sign, did_set_tx, "DIDSet");
+tx_fns!(did_set_tx, did_set_json, did_set_sign, "DIDSet");
 
 // ------------------------------------------------------------------ DIDDelete
 
@@ -393,7 +334,7 @@ fn did_delete_tx(
         common_fields: common_fields!(account, DIDDelete, sequence, fee_lls),
     })
 }
-tx_fns!(did_delete_json, did_delete_sign, did_delete_tx, "DIDDelete");
+tx_fns!(did_delete_tx, did_delete_json, did_delete_sign, "DIDDelete");
 
 // ------------------------------------------------------------------ OracleSet
 
@@ -420,7 +361,7 @@ pub const ORACLE_SET: TxSpec = TxSpec {
             "PriceDataSeries",
             FieldKind::Custom(price_series_ok),
             true,
-            "BASE/QUOTE=price@scale, comma-separated (1..10); BASE/QUOTE alone deletes the pair; price is decimal, scale 0..20",
+            "BASE/QUOTE=price@scale, comma-separated (1..10); BASE/QUOTE alone deletes the pair; price is an integer 0..2^64-1, scale 0..20",
         ),
         field(
             "Provider",
@@ -451,7 +392,7 @@ fn price_series_ok(v: &str) -> Result<(), String> {
     parse_price_series(v).map(|_| ())
 }
 
-/// `BASE/QUOTE=price@scale` entries → crate `PriceData` (price decimal → hex, as the ledger wants).
+/// `BASE/QUOTE=price@scale` entries → crate `PriceData` (integer price → hex, as the ledger wants).
 fn parse_price_series(v: &str) -> Result<Vec<PriceData>, String> {
     let mut out = Vec::new();
     let mut seen = BTreeSet::new();
@@ -523,7 +464,7 @@ fn oracle_set_tx(
             .map_err(|e| eyre!("PriceDataSeries: {e}"))?,
     })
 }
-tx_fns!(oracle_set_json, oracle_set_sign, oracle_set_tx, "OracleSet");
+tx_fns!(oracle_set_tx, oracle_set_json, oracle_set_sign, "OracleSet");
 
 // --------------------------------------------------------------- OracleDelete
 
@@ -554,9 +495,9 @@ fn oracle_delete_tx(
     })
 }
 tx_fns!(
+    oracle_delete_tx,
     oracle_delete_json,
     oracle_delete_sign,
-    oracle_delete_tx,
     "OracleDelete"
 );
 
@@ -643,9 +584,9 @@ fn domain_set_tx(
     })
 }
 tx_fns!(
+    domain_set_tx,
     domain_set_json,
     domain_set_sign,
-    domain_set_tx,
     "PermissionedDomainSet"
 );
 
@@ -679,15 +620,15 @@ fn domain_delete_tx(
     })
 }
 tx_fns!(
+    domain_delete_tx,
     domain_delete_json,
     domain_delete_sign,
-    domain_delete_tx,
     "PermissionedDomainDelete"
 );
 
 #[cfg(test)]
 pub(super) mod tests {
-    use serde_json::json;
+    use serde_json::{Value, json};
     use xrpl::core::binarycodec::decode;
 
     use super::*;
@@ -705,9 +646,7 @@ pub(super) mod tests {
 
     pub(in crate::xrpl::txspec) fn wallet() -> xrpl::wallet::Wallet {
         crate::signing::credential_from_secrets(
-            Some(&secrecy::SecretString::from(
-                "sEdSkooMk31MeTjbHVE7vLvgCpEMAdB",
-            )),
+            Some(&secrecy::SecretString::from(crate::test_support::TEST_SEED)),
             None,
         )
         .expect("credential")
@@ -828,7 +767,7 @@ pub(super) mod tests {
             (
                 "CredentialDelete",
                 f(&[("CredentialType", "KYC")]),
-                Some("Subject or Issuer"),
+                Some("Subject/Issuer"),
             ),
             ("DIDSet", f(&[("Data", "x")]), None),
             ("DIDSet", f(&[("Data", &did_256), ("URI", "u")]), None),
@@ -1282,9 +1221,7 @@ pub(super) mod tests {
         let server = tokio::spawn(rpc_mock::serve(listener, 4, result_for));
         let rpc = RpcClient::connect(&url).expect("rpc client");
         let credential = crate::signing::credential_from_secrets(
-            Some(&secrecy::SecretString::from(
-                "sEdSkooMk31MeTjbHVE7vLvgCpEMAdB",
-            )),
+            Some(&secrecy::SecretString::from(crate::test_support::TEST_SEED)),
             None,
         )
         .expect("credential")

@@ -2,13 +2,11 @@
 //! NFTokenCancelOffer. Each `*_tx` builds the typed `xrpl::models` struct once; `*_json` and
 //! `*_sign` are its simulate / signed forms (same pattern as `signing.rs`).
 //!
-//! Not supported (xrpl-rust `NFTokenMintFlag` has no `tfMutable`): minting dynamic NFTs; a
-//! zero-price sell offer (the shared amount parser rejects zero).
+//! Supported mint flags: `tfBurnable`, `tfOnlyXRP`, `tfTransferable`. The locked model also has
+//! `tfTrustLine`, but this form deliberately does not expose it; `tfMutable` (dynamic NFTs) is not
+//! in the locked model. A zero-price sell offer is unsupported (the shared amount parser rejects it).
 
-use crate::signing::SimulatedFill;
 use color_eyre::eyre::eyre;
-use serde_json::Value;
-use xrpl::models::Model;
 use xrpl::models::transactions::nftoken_accept_offer::NFTokenAcceptOffer;
 use xrpl::models::transactions::nftoken_burn::NFTokenBurn;
 use xrpl::models::transactions::nftoken_cancel_offer::NFTokenCancelOffer;
@@ -18,16 +16,14 @@ use xrpl::models::transactions::nftoken_create_offer::{
 use xrpl::models::transactions::nftoken_mint::{NFTokenMint, NFTokenMintFlag};
 
 use super::{
-    Confirm, FieldKind, FieldSpec, Fields, TxSpec, common_fields, flag_bits, id_list, val,
+    Confirm, FieldKind, FieldSpec, Fields, ID_LEN, MAX_TRANSFER_FEE, TxSpec, address,
+    common_fields, flag_bits, id_list, is_nonzero, no_check, required, tx_fns, uint, val,
 };
-use crate::signing::{parse_offer_amount, sign_blob};
+use crate::signing::parse_offer_amount;
 
 const FAMILY: &str = "NFT";
-const ID_LEN: usize = 64;
 /// rippled `maxTokenURILength`.
 const MAX_URI_BYTES: usize = 256;
-/// rippled `maxTransferFee` (units of 1/1000 %: 50000 = 50 %).
-const MAX_TRANSFER_FEE: u32 = 50_000;
 /// rippled `maxTokenOfferCancelCount`.
 const MAX_CANCEL_OFFERS: usize = 500;
 
@@ -37,34 +33,8 @@ const TRANSFERABLE: u32 = 0x8;
 
 pub static SPECS: &[TxSpec] = &[MINT, BURN, CREATE_OFFER, ACCEPT_OFFER, CANCEL_OFFER];
 
-fn eyre_model<E: std::fmt::Debug>(e: E) -> color_eyre::Report {
-    eyre!("{e:?}")
-}
-
-fn to_json<T: serde::Serialize>(tx: &T, what: &str) -> color_eyre::Result<Value> {
-    serde_json::to_value(tx).map_err(|e| eyre!("{what} tx_json: {e}"))
-}
-
 fn id(fields: &Fields, name: &str) -> Option<String> {
     val(fields, name).map(str::to_ascii_uppercase)
-}
-
-fn address(fields: &Fields, name: &str) -> Option<String> {
-    val(fields, name).map(str::to_string)
-}
-
-fn required<'a>(fields: &'a Fields, name: &str) -> color_eyre::Result<&'a str> {
-    val(fields, name).ok_or_else(|| eyre!("{name}: required"))
-}
-
-fn uint(fields: &Fields, name: &str) -> color_eyre::Result<Option<u32>> {
-    val(fields, name)
-        .map(|v| v.parse::<u32>().map_err(|e| eyre!("{name}: {e}")))
-        .transpose()
-}
-
-fn no_check(_: &Fields) -> Result<(), String> {
-    Ok(())
 }
 
 // ---------------------------------------------------------------- NFTokenMint
@@ -116,10 +86,10 @@ pub const MINT: TxSpec = TxSpec {
     sign: mint_sign,
 };
 
-fn mint_check(f: &Fields) -> Result<(), String> {
+fn mint_check(f: &Fields, _account: Option<&str>) -> Result<(), String> {
     let transferable =
         val(f, "Flags").is_some_and(|v| flag_bits(MINT_FLAGS, v) & TRANSFERABLE != 0);
-    if val(f, "TransferFee").is_some_and(|v| v != "0") && !transferable {
+    if val(f, "TransferFee").is_some_and(is_nonzero) && !transferable {
         return Err("TransferFee: a non-zero fee needs the transferable flag".into());
     }
     Ok(())
@@ -136,32 +106,13 @@ fn mint_tx(
         common_fields: common_fields!(account, NFTokenMint, sequence, fee_lls)
             .with_flags(NFTokenMintFlag::from_bits(bits)),
         nftoken_taxon: uint(f, "NFTokenTaxon")?.ok_or_else(|| eyre!("NFTokenTaxon: required"))?,
-        issuer: address(f, "Issuer").map(Into::into),
+        issuer: address(f, "Issuer")?.map(Into::into),
         transfer_fee: uint(f, "TransferFee")?,
         uri: val(f, "URI").map(|u| hex::encode_upper(u.as_bytes()).into()),
     })
 }
 
-fn mint_json(account: &str, f: &Fields, sequence: u32) -> color_eyre::Result<Value> {
-    let tx = mint_tx(account, f, sequence, None)?;
-    tx.validate().map_err(eyre_model)?;
-    to_json(&tx, "NFTokenMint")
-}
-
-fn mint_sign(
-    wallet: &xrpl::wallet::Wallet,
-    account: &str,
-    f: &Fields,
-    fill: SimulatedFill,
-) -> color_eyre::Result<String> {
-    let mut tx = mint_tx(
-        account,
-        f,
-        fill.sequence,
-        Some((fill.fee_drops, fill.last_ledger_sequence)),
-    )?;
-    sign_blob!(tx, wallet)
-}
+tx_fns!(mint_tx, mint_json, mint_sign, "NFTokenMint");
 
 // ---------------------------------------------------------------- NFTokenBurn
 
@@ -205,30 +156,11 @@ fn burn_tx(
         nftoken_id: id(f, "NFTokenID")
             .ok_or_else(|| eyre!("NFTokenID: required"))?
             .into(),
-        owner: address(f, "Owner").map(Into::into),
+        owner: address(f, "Owner")?.map(Into::into),
     })
 }
 
-fn burn_json(account: &str, f: &Fields, sequence: u32) -> color_eyre::Result<Value> {
-    let tx = burn_tx(account, f, sequence, None)?;
-    tx.validate().map_err(eyre_model)?;
-    to_json(&tx, "NFTokenBurn")
-}
-
-fn burn_sign(
-    wallet: &xrpl::wallet::Wallet,
-    account: &str,
-    f: &Fields,
-    fill: SimulatedFill,
-) -> color_eyre::Result<String> {
-    let mut tx = burn_tx(
-        account,
-        f,
-        fill.sequence,
-        Some((fill.fee_drops, fill.last_ledger_sequence)),
-    )?;
-    sign_blob!(tx, wallet)
-}
+tx_fns!(burn_tx, burn_json, burn_sign, "NFTokenBurn");
 
 // ---------------------------------------------------------- NFTokenCreateOffer
 
@@ -290,7 +222,7 @@ fn is_sell(f: &Fields) -> bool {
     val(f, "Flags").is_some_and(|v| flag_bits(SELL_FLAG, v) & 1 != 0)
 }
 
-fn create_offer_check(f: &Fields) -> Result<(), String> {
+fn create_offer_check(f: &Fields, _account: Option<&str>) -> Result<(), String> {
     match (is_sell(f), val(f, "Owner")) {
         (true, Some(_)) => Err("Owner: only for buy offers (a sell offer is your own NFT)".into()),
         (false, None) => Err("Owner: required for a buy offer (the current holder)".into()),
@@ -316,32 +248,18 @@ fn create_offer_tx(
             .ok_or_else(|| eyre!("NFTokenID: required"))?
             .into(),
         amount: parse_offer_amount(required(f, "Amount")?)?,
-        owner: address(f, "Owner").map(Into::into),
+        owner: address(f, "Owner")?.map(Into::into),
         expiration: uint(f, "Expiration")?,
-        destination: address(f, "Destination").map(Into::into),
+        destination: address(f, "Destination")?.map(Into::into),
     })
 }
 
-fn create_offer_json(account: &str, f: &Fields, sequence: u32) -> color_eyre::Result<Value> {
-    let tx = create_offer_tx(account, f, sequence, None)?;
-    tx.validate().map_err(eyre_model)?;
-    to_json(&tx, "NFTokenCreateOffer")
-}
-
-fn create_offer_sign(
-    wallet: &xrpl::wallet::Wallet,
-    account: &str,
-    f: &Fields,
-    fill: SimulatedFill,
-) -> color_eyre::Result<String> {
-    let mut tx = create_offer_tx(
-        account,
-        f,
-        fill.sequence,
-        Some((fill.fee_drops, fill.last_ledger_sequence)),
-    )?;
-    sign_blob!(tx, wallet)
-}
+tx_fns!(
+    create_offer_tx,
+    create_offer_json,
+    create_offer_sign,
+    "NFTokenCreateOffer"
+);
 
 // ---------------------------------------------------------- NFTokenAcceptOffer
 
@@ -381,14 +299,14 @@ pub const ACCEPT_OFFER: TxSpec = TxSpec {
     sign: accept_offer_sign,
 };
 
-fn accept_offer_check(f: &Fields) -> Result<(), String> {
+fn accept_offer_check(f: &Fields, _account: Option<&str>) -> Result<(), String> {
     let (sell, buy, fee) = (
         val(f, "NFTokenSellOffer"),
         val(f, "NFTokenBuyOffer"),
         val(f, "NFTokenBrokerFee"),
     );
     if sell.is_none() && buy.is_none() {
-        return Err("NFTokenSellOffer or NFTokenBuyOffer: at least one is required".into());
+        return Err("NFTokenSellOffer/NFTokenBuyOffer: set at least one".into());
     }
     if fee.is_some() && (sell.is_none() || buy.is_none()) {
         return Err("NFTokenBrokerFee: brokered mode needs both offers".into());
@@ -412,26 +330,12 @@ fn accept_offer_tx(
     })
 }
 
-fn accept_offer_json(account: &str, f: &Fields, sequence: u32) -> color_eyre::Result<Value> {
-    let tx = accept_offer_tx(account, f, sequence, None)?;
-    tx.validate().map_err(eyre_model)?;
-    to_json(&tx, "NFTokenAcceptOffer")
-}
-
-fn accept_offer_sign(
-    wallet: &xrpl::wallet::Wallet,
-    account: &str,
-    f: &Fields,
-    fill: SimulatedFill,
-) -> color_eyre::Result<String> {
-    let mut tx = accept_offer_tx(
-        account,
-        f,
-        fill.sequence,
-        Some((fill.fee_drops, fill.last_ledger_sequence)),
-    )?;
-    sign_blob!(tx, wallet)
-}
+tx_fns!(
+    accept_offer_tx,
+    accept_offer_json,
+    accept_offer_sign,
+    "NFTokenAcceptOffer"
+);
 
 // ---------------------------------------------------------- NFTokenCancelOffer
 
@@ -470,26 +374,12 @@ fn cancel_offer_tx(
     })
 }
 
-fn cancel_offer_json(account: &str, f: &Fields, sequence: u32) -> color_eyre::Result<Value> {
-    let tx = cancel_offer_tx(account, f, sequence, None)?;
-    tx.validate().map_err(eyre_model)?;
-    to_json(&tx, "NFTokenCancelOffer")
-}
-
-fn cancel_offer_sign(
-    wallet: &xrpl::wallet::Wallet,
-    account: &str,
-    f: &Fields,
-    fill: SimulatedFill,
-) -> color_eyre::Result<String> {
-    let mut tx = cancel_offer_tx(
-        account,
-        f,
-        fill.sequence,
-        Some((fill.fee_drops, fill.last_ledger_sequence)),
-    )?;
-    sign_blob!(tx, wallet)
-}
+tx_fns!(
+    cancel_offer_tx,
+    cancel_offer_json,
+    cancel_offer_sign,
+    "NFTokenCancelOffer"
+);
 
 #[cfg(test)]
 mod tests {
@@ -511,9 +401,7 @@ mod tests {
 
     fn wallet() -> xrpl::wallet::Wallet {
         crate::signing::credential_from_secrets(
-            Some(&secrecy::SecretString::from(
-                "sEdSkooMk31MeTjbHVE7vLvgCpEMAdB",
-            )),
+            Some(&secrecy::SecretString::from(crate::test_support::TEST_SEED)),
             None,
         )
         .expect("credential")
@@ -628,6 +516,12 @@ mod tests {
             (
                 "NFTokenMint",
                 f(&[("NFTokenTaxon", "1"), ("TransferFee", "0")]),
+                None,
+            ),
+            // Leading zeros are zero: `"00"` must not be treated as a non-zero fee.
+            (
+                "NFTokenMint",
+                f(&[("NFTokenTaxon", "1"), ("TransferFee", "00")]),
                 None,
             ),
             (

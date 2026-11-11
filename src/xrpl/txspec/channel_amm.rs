@@ -8,9 +8,9 @@
 //! Not supported: `CredentialIDs` on PaymentChannelClaim (deposit-auth credentials); AMMClawback
 //! (no typed model, see `coverage.rs`).
 
-use crate::signing::SimulatedFill;
+use std::cmp::Ordering;
+
 use color_eyre::eyre::eyre;
-use serde_json::Value;
 use xrpl::models::transactions::AuthAccount;
 use xrpl::models::transactions::amm_bid::AMMBid;
 use xrpl::models::transactions::amm_create::AMMCreate;
@@ -21,15 +21,15 @@ use xrpl::models::transactions::payment_channel_claim::{
 };
 use xrpl::models::transactions::payment_channel_create::PaymentChannelCreate;
 use xrpl::models::transactions::payment_channel_fund::PaymentChannelFund;
-use xrpl::models::{Amount, IssuedCurrencyAmount, Model, XRPAmount};
+use xrpl::models::{Amount, IssuedCurrencyAmount, XRPAmount};
 
 use super::{
-    Confirm, FieldKind, FieldSpec, Fields, TxSpec, common_fields, flag_bits, parse_drops, val,
+    Confirm, FieldKind, FieldSpec, Fields, ID_LEN, TxSpec, common_fields, flag_bits, no_check,
+    parse_drops, required, tx_fns, uint, upper, val,
 };
-use crate::signing::{amm_currency, parse_amm_asset, parse_offer_amount, sign_blob};
+use crate::signing::{amm_currency, parse_amm_asset, parse_offer_amount};
 
 const FAMILY: &str = "Channel / AMM";
-const ID_LEN: usize = 64;
 /// rippled `AUCTION_SLOT_MAX_AUTH_ACCOUNTS`.
 const MAX_AUTH_ACCOUNTS: usize = 4;
 /// rippled `AMM_MAX_TRADING_FEE` (1/100,000; 1000 = 1 %).
@@ -48,32 +48,6 @@ pub static SPECS: &[TxSpec] = &[
     AMM_BID,
     AMM_DELETE,
 ];
-
-fn eyre_model<E: std::fmt::Debug>(e: E) -> color_eyre::Report {
-    eyre!("{e:?}")
-}
-
-fn to_json<T: serde::Serialize>(tx: &T, what: &str) -> color_eyre::Result<Value> {
-    serde_json::to_value(tx).map_err(|e| eyre!("{what} tx_json: {e}"))
-}
-
-fn required<'a>(fields: &'a Fields, name: &str) -> color_eyre::Result<&'a str> {
-    val(fields, name).ok_or_else(|| eyre!("{name}: required"))
-}
-
-fn upper(fields: &Fields, name: &str) -> Option<String> {
-    val(fields, name).map(str::to_ascii_uppercase)
-}
-
-fn uint(fields: &Fields, name: &str) -> color_eyre::Result<Option<u32>> {
-    val(fields, name)
-        .map(|v| v.parse::<u32>().map_err(|e| eyre!("{name}: {e}")))
-        .transpose()
-}
-
-fn no_check(_: &Fields) -> Result<(), String> {
-    Ok(())
-}
 
 // ------------------------------------------------------------- field grammars
 
@@ -135,6 +109,60 @@ fn lp_amount_ok(v: &str) -> Result<(), String> {
     lp_amount(v).map(|_| ()).map_err(|e| e.to_string())
 }
 
+/// Normalize a positive decimal / scientific-notation value to significant digits and a base-10
+/// exponent. This is the exact counterpart of the numeric grammar accepted by `validate_iou_fields`.
+fn decimal_parts(v: &str) -> Option<(String, i64)> {
+    let (mantissa, exponent) = match v.find(['e', 'E']) {
+        Some(i) => (&v[..i], v[i + 1..].parse::<i64>().ok()?),
+        None => (v, 0),
+    };
+    let mantissa = mantissa.strip_prefix('+').unwrap_or(mantissa);
+    let mut parts = mantissa.split('.');
+    let whole = parts.next()?;
+    let fraction = parts.next().unwrap_or("");
+    if parts.next().is_some()
+        || (whole.is_empty() && fraction.is_empty())
+        || !whole.bytes().all(|b| b.is_ascii_digit())
+        || !fraction.bytes().all(|b| b.is_ascii_digit())
+    {
+        return None;
+    }
+
+    let mut digits = format!("{whole}{fraction}");
+    let first_nonzero = digits.bytes().position(|b| b != b'0')?;
+    digits.drain(..first_nonzero);
+    let mut exponent = exponent.checked_sub(i64::try_from(fraction.len()).ok()?)?;
+    let significant_len = digits.trim_end_matches('0').len();
+    let trailing_zeros = digits.len() - significant_len;
+    digits.truncate(significant_len);
+    exponent = exponent.checked_add(i64::try_from(trailing_zeros).ok()?)?;
+    Some((digits, exponent))
+}
+
+/// Compare exact values by magnitude, then by right-zero-padded significant digits.
+fn decimal_cmp(a: &str, b: &str) -> Option<Ordering> {
+    let (a_digits, a_exponent) = decimal_parts(a)?;
+    let (b_digits, b_exponent) = decimal_parts(b)?;
+    let a_magnitude = i64::try_from(a_digits.len())
+        .ok()?
+        .checked_add(a_exponent)?;
+    let b_magnitude = i64::try_from(b_digits.len())
+        .ok()?
+        .checked_add(b_exponent)?;
+    Some(a_magnitude.cmp(&b_magnitude).then_with(|| {
+        let len = a_digits.len().max(b_digits.len());
+        (0..len)
+            .map(|i| {
+                (
+                    a_digits.as_bytes().get(i).copied().unwrap_or(b'0'),
+                    b_digits.as_bytes().get(i).copied().unwrap_or(b'0'),
+                )
+            })
+            .find_map(|(a, b)| (a != b).then(|| a.cmp(&b)))
+            .unwrap_or(Ordering::Equal)
+    }))
+}
+
 fn split_accounts(v: &str) -> Vec<&str> {
     v.split(|c: char| c == ',' || c.is_whitespace())
         .filter(|p| !p.is_empty())
@@ -170,15 +198,15 @@ fn asset_pair(
 }
 
 /// Asset and Asset2 must name two different pool assets.
-fn assets_differ(f: &Fields) -> Result<(), String> {
+fn assets_differ(f: &Fields, _account: Option<&str>) -> Result<(), String> {
     match (val(f, "Asset"), val(f, "Asset2")) {
         (Some(a), Some(b)) => {
             let (a, b) = (
-                parse_amm_asset(a).map_err(|e| e.to_string())?,
-                parse_amm_asset(b).map_err(|e| e.to_string())?,
+                parse_amm_asset(a).map_err(|e| format!("Asset: {e}"))?,
+                parse_amm_asset(b).map_err(|e| format!("Asset2: {e}"))?,
             );
             if a == b {
-                return Err("Asset and Asset2 must be different assets".into());
+                return Err("Asset/Asset2: must be different assets".into());
             }
             Ok(())
         }
@@ -285,26 +313,12 @@ fn channel_create_tx(
     })
 }
 
-fn channel_create_json(account: &str, f: &Fields, sequence: u32) -> color_eyre::Result<Value> {
-    let tx = channel_create_tx(account, f, sequence, None)?;
-    tx.validate().map_err(eyre_model)?;
-    to_json(&tx, "PaymentChannelCreate")
-}
-
-fn channel_create_sign(
-    wallet: &xrpl::wallet::Wallet,
-    account: &str,
-    f: &Fields,
-    fill: SimulatedFill,
-) -> color_eyre::Result<String> {
-    let mut tx = channel_create_tx(
-        account,
-        f,
-        fill.sequence,
-        Some((fill.fee_drops, fill.last_ledger_sequence)),
-    )?;
-    sign_blob!(tx, wallet)
-}
+tx_fns!(
+    channel_create_tx,
+    channel_create_json,
+    channel_create_sign,
+    "PaymentChannelCreate"
+);
 
 // -------------------------------------------------------- PaymentChannelFund
 
@@ -354,26 +368,12 @@ fn channel_fund_tx(
     })
 }
 
-fn channel_fund_json(account: &str, f: &Fields, sequence: u32) -> color_eyre::Result<Value> {
-    let tx = channel_fund_tx(account, f, sequence, None)?;
-    tx.validate().map_err(eyre_model)?;
-    to_json(&tx, "PaymentChannelFund")
-}
-
-fn channel_fund_sign(
-    wallet: &xrpl::wallet::Wallet,
-    account: &str,
-    f: &Fields,
-    fill: SimulatedFill,
-) -> color_eyre::Result<String> {
-    let mut tx = channel_fund_tx(
-        account,
-        f,
-        fill.sequence,
-        Some((fill.fee_drops, fill.last_ledger_sequence)),
-    )?;
-    sign_blob!(tx, wallet)
-}
+tx_fns!(
+    channel_fund_tx,
+    channel_fund_json,
+    channel_fund_sign,
+    "PaymentChannelFund"
+);
 
 // ------------------------------------------------------- PaymentChannelClaim
 
@@ -432,7 +432,7 @@ fn channel_claim_bits(f: &Fields) -> u32 {
     val(f, "Flags").map_or(0, |v| flag_bits(CLAIM_FLAGS, v))
 }
 
-fn channel_claim_check(f: &Fields) -> Result<(), String> {
+fn channel_claim_check(f: &Fields, _account: Option<&str>) -> Result<(), String> {
     let bits = channel_claim_bits(f);
     if bits & RENEW != 0 && bits & CLOSE != 0 {
         return Err("Flags: renew and close cannot be combined".into());
@@ -485,26 +485,12 @@ fn channel_claim_tx(
     })
 }
 
-fn channel_claim_json(account: &str, f: &Fields, sequence: u32) -> color_eyre::Result<Value> {
-    let tx = channel_claim_tx(account, f, sequence, None)?;
-    tx.validate().map_err(eyre_model)?;
-    to_json(&tx, "PaymentChannelClaim")
-}
-
-fn channel_claim_sign(
-    wallet: &xrpl::wallet::Wallet,
-    account: &str,
-    f: &Fields,
-    fill: SimulatedFill,
-) -> color_eyre::Result<String> {
-    let mut tx = channel_claim_tx(
-        account,
-        f,
-        fill.sequence,
-        Some((fill.fee_drops, fill.last_ledger_sequence)),
-    )?;
-    sign_blob!(tx, wallet)
-}
+tx_fns!(
+    channel_claim_tx,
+    channel_claim_json,
+    channel_claim_sign,
+    "PaymentChannelClaim"
+);
 
 // ------------------------------------------------------------------ AMMCreate
 
@@ -544,7 +530,7 @@ pub const AMM_CREATE: TxSpec = TxSpec {
     sign: amm_create_sign,
 };
 
-fn amm_create_check(f: &Fields) -> Result<(), String> {
+fn amm_create_check(f: &Fields, _account: Option<&str>) -> Result<(), String> {
     match (val(f, "Amount"), val(f, "Amount2")) {
         (Some(a), Some(b)) => {
             crate::signing::validate_amm_deposit_specs(a, b).map_err(|e| e.to_string())
@@ -569,26 +555,7 @@ fn amm_create_tx(
     })
 }
 
-fn amm_create_json(account: &str, f: &Fields, sequence: u32) -> color_eyre::Result<Value> {
-    let tx = amm_create_tx(account, f, sequence, None)?;
-    tx.validate().map_err(eyre_model)?;
-    to_json(&tx, "AMMCreate")
-}
-
-fn amm_create_sign(
-    wallet: &xrpl::wallet::Wallet,
-    account: &str,
-    f: &Fields,
-    fill: SimulatedFill,
-) -> color_eyre::Result<String> {
-    let mut tx = amm_create_tx(
-        account,
-        f,
-        fill.sequence,
-        Some((fill.fee_drops, fill.last_ledger_sequence)),
-    )?;
-    sign_blob!(tx, wallet)
-}
+tx_fns!(amm_create_tx, amm_create_json, amm_create_sign, "AMMCreate");
 
 // -------------------------------------------------------------------- AMMVote
 
@@ -630,26 +597,7 @@ fn amm_vote_tx(
     })
 }
 
-fn amm_vote_json(account: &str, f: &Fields, sequence: u32) -> color_eyre::Result<Value> {
-    let tx = amm_vote_tx(account, f, sequence, None)?;
-    tx.validate().map_err(eyre_model)?;
-    to_json(&tx, "AMMVote")
-}
-
-fn amm_vote_sign(
-    wallet: &xrpl::wallet::Wallet,
-    account: &str,
-    f: &Fields,
-    fill: SimulatedFill,
-) -> color_eyre::Result<String> {
-    let mut tx = amm_vote_tx(
-        account,
-        f,
-        fill.sequence,
-        Some((fill.fee_drops, fill.last_ledger_sequence)),
-    )?;
-    sign_blob!(tx, wallet)
-}
+tx_fns!(amm_vote_tx, amm_vote_json, amm_vote_sign, "AMMVote");
 
 // --------------------------------------------------------------------- AMMBid
 
@@ -691,18 +639,25 @@ pub const AMM_BID: TxSpec = TxSpec {
     sign: amm_bid_sign,
 };
 
-fn amm_bid_check(f: &Fields) -> Result<(), String> {
-    assets_differ(f)?;
+fn amm_bid_check(f: &Fields, account: Option<&str>) -> Result<(), String> {
+    assets_differ(f, account)?;
+    if account.is_some_and(|account| {
+        val(f, "AuthAccounts").is_some_and(|v| split_accounts(v).contains(&account))
+    }) {
+        return Err("AuthAccounts: must not include the sender".into());
+    }
     if let (Some(min), Some(max)) = (val(f, "BidMin"), val(f, "BidMax")) {
         let (min, max) = (
-            lp_amount(min).map_err(|e| e.to_string())?,
-            lp_amount(max).map_err(|e| e.to_string())?,
+            lp_amount(min).map_err(|e| format!("BidMin: {e}"))?,
+            lp_amount(max).map_err(|e| format!("BidMax: {e}"))?,
         );
         if (&min.currency, &min.issuer) != (&max.currency, &max.issuer) {
-            return Err("BidMin and BidMax must be the same LP token".into());
+            return Err("BidMin/BidMax: must use the same LP token".into());
         }
-        // Both passed `validate_iou_fields`, so the values parse.
-        if min.value.parse::<f64>().unwrap_or(0.0) > max.value.parse::<f64>().unwrap_or(0.0) {
+        if decimal_cmp(&min.value, &max.value)
+            .ok_or_else(|| "BidMin/BidMax: invalid decimal amount".to_string())?
+            == Ordering::Greater
+        {
             return Err("BidMin: must not exceed BidMax".into());
         }
     }
@@ -715,19 +670,16 @@ fn amm_bid_tx(
     sequence: u32,
     fee_lls: Option<(u32, u32)>,
 ) -> color_eyre::Result<AMMBid<'static>> {
+    AMM_BID
+        .check_for_account(account, f)
+        .map_err(|e| eyre!("{e}"))?;
     let (asset, asset2) = asset_pair(f)?;
-    let auth_accounts = val(f, "AuthAccounts")
-        .map(|v| {
-            let list = split_accounts(v);
-            if list.contains(&account) {
-                return Err(eyre!("AuthAccounts: must not include the sender"));
-            }
-            Ok(list
-                .into_iter()
-                .map(|a| AuthAccount::new(a.to_string()))
-                .collect())
-        })
-        .transpose()?;
+    let auth_accounts = val(f, "AuthAccounts").map(|v| {
+        split_accounts(v)
+            .into_iter()
+            .map(|a| AuthAccount::new(a.to_string()))
+            .collect()
+    });
     Ok(AMMBid {
         common_fields: common_fields!(account, AMMBid, sequence, fee_lls),
         asset,
@@ -738,26 +690,7 @@ fn amm_bid_tx(
     })
 }
 
-fn amm_bid_json(account: &str, f: &Fields, sequence: u32) -> color_eyre::Result<Value> {
-    let tx = amm_bid_tx(account, f, sequence, None)?;
-    tx.validate().map_err(eyre_model)?;
-    to_json(&tx, "AMMBid")
-}
-
-fn amm_bid_sign(
-    wallet: &xrpl::wallet::Wallet,
-    account: &str,
-    f: &Fields,
-    fill: SimulatedFill,
-) -> color_eyre::Result<String> {
-    let mut tx = amm_bid_tx(
-        account,
-        f,
-        fill.sequence,
-        Some((fill.fee_drops, fill.last_ledger_sequence)),
-    )?;
-    sign_blob!(tx, wallet)
-}
+tx_fns!(amm_bid_tx, amm_bid_json, amm_bid_sign, "AMMBid");
 
 // ------------------------------------------------------------------ AMMDelete
 
@@ -789,30 +722,11 @@ fn amm_delete_tx(
     })
 }
 
-fn amm_delete_json(account: &str, f: &Fields, sequence: u32) -> color_eyre::Result<Value> {
-    let tx = amm_delete_tx(account, f, sequence, None)?;
-    tx.validate().map_err(eyre_model)?;
-    to_json(&tx, "AMMDelete")
-}
-
-fn amm_delete_sign(
-    wallet: &xrpl::wallet::Wallet,
-    account: &str,
-    f: &Fields,
-    fill: SimulatedFill,
-) -> color_eyre::Result<String> {
-    let mut tx = amm_delete_tx(
-        account,
-        f,
-        fill.sequence,
-        Some((fill.fee_drops, fill.last_ledger_sequence)),
-    )?;
-    sign_blob!(tx, wallet)
-}
+tx_fns!(amm_delete_tx, amm_delete_json, amm_delete_sign, "AMMDelete");
 
 #[cfg(test)]
 mod tests {
-    use serde_json::json;
+    use serde_json::{Value, json};
     use xrpl::core::binarycodec::decode;
 
     use super::*;
@@ -834,9 +748,7 @@ mod tests {
 
     fn wallet() -> xrpl::wallet::Wallet {
         crate::signing::credential_from_secrets(
-            Some(&secrecy::SecretString::from(
-                "sEdSkooMk31MeTjbHVE7vLvgCpEMAdB",
-            )),
+            Some(&secrecy::SecretString::from(crate::test_support::TEST_SEED)),
             None,
         )
         .expect("credential")
@@ -1275,6 +1187,46 @@ mod tests {
                 f(&[
                     ("Asset", "XRP"),
                     ("Asset2", &usd),
+                    ("BidMin", &format!("{lp}:9007199254740993")),
+                    ("BidMax", &format!("{lp}:9007199254740992")),
+                ]),
+                Some("BidMin: must not exceed BidMax"),
+            ),
+            (
+                "AMMBid",
+                f(&[
+                    ("Asset", "XRP"),
+                    ("Asset2", &usd),
+                    ("BidMin", &format!("{lp}:9007199254740992")),
+                    ("BidMax", &format!("{lp}:9007199254740993")),
+                ]),
+                None,
+            ),
+            (
+                "AMMBid",
+                f(&[
+                    ("Asset", "XRP"),
+                    ("Asset2", &usd),
+                    ("BidMin", &format!("{lp}:1e-7")),
+                    ("BidMax", &format!("{lp}:0.00000010")),
+                ]),
+                None,
+            ),
+            (
+                "AMMBid",
+                f(&[
+                    ("Asset", "XRP"),
+                    ("Asset2", &usd),
+                    ("BidMin", &format!("{lp}:0.1000000000000000000000000001")),
+                    ("BidMax", &format!("{lp}:0.1")),
+                ]),
+                Some("BidMin: must not exceed BidMax"),
+            ),
+            (
+                "AMMBid",
+                f(&[
+                    ("Asset", "XRP"),
+                    ("Asset2", &usd),
                     ("BidMin", &format!("{lp}:1")),
                     ("BidMax", &format!("{LP}:{ACCOUNT_B}:5")),
                 ]),
@@ -1550,21 +1502,23 @@ mod tests {
         }
     }
 
-    /// Builder-time rule: the sender may not be its own AuthAccount (only the builder knows the
-    /// sender, so field validation cannot catch it).
+    /// Account-aware preflight and the builder both reject the sender as its own AuthAccount.
     #[test]
     fn builder_rules() {
         let account = wallet().classic_address.clone();
-        let own = spec("AMMBid")
-            .prepare(
-                &f(&[
-                    ("Asset", "XRP"),
-                    ("Asset2", &usd()),
-                    ("AuthAccounts", &account),
-                ]),
-                0,
-            )
-            .unwrap();
+        let fields = f(&[
+            ("Asset", "XRP"),
+            ("Asset2", &usd()),
+            ("AuthAccounts", &account),
+        ]);
+        assert!(AMM_BID.validate(&fields).is_ok());
+        let e = AMM_BID
+            .prepare_for_account(&account, &fields, 0)
+            .expect_err("account-aware preparation rejects sender");
+        assert!(e.contains("AuthAccounts") && e.contains("sender"), "{e}");
+        assert!(AMM_BID.check_for_account(ACCOUNT_B, &fields).is_ok());
+
+        let own = spec("AMMBid").prepare(&fields, 0).unwrap();
         let e = (AMM_BID.build_json)(&account, &own, 1).expect_err("sender as AuthAccount");
         assert!(e.to_string().contains("sender"), "{e}");
     }
@@ -1634,9 +1588,7 @@ mod tests {
         let server = tokio::spawn(rpc_mock::serve(listener, 8, result_for));
         let rpc = RpcClient::connect(&url).expect("rpc client");
         let credential = crate::signing::credential_from_secrets(
-            Some(&secrecy::SecretString::from(
-                "sEdSkooMk31MeTjbHVE7vLvgCpEMAdB",
-            )),
+            Some(&secrecy::SecretString::from(crate::test_support::TEST_SEED)),
             None,
         )
         .expect("credential")

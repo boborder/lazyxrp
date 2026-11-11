@@ -2,6 +2,11 @@
 
 use std::path::PathBuf;
 
+/// Well-known public XRPL documentation seed, shared by tests instead of 33 copied literals.
+/// Never use it for a real wallet.
+#[cfg(test)]
+pub(crate) const TEST_SEED: &str = "sEdSkooMk31MeTjbHVE7vLvgCpEMAdB";
+
 /// Remove a temp directory tree on drop (panic-safe cleanup).
 pub struct TempRootGuard {
     root: PathBuf,
