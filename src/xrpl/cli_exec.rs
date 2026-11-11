@@ -666,7 +666,7 @@ async fn cmd_send(
 
     let (account, account_info) = flow.load_account(&wallet).await?;
     let balance_xrp_str = account_info.balance_xrp;
-    let balance_drops = xrp_to_drops(&balance_xrp_str).unwrap_or(0);
+    let balance_drops = account_info.balance_drops;
 
     println!("From: {}", account);
     println!("To: {}", destination_classic);
@@ -1118,7 +1118,7 @@ mod tests {
             let url = format!("http://{}", listener.local_addr()?);
             let server = tokio::spawn(rpc_mock::serve(listener, 4, node));
             let credential = crate::signing::credential_from_secrets(
-                Some(&SecretString::from("sEdSkooMk31MeTjbHVE7vLvgCpEMAdB")),
+                Some(&SecretString::from(crate::test_support::TEST_SEED)),
                 None,
             )?;
             execute_cli_command(
@@ -1170,7 +1170,7 @@ mod tests {
                 &url,
                 &Network::Testnet,
                 crate::signing::credential_from_secrets(
-                    Some(&SecretString::from("sEdSkooMk31MeTjbHVE7vLvgCpEMAdB")),
+                    Some(&SecretString::from(crate::test_support::TEST_SEED)),
                     None,
                 )?,
                 false,
@@ -1200,7 +1200,7 @@ mod tests {
             let url = format!("http://{}", listener.local_addr()?);
             let server = tokio::spawn(serve_with(listener, 3, failing_simulate));
             let credential = crate::signing::credential_from_secrets(
-                Some(&SecretString::from("sEdSkooMk31MeTjbHVE7vLvgCpEMAdB")),
+                Some(&SecretString::from(crate::test_support::TEST_SEED)),
                 None,
             )?;
             let err = execute_cli_command(
@@ -1237,7 +1237,7 @@ mod tests {
             let url = format!("http://{}", listener.local_addr()?);
             let server = tokio::spawn(serve_with(listener, 4, mainnet_node));
             let credential = crate::signing::credential_from_secrets(
-                Some(&SecretString::from("sEdSkooMk31MeTjbHVE7vLvgCpEMAdB")),
+                Some(&SecretString::from(crate::test_support::TEST_SEED)),
                 None,
             )?;
             execute_cli_command(
@@ -1480,7 +1480,7 @@ mod tests {
         fn test_credential() -> color_eyre::Result<Option<crate::signing::SigningCredential>> {
             use secrecy::SecretString;
             crate::signing::credential_from_secrets(
-                Some(&SecretString::from("sEdSkooMk31MeTjbHVE7vLvgCpEMAdB")),
+                Some(&SecretString::from(crate::test_support::TEST_SEED)),
                 None,
             )
         }
@@ -1634,7 +1634,7 @@ mod tests {
             let url = format!("http://{}", listener.local_addr()?);
             let server = tokio::spawn(serve_with(listener, 1, mainnet_node));
             let credential = crate::signing::credential_from_secrets(
-                Some(&SecretString::from("sEdSkooMk31MeTjbHVE7vLvgCpEMAdB")),
+                Some(&SecretString::from(crate::test_support::TEST_SEED)),
                 None,
             )?;
             let err = execute_cli_command(
@@ -1660,7 +1660,7 @@ mod tests {
         async fn send_zero_amount_is_refused_before_rpc() -> color_eyre::Result<()> {
             use secrecy::SecretString;
             let credential = crate::signing::credential_from_secrets(
-                Some(&SecretString::from("sEdSkooMk31MeTjbHVE7vLvgCpEMAdB")),
+                Some(&SecretString::from(crate::test_support::TEST_SEED)),
                 None,
             )?;
             let err = execute_cli_command(
@@ -1698,7 +1698,7 @@ mod tests {
             let url = format!("http://{}", listener.local_addr()?);
             let server = tokio::spawn(serve_with(listener, 4, rejecting));
             let credential = crate::signing::credential_from_secrets(
-                Some(&SecretString::from("sEdSkooMk31MeTjbHVE7vLvgCpEMAdB")),
+                Some(&SecretString::from(crate::test_support::TEST_SEED)),
                 None,
             )?;
             let err = execute_cli_command(
@@ -1760,7 +1760,7 @@ mod tests {
             );
 
             let credential = crate::signing::credential_from_secrets(
-                Some(&SecretString::from("sEdSkooMk31MeTjbHVE7vLvgCpEMAdB")),
+                Some(&SecretString::from(crate::test_support::TEST_SEED)),
                 None,
             )?;
             execute_cli_command(

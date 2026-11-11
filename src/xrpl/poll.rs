@@ -9,9 +9,7 @@ use tracing::warn;
 use crate::action::Action;
 use crate::network::Network;
 
-use super::client::{
-    RPC_TIMEOUT, RpcClient, empty_account_tx_page_on_not_found, path_find_snapshot,
-};
+use super::client::{RPC_TIMEOUT, RpcClient, path_find_snapshot};
 use super::submit::*;
 use super::types::{BookPair, OracleId, PollCommand, PollContext};
 use super::util::next_backoff_secs;
@@ -106,9 +104,8 @@ pub(crate) fn action_from_account_tx_result(
     };
     match result {
         Ok(page) => history(page),
-        Err(e) => empty_account_tx_page_on_not_found(&e)
-            .map(history)
-            .unwrap_or_else(|| Action::XrplError(format!("account_tx: {e}"))),
+        // `RpcClient::account_tx` already maps not-found to an empty page.
+        Err(e) => Action::XrplError(format!("account_tx: {e}")),
     }
 }
 
@@ -563,6 +560,16 @@ async fn poll_wallet_overview(
     }
 }
 
+/// Build an error action with typed connectivity variants where the app/status bar need them.
+fn xrpl_error(label: &str, detail: impl std::fmt::Display) -> Action {
+    let message = format!("{label}: {detail}");
+    match label {
+        "server_info" => Action::XrplServerInfoError(message),
+        "rpc init failed" => Action::XrplRpcInitError(message),
+        _ => Action::XrplError(message),
+    }
+}
+
 /// Sends the outcome of a timed RPC as an action; returns whether it succeeded.
 fn send_timed<T, F>(
     action_tx: &UnboundedSender<Action>,
@@ -575,8 +582,8 @@ where
 {
     let (action, ok) = match result {
         Ok(Ok(value)) => (ok_action(value), true),
-        Ok(Err(e)) => (Action::XrplError(format!("{label}: {e}")), false),
-        Err(_) => (Action::XrplError(format!("{label}: timeout")), false),
+        Ok(Err(e)) => (xrpl_error(label, e), false),
+        Err(_) => (xrpl_error(label, "timeout"), false),
     };
     send_account_tx_action(action_tx, action);
     ok
@@ -720,7 +727,9 @@ async fn drive_poll_loop(
     let rpc_cell = tokio::sync::RwLock::new(match RpcClient::connect(&ctx.rpc_url) {
         Ok(rpc) => rpc,
         Err(err) => {
-            if let Err(e) = action_tx.send(Action::XrplError(format!("rpc init failed: {err}"))) {
+            if let Err(e) =
+                action_tx.send(Action::XrplRpcInitError(format!("rpc init failed: {err}")))
+            {
                 warn!(?e, "action channel closed");
             }
             return;
@@ -735,6 +744,10 @@ async fn drive_poll_loop(
     tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
     price_tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
     let mut last_poll: Option<Instant> = None;
+    // `watch::Receiver::changed()` returns Err immediately and forever once the sender is
+    // dropped: without this gate the arm below would spin the loop at 100% CPU (ws.rs has
+    // the same guard).
+    let mut watching_network = true;
     // Shared by the interval and trigger arms: one scheduled poll against the live client.
     macro_rules! scheduled_poll {
         () => {{
@@ -754,8 +767,9 @@ async fn drive_poll_loop(
     loop {
         tokio::select! {
             _ = cancel.cancelled() => return,
-            network_res = ctx.network_watch.changed() => {
+            network_res = ctx.network_watch.changed(), if watching_network => {
                 if network_res.is_err() {
+                    watching_network = false;
                     continue;
                 }
                 let new_network = *ctx.network_watch.borrow();
@@ -1193,7 +1207,25 @@ mod tests {
         }
     }
 
-    /// TC-089/TC-144: not-found → empty history (I-7); action follows append flag
+    /// Connectivity errors use typed variants; unrelated RPC failures stay generic.
+    #[test]
+    fn connectivity_errors_are_typed_not_string_matched() {
+        assert!(matches!(
+            xrpl_error("server_info", "connection refused"),
+            Action::XrplServerInfoError(_)
+        ));
+        assert!(matches!(
+            xrpl_error("rpc init failed", "bad url"),
+            Action::XrplRpcInitError(_)
+        ));
+        assert!(matches!(
+            xrpl_error("account_tx", "timeout"),
+            Action::XrplError(_)
+        ));
+    }
+
+    /// TC-089/TC-144: the client maps not-found to an empty page (I-7); this action mapper
+    /// receives only real errors and follows the append flag for successful pages.
     #[test]
     fn action_from_account_tx_result_maps_all_outcomes() {
         use crate::xrpl::types::AccountTxPage;
@@ -1218,17 +1250,14 @@ mod tests {
             Expect,
         )> = vec![
             (
-                "not-found without append yields an empty history",
+                "not-found reaches the action layer as an error (the client converts it)",
                 Err(color_eyre::Report::new(crate::xrpl::parse::NodeError::new(
                     "actNotFound",
                     19,
                     "Account not found.".into(),
                 ))),
                 false,
-                Expect::History {
-                    append: false,
-                    marker: None,
-                },
+                Expect::Error("Account not found"),
             ),
             (
                 "non-not-found error without append is an XrplError",
@@ -1255,17 +1284,14 @@ mod tests {
                 },
             ),
             (
-                "not-found with append yields an empty append",
+                "not-found with append also stays an error at the action layer",
                 Err(color_eyre::Report::new(crate::xrpl::parse::NodeError::new(
                     "actNotFound",
                     19,
                     "Account not found.".into(),
                 ))),
                 true,
-                Expect::History {
-                    append: true,
-                    marker: None,
-                },
+                Expect::Error("Account not found"),
             ),
         ];
         for (name, result, append, expected) in cases {
@@ -1443,7 +1469,7 @@ mod tests {
             flare_network: Default::default(),
             flare_expected_operator: None,
             flare_display: Default::default(),
-            flare_evm_key_env: "FLARE_EVM_KEY".into(),
+            flare_evm_key_env: crate::config::DEFAULT_FLARE_EVM_KEY_ENV.into(),
             flare_evm_key: None,
             flare_wallet_address: None,
             submit_lock: std::sync::Arc::new(tokio::sync::Mutex::new(())),

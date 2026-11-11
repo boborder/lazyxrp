@@ -39,7 +39,7 @@ pub struct TxDetailState {
     pub tx_json: ArcValue,
     pub meta_json: ArcValue,
     pub scroll: u16,
-    cached_lines: Option<Vec<Line<'static>>>,
+    cached_paragraph: Option<Paragraph<'static>>,
 }
 
 impl TxDetailState {
@@ -48,7 +48,7 @@ impl TxDetailState {
         self.tx_json = tx_json;
         self.meta_json = meta_json;
         self.scroll = 0;
-        self.cached_lines = None;
+        self.cached_paragraph = None;
     }
 
     pub fn close(&mut self) {
@@ -134,24 +134,23 @@ pub fn render_tx_detail(frame: &mut Frame, area: Rect, state: &mut TxDetailState
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
 
-    let lines = state
-        .cached_lines
-        .get_or_insert_with(|| {
-            to_static_lines(detail_lines_for(&state.tx_json.0, &state.meta_json.0))
-        })
-        .clone();
-    let line_count = lines.len();
-    let paragraph = Paragraph::new(lines)
-        .wrap(Wrap { trim: true })
-        .scroll((state.scroll, 0));
-
     let [content_area, sb_area] =
         Layout::horizontal([Constraint::Fill(1), Constraint::Length(1)]).areas(inner);
 
-    frame.render_widget(paragraph, content_area);
+    let paragraph = state.cached_paragraph.get_or_insert_with(|| {
+        Paragraph::new(to_static_lines(detail_lines_for(
+            &state.tx_json.0,
+            &state.meta_json.0,
+        )))
+        .wrap(Wrap { trim: true })
+    });
+    let max_scroll = paragraph
+        .line_count(content_area.width)
+        .saturating_sub(content_area.height as usize);
+    state.scroll = (state.scroll as usize).min(max_scroll) as u16;
+    *paragraph = std::mem::take(paragraph).scroll((state.scroll, 0));
+    frame.render_widget(&*paragraph, content_area);
 
-    let content_height = content_area.height as usize;
-    let max_scroll = line_count.saturating_sub(content_height);
     let mut sb_state = ScrollbarState::new(max_scroll).position(state.scroll as usize);
     frame.render_stateful_widget(
         Scrollbar::new(ScrollbarOrientation::VerticalRight)
@@ -605,7 +604,7 @@ mod tests {
         state.open(arc(tx1), arc(json!({})));
         // Simulate a stale draw cache from the first tx.
         let lines = detail_lines_for(&state.tx_json.0, &state.meta_json.0);
-        state.cached_lines = Some(to_static_lines(lines));
+        state.cached_paragraph = Some(Paragraph::new(to_static_lines(lines)));
 
         let tx2 = json!({"TransactionType":"AccountSet","Account":"rAccountSetOnly","SetFlag":8});
         state.open(arc(tx2), arc(json!({})));
@@ -658,5 +657,41 @@ mod tests {
         assert!(state.handle_action(&Action::TxDetailToggle));
         assert!(!state.visible);
         assert_eq!(state.scroll, 0);
+    }
+
+    #[test]
+    fn wrapped_scroll_reaches_tail_without_overscroll() {
+        let mut lines: Vec<Line<'static>> = (0..20)
+            .map(|index| Line::from(format!("row {index}")))
+            .collect();
+        lines.push(Line::from("wrapped row ".repeat(20)));
+        lines.push(Line::from("TAIL_MARKER"));
+        let paragraph = Paragraph::new(lines).wrap(Wrap { trim: true });
+        let popup = centered_popup_rect(Rect::new(0, 0, 40, 12), 40, 12);
+        let content_width = popup.width - 3;
+        let content_height = popup.height - 2;
+        let rendered_rows = paragraph.line_count(content_width);
+        let mut state = TxDetailState {
+            visible: true,
+            scroll: u16::MAX,
+            cached_paragraph: Some(paragraph),
+            ..Default::default()
+        };
+
+        let out = crate::test_support::render_to_string(40, 12, |frame| {
+            render_tx_detail(frame, frame.area(), &mut state)
+        });
+        assert_eq!(
+            state.scroll as usize,
+            rendered_rows - content_height as usize
+        );
+        assert!(out.contains("TAIL_MARKER"), "tail must be reachable: {out}");
+        assert!(state.cached_paragraph.is_some());
+
+        state.scroll = u16::MAX;
+        let scrolled = crate::test_support::render_to_string(40, 12, |frame| {
+            render_tx_detail(frame, frame.area(), &mut state)
+        });
+        assert_eq!(scrolled, out, "overscroll must clamp to the same tail");
     }
 }

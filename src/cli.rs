@@ -70,7 +70,7 @@ pub struct Cli {
     pub watch: bool,
 
     /// Watch account for the TUI (overrides config).
-    #[arg(long, global = true)]
+    #[arg(long)]
     pub account: Option<String>,
 
     /// Run a non-interactive script subcommand (e.g. `lazyxrp -x info`). Shell alias: `rc='lazyxrp -x'`.

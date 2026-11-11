@@ -72,6 +72,7 @@ pub struct StatusBar {
     last_flare_update: Option<Instant>,
     flare_down: bool,
     last_any_update_wall: Option<SystemTime>,
+    server_connectivity_error: bool,
     cached_wall_time: Option<String>,
     cached_wall_for: Option<SystemTime>,
     last_error: Option<String>,
@@ -109,6 +110,7 @@ impl StatusBar {
             freshness_flr: None,
             dunl_data_wall: None,
             last_any_update_wall: None,
+            server_connectivity_error: false,
             cached_wall_time: None,
             cached_wall_for: None,
             last_error: None,
@@ -148,15 +150,25 @@ impl StatusBar {
         }
     }
 
+    fn refresh_cached_labels(&mut self) {
+        if self.cached_state_display.is_none() {
+            let state = self.connection_state();
+            self.cached_state_display = Some(format!(" {} {} ", state.icon(), state.label()));
+        }
+        let _ = Self::cached_freshness_label(&mut self.freshness_srv, self.last_server_update);
+        let _ = Self::cached_freshness_label(&mut self.freshness_acc, self.last_account_update);
+        let _ = Self::cached_freshness_label(&mut self.freshness_book, self.last_book_update);
+        let _ = Self::cached_freshness_label(&mut self.freshness_flr, self.last_flare_update);
+        if self.cached_wall_for != self.last_any_update_wall {
+            self.cached_wall_for = self.last_any_update_wall;
+            self.cached_wall_time = self.last_any_update_wall.map(fmt::fmt_local_hms);
+        }
+    }
+
     fn connection_state(&self) -> ConnectionState {
-        // server_info polls every tick (never tab-gated), so an RPC outage
-        // reliably surfaces as a server_info error; other XrplError labels
-        // (dUNL, path_find, book) are fetch-specific, not connectivity.
-        if self
-            .last_error
-            .as_deref()
-            .is_some_and(|e| e.contains("server_info"))
-        {
+        // Only typed server_info / RPC initialization failures mean connectivity is down;
+        // generic request errors are fetch-specific, not connectivity.
+        if self.server_connectivity_error {
             ConnectionState::Offline
         } else if let Some(t) = self.last_server_update {
             if t.elapsed() > XRPL_STALE_AFTER {
@@ -197,6 +209,7 @@ impl Component for StatusBar {
             Action::XrplServerInfo(_) => {
                 self.last_server_update = Some(Instant::now());
                 self.last_any_update_wall = Some(SystemTime::now());
+                self.server_connectivity_error = false;
                 self.last_error = None;
                 self.cached_error_display = None;
                 self.cached_state_display = None;
@@ -233,6 +246,12 @@ impl Component for StatusBar {
                 self.cached_error_display = Some(format!("err:{msg}"));
                 self.cached_state_display = None;
             }
+            Action::XrplServerInfoError(msg) | Action::XrplRpcInitError(msg) => {
+                self.server_connectivity_error = true;
+                self.last_error = Some(msg.to_string());
+                self.cached_error_display = Some(format!("err:{msg}"));
+                self.cached_state_display = None;
+            }
             Action::NetworkChange(net) => {
                 self.network = *net;
                 self.network_badge = format!(" {} ", (*net).display_name());
@@ -255,6 +274,7 @@ impl Component for StatusBar {
             Action::RefreshBook => self.refreshing_book = true,
             _ => {}
         }
+        self.refresh_cached_labels();
         Ok(None)
     }
 
@@ -262,35 +282,37 @@ impl Component for StatusBar {
         let state = self.connection_state();
         let state_style = Style::new().fg(state.color()).bold().reversed();
         let label_style = theme::dim_style();
-        // Hoist: flare_state() needs an immutable self borrow, which conflicts
-        // with the mutable cached_state_display borrow held by `spans` below.
         let flr_state = self.flare_state();
         let state_display = self
             .cached_state_display
-            .get_or_insert_with(|| format!(" {} {} ", state.icon(), state.label()));
+            .as_deref()
+            .unwrap_or(" ○ CONNECTING ");
         let mut spans = vec![
-            Span::styled(state_display.as_str(), state_style),
+            Span::styled(state_display, state_style),
             Span::raw(" "),
             Span::styled("acct:", label_style),
             Span::styled(self.account_short.as_str(), theme::accent_style()),
             Span::raw("  "),
             Span::styled("srv:", label_style),
-            Span::raw(Self::cached_freshness_label(
-                &mut self.freshness_srv,
-                self.last_server_update,
-            )),
+            Span::raw(
+                self.freshness_srv
+                    .as_ref()
+                    .map_or("-", |(_, label)| label.as_str()),
+            ),
             Span::raw("  "),
             Span::styled("acc:", label_style),
-            Span::raw(Self::cached_freshness_label(
-                &mut self.freshness_acc,
-                self.last_account_update,
-            )),
+            Span::raw(
+                self.freshness_acc
+                    .as_ref()
+                    .map_or("-", |(_, label)| label.as_str()),
+            ),
             Span::raw("  "),
             Span::styled("bk:", label_style),
-            Span::raw(Self::cached_freshness_label(
-                &mut self.freshness_book,
-                self.last_book_update,
-            )),
+            Span::raw(
+                self.freshness_book
+                    .as_ref()
+                    .map_or("-", |(_, label)| label.as_str()),
+            ),
         ];
         if let Some(flr_state) = flr_state {
             spans.push(Span::raw("  "));
@@ -300,10 +322,11 @@ impl Component for StatusBar {
                 Style::new().fg(flr_state.color()),
             ));
             spans.push(Span::raw(" "));
-            spans.push(Span::raw(Self::cached_freshness_label(
-                &mut self.freshness_flr,
-                self.last_flare_update,
-            )));
+            spans.push(Span::raw(
+                self.freshness_flr
+                    .as_ref()
+                    .map_or("-", |(_, label)| label.as_str()),
+            ));
         }
         if let Some(data_wall) = self.dunl_data_wall {
             // dUNL data age: the manifest itself, not the last receive (the
@@ -328,13 +351,9 @@ impl Component for StatusBar {
                 style,
             ));
         }
-        if let Some(t) = self.last_any_update_wall {
+        if self.last_any_update_wall.is_some() {
             spans.push(Span::raw("  "));
             spans.push(Span::styled("@", label_style));
-            if self.cached_wall_for != Some(t) {
-                self.cached_wall_for = Some(t);
-                self.cached_wall_time = Some(fmt::fmt_local_hms(t));
-            }
             let wall_str = self.cached_wall_time.as_deref().expect("wall time cached");
             spans.push(Span::styled(wall_str, theme::accent_style()));
         }
@@ -426,11 +445,11 @@ mod tests {
             false,
         );
         assert_eq!(bar.connection_state(), ConnectionState::Connecting);
-        bar.last_error = Some("server_info: connection refused".into());
+        bar.server_connectivity_error = true;
         assert_eq!(bar.connection_state(), ConnectionState::Offline);
         bar.last_server_update = Some(Instant::now() - Duration::from_secs(31));
         assert_eq!(bar.connection_state(), ConnectionState::Offline);
-        bar.last_error = None;
+        bar.server_connectivity_error = false;
         assert_eq!(bar.connection_state(), ConnectionState::Stale);
         bar.last_server_update = Some(Instant::now());
         assert_eq!(bar.connection_state(), ConnectionState::Online);
@@ -446,6 +465,69 @@ mod tests {
         assert_eq!(bar.flare_state(), Some(ConnectionState::Offline));
         bar.flare_enabled = false;
         assert_eq!(bar.flare_state(), None);
+    }
+
+    #[test]
+    fn typed_server_errors_control_connectivity() {
+        let mut bar = StatusBar::new("acct".into(), Network::Testnet, false);
+        bar.update(&Action::XrplError("server_info: legacy error".into()))
+            .expect("generic error");
+        assert_eq!(bar.connection_state(), ConnectionState::Connecting);
+
+        for (error, expected) in [
+            (
+                Action::XrplServerInfoError("connection refused".into()),
+                "err:connection refused",
+            ),
+            (
+                Action::XrplRpcInitError("invalid endpoint".into()),
+                "err:invalid endpoint",
+            ),
+        ] {
+            bar.update(&error).expect("connectivity error");
+            assert_eq!(bar.connection_state(), ConnectionState::Offline);
+            assert_eq!(bar.cached_error_display.as_deref(), Some(expected));
+        }
+
+        bar.update(&Action::XrplServerInfo(Box::new(
+            crate::xrpl::ServerInfoSummary {
+                ledger_index: 100,
+                hostid: String::new(),
+                build_version: String::new(),
+                validation_quorum: None,
+                validator_list: None,
+            },
+        )))
+        .expect("server recovery");
+        assert_eq!(bar.connection_state(), ConnectionState::Online);
+        assert!(bar.last_error.is_none());
+        assert!(bar.cached_error_display.is_none());
+    }
+
+    #[test]
+    fn tick_ages_freshness_and_draw_does_not_mutate_caches() {
+        let mut bar = StatusBar::new("acct".into(), Network::Testnet, false);
+        bar.last_server_update = Some(Instant::now() - Duration::from_secs(2));
+        bar.update(&Action::Tick).expect("tick");
+        assert_eq!(bar.freshness_srv.as_ref().unwrap().1, "2s");
+        let cached = bar.freshness_srv.clone();
+        let tick = bar.tick;
+        let wall_cache = bar.cached_wall_time.clone();
+
+        crate::test_support::render_to_string(120, 1, |frame| {
+            bar.draw(frame, frame.area()).expect("draw");
+        });
+        assert_eq!(bar.freshness_srv, cached);
+        assert_eq!(bar.cached_wall_time, wall_cache);
+        assert_eq!(bar.tick, tick);
+
+        bar.last_server_update = Some(Instant::now() - Duration::from_secs(3));
+        crate::test_support::render_to_string(120, 1, |frame| {
+            bar.draw(frame, frame.area()).expect("draw");
+        });
+        assert_eq!(bar.freshness_srv, cached, "draw must not age the cache");
+        bar.update(&Action::Tick).expect("next tick");
+        assert_eq!(bar.freshness_srv.as_ref().unwrap().1, "3s");
     }
 
     /// TC-174: draw renders the flare dot and dUNL data-age marker when fed

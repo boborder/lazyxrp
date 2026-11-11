@@ -23,7 +23,6 @@ use tracing::error;
 
 #[derive(Debug)]
 pub enum Event {
-    Init,
     Error,
     Tick,
     Key(KeyEvent),
@@ -77,10 +76,6 @@ impl Tui {
         let mut event_stream = EventStream::new();
         let mut tick_interval = interval(Duration::from_secs_f64(1.0 / tick_rate));
 
-        if let Err(e) = event_tx.send(Event::Init) {
-            error!("failed to send init event — receiver dropped: {e}");
-            return;
-        }
         loop {
             let event = tokio::select! {
                 _ = cancellation_token.cancelled() => {
@@ -94,7 +89,12 @@ impl Tui {
                         CrosstermEvent::Resize(x, y) => Event::Resize(x, y),
                         _ => continue,
                     }
-                    Some(Err(_)) => Event::Error,
+                    Some(Err(e)) => {
+                        // The variant carries no payload, so log the cause here; the app just
+                        // keeps running on the next event.
+                        error!(?e, "terminal event stream error");
+                        Event::Error
+                    }
                     None => break,
                 },
             };

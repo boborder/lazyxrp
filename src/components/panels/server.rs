@@ -62,7 +62,6 @@ pub struct ServerPanel {
     tick: usize,
     pub is_focused: bool,
     detail: ValidatorDetail,
-    action_tx: Option<tokio::sync::mpsc::UnboundedSender<Action>>,
 }
 
 impl ServerPanel {
@@ -288,32 +287,22 @@ impl Component for ServerPanel {
                     )
                 {
                     self.detail.open(row, idx, d);
-                    if let (Some(domain), Some(tx)) =
-                        (row.domain.as_deref(), self.action_tx.as_ref())
-                    {
+                    if let Some(domain) = row.domain.as_deref() {
                         let expected_pubkey = row
                             .master_public_key
                             .as_deref()
                             .unwrap_or(&row.validation_public_key)
                             .to_string();
-                        let _ = tx.send(Action::RequestXrplToml {
+                        return Ok(Some(Action::RequestXrplToml {
                             domain: domain.to_string(),
                             expected_pubkey,
-                        });
+                        }));
                     }
                 }
             }
             _ => {}
         }
         Ok(None)
-    }
-
-    fn register_action_handler(
-        &mut self,
-        action_tx: tokio::sync::mpsc::UnboundedSender<Action>,
-    ) -> color_eyre::Result<()> {
-        self.action_tx = Some(action_tx);
-        Ok(())
     }
 
     fn draw(&mut self, frame: &mut Frame, area: Rect) -> color_eyre::Result<()> {

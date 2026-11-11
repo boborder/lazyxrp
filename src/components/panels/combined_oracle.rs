@@ -20,6 +20,8 @@ pub struct CombinedOraclePanel {
     ftso: FlareFtsoPanel,
     fxrp: FxrpDirectMintPanel,
     flare_display: FlareDisplay,
+    /// Kept so `update_children` can forward a second child's action instead of dropping it.
+    action_tx: Option<tokio::sync::mpsc::UnboundedSender<Action>>,
     pub is_focused: bool,
 }
 
@@ -30,6 +32,7 @@ impl CombinedOraclePanel {
             ftso: FlareFtsoPanel::default(),
             fxrp: FxrpDirectMintPanel::default(),
             flare_display,
+            action_tx: None,
             is_focused: false,
         }
     }
@@ -88,6 +91,7 @@ impl Component for CombinedOraclePanel {
         &mut self,
         action_tx: tokio::sync::mpsc::UnboundedSender<Action>,
     ) -> color_eyre::Result<()> {
+        self.action_tx = Some(action_tx.clone());
         self.oracle.register_action_handler(action_tx.clone())?;
         self.ftso.register_action_handler(action_tx.clone())?;
         self.fxrp.register_action_handler(action_tx)?;
@@ -99,13 +103,11 @@ impl Component for CombinedOraclePanel {
         self.oracle.is_focused = self.is_focused;
         self.ftso.is_focused = false;
         self.fxrp.is_focused = false;
-        if let Some(a) = self.oracle.update(action)? {
-            return Ok(Some(a));
-        }
-        if let Some(a) = self.ftso.update(action)? {
-            return Ok(Some(a));
-        }
-        self.fxrp.update(action)
+        crate::components::update_children(
+            &mut [&mut self.oracle, &mut self.ftso, &mut self.fxrp],
+            action,
+            self.action_tx.as_ref(),
+        )
     }
 
     fn draw(&mut self, frame: &mut Frame, area: Rect) -> color_eyre::Result<()> {

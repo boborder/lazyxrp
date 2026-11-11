@@ -69,6 +69,10 @@ pub enum Action {
     /// `account_objects` snapshot; Assets panels filter rows by `LedgerEntryType`.
     XrplLedgerObjects(Vec<LedgerObjectRow>),
     XrplError(String),
+    /// `server_info` failed: a typed connectivity signal for the splash and status bar.
+    XrplServerInfoError(String),
+    /// The initial RPC client could not be constructed; startup must leave the splash.
+    XrplRpcInitError(String),
     /// Request xrp-ledger.toml fetch for domain verification.
     RequestXrplToml {
         domain: String,

@@ -10,7 +10,6 @@ use super::dunl::{
 use super::format::drops_to_xrp;
 pub use super::format::{path_find_snapshot, xrp_to_drops};
 pub use super::parse::SubmitOutcome;
-pub(crate) use super::parse::empty_account_tx_page_on_not_found;
 use super::parse::{
     NodeError, book_currency, book_offer_best_price, escrow_offer_sequence_from_tx, is_not_found,
     is_rate_limited_error, node_error, parse_account_escrows_value, parse_account_lines_value,
@@ -234,9 +233,14 @@ impl RpcClient {
         let value = self
             .rpc_value("account_info", json!({ "account": watch_address }))
             .await?;
+        let balance = json_str(&value, &["result", "account_data", "Balance"]);
+        let balance_drops = balance.parse::<u64>().map_err(|_| {
+            color_eyre::eyre::eyre!("account_info: invalid Balance {balance:?} (expected drops)")
+        })?;
         Ok(AccountSummary {
             account: json_str(&value, &["result", "account_data", "Account"]).to_string(),
-            balance_xrp: drops_to_xrp(json_str(&value, &["result", "account_data", "Balance"])),
+            balance_xrp: drops_to_xrp(balance),
+            balance_drops,
             sequence: json_u32(&value, &["result", "account_data", "Sequence"]),
             owner_count: json_u32(&value, &["result", "account_data", "OwnerCount"]),
             flags: json_u32(&value, &["result", "account_data", "Flags"]),
@@ -327,16 +331,10 @@ impl RpcClient {
         if let Some(m) = marker {
             req["marker"] = m;
         }
-        let value = match self.rpc_value("account_tx", req).await {
-            Ok(value) => value,
-            Err(e) => {
-                if let Some(page) = empty_account_tx_page_on_not_found(&e) {
-                    return Ok(page);
-                }
-                return Err(e);
-            }
-        };
-        Ok(parse_account_tx_page(value, watch_address))
+        let value = self.rpc_value_or_none("account_tx", req).await?;
+        Ok(value.map_or_else(AccountTxPage::default, |value| {
+            parse_account_tx_page(value, watch_address)
+        }))
     }
 
     pub async fn account_overview(
@@ -865,6 +863,43 @@ mod tests {
             "The server is too busy."
         )));
         assert!(!is_not_found(&eyre!("account not found")), "transport text");
+    }
+
+    /// `account_tx` not-found is converted once, in the client; a malformed Balance is an RPC
+    /// data error instead of a zero balance that could refuse a valid payment.
+    #[tokio::test]
+    async fn account_tx_not_found_and_strict_balance() {
+        use crate::test_support::rpc_mock;
+
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(rpc_mock::serve(listener, 1, |_| {
+            json!({
+                "error": "actNotFound",
+                "error_code": 19,
+                "error_message": "Account not found."
+            })
+        }));
+        let rpc = RpcClient::connect(&format!("http://{address}")).unwrap();
+        let page = rpc.account_tx("rTest", 20, None).await.unwrap();
+        assert_eq!(page, AccountTxPage::default());
+        server.await.unwrap().unwrap();
+
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(rpc_mock::serve(
+            listener,
+            1,
+            |_| json!({"account_data": {"Account": "rTest", "Balance": "not-drops"}}),
+        ));
+        let rpc = RpcClient::connect(&format!("http://{address}")).unwrap();
+        let err = rpc.account_info("rTest").await.expect_err("bad balance");
+        assert!(err.to_string().contains("invalid Balance"), "{err}");
+        server.await.unwrap().unwrap();
     }
 
     /// Retries: a local HTTP 429 and a transient node error are retried, then it gives up after

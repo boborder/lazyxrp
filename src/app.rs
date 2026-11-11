@@ -85,7 +85,8 @@ pub struct App {
     /// task by `run()`.
     credential: Option<crate::signing::SigningCredential>,
     flare_evm_key: Option<secrecy::SecretString>,
-    /// A seed or mnemonic is configured: the wallet pane (and its composer) exists.
+    /// A seed or mnemonic is configured: the wallet pane (and its composer) exists. Kept after
+    /// `run()` moves the credential into the poll task, so `TxComposerOpen` can still route.
     has_wallet: bool,
     /// A form/modal is typing: skip the global keymap in `on_key_event`.
     keymap_suppressed: bool,
@@ -128,12 +129,14 @@ pub struct App {
     toml_inflight: HashSet<String>,
 }
 
-pub(crate) fn resolve_flare_rpc_url(flare: &FlareConfig) -> Option<String> {
+/// `FLARE_RPC_URL` (trimmed, non-empty) wins over the `[flare] network` preset, which itself
+/// falls back to Flare mainnet: there is always an endpoint.
+pub(crate) fn resolve_flare_rpc_url(flare: &FlareConfig) -> String {
     std::env::var("FLARE_RPC_URL")
         .ok()
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
-        .or_else(|| Some(flare.network.rpc_url().to_string()))
+        .unwrap_or_else(|| flare.network.rpc_url().to_string())
 }
 
 fn resolve_flare_feeds() -> Vec<String> {
@@ -355,7 +358,7 @@ impl App {
                 tab_watch: self.tab_tx.subscribe(),
                 oracles: self.config.xrpl.oracles.clone(),
                 oracle_pairs: self.config.xrpl.oracle_pairs.clone(),
-                flare_rpc_url,
+                flare_rpc_url: Some(flare_rpc_url),
                 flare_feeds,
                 flare_expected_core_vault: self.config.flare.fassets.expected_core_vault.clone(),
                 flare_expected_operator: self.config.flare.smart_accounts.expected_operator.clone(),
@@ -496,6 +499,9 @@ impl App {
                 if let Some(action) = keymap.get(&self.last_tick_key_events) {
                     info!("Got action: {action:?}");
                     action_tx.send(action.clone())?;
+                    // A matched sequence is consumed: otherwise the stale prefix would make
+                    // the same sequence fail to fire again until the next Tick clears it.
+                    self.last_tick_key_events.clear();
                 }
             }
         }
@@ -674,10 +680,9 @@ impl App {
                 }
             }
             Action::XrplServerInfo(_) => self.startup_done = true,
-            // Unreachable RPC: leave the splash so the error UI is visible.
-            Action::XrplError(msg)
-                if msg.starts_with("server_info") || msg.starts_with("rpc init failed") =>
-            {
+            // Unreachable RPC: leave the splash so the error UI is visible. These are typed
+            // actions, not string-prefix matching on XrplError.
+            Action::XrplServerInfoError(_) | Action::XrplRpcInitError(_) => {
                 self.startup_done = true;
             }
             Action::Help => self.show_help = !self.show_help,
@@ -1051,7 +1056,7 @@ mod tests {
             raw_json: Default::default(),
         };
 
-        let mut app = test_app_seeded(Some("sEdSkooMk31MeTjbHVE7vLvgCpEMAdB")).await?;
+        let mut app = test_app_seeded(Some(crate::test_support::TEST_SEED)).await?;
         app.action_tx
             .send(Action::XrplAccountNfts(vec![nft.clone()]))?;
         app.drain_and_dispatch_actions(None)?;
@@ -1066,7 +1071,7 @@ mod tests {
         app.drain_and_dispatch_actions(None)?;
         assert_eq!(app.active_tab, ACCOUNT_TAB);
 
-        let mut empty = test_app_seeded(Some("sEdSkooMk31MeTjbHVE7vLvgCpEMAdB")).await?;
+        let mut empty = test_app_seeded(Some(crate::test_support::TEST_SEED)).await?;
         empty.active_tab = ASSETS_TAB;
         empty.on_key_event(x)?;
         empty.drain_and_dispatch_actions(None)?;
@@ -1079,7 +1084,7 @@ mod tests {
 
     /// Funded wallet + seed, handlers registered the way `run()` does, then Overview active.
     async fn seeded_app() -> color_eyre::Result<App> {
-        let mut app = test_app_seeded(Some("sEdSkooMk31MeTjbHVE7vLvgCpEMAdB")).await?;
+        let mut app = test_app_seeded(Some(crate::test_support::TEST_SEED)).await?;
         let tx = app.action_tx.clone();
         for panel in app.panels.iter_mut() {
             panel.register_action_handler(tx.clone())?;
@@ -1089,6 +1094,7 @@ mod tests {
             crate::xrpl::AccountSummary {
                 account: "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh".into(),
                 balance_xrp: "100".into(),
+                balance_drops: 100_000_000,
                 sequence: 1,
                 owner_count: 0,
                 flags: 0,
@@ -1165,8 +1171,9 @@ mod tests {
             .send(Action::XrplError("account_tx: timeout".into()))?;
         app.drain_and_dispatch_actions(None)?;
         assert!(!app.startup_done, "unrelated errors keep the splash");
-        app.action_tx
-            .send(Action::XrplError("server_info: connection refused".into()))?;
+        app.action_tx.send(Action::XrplServerInfoError(
+            "server_info: connection refused".into(),
+        ))?;
         app.drain_and_dispatch_actions(None)?;
         assert!(app.startup_done, "unreachable RPC must reach the error UI");
         Ok(())

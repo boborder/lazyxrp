@@ -91,6 +91,17 @@ fn perform_self_uninstall_binary(
     }
     if let Some(ref a) = rp_alias {
         eprintln!("  alias:  {} (if present)", a.display());
+    } else {
+        // install.sh / cargo install can place a real `rp` binary next to lazyxrp. Never delete
+        // an unrelated regular file automatically; tell the user exactly what remains.
+        let rp_binary = exe.with_file_name("rp");
+        if fs::symlink_metadata(&rp_binary).is_ok() {
+            eprintln!(
+                "  note: separate rp binary {} is kept; remove it with `rm -f '{}'`",
+                rp_binary.display(),
+                rp_binary.display()
+            );
+        }
     }
     for d in &dirs {
         eprintln!("  directory: {}", d.display());
@@ -164,17 +175,17 @@ mod tests {
         let guard = TestEnvGuard::new(&[
             "LAZYXRP_CONFIG",
             "LAZYXRP_DATA",
-            "XRPL_RPC_SERVER",
-            "XRPL_NETWORK",
-            "XRPL_SEED",
-            "XRPL_MNEMONIC",
+            crate::config::XRPL_RPC_SERVER_ENV,
+            crate::config::XRPL_NETWORK_ENV,
+            crate::signing::SEED_ENV,
+            crate::signing::MNEMONIC_ENV,
             "XDG_CONFIG_HOME",
         ]);
         for k in [
-            "XRPL_RPC_SERVER",
-            "XRPL_NETWORK",
-            "XRPL_SEED",
-            "XRPL_MNEMONIC",
+            crate::config::XRPL_RPC_SERVER_ENV,
+            crate::config::XRPL_NETWORK_ENV,
+            crate::signing::SEED_ENV,
+            crate::signing::MNEMONIC_ENV,
             "XDG_CONFIG_HOME",
         ] {
             guard.remove(k);

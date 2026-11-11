@@ -142,7 +142,8 @@ impl DunlSummary {
             .duration_since(std::time::UNIX_EPOCH)
             .ok()?
             .as_secs() as i64;
-        Some((expiry_unix - now) / 86_400)
+        // Euclidean division: truncation would report a blob that expired hours ago as 0 days.
+        Some((expiry_unix - now).div_euclid(86_400))
     }
 }
 
@@ -165,6 +166,8 @@ pub struct FeeSummary {
 pub struct AccountSummary {
     pub account: String,
     pub balance_xrp: String,
+    /// Node `Balance` in drops, parsed strictly so a malformed answer is never read as zero.
+    pub balance_drops: u64,
     pub sequence: u32,
     pub owner_count: u32,
     /// AccountRoot flags bitmask (lsfDepositAuth, lsfRequireDestTag, etc.).
@@ -509,7 +512,7 @@ pub struct TxRow {
 }
 
 /// Result page from `account_tx` (includes optional marker for pagination).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct AccountTxPage {
     pub rows: Vec<TxRow>,
     pub marker: Option<serde_json::Value>,
@@ -938,6 +941,25 @@ pub struct XrplTomlData {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A blob that expired hours ago must read as negative (expired), not as "0d left":
+    /// integer division truncates toward zero, so use Euclidean division.
+    #[test]
+    fn dunl_expiry_is_negative_once_expired() {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock after 1970")
+            .as_secs() as i64;
+        let dunl = DunlSummary {
+            validator_count: 0,
+            sequence: 0,
+            expiration_ripple: (now - 3_600 - RIPPLE_EPOCH_UNIX) as u64,
+            expiration_utc: String::new(),
+            fetched_at: std::time::SystemTime::now(),
+            validators: Vec::new(),
+        };
+        assert_eq!(dunl.days_until_expiry(), Some(-1));
+    }
 
     /// A config with no `currency_code` still asks the node for the RLUSD book by its 160-bit
     /// code; changing `currency` moves the book with it, and an explicit code wins.

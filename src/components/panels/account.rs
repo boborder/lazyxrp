@@ -259,6 +259,7 @@ mod tests {
             .update(&Action::XrplAccount(Box::new(AccountSummary {
                 account: "rTest".into(),
                 balance_xrp: "10.000000".into(),
+                balance_drops: 10_000_000,
                 sequence: 7,
                 owner_count: 1,
                 flags: 0,

@@ -11,7 +11,7 @@ use crate::{
     action::Action,
     components::{
         Component,
-        shared::{fmt, theme, widgets::render_loading},
+        shared::{fmt, theme},
     },
     config::Config,
     xrpl::FlareWalletSummary,
@@ -50,13 +50,17 @@ impl FlareWalletPanel {
         }
 
         let Some(summary) = &self.summary else {
-            render_loading(
-                frame,
+            // Already inside the "Flare Wallet" block: a second bordered block here would nest.
+            frame.render_widget(
+                Paragraph::new(Line::from(vec![
+                    Span::styled(
+                        crate::components::shared::widgets::spinner(self.tick),
+                        theme::accent_style(),
+                    ),
+                    Span::raw(" "),
+                    Span::styled("loading wallet balances…", theme::dim_style()),
+                ])),
                 area,
-                "Flare",
-                self.tick,
-                "loading wallet balances…",
-                self.is_focused,
             );
             return;
         };

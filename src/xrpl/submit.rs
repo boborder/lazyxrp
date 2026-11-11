@@ -932,23 +932,31 @@ pub(super) async fn submit_generic_transaction(
     ) else {
         return;
     };
-    let Some(fields) = unwrap_or_submit_err(
-        spec.prepare(&params.fields, ripple_now_secs()),
+    let mainnet_err = format!(
+        "production network: restart lazyxrp with --yes to allow {} writes",
+        spec.tx_type
+    );
+    let Some(wallet) = resolve_submit_wallet(
+        network,
+        params.skip_mainnet_prompt,
+        signing_credential,
+        &mainnet_err,
         submit_err,
         action_tx,
     ) else {
         return;
     };
-    let mainnet_err = format!(
-        "production network: restart lazyxrp with --yes to allow {} writes",
-        spec.tx_type
-    );
-    run_submit(
+    let Some(fields) = unwrap_or_submit_err(
+        spec.prepare_for_account(&wallet.classic_address, &params.fields, ripple_now_secs()),
+        submit_err,
+        action_tx,
+    ) else {
+        return;
+    };
+    run_submit_with_wallet(
         rpc,
         network,
-        params.skip_mainnet_prompt,
-        signing_credential,
-        &mainnet_err,
+        &wallet,
         action_tx,
         SubmitPlan {
             submit_err,
@@ -1732,7 +1740,7 @@ mod tests {
         let server = tokio::spawn(rpc_mock::serve(listener, 10, result_for));
         let rpc = RpcClient::connect(&url).expect("rpc client");
         let credential = crate::signing::credential_from_secrets(
-            Some(&SecretString::from("sEdSkooMk31MeTjbHVE7vLvgCpEMAdB")),
+            Some(&SecretString::from(crate::test_support::TEST_SEED)),
             None,
         )
         .expect("credential")
@@ -1885,7 +1893,7 @@ mod tests {
         let server = tokio::spawn(rpc_mock::serve(listener, 10, result_for));
         let rpc = RpcClient::connect(&url).expect("rpc client");
         let credential = crate::signing::credential_from_secrets(
-            Some(&SecretString::from("sEdSkooMk31MeTjbHVE7vLvgCpEMAdB")),
+            Some(&SecretString::from(crate::test_support::TEST_SEED)),
             None,
         )
         .expect("credential")
@@ -1991,7 +1999,7 @@ mod tests {
         let server = tokio::spawn(rpc_mock::serve(listener, 9, result_for));
         let rpc = RpcClient::connect(&url).expect("rpc client");
         let credential = crate::signing::credential_from_secrets(
-            Some(&SecretString::from("sEdSkooMk31MeTjbHVE7vLvgCpEMAdB")),
+            Some(&SecretString::from(crate::test_support::TEST_SEED)),
             None,
         )
         .expect("credential")
@@ -2101,7 +2109,7 @@ mod tests {
         let server = tokio::spawn(rpc_mock::serve(listener, 4, result_for));
         let rpc = RpcClient::connect(&url).expect("rpc client");
         let credential = crate::signing::credential_from_secrets(
-            Some(&SecretString::from("sEdSkooMk31MeTjbHVE7vLvgCpEMAdB")),
+            Some(&SecretString::from(crate::test_support::TEST_SEED)),
             None,
         )
         .expect("credential")
@@ -2183,7 +2191,7 @@ mod tests {
         let server = tokio::spawn(rpc_mock::serve(listener, 3, result_for));
         let rpc = RpcClient::connect(&url).expect("rpc client");
         let credential = crate::signing::credential_from_secrets(
-            Some(&SecretString::from("sEdSkooMk31MeTjbHVE7vLvgCpEMAdB")),
+            Some(&SecretString::from(crate::test_support::TEST_SEED)),
             None,
         )
         .expect("credential")
@@ -2852,7 +2860,7 @@ mod tests {
             Some(&url),
             true,
             crate::config::FlareNetwork::Flare,
-            "FLARE_EVM_KEY",
+            crate::config::DEFAULT_FLARE_EVM_KEY_ENV,
             Some(&key),
             FxrpExecuteDirectMintParams {
                 proof_json: "{}".into(),
@@ -2880,7 +2888,7 @@ mod tests {
                 Some("http://127.0.0.1:1"),
                 true,
                 flare,
-                "FLARE_EVM_KEY",
+                crate::config::DEFAULT_FLARE_EVM_KEY_ENV,
                 Some(&key),
                 FxrpExecuteDirectMintParams {
                     proof_json: "{}".into(),
@@ -2953,7 +2961,7 @@ mod tests {
             Some("http://127.0.0.1:1"),
             false,
             crate::config::FlareNetwork::Coston2,
-            "FLARE_EVM_KEY",
+            crate::config::DEFAULT_FLARE_EVM_KEY_ENV,
             None,
             params,
             &tx,
@@ -3061,7 +3069,7 @@ mod tests {
     fn test_credential() -> crate::signing::SigningCredential {
         use secrecy::SecretString;
         crate::signing::credential_from_secrets(
-            Some(&SecretString::from("sEdSkooMk31MeTjbHVE7vLvgCpEMAdB")),
+            Some(&SecretString::from(crate::test_support::TEST_SEED)),
             None,
         )
         .expect("credential")

@@ -20,7 +20,6 @@ pub struct AccountWalletTab {
     account: AccountPanel,
     tx: TxHistoryPanel,
     focus_index: usize,
-    has_wallet: bool,
     action_tx: Option<tokio::sync::mpsc::UnboundedSender<Action>>,
 }
 
@@ -30,13 +29,11 @@ impl AccountWalletTab {
     pub fn new(skip_mainnet_prompt: bool, wallet: Option<Result<String, String>>) -> Self {
         let mut account = AccountPanel::default();
         account.is_focused = true;
-        let has_wallet = wallet.is_some();
         Self {
             wallet: WalletPanel::new(skip_mainnet_prompt).with_seed_address(wallet),
             account,
             tx: TxHistoryPanel::default(),
             focus_index: 0,
-            has_wallet,
             action_tx: None,
         }
     }
@@ -48,7 +45,7 @@ impl AccountWalletTab {
     fn update_focus(&mut self) {
         // Two fixed panes: wallet (or account when there is no wallet) on top, tx below.
         self.tx.is_focused = self.focus_index == 1;
-        if self.has_wallet {
+        if self.wallet.has_wallet() {
             self.wallet.is_focused = self.focus_index == 0;
             self.account.is_focused = false;
         } else {
@@ -97,7 +94,7 @@ impl Component for AccountWalletTab {
         }
 
         let tx = self.action_tx.as_ref();
-        if self.has_wallet {
+        if self.wallet.has_wallet() {
             crate::components::update_children(&mut [&mut self.wallet, &mut self.tx], action, tx)
         } else {
             crate::components::update_children(
@@ -112,7 +109,7 @@ impl Component for AccountWalletTab {
         let [top, bottom] =
             Layout::vertical([Constraint::Percentage(46), Constraint::Percentage(54)]).areas(area);
 
-        if self.has_wallet {
+        if self.wallet.has_wallet() {
             self.wallet.draw(frame, top)?;
         } else {
             self.account.draw(frame, top)?;
@@ -125,7 +122,7 @@ impl Component for AccountWalletTab {
     /// Keys and paste go to the focused pane only (wallet composer / tx history filter).
     fn on_event(&mut self, event: Option<&Event>) -> color_eyre::Result<Option<Action>> {
         match event {
-            Some(Event::Key(key)) if self.has_wallet && self.wallet.is_focused => {
+            Some(Event::Key(key)) if self.wallet.has_wallet() && self.wallet.is_focused => {
                 self.wallet.on_key_event(*key)
             }
             Some(Event::Key(key)) => self.tx.on_key_event(*key),
@@ -167,7 +164,7 @@ mod tests {
         let cases: &[(&str, Option<&str>, Option<&str>, bool)] = &[
             (
                 "family seed config sets has_wallet",
-                Some("sEdSkooMk31MeTjbHVE7vLvgCpEMAdB"),
+                Some(crate::test_support::TEST_SEED),
                 None,
                 true,
             ),
@@ -188,7 +185,7 @@ mod tests {
         ];
         for (desc, seed, mnemonic, expected) in cases {
             assert_eq!(
-                tab_with_signing(*seed, *mnemonic).has_wallet,
+                tab_with_signing(*seed, *mnemonic).wallet.has_wallet(),
                 *expected,
                 "{desc}"
             );
@@ -206,7 +203,7 @@ mod tests {
     /// FocusNext) Tx History — `f` starts the filter and `m` pages.
     #[test]
     fn keys_reach_focused_tx_history_pane() {
-        let mut tab = tab_with_signing(Some("sEdSkooMk31MeTjbHVE7vLvgCpEMAdB"), None);
+        let mut tab = tab_with_signing(Some(crate::test_support::TEST_SEED), None);
         let marker = serde_json::json!({ "ledger": 1, "seq": 2 });
         tab.update(&Action::XrplTxHistory(vec![], Some(marker.clone())))
             .unwrap();

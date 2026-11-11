@@ -382,6 +382,11 @@ impl WalletPanel {
         self
     }
 
+    /// Whether a signing credential was configured (independent of the selected network).
+    pub fn has_wallet(&self) -> bool {
+        self.seed_address.is_some()
+    }
+
     fn label_for_flag(ix: usize) -> String {
         FLAG_OPTIONS.get(ix).unwrap_or(&"(none)").to_string()
     }
@@ -2556,6 +2561,7 @@ mod tests {
         panel.account = Some(AccountSummary {
             account: "rTest".into(),
             balance_xrp: "10".into(),
+            balance_drops: 10_000_000,
             sequence: 1,
             flags: 0,
             owner_count: 0,

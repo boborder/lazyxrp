@@ -147,6 +147,11 @@ impl WalletPanel {
         row: &mut usize,
         rows: usize,
     ) -> bool {
+        // A spec with no fields (e.g. DIDDelete) has no rows: `% rows` would panic and
+        // `rows - 1` would underflow. Nothing to navigate; `s` still submits the form.
+        if rows == 0 {
+            return false;
+        }
         match key.code {
             KeyCode::Char('e') | KeyCode::Char('E')
                 if !key.modifiers.contains(KeyModifiers::CONTROL) =>
@@ -2132,6 +2137,29 @@ mod tests {
         ));
         assert!(!editing);
         assert_eq!(row, 2);
+    }
+
+    /// A field-less spec (DIDDelete) has `rows == 0`: navigation must be a no-op, not a
+    /// `% 0` panic or a `rows - 1` underflow.
+    #[test]
+    fn composer_row_nav_with_no_rows_is_a_noop() {
+        let mut editing = true;
+        let mut row = 0;
+        for key in [
+            key(']'),
+            key('['),
+            KeyEvent::new(KeyCode::Tab, KeyModifiers::empty()),
+            KeyEvent::new(KeyCode::BackTab, KeyModifiers::empty()),
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()),
+        ] {
+            assert!(!WalletPanel::composer_row_nav(
+                &mut editing,
+                &key,
+                &mut row,
+                0
+            ));
+            assert_eq!(row, 0);
+        }
     }
 
     /// TC-132: composer_edit_toggle_nav for single-row phases — `e` toggles,

@@ -241,7 +241,7 @@ pub(crate) fn parse_account_nfts_value(value: &Value) -> Vec<NftRow> {
                 nft_id: json_str(&n, &["NFTokenID"]).to_string(),
                 taxon: json_u32(&n, &["NFTokenTaxon"]),
                 serial: json_u32(&n, &["nft_serial"]),
-                transfer_fee: json_u32(&n, &["TransferFee"]) as u16,
+                transfer_fee: u16::try_from(json_u32(&n, &["TransferFee"])).unwrap_or(u16::MAX),
                 uri: {
                     let uri = json_str(&n, &["URI"]);
                     hex_to_ascii(uri).unwrap_or_else(|| uri.to_string())
@@ -292,7 +292,8 @@ pub(crate) fn parse_amm_info_value(value: &Value) -> AmmSummary {
             lp("value").unwrap_or("0"),
             lp("currency").unwrap_or("?")
         ),
-        trading_fee: amm.get("trading_fee").and_then(Value::as_u64).unwrap_or(0) as u16,
+        trading_fee: u16::try_from(amm.get("trading_fee").and_then(Value::as_u64).unwrap_or(0))
+            .unwrap_or(u16::MAX),
         pool1: format_amount(amm.get("amount")),
         pool2: format_amount(amm.get("amount2")),
     }
@@ -611,19 +612,6 @@ pub(crate) fn book_offer_best_price(value: &Value, invert: bool) -> Option<f64> 
     }
 }
 
-pub(crate) fn empty_account_tx_page_on_not_found(
-    err: &color_eyre::Report,
-) -> Option<AccountTxPage> {
-    if is_not_found(err) {
-        Some(AccountTxPage {
-            rows: vec![],
-            marker: None,
-        })
-    } else {
-        None
-    }
-}
-
 pub(crate) fn book_currency(currency: &str, issuer: Option<&str>) -> Value {
     if currency.eq_ignore_ascii_case("XRP") {
         json!({ "currency": "XRP" })
@@ -917,19 +905,6 @@ mod tests {
         );
         assert_eq!(page.rows.len(), 0);
         assert_eq!(page.marker, Some(json!({"ledger": 55, "seq": 2})));
-
-        // empty account tx page on not found contract
-        let not_found = color_eyre::Report::new(NodeError::new(
-            "actNotFound",
-            19,
-            "Account not found.".into(),
-        ));
-        let page = empty_account_tx_page_on_not_found(&not_found)
-            .expect("not-found should become empty page");
-        assert!(page.rows.is_empty());
-        assert!(page.marker.is_none());
-
-        assert!(empty_account_tx_page_on_not_found(&color_eyre::eyre::eyre!("timeout")).is_none());
     }
 
     /// TC-017, TC-140: numeric quality maps to price; a non-numeric quality

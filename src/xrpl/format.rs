@@ -69,8 +69,10 @@ pub fn drops_to_xrp(drops: &str) -> String {
     if let Ok(d) = drops.parse::<u128>() {
         return format!("{}.{:06}", d / 1_000_000, d % 1_000_000);
     }
-    // Not a whole number of drops (decimal XRP strings, garbage): best-effort float.
-    let drops_num = drops.parse::<f64>().unwrap_or_default();
+    // Not a whole number of drops (decimal XRP strings): best-effort float.
+    let Ok(drops_num) = drops.parse::<f64>() else {
+        return "-".to_string();
+    };
     format!("{:.6}", drops_num / 1_000_000.0)
 }
 
@@ -102,7 +104,9 @@ pub fn format_path_amount(value: &Value, fallback_label: &str) -> String {
             value: amount,
             ..
         }) if currency.eq_ignore_ascii_case("XRP") => {
-            format!("{} XRP", drops_to_xrp(amount))
+            // A real XRP amount is a drops string; if a malformed object says XRP, its `value`
+            // is already in XRP units — dividing it by 1e6 would understate it a millionfold.
+            format!("{amount} XRP")
         }
         Some(JsonAmount::Issued {
             currency,
@@ -119,7 +123,7 @@ pub fn format_path_amount(value: &Value, fallback_label: &str) -> String {
                 .unwrap_or(fallback_label);
             let amount = obj.get("value").and_then(Value::as_str).unwrap_or("-");
             if currency.eq_ignore_ascii_case("XRP") {
-                return format!("{} XRP", drops_to_xrp(amount));
+                return format!("{amount} XRP");
             }
             format!("{amount} {}", asset_display_name(currency))
         }
@@ -378,14 +382,13 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    /// TC-008-009: drops_to_xrp conversion; invalid string is zero
-    /// `drops_to_xrp`: valid drops render with 6 decimals; invalid input
-    /// yields "0.000000".
+    /// TC-008-009: drops_to_xrp conversion; malformed input is unknown, never a false zero.
+    /// `drops_to_xrp`: valid drops render with 6 decimals; invalid input yields "-".
     #[test]
     fn drops_to_xrp_converts() {
         assert_eq!(drops_to_xrp("1000000"), "1.000000");
         assert_eq!(drops_to_xrp("250000"), "0.250000");
-        assert_eq!(drops_to_xrp("not-a-number"), "0.000000");
+        assert_eq!(drops_to_xrp("not-a-number"), "-");
         // Beyond 2^53 drops an f64 loses the last digits; whole-drop amounts stay exact.
         assert_eq!(
             drops_to_xrp("99999999999999999"),

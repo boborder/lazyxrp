@@ -15,6 +15,7 @@ pub(super) struct ValidatorDetail {
     pub(super) visible: bool,
     pub(super) scroll: usize,
     pub(super) lines: Vec<Line<'static>>,
+    cached_paragraph: Option<Paragraph<'static>>,
     pub(super) toml: Option<Result<XrplTomlData, String>>,
     pub(super) toml_raw: Option<String>,
     pub(super) status: u16,
@@ -33,6 +34,7 @@ impl ValidatorDetail {
     pub(super) fn open(&mut self, row: &DunlValidatorRow, index: usize, dunl: &DunlSummary) {
         self.visible = true;
         self.scroll = 0;
+        self.cached_paragraph = None;
         self.toml_raw = None;
         self.status = 0;
         self.content_type = None;
@@ -61,6 +63,7 @@ impl ValidatorDetail {
         dunl: &DunlSummary,
         fetch: TomlFetch,
     ) {
+        self.cached_paragraph = None;
         self.toml = Some(fetch.result);
         self.toml_raw = fetch.raw;
         self.status = fetch.status;
@@ -80,6 +83,7 @@ impl ValidatorDetail {
         self.visible = false;
         self.scroll = 0;
         self.lines.clear();
+        self.cached_paragraph = None;
         self.toml = None;
         self.toml_raw = None;
     }
@@ -201,15 +205,14 @@ fn dunl_lines(dunl: &DunlSummary) -> Vec<Line<'static>> {
         )),
     ]));
     if let Some(days) = dunl.days_until_expiry() {
-        let style = if days < 14 {
-            warning_style
+        let (text, style) = if days < 0 {
+            ("  expired".to_string(), theme::error_style())
+        } else if days < 14 {
+            (format!("  expires in {days} day(s)"), warning_style)
         } else {
-            label_style
+            (format!("  expires in {days} day(s)"), label_style)
         };
-        lines.push(Line::from(Span::styled(
-            format!("  expires in {days} day(s)"),
-            style,
-        )));
+        lines.push(Line::from(Span::styled(text, style)));
     }
     lines
 }
@@ -333,18 +336,19 @@ pub(super) fn render_validator_detail(frame: &mut Frame, area: Rect, state: &mut
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
 
-    let line_count = state.lines.len();
-    let paragraph = Paragraph::new(state.lines.clone())
-        .wrap(Wrap { trim: true })
-        .scroll((state.scroll as u16, 0));
-
     let [content_area, sb_area] =
         Layout::horizontal([Constraint::Fill(1), Constraint::Length(1)]).areas(inner);
 
-    frame.render_widget(paragraph, content_area);
+    let paragraph = state
+        .cached_paragraph
+        .get_or_insert_with(|| Paragraph::new(state.lines.clone()).wrap(Wrap { trim: true }));
+    let max_scroll = paragraph
+        .line_count(content_area.width)
+        .saturating_sub(content_area.height as usize);
+    state.scroll = state.scroll.min(max_scroll);
+    *paragraph = std::mem::take(paragraph).scroll((state.scroll as u16, 0));
+    frame.render_widget(&*paragraph, content_area);
 
-    let content_height = content_area.height as usize;
-    let max_scroll = line_count.saturating_sub(content_height);
     let mut sb_state = ScrollbarState::new(max_scroll).position(state.scroll);
     frame.render_stateful_widget(
         Scrollbar::new(ScrollbarOrientation::VerticalRight)
@@ -435,7 +439,11 @@ mod tests {
     fn expiry_line(dunl: &DunlSummary) -> Line<'static> {
         validator_detail_lines(&row(None, None), 0, dunl, &None, None, 0, None)
             .into_iter()
-            .find(|l| l.spans.iter().any(|s| s.content.contains("expires in")))
+            .find(|l| {
+                l.spans
+                    .iter()
+                    .any(|s| s.content.contains("expires in") || s.content.contains("expired"))
+            })
             .expect("expiry line")
     }
 
@@ -451,8 +459,8 @@ mod tests {
         assert_eq!(soon.spans[0].style, theme::warning_style());
 
         let expired = expiry_line(&dunl_expiring_in(-10 * DAY - DAY / 2));
-        assert_eq!(expired.spans[0].content, "  expires in -10 day(s)");
-        assert_eq!(expired.spans[0].style, theme::warning_style());
+        assert_eq!(expired.spans[0].content, "  expired");
+        assert_eq!(expired.spans[0].style, theme::error_style());
     }
 
     /// TC-169: the validator detail renders identity / dUNL / fetching, verified TOML with rotated
@@ -535,5 +543,39 @@ mod tests {
         assert!(out.contains("404"));
         assert!(out.contains("Error: boom"));
         assert!(!out.contains("Domain verified:"));
+    }
+
+    #[test]
+    fn wrapped_scroll_reaches_tail_without_overscroll() {
+        let mut lines = vec![Line::from("Validator")];
+        lines.extend((0..30).map(|index| Line::from(format!("row {index}"))));
+        lines.push(Line::from("wrapped row ".repeat(20)));
+        lines.push(Line::from("TAIL_MARKER"));
+        let popup_height = (lines.len() as u16 + 2).clamp(14, 24);
+        let popup = centered_popup_rect(Rect::new(0, 0, 44, 24), 44, popup_height);
+        let content_width = popup.width - 3;
+        let content_height = popup.height - 2;
+        let rendered_rows = Paragraph::new(lines.clone())
+            .wrap(Wrap { trim: true })
+            .line_count(content_width);
+        let mut state = ValidatorDetail {
+            visible: true,
+            scroll: usize::MAX,
+            lines,
+            ..Default::default()
+        };
+
+        let out = crate::test_support::render_to_string(44, 24, |frame| {
+            render_validator_detail(frame, frame.area(), &mut state)
+        });
+        assert_eq!(state.scroll, rendered_rows - content_height as usize);
+        assert!(out.contains("TAIL_MARKER"), "tail must be reachable: {out}");
+        assert!(state.cached_paragraph.is_some());
+
+        state.scroll = usize::MAX;
+        let scrolled = crate::test_support::render_to_string(44, 24, |frame| {
+            render_validator_detail(frame, frame.area(), &mut state)
+        });
+        assert_eq!(scrolled, out, "overscroll must clamp to the same tail");
     }
 }
