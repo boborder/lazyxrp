@@ -4,6 +4,8 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ## [Unreleased]
 
+## [0.10.2] - 2026-11-11
+
 ### Added
 
 - README demo: `docs/demo.tape` (vhs) renders `docs/demo.gif` with `mise run demo`; it runs the debug binary read-only with a scrubbed environment and throwaway config/data dirs. `vhs` is added to the mise tools.
@@ -258,7 +260,8 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 See [GitHub Releases](https://github.com/boborder/lazyxrp/releases) for 0.2.11 and older.
 
-[Unreleased]: https://github.com/boborder/lazyxrp/compare/v0.10.1...HEAD
+[Unreleased]: https://github.com/boborder/lazyxrp/compare/v0.10.2...HEAD
+[0.10.2]: https://github.com/boborder/lazyxrp/compare/v0.10.1...v0.10.2
 [0.10.1]: https://github.com/boborder/lazyxrp/compare/v0.10.0...v0.10.1
 [0.10.0]: https://github.com/boborder/lazyxrp/compare/v0.9.1...v0.10.0
 [0.9.1]: https://github.com/boborder/lazyxrp/compare/v0.9.0...v0.9.1
