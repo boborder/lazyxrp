@@ -107,9 +107,17 @@ fn sanitize_rate(rate: f64, default: f64) -> f64 {
 fn resolve_ws_url(args: &Cli, config: &Config, network: &Network) -> String {
     args.ws_server
         .clone()
-        .or_else(|| env::var(config::XRPL_WS_SERVER_ENV).ok())
+        .or_else(|| env_nonempty(config::XRPL_WS_SERVER_ENV))
         .or_else(|| config.xrpl.ws_server.clone())
         .unwrap_or_else(|| network.ws_url().to_string())
+}
+
+/// Env rung of the URL precedence: trimmed, blank = unset (same rule as `Config::new`).
+fn env_nonempty(key: &str) -> Option<String> {
+    env::var(key)
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
 }
 
 fn argv0_basename() -> String {
@@ -131,7 +139,7 @@ fn is_rp_alias_bin(name: &str) -> bool {
 
 fn resolve_rpc_url(cli_server: Option<String>, config: &Config, network: &Network) -> String {
     cli_server
-        .or_else(|| env::var(config::XRPL_RPC_SERVER_ENV).ok())
+        .or_else(|| env_nonempty(config::XRPL_RPC_SERVER_ENV))
         .or_else(|| config.xrpl.rpc_server.clone())
         .unwrap_or_else(|| network.rpc_url().to_string())
 }
@@ -174,7 +182,12 @@ pub async fn run() -> color_eyre::Result<()> {
     let args = Cli::parse();
     if args.self_uninstall {
         ensure_uninstall_standalone(&args)?;
-        let config = Config::new()?;
+        // Self-uninstall is the recovery path: a config.toml that no longer parses (or a
+        // missing field) must not block removing the binary and its dirs.
+        let config = Config::new().unwrap_or_else(|err| {
+            eprintln!("lazyxrp: warning: {err:#}; uninstalling with default paths");
+            Config::default()
+        });
         return uninstall::perform_self_uninstall(&config, args.yes);
     }
 
@@ -221,14 +234,13 @@ pub async fn run() -> color_eyre::Result<()> {
     let yes = args.yes;
     match resolve_lazyxrp_command(&args)? {
         None => {
-            if let Some(url) = app::resolve_flare_rpc_url(&config.flare) {
-                let evm_key_set = secrets.flare_evm_key.is_some();
-                check_flare_endpoint(
-                    &url,
-                    args.allow_insecure_rpc,
-                    credential.is_some() || evm_key_set,
-                )?;
-            }
+            let url = app::resolve_flare_rpc_url(&config.flare);
+            let evm_key_set = secrets.flare_evm_key.is_some();
+            check_flare_endpoint(
+                &url,
+                args.allow_insecure_rpc,
+                credential.is_some() || evm_key_set,
+            )?;
             let mut app = app::App::new(
                 tick_rate,
                 app::Endpoints {
@@ -317,9 +329,7 @@ async fn run_flare_command(
 ) -> color_eyre::Result<()> {
     use secrecy::ExposeSecret;
 
-    let url = app::resolve_flare_rpc_url(&config.flare).ok_or_else(|| {
-        color_eyre::eyre::eyre!("no Flare RPC: set [flare] network or FLARE_RPC_URL")
-    })?;
+    let url = app::resolve_flare_rpc_url(&config.flare);
     let writes = cmd.signs();
     let pair = || {
         flare::check_network_pair(xrpl_network, config.flare.network)
@@ -407,7 +417,14 @@ async fn run_flare_command(
             println!("{hash}");
         }
         Cmd::FxrpTagReserve => {
-            let (hash, tag) = flare_cmd::reserve_tag(&url, key, gate, say).await?;
+            let (hash, tag) = flare_cmd::reserve_tag_with_pin(
+                &url,
+                key,
+                gate,
+                config.flare.fassets.expected_tag_manager.as_deref(),
+                say,
+            )
+            .await?;
             println!("{hash} · reserved tag {tag}");
         }
         Cmd::FxrpTagSet {
@@ -732,6 +749,11 @@ fn enter_watch_mode(
 
 /// `None` = launch the TUI; `Some` = script subcommand (requires `-x`).
 fn resolve_lazyxrp_command(args: &Cli) -> color_eyre::Result<Option<Cmd>> {
+    if args.command.is_some() && args.account.is_some() {
+        color_eyre::eyre::bail!(
+            "`--account` only applies to the TUI; use the script subcommand's address argument"
+        );
+    }
     match (args.command.clone(), args.exec) {
         (None, true) => color_eyre::eyre::bail!(
             "`-x` requires a script subcommand (e.g. `lazyxrp -x info`); omit `-x` to launch the TUI"
@@ -876,6 +898,10 @@ mod command_resolve_tests {
             resolve_lazyxrp_command(&args).unwrap(),
             Some(Cmd::Info)
         ));
+
+        let args = Cli::try_parse_from(["lazyxrp", "--account", "rTest", "-x", "info"]).unwrap();
+        assert!(resolve_lazyxrp_command(&args).is_err());
+        assert!(Cli::try_parse_from(["lazyxrp", "-x", "info", "--account", "rTest"]).is_err());
     }
 
     /// TC-076: `--self-uninstall` combined with a subcommand is refused before any side effect.
@@ -937,7 +963,7 @@ mod command_resolve_tests {
         // mode drops all keys and keeps address
         use secrecy::SecretString;
         let mut secrets = Secrets {
-            seed: Some(SecretString::from("sEdSkooMk31MeTjbHVE7vLvgCpEMAdB")),
+            seed: Some(SecretString::from(crate::test_support::TEST_SEED)),
             mnemonic: Some(SecretString::from("abandon about")),
             flare_evm_key: Some(SecretString::from("0x01")),
         };

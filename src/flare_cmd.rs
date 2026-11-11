@@ -282,20 +282,22 @@ fn to_u128(v: U256, what: &str) -> color_eyre::Result<u128> {
     u128::try_from(v).map_err(|_| color_eyre::eyre::eyre!("Flare RPC returned out-of-range {what}"))
 }
 
-/// Wait for the receipt; a revert is an error naming the transaction.
-async fn confirm(
-    pending: alloy::providers::PendingTransactionBuilder<alloy::network::Ethereum>,
-    what: &str,
-) -> color_eyre::Result<alloy::rpc::types::TransactionReceipt> {
-    let hash = *pending.tx_hash();
-    let receipt = pending
-        .get_receipt()
-        .await
-        .map_err(|e| color_eyre::eyre::eyre!("{what} receipt failed ({hash:#x}): {e}"))?;
-    if !receipt.status() {
-        color_eyre::eyre::bail!("{what} reverted: {hash:#x}");
+/// A reservation is payable to an RPC-selected contract, so its value gets the same 10 FLR ceiling
+/// as a transaction's gas budget. Zero is valid on networks that make tag reservation free.
+const MAX_TAG_RESERVATION_FEE_WEI: u128 = flare::MAX_TX_FEE_WEI;
+
+fn check_tag_reservation_fee(fee: U256, destination: Address) -> Result<(), String> {
+    let fee_wei = u128::try_from(fee).map_err(|_| {
+        format!(
+            "refusing tag reservation at {destination:#x}: reservation fee {fee} wei exceeds the supported u128 range"
+        )
+    })?;
+    if fee_wei > MAX_TAG_RESERVATION_FEE_WEI {
+        return Err(format!(
+            "refusing tag reservation at {destination:#x}: reservation fee {fee} wei exceeds the {MAX_TAG_RESERVATION_FEE_WEI} wei cap"
+        ));
     }
-    Ok(receipt)
+    Ok(())
 }
 
 /// Wallet provider + signer address, after the chain-id / `--yes` gate: nothing is signed before it.
@@ -362,7 +364,7 @@ pub async fn redeem_fxrp(
             flare::send_capped(call, &say).await?
         }
     };
-    let receipt = confirm(pending, "redeem").await?;
+    let receipt = flare::confirm_receipt(pending, "redeem").await?;
     {
         use alloy::sol_types::SolEvent;
         for l in receipt
@@ -403,8 +405,19 @@ async fn tag_manager<P: Provider + Clone>(
     Ok(IMintingTagManager::new(addr, provider.clone()))
 }
 
-/// The tag must be reserved and owned by `me` before anything is sent. Only a revert reads as
-/// "not reserved"; transport errors propagate.
+async fn pinned_tag_manager<P: Provider + Clone>(
+    provider: &P,
+    rpc_url: &str,
+    expected_tag_manager: Option<&str>,
+) -> color_eyre::Result<IMintingTagManager::IMintingTagManagerInstance<P>> {
+    let manager = tag_manager(provider, rpc_url).await?;
+    flare::check_tag_manager(*manager.address(), expected_tag_manager)
+        .map_err(|e| color_eyre::eyre::eyre!(e))?;
+    Ok(manager)
+}
+
+/// The tag must be reserved and owned by `me` before anything is sent. Only actual revert data
+/// reads as "not reserved"; transport errors and text-only node messages propagate.
 async fn require_tag_owner<P: Provider>(
     manager: &IMintingTagManager::IMintingTagManagerInstance<P>,
     tag: u64,
@@ -420,24 +433,30 @@ async fn require_tag_owner<P: Provider>(
 }
 
 /// `reserve()`: pay `reservationFee` (FLR) for a new minting tag. Returns `(tx hash, tag id)`.
-pub async fn reserve_tag(
+/// The manager pin and payable-value cap are checked before gas estimation or signing.
+pub async fn reserve_tag_with_pin(
     rpc_url: &str,
     key: &str,
     gate: EvmGate,
+    expected_tag_manager: Option<&str>,
     say: impl Fn(&str),
 ) -> color_eyre::Result<(String, u128)> {
     let (provider, me) = wallet_provider(rpc_url, key, gate).await?;
-    let manager = tag_manager(&provider, rpc_url).await?;
+    let manager = pinned_tag_manager(&provider, rpc_url, expected_tag_manager).await?;
+    let destination = *manager.address();
     let fee = manager.reservationFee().call().await?;
+    check_tag_reservation_fee(fee, destination).map_err(|e| color_eyre::eyre::eyre!(e))?;
     let balance = provider.get_balance(me).await?;
     if balance < fee {
-        color_eyre::eyre::bail!("FLR balance {balance} wei is below the reservation fee {fee} wei");
+        color_eyre::eyre::bail!(
+            "refusing tag reservation at {destination:#x}: FLR balance {balance} wei is below the reservation fee {fee} wei"
+        );
     }
     say(&format!(
-        "reserve a minting tag for {fee} wei FLR from {me:#x}"
+        "reserve a minting tag for {fee} wei FLR at {destination:#x} from {me:#x}"
     ));
     let call = manager.reserve().value(fee);
-    let receipt = confirm(flare::send_capped(call, say).await?, "reserve").await?;
+    let receipt = flare::confirm_receipt(flare::send_capped(call, say).await?, "reserve").await?;
     let tag = receipt
         .inner
         .logs()
@@ -488,7 +507,9 @@ pub async fn set_tag(
     if let Some(r) = recipient {
         say(&format!("tag {tag}: minting recipient → {r:#x}"));
         let call = manager.setMintingRecipient(id, r);
-        let receipt = confirm(flare::send_capped(call, &say).await?, "setMintingRecipient").await?;
+        let receipt =
+            flare::confirm_receipt(flare::send_capped(call, &say).await?, "setMintingRecipient")
+                .await?;
         hashes.push(format!("{:#x}", receipt.transaction_hash));
     }
     if let Some(e) = executor {
@@ -497,7 +518,9 @@ pub async fn set_tag(
             "tag {tag}: allowed executor → {e:#x} (active after {cooldown} s)"
         ));
         let call = manager.setAllowedExecutor(id, e);
-        let receipt = confirm(flare::send_capped(call, &say).await?, "setAllowedExecutor").await?;
+        let receipt =
+            flare::confirm_receipt(flare::send_capped(call, &say).await?, "setAllowedExecutor")
+                .await?;
         hashes.push(format!("{:#x}", receipt.transaction_hash));
     }
     Ok(hashes)
@@ -553,7 +576,7 @@ pub async fn transfer_tag(
     require_tag_owner(&manager, tag, me).await?;
     say(&format!("transfer tag {tag}: {me:#x} → {to:#x}"));
     let call = manager.transfer(to, id);
-    let receipt = confirm(flare::send_capped(call, say).await?, "transfer").await?;
+    let receipt = flare::confirm_receipt(flare::send_capped(call, say).await?, "transfer").await?;
     Ok(format!("{:#x}", receipt.transaction_hash))
 }
 
@@ -612,6 +635,31 @@ mod tests {
         assert!(check_tag_address("to", Address::ZERO, me).is_err());
         assert!(check_tag_address("to", me, me).is_err());
         assert!(check_tag_address("to", Address::repeat_byte(2), me).is_ok());
+    }
+
+    /// The RPC-selected reservation value is payable only within the explicit 10 FLR cap. Errors
+    /// identify both the value and destination so an operator never has to infer what was refused.
+    #[test]
+    fn tag_reservation_fee_is_capped() {
+        let destination = Address::repeat_byte(0x77);
+        assert!(check_tag_reservation_fee(U256::ZERO, destination).is_ok());
+        assert!(
+            check_tag_reservation_fee(U256::from(MAX_TAG_RESERVATION_FEE_WEI), destination).is_ok()
+        );
+        let too_high =
+            check_tag_reservation_fee(U256::from(MAX_TAG_RESERVATION_FEE_WEI + 1), destination)
+                .unwrap_err();
+        assert!(too_high.contains("10000000000000000001"), "{too_high}");
+        assert!(
+            too_high.contains(&format!("{destination:#x}")),
+            "{too_high}"
+        );
+        let overflow = check_tag_reservation_fee(U256::MAX, destination).unwrap_err();
+        assert!(overflow.contains(&U256::MAX.to_string()), "{overflow}");
+        assert!(
+            overflow.contains(&format!("{destination:#x}")),
+            "{overflow}"
+        );
     }
 
     /// TC-342: vault instruction layout `[id | wallet | value(10) | 2 ignored | vaultId | 16 ignored]`

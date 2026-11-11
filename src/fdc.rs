@@ -56,13 +56,32 @@ sol! {
 }
 
 /// Verifier / DA endpoints and the XRPL source id for one Flare network.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct FdcConfig {
     pub verifier_base: String,
     pub da_base: String,
     pub api_key: String,
     /// `XRP` (mainnet) / `testXRP` (testnet) as the verifier's `sourceId`.
     pub source_id: &'static str,
+}
+
+// Manual (not derived) so the verifier key can never reach a log line or a test failure.
+impl std::fmt::Debug for FdcConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FdcConfig")
+            .field("verifier_base", &self.verifier_base)
+            .field("da_base", &self.da_base)
+            .field(
+                "api_key",
+                &if self.api_key.is_empty() {
+                    ""
+                } else {
+                    "<redacted>"
+                },
+            )
+            .field("source_id", &self.source_id)
+            .finish()
+    }
 }
 
 /// Defaults per network; `FDC_VERIFIER_URL` / `FDC_DA_URL` / `FDC_VERIFIER_API_KEY` override.
@@ -155,9 +174,10 @@ async fn read_limited(resp: reqwest::Response, what: &str) -> color_eyre::Result
         }
     }
     if !status.is_success() {
+        // Remote-controlled body: strip escapes/control chars before it reaches the terminal.
         color_eyre::eyre::bail!(
             "{what} HTTP {status}: {}",
-            String::from_utf8_lossy(&body[..body.len().min(200)])
+            crate::xrpl::sanitize_text(&String::from_utf8_lossy(&body[..body.len().min(200)]), 200)
         );
     }
     Ok(body)
@@ -201,7 +221,7 @@ async fn prepare_request(
     if answer["status"] != "VALID" {
         color_eyre::eyre::bail!(
             "verifier rejected the request: {} (the payment needs 3 validated ledgers, ≈ 12 s)",
-            answer["status"]
+            crate::xrpl::sanitize_text(&answer["status"].to_string(), 64)
         );
     }
     let encoded = hex::decode(
@@ -214,8 +234,36 @@ async fn prepare_request(
     Ok(encoded)
 }
 
+/// Check the decoded DA response against the attestation we requested. Parsing alone is not a
+/// binding check: a syntactically valid proof for another payment, owner, or round is unusable.
+fn check_da_proof_response(
+    text: &str,
+    expected_transaction_id: &[u8; 32],
+    expected_owner: Address,
+    expected_round: u64,
+) -> color_eyre::Result<()> {
+    let proof = flare::parse_fdc_payment_proof_json(text)?;
+    let response = proof.data;
+    if response.requestBody.transactionId.as_slice() != expected_transaction_id {
+        color_eyre::eyre::bail!("DA proof response transactionId does not match the request");
+    }
+    if response.requestBody.proofOwner != expected_owner {
+        color_eyre::eyre::bail!("DA proof response proofOwner does not match the request");
+    }
+    if response.votingRound != expected_round {
+        color_eyre::eyre::bail!("DA proof response votingRound does not match the request");
+    }
+    Ok(())
+}
+
 /// DA layer proof for `(round, request)`: `{response, proof}` JSON text (decoded leaves).
-async fn fetch_da_proof(cfg: &FdcConfig, round: u64, request: &[u8]) -> color_eyre::Result<String> {
+async fn fetch_da_proof(
+    cfg: &FdcConfig,
+    round: u64,
+    request: &[u8],
+    expected_transaction_id: &[u8; 32],
+    expected_owner: Address,
+) -> color_eyre::Result<String> {
     let resp = http_client()?
         .post(format!("{}/api/v1/fdc/proof-by-request-round", cfg.da_base))
         .json(&json!({
@@ -225,8 +273,9 @@ async fn fetch_da_proof(cfg: &FdcConfig, round: u64, request: &[u8]) -> color_ey
         .send()
         .await?;
     let text = String::from_utf8(read_limited(resp, "FDC DA layer").await?)?;
-    // Shape check now (same parser as the executor), so a bad answer fails before any gas.
-    flare::parse_fdc_payment_proof_json(&text)?;
+    // Shape and Merkle-proof checks now (same parser as the executor), plus binding to the exact
+    // transaction, owner, and round, so a valid-looking substitute cannot reach an on-chain mint.
+    check_da_proof_response(&text, expected_transaction_id, expected_owner, round)?;
     Ok(text)
 }
 
@@ -259,6 +308,9 @@ pub async fn prove_xrp_payment(
     gate.check(&provider).await?;
 
     progress("asking the verifier to prepare the request…");
+    let tx_id: [u8; 32] = hex::decode(xrpl_tx_hash.trim_start_matches("0x"))?
+        .try_into()
+        .map_err(|_| color_eyre::eyre::eyre!("XRPL transaction hash must be 32 bytes"))?;
     let request = prepare_request(cfg, xrpl_tx_hash, owner).await?;
 
     let (hub, fees, relay, systems) = tokio::try_join!(
@@ -368,7 +420,7 @@ pub async fn prove_xrp_payment(
     // The DA layer can lag a few seconds behind the on-chain Merkle root.
     let mut last = None;
     for _ in 0..12 {
-        match fetch_da_proof(cfg, round, &request).await {
+        match fetch_da_proof(cfg, round, &request, &tx_id, owner).await {
             Ok(proof) => return Ok(proof),
             Err(e) => last = Some(e),
         }
@@ -386,6 +438,87 @@ mod tests {
 
     fn env_none(_: &str) -> Option<String> {
         None
+    }
+
+    fn da_proof_json(tx_id: &[u8; 32], owner: Address, round: u64) -> Value {
+        json!({
+            "response": {
+                "attestationType": bytes32_name("XRPPayment"),
+                "sourceId": bytes32_name("XRP"),
+                "votingRound": round,
+                "lowestUsedTimestamp": 1,
+                "requestBody": {
+                    "transactionId": format!("0x{}", hex::encode(tx_id)),
+                    "proofOwner": format!("{owner:#x}"),
+                },
+                "responseBody": {
+                    "blockNumber": 1,
+                    "blockTimestamp": 1,
+                    "sourceAddress": "rJrRMgiRgrU6hDF4pgu5DXQdWyPbY35ErN",
+                    "sourceAddressHash": format!("0x{}", "00".repeat(32)),
+                    "receivingAddressHash": format!("0x{}", "00".repeat(32)),
+                    "intendedReceivingAddressHash": format!("0x{}", "00".repeat(32)),
+                    "spentAmount": "1",
+                    "intendedSpentAmount": "1",
+                    "receivedAmount": "1",
+                    "intendedReceivedAmount": "1",
+                    "hasMemoData": false,
+                    "firstMemoData": "0x",
+                    "hasDestinationTag": false,
+                    "destinationTag": 0,
+                    "status": 1,
+                },
+            },
+            "proof": [format!("0x{}", "11".repeat(32))],
+        })
+    }
+
+    #[test]
+    fn da_proof_response_is_bound_to_transaction_owner_and_round() {
+        let tx_id = [0xab; 32];
+        let owner = Address::repeat_byte(0x11);
+        let round = 1234;
+        let good = da_proof_json(&tx_id, owner, round);
+        let text = good.to_string();
+        assert!(check_da_proof_response(&text, &tx_id, owner, round).is_ok());
+
+        let mut wrong_tx = good.clone();
+        wrong_tx["response"]["requestBody"]["transactionId"] =
+            json!(format!("0x{}", hex::encode([0xcd; 32])));
+        let err = check_da_proof_response(&wrong_tx.to_string(), &tx_id, owner, round)
+            .expect_err("another transaction's proof must be rejected");
+        assert!(err.to_string().contains("transactionId"), "{err}");
+
+        let mut wrong_owner = good.clone();
+        wrong_owner["response"]["requestBody"]["proofOwner"] =
+            json!(format!("{:#x}", Address::repeat_byte(0x22)));
+        let err = check_da_proof_response(&wrong_owner.to_string(), &tx_id, owner, round)
+            .expect_err("another owner's proof must be rejected");
+        assert!(err.to_string().contains("proofOwner"), "{err}");
+
+        let mut wrong_round = good.clone();
+        wrong_round["response"]["votingRound"] = json!(round + 1);
+        let err = check_da_proof_response(&wrong_round.to_string(), &tx_id, owner, round)
+            .expect_err("another round's proof must be rejected");
+        assert!(err.to_string().contains("votingRound"), "{err}");
+
+        for key in ["transactionId", "proofOwner"] {
+            let mut missing = good.clone();
+            missing["response"]["requestBody"]
+                .as_object_mut()
+                .unwrap()
+                .remove(key);
+            assert!(
+                check_da_proof_response(&missing.to_string(), &tx_id, owner, round).is_err(),
+                "missing {key} must be rejected"
+            );
+        }
+        let mut missing_round = good;
+        missing_round["response"]
+            .as_object_mut()
+            .unwrap()
+            .remove("votingRound");
+        assert!(check_da_proof_response(&missing_round.to_string(), &tx_id, owner, round).is_err());
     }
 
     /// TC-340: the verifier's encoded request must match the asked transaction and proof owner;

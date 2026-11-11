@@ -400,13 +400,19 @@ pub async fn fetch_flare_wallet_balance(
     })
 }
 
+/// Project an optional read into the display snapshot. Writes separately require every status.
+fn display_read<T>(read: Result<T, String>) -> Option<T> {
+    read.ok()
+}
+
 /// Resolve AssetManagerFXRP and read Core Vault + direct-mint fee views (read-only).
 pub async fn fetch_fxrp_direct_mint_info(rpc_url: &str) -> color_eyre::Result<FxrpDirectMintInfo> {
     let provider = ProviderBuilder::new().connect_http(rpc_url.parse()?);
     let asset_manager_addr = resolve_asset_manager_fxrp_address(provider.clone(), rpc_url).await?;
     let am = IAssetManager::new(asset_manager_addr, provider.clone());
 
-    // Pause views are advisory (a contract without them still serves the rest): `None` = unknown.
+    // Keep partial data available to the read-only panel, but retain each read as a typed Result
+    // until the snapshot boundary. `check_direct_mint_open` rejects every `None` before a write.
     let (required, minting_paused, emergency_pause_level, limits) = tokio::join!(
         async {
             tokio::try_join!(
@@ -416,30 +422,60 @@ pub async fn fetch_fxrp_direct_mint_info(rpc_url: &str) -> color_eyre::Result<Fx
                 async { am.getDirectMintingExecutorFeeUBA().call().await },
             )
         },
-        async { am.mintingPaused().call().await.ok() },
-        async { am.emergencyPauseLevel().call().await.ok() },
-        async { fetch_mint_limits(&am, &provider).await.ok() },
+        async {
+            am.mintingPaused()
+                .call()
+                .await
+                .map_err(|e| format!("mintingPaused: {e}"))
+        },
+        async {
+            am.emergencyPauseLevel()
+                .call()
+                .await
+                .map_err(|e| format!("emergencyPauseLevel: {e}"))
+        },
+        async {
+            fetch_mint_limits(&am, &provider)
+                .await
+                .map_err(|e| e.to_string())
+        },
     );
     let (core_vault_xrpl, min_fee, fee_bips, executor_fee) = required?;
 
     // Remote values: a checked conversion, never a panicking one (the panic hook exits the TUI).
     let too_big = |what: &str| color_eyre::eyre::eyre!("Flare RPC returned out-of-range {what}");
+    let fee_bips = u64::try_from(fee_bips).map_err(|_| too_big("fee bips"))?;
+    check_fee_bips(fee_bips).map_err(|e| color_eyre::eyre::eyre!(e))?;
     Ok(FxrpDirectMintInfo {
         core_vault_xrpl,
         asset_manager: format!("{asset_manager_addr:#x}"),
         min_fee_uba: min_fee.try_into().map_err(|_| too_big("minimum fee"))?,
-        fee_bips: fee_bips.try_into().map_err(|_| too_big("fee bips"))?,
+        fee_bips,
         executor_fee_uba: executor_fee
             .try_into()
             .map_err(|_| too_big("executor fee"))?,
-        minting_paused,
-        emergency_pause_level,
-        limits,
+        minting_paused: display_read(minting_paused),
+        emergency_pause_level: display_read(emergency_pause_level),
+        limits: display_read(limits),
     })
 }
 
-/// Redemption queue pages read at most (`maxRedeemedTickets` tickets each): bounds RPC work.
+/// Redemption queue pagination is bounded in both directions: at most 100 pages of at most 100
+/// tickets each. A zero page size is rejected because it cannot make pagination progress.
 const REDEMPTION_QUEUE_MAX_PAGES: usize = 100;
+const REDEMPTION_QUEUE_MAX_PAGE_SIZE: u64 = 100;
+
+fn redemption_queue_page_size(raw: U256) -> color_eyre::Result<U256> {
+    let size = u64::try_from(raw).map_err(|_| {
+        color_eyre::eyre::eyre!("Flare RPC returned out-of-range redemption queue page size {raw}")
+    })?;
+    if size == 0 || size > REDEMPTION_QUEUE_MAX_PAGE_SIZE {
+        color_eyre::eyre::bail!(
+            "refusing redemption queue page size {raw}; expected 1..={REDEMPTION_QUEUE_MAX_PAGE_SIZE}"
+        );
+    }
+    Ok(U256::from(size))
+}
 
 /// Aggregate redemption tickets `(agent vault, value UBA)` into totals and the 10 largest agents.
 fn summarize_queue(tickets: &[(Address, u128)], lot_size_uba: u128) -> serde_json::Value {
@@ -485,9 +521,13 @@ pub async fn fetch_fxrp_report(
     )?;
     let lot_amg = u64::try_from(settings_word(&settings, SETTINGS_LOT_SIZE_AMG_WORD)?)
         .map_err(|_| too_big("lot size"))?;
-    let page_size = settings_word(&settings, SETTINGS_MAX_REDEEMED_TICKETS_WORD)?;
+    let page_size = redemption_queue_page_size(settings_word(
+        &settings,
+        SETTINGS_MAX_REDEEMED_TICKETS_WORD,
+    )?)?;
     let lot_size_uba = u128::from(lot_amg)
-        .saturating_mul(u128::try_from(granularity).map_err(|_| too_big("granularity"))?);
+        .checked_mul(u128::try_from(granularity).map_err(|_| too_big("granularity"))?)
+        .ok_or_else(|| too_big("lot size in UBA"))?;
 
     let manager = IMintingTagManager::new(manager_addr, provider.clone());
     let fee = manager.reservationFee().call().await?;
@@ -800,6 +840,19 @@ pub fn check_core_vault(fetched: &str, expected: Option<&str>) -> Result<(), Str
     )
 }
 
+/// The minting tag manager is reached through the pinned Flare registry and AssetManager, but its
+/// final address is still RPC-supplied. A payable reservation therefore also requires this pin.
+pub fn check_tag_manager(fetched: Address, expected: Option<&str>) -> Result<(), String> {
+    let expected = expected.map(|pin| pin.trim().to_ascii_lowercase());
+    check_pinned(
+        "minting tag manager",
+        "fassets",
+        "expected_tag_manager",
+        &format!("{fetched:#x}"),
+        expected.as_deref(),
+    )
+}
+
 /// The operator comes from one Flare RPC answer; sign an instruction Payment to it only when it
 /// equals the operator-pinned `[flare.smart_accounts] expected_operator` (verified out of band).
 pub fn check_operator(fetched: &str, expected: Option<&str>) -> Result<(), String> {
@@ -904,17 +957,45 @@ pub(crate) async fn send_capped<P: Provider, D: CallDecoder>(
     let fees = call.provider.estimate_eip1559_fees().await?;
     check_tx_fee(gas, fees.max_fee_per_gas).map_err(|e| color_eyre::eyre::eyre!(e))?;
     say(&format!("simulated ok, gas {gas}"));
-    Ok(call
+    let pending = call
         .gas(gas)
         .max_fee_per_gas(fees.max_fee_per_gas)
         .max_priority_fee_per_gas(fees.max_priority_fee_per_gas)
         .send()
-        .await?)
+        .await?;
+    // Make the hash available before any receipt wait, including a wait that times out.
+    say(&format!("transaction submitted: {:#x}", pending.tx_hash()));
+    Ok(pending)
 }
 
-/// A contract `revert` (a node answers `execution reverted`), as opposed to a transport failure.
+const RECEIPT_WAIT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+
+/// Wait for a receipt for at most two minutes. The transaction may still confirm later; callers
+/// receive its hash in both the preceding submission message and every wait error.
+pub(crate) async fn confirm_receipt(
+    pending: PendingTransactionBuilder<Ethereum>,
+    what: &str,
+) -> color_eyre::Result<alloy::rpc::types::TransactionReceipt> {
+    let hash = *pending.tx_hash();
+    let receipt = tokio::time::timeout(RECEIPT_WAIT_TIMEOUT, pending.get_receipt())
+        .await
+        .map_err(|_| {
+            color_eyre::eyre::eyre!(
+                "{what} receipt was not confirmed within {} seconds ({hash:#x}); check the transaction before retrying",
+                RECEIPT_WAIT_TIMEOUT.as_secs()
+            )
+        })?
+        .map_err(|e| color_eyre::eyre::eyre!("{what} receipt failed ({hash:#x}): {e}"))?;
+    if !receipt.status() {
+        color_eyre::eyre::bail!("{what} reverted: {hash:#x}");
+    }
+    Ok(receipt)
+}
+
+/// Only actual EVM revert data means `ownerOf` says the tag does not exist. Error text is not
+/// evidence: a transport or node failure must propagate rather than become "not reserved".
 fn is_revert(e: &alloy::contract::Error) -> bool {
-    e.as_revert_data().is_some() || e.to_string().to_lowercase().contains("revert")
+    e.as_revert_data().is_some()
 }
 
 /// Owner of `id`, or `None` when the tag is not reserved (`ownerOf` reverts). Any other error
@@ -1095,8 +1176,9 @@ pub async fn execute_direct_minting_with(
     let am = IAssetManager::new(asset_manager_addr, &provider);
 
     let pending = match data {
-        None => send_capped(am.executeDirectMinting(proof), |_| {}).await,
-        Some(d) => send_capped(am.executeDirectMintingWithData(proof, d), |_| {}).await,
+        None => send_capped(am.executeDirectMinting(proof), |m| eprintln!("{m}")).await,
+        Some(d) => send_capped(am.executeDirectMintingWithData(proof, d), |m| eprintln!("{m}"))
+            .await,
     }
     .map_err(|e| {
         let hint = if e.to_string().contains("0x18dce79f") {
@@ -1107,14 +1189,8 @@ pub async fn execute_direct_minting_with(
         color_eyre::eyre::eyre!("executeDirectMinting send failed: {e}{hint}")
     })?;
     let tx_hash = *pending.tx_hash();
-    let receipt = pending
-        .get_receipt()
-        .await
-        .map_err(|e| color_eyre::eyre::eyre!("executeDirectMinting receipt failed: {e}"))?;
-    if !receipt.status() {
-        color_eyre::eyre::bail!("executeDirectMinting reverted: {tx_hash:#x}");
-    }
-    let outcome = decode_direct_minting_outcome(receipt.inner.logs(), asset_manager_addr);
+    let receipt = confirm_receipt(pending, "executeDirectMinting").await?;
+    let outcome = decode_direct_minting_outcome(receipt.inner.logs(), asset_manager_addr)?;
     Ok((format!("{tx_hash:#x}"), outcome))
 }
 
@@ -1177,57 +1253,72 @@ impl std::fmt::Display for DirectMintOutcome {
     }
 }
 
-fn u128_sat(v: U256) -> u128 {
-    u128::try_from(v).unwrap_or(u128::MAX)
+fn event_u128(v: U256, what: &str) -> color_eyre::Result<u128> {
+    u128::try_from(v)
+        .map_err(|_| color_eyre::eyre::eyre!("Direct Mint event has out-of-range {what}"))
 }
 
 /// Classify an `executeDirectMinting` receipt. Only logs emitted by the AssetManager count.
 pub fn decode_direct_minting_outcome(
     logs: &[alloy::rpc::types::Log],
     asset_manager: Address,
-) -> DirectMintOutcome {
+) -> color_eyre::Result<DirectMintOutcome> {
     use alloy::sol_types::SolEvent;
-    let at = |v: U256| u64::try_from(v).unwrap_or(u64::MAX);
+    let at = |v: U256| {
+        u64::try_from(v).map_err(|_| {
+            color_eyre::eyre::eyre!("Direct Mint event has out-of-range executionAllowedAt")
+        })
+    };
     for log in logs.iter().filter(|l| l.address() == asset_manager) {
         let Some(topic) = log.topic0() else { continue };
         if *topic == IAssetManager::DirectMintingExecuted::SIGNATURE_HASH
             && let Ok(e) = log.log_decode::<IAssetManager::DirectMintingExecuted>()
         {
-            return DirectMintOutcome::Minted {
-                minted_uba: u128_sat(e.inner.data.mintedAmountUBA),
-            };
+            return Ok(DirectMintOutcome::Minted {
+                minted_uba: event_u128(e.inner.data.mintedAmountUBA, "mintedAmountUBA")?,
+            });
         }
         if *topic == IAssetManager::DirectMintingExecutedToSmartAccount::SIGNATURE_HASH
             && let Ok(e) = log.log_decode::<IAssetManager::DirectMintingExecutedToSmartAccount>()
         {
-            return DirectMintOutcome::MintedToSmartAccount {
-                minted_uba: u128_sat(e.inner.data.mintedAmountUBA),
-            };
+            return Ok(DirectMintOutcome::MintedToSmartAccount {
+                minted_uba: event_u128(e.inner.data.mintedAmountUBA, "mintedAmountUBA")?,
+            });
         }
         if *topic == IAssetManager::DirectMintingDelayed::SIGNATURE_HASH
             && let Ok(e) = log.log_decode::<IAssetManager::DirectMintingDelayed>()
         {
-            return DirectMintOutcome::Delayed {
-                execution_allowed_at: at(e.inner.data.executionAllowedAt),
-            };
+            return Ok(DirectMintOutcome::Delayed {
+                execution_allowed_at: at(e.inner.data.executionAllowedAt)?,
+            });
         }
         if *topic == IAssetManager::LargeDirectMintingDelayed::SIGNATURE_HASH
             && let Ok(e) = log.log_decode::<IAssetManager::LargeDirectMintingDelayed>()
         {
-            return DirectMintOutcome::Delayed {
-                execution_allowed_at: at(e.inner.data.executionAllowedAt),
-            };
+            return Ok(DirectMintOutcome::Delayed {
+                execution_allowed_at: at(e.inner.data.executionAllowedAt)?,
+            });
         }
         if *topic == IAssetManager::DirectMintingPaymentTooSmallForFee::SIGNATURE_HASH
             && let Ok(e) = log.log_decode::<IAssetManager::DirectMintingPaymentTooSmallForFee>()
         {
-            return DirectMintOutcome::PaymentTooSmall {
-                received_uba: u128_sat(e.inner.data.receivedAmountUBA),
-                minimum_uba: u128_sat(e.inner.data.minimumMintingFeeUBA),
-            };
+            return Ok(DirectMintOutcome::PaymentTooSmall {
+                received_uba: event_u128(e.inner.data.receivedAmountUBA, "receivedAmountUBA")?,
+                minimum_uba: event_u128(e.inner.data.minimumMintingFeeUBA, "minimumMintingFeeUBA")?,
+            });
         }
     }
-    DirectMintOutcome::Unknown
+    Ok(DirectMintOutcome::Unknown)
+}
+
+/// BIPS is a fixed four-decimal basis: values above 10,000 are not valid fee rates.
+pub fn check_fee_bips(fee_bips: u64) -> Result<(), String> {
+    if fee_bips > 10_000 {
+        return Err(format!(
+            "Direct Mint fee bips {fee_bips} exceeds the maximum 10000"
+        ));
+    }
+    Ok(())
 }
 
 /// Refuse a Direct Mint Payment that would not leave anything after the fees. A payment below
@@ -1242,9 +1333,13 @@ pub fn check_direct_mint_amount(
     fee_bips: u64,
     executor_fee_uba: u128,
 ) -> Result<(), String> {
+    check_fee_bips(fee_bips)?;
     let amount = u128::from(amount_drops);
     let pct_fee = amount * u128::from(fee_bips) / 10_000;
-    let required = min_fee_uba.max(pct_fee).saturating_add(executor_fee_uba);
+    let required = min_fee_uba
+        .max(pct_fee)
+        .checked_add(executor_fee_uba)
+        .ok_or_else(|| "Direct Mint fees overflow the supported UBA range".to_string())?;
     if amount > required {
         return Ok(());
     }
@@ -1259,16 +1354,41 @@ pub fn check_direct_mint_amount(
 }
 
 /// `-x sa-memo` / `sa-call` / the TUI Direct Mint send XRP to the Core Vault: refuse while FXRP
-/// minting is paused and when the amount is over the minting cap (the XRP would sit in the Core
-/// Vault until it has room).
+/// minting is paused, whenever a safety read failed, and when the amount is over the minting cap.
 pub fn check_direct_mint_open(info: &FxrpDirectMintInfo, amount_xrp: &str) -> Result<(), String> {
-    if info.minting_paused == Some(true) || info.emergency_pause_level.is_some_and(|l| l > 0) {
-        return Err("FXRP minting is paused on Flare; not sending XRP to the Core Vault".into());
+    check_fee_bips(info.fee_bips)?;
+    match info.minting_paused {
+        Some(true) => {
+            return Err(
+                "FXRP minting is paused on Flare; not sending XRP to the Core Vault".into(),
+            );
+        }
+        Some(false) => {}
+        None => {
+            return Err(
+                "FXRP mintingPaused state is unknown; not sending XRP to the Core Vault".into(),
+            );
+        }
     }
+    match info.emergency_pause_level {
+        Some(0) => {}
+        Some(level) => {
+            return Err(format!(
+                "FXRP emergency pause level is {level}; not sending XRP to the Core Vault"
+            ));
+        }
+        None => {
+            return Err(
+                "FXRP emergencyPauseLevel state is unknown; not sending XRP to the Core Vault"
+                    .into(),
+            );
+        }
+    }
+    let limits = info.limits.as_ref().ok_or_else(|| {
+        "FXRP mint limits are unknown; not sending XRP to the Core Vault".to_string()
+    })?;
     let drops = crate::xrpl::xrp_to_drops(amount_xrp.trim()).map_err(|e| format!("amount: {e}"))?;
-    if let Some(limits) = &info.limits
-        && classify_mint(u128::from(drops), limits) == MintClass::CapExceeded
-    {
+    if classify_mint(u128::from(drops), limits) == MintClass::CapExceeded {
         return Err(format!(
             "{}; the XRP would sit in the Core Vault until the cap has room",
             MintClass::CapExceeded
@@ -1348,7 +1468,6 @@ pub async fn verify_smart_account_terms(
 /// Largest mint a tumbling window still lets through right now. The limiter views are stale
 /// between writes, so the window is advanced to `now` exactly like `MintingRateLimiter`; the
 /// on-chain test is `minted < limit`, so the usable headroom is one granule lower.
-#[must_use]
 pub fn window_max_now(
     now: u64,
     start: u64,
@@ -1356,15 +1475,31 @@ pub fn window_max_now(
     granularity_uba: u128,
     limit_uba: u128,
     size_secs: u64,
-) -> u128 {
-    let mut used = u128::from(minted_amg).saturating_mul(granularity_uba);
-    if start > 0 && now >= start.saturating_add(size_secs) {
-        let windows = u128::from((now - start) / size_secs);
-        used = used.saturating_sub(windows.saturating_mul(limit_uba));
+) -> Result<u128, String> {
+    if granularity_uba == 0 {
+        return Err("asset minting granularity must be greater than zero".into());
     }
-    limit_uba
+    if size_secs == 0 {
+        return Err("mint limiter window size must be greater than zero".into());
+    }
+    let mut used = u128::from(minted_amg)
+        .checked_mul(granularity_uba)
+        .ok_or_else(|| "minted limiter amount overflows UBA".to_string())?;
+    if start > 0 {
+        let window_end = start
+            .checked_add(size_secs)
+            .ok_or_else(|| "mint limiter window end overflows seconds".to_string())?;
+        if now >= window_end {
+            let windows = u128::from((now - start) / size_secs);
+            let drained = windows
+                .checked_mul(limit_uba)
+                .ok_or_else(|| "elapsed mint limiter capacity overflows UBA".to_string())?;
+            used = used.saturating_sub(drained);
+        }
+    }
+    Ok(limit_uba
         .saturating_sub(used)
-        .saturating_sub(granularity_uba)
+        .saturating_sub(granularity_uba))
 }
 
 /// What `executeDirectMinting` will do with a mint of `amount_uba` (floored to whole granules).
@@ -1502,7 +1637,13 @@ async fn fetch_mint_limits<P: Provider + Clone>(
             .map_err(|_| color_eyre::eyre::eyre!("Flare RPC returned out-of-range limit"))
     };
     let granule = chk(granularity)?;
+    if granule == 0 {
+        color_eyre::eyre::bail!("Flare RPC returned zero asset minting granularity");
+    }
     let cap_amg = settings_minting_cap_amg(&settings_raw)?;
+    let cap_uba = u128::from(cap_amg)
+        .checked_mul(granule)
+        .ok_or_else(|| color_eyre::eyre::eyre!("Flare RPC returned out-of-range minting cap"))?;
     let supply_uba = chk(supply)?;
     let (hourly, daily) = (chk(hourly)?, chk(daily)?);
     // Window sizes: upstream `MintingRateLimiter.State.windowSizeSeconds` is governance-settable
@@ -1515,7 +1656,8 @@ async fn fetch_mint_limits<P: Provider + Clone>(
         granule,
         hourly,
         3600,
-    );
+    )
+    .map_err(|e| color_eyre::eyre::eyre!(e))?;
     let daily_max = window_max_now(
         now,
         daily_state.windowStart,
@@ -1523,19 +1665,28 @@ async fn fetch_mint_limits<P: Provider + Clone>(
         granule,
         daily,
         86_400,
-    );
-    Ok(MintLimits {
-        cap_uba: u128::from(cap_amg).saturating_mul(granule),
-        supply_uba,
+    )
+    .map_err(|e| color_eyre::eyre::eyre!(e))?;
+    let cap_headroom_uba = if cap_amg == 0 {
+        None
+    } else {
         // Reserved capacity has no getter, so `cap - supply` is an upper bound.
-        cap_headroom_uba: (cap_amg != 0).then(|| {
-            u128::from(cap_amg)
-                .saturating_sub(supply_uba / granule.max(1))
-                .saturating_mul(granule)
-        }),
+        let headroom_amg = u128::from(cap_amg).saturating_sub(supply_uba / granule);
+        Some(
+            headroom_amg
+                .checked_mul(granule)
+                .ok_or_else(|| color_eyre::eyre::eyre!("mint cap headroom overflows UBA"))?,
+        )
+    };
+    let large_delay_secs = u64::try_from(chk(large_delay)?)
+        .map_err(|_| color_eyre::eyre::eyre!("Flare RPC returned out-of-range large-mint delay"))?;
+    Ok(MintLimits {
+        cap_uba,
+        supply_uba,
+        cap_headroom_uba,
         window_max_now_uba: hourly_max.min(daily_max),
         large_threshold_uba: chk(large_threshold)?,
-        large_delay_secs: u64::try_from(chk(large_delay)?).unwrap_or(u64::MAX),
+        large_delay_secs,
         granularity_uba: granule,
     })
 }
@@ -1555,19 +1706,30 @@ async fn fetch_settings_raw<P: Provider + Clone>(
 
 /// Field indexes in `AssetManagerSettings.Data` (upstream `AssetManagerSettings.sol` order);
 /// the ABI answer is `[offset = 0x20][struct head: one 32-byte word per field]`.
+const SETTINGS_FIELD_COUNT: usize = 58;
+const SETTINGS_ABI_BYTES: usize = 32 * (1 + SETTINGS_FIELD_COUNT);
 const SETTINGS_LOT_SIZE_AMG_WORD: usize = 19;
 const SETTINGS_MINTING_CAP_AMG_WORD: usize = 22;
 const SETTINGS_MAX_REDEEMED_TICKETS_WORD: usize = 30;
 
 fn settings_word(raw: &[u8], field: usize) -> color_eyre::Result<U256> {
-    let word = |i: usize| raw.get(32 * i..32 * (i + 1));
-    let (Some(offset), Some(value)) = (word(0), word(1 + field)) else {
-        color_eyre::eyre::bail!("getSettings() answer too short");
-    };
-    if U256::from_be_slice(offset) != U256::from(32) {
-        color_eyre::eyre::bail!("getSettings() answer has an unexpected layout");
+    if field >= SETTINGS_FIELD_COUNT {
+        color_eyre::eyre::bail!("getSettings() field {field} is outside the static struct");
     }
-    Ok(U256::from_be_slice(value))
+    if raw.len() != SETTINGS_ABI_BYTES {
+        color_eyre::eyre::bail!(
+            "getSettings() answer has {} bytes, expected exactly {SETTINGS_ABI_BYTES} for the 58-field static struct",
+            raw.len()
+        );
+    }
+    let offset = U256::from_be_slice(&raw[..32]);
+    if offset != U256::from(32) {
+        color_eyre::eyre::bail!(
+            "getSettings() answer has an unexpected layout (struct offset {offset}, expected 32)"
+        );
+    }
+    let start = 32 * (1 + field);
+    Ok(U256::from_be_slice(&raw[start..start + 32]))
 }
 
 fn settings_minting_cap_amg(raw: &[u8]) -> color_eyre::Result<u64> {
@@ -1601,6 +1763,23 @@ mod tests {
         );
         assert!(check_core_vault("rVault", Some("")).is_err());
 
+        // The payable tag reservation has the same unset/mismatch/empty-pin refusal.
+        let manager = Address::repeat_byte(0xab);
+        let manager_text = format!("{manager:#x}");
+        assert!(check_tag_manager(manager, Some(&manager_text)).is_ok());
+        assert!(check_tag_manager(manager, Some(&manager_text.to_uppercase())).is_ok());
+        assert!(
+            check_tag_manager(manager, Some(&format!("{:#x}", Address::repeat_byte(0x45))))
+                .unwrap_err()
+                .contains("differs")
+        );
+        assert!(
+            check_tag_manager(manager, None)
+                .unwrap_err()
+                .contains("expected_tag_manager")
+        );
+        assert!(check_tag_manager(manager, Some(" ")).is_err());
+
         // operator requires pinned match
         assert!(check_operator("rOperator", Some(" rOperator ")).is_ok());
         assert!(
@@ -1625,7 +1804,15 @@ mod tests {
             executor_fee_uba: 100,
             minting_paused: Some(false),
             emergency_pause_level: Some(0),
-            limits: None,
+            limits: Some(MintLimits {
+                cap_uba: 0,
+                supply_uba: 0,
+                cap_headroom_uba: None,
+                window_max_now_uba: u128::MAX,
+                large_threshold_uba: u128::MAX,
+                large_delay_secs: 0,
+                granularity_uba: 1,
+            }),
         }
     }
 
@@ -2157,6 +2344,32 @@ mod tests {
         Ok(())
     }
 
+    /// A Direct Mint write needs affirmative pause and limit reads; display-only unknowns are not
+    /// interpreted as open. Fee bips and fee arithmetic are checked before they influence a payment.
+    #[test]
+    fn direct_mint_write_requires_known_state_and_valid_bips() {
+        let info = mint_info(1);
+        assert!(check_direct_mint_open(&info, "5").is_ok());
+        for field in 0..3 {
+            let mut unknown = info.clone();
+            match field {
+                0 => unknown.minting_paused = None,
+                1 => unknown.emergency_pause_level = None,
+                _ => unknown.limits = None,
+            }
+            assert!(
+                check_direct_mint_open(&unknown, "5")
+                    .unwrap_err()
+                    .contains("unknown")
+            );
+        }
+        assert!(check_fee_bips(0).is_ok());
+        assert!(check_fee_bips(10_000).is_ok());
+        assert!(check_fee_bips(10_001).is_err());
+        assert!(check_direct_mint_amount(2_000_000, 0, 10_001, 0).is_err());
+        assert!(check_direct_mint_amount(1, u128::MAX, 0, 1).is_err());
+    }
+
     /// TC-330: a Direct Mint Payment must exceed max(min fee, bips share) + executor fee; a
     /// payment below the minimum fee is minted entirely to the fee receiver on Flare.
     #[test]
@@ -2215,37 +2428,45 @@ mod tests {
         .encode_log_data();
 
         assert_eq!(
-            decode_direct_minting_outcome(&[log(am, delayed.clone())], am),
+            decode_direct_minting_outcome(&[log(am, delayed.clone())], am).unwrap(),
             DirectMintOutcome::Delayed {
                 execution_allowed_at: 1_700_000_000
             }
         );
         assert_eq!(
-            decode_direct_minting_outcome(&[log(am, large)], am),
+            decode_direct_minting_outcome(&[log(am, large)], am).unwrap(),
             DirectMintOutcome::Delayed {
                 execution_allowed_at: 1_700_007_200
             }
         );
         assert_eq!(
-            decode_direct_minting_outcome(&[log(am, small)], am),
+            decode_direct_minting_outcome(&[log(am, small)], am).unwrap(),
             DirectMintOutcome::PaymentTooSmall {
                 received_uba: 50_000,
                 minimum_uba: 100_000
             }
         );
         assert_eq!(
-            decode_direct_minting_outcome(&[log(am, executed.clone())], am),
+            decode_direct_minting_outcome(&[log(am, executed.clone())], am).unwrap(),
             DirectMintOutcome::Minted {
                 minted_uba: 9_800_000
             }
         );
+        let absurd_delay = IAssetManager::DirectMintingDelayed {
+            transactionId: B256::ZERO,
+            amount: U256::from(5),
+            executionAllowedAt: U256::MAX,
+        }
+        .encode_log_data();
+        assert!(decode_direct_minting_outcome(&[log(am, absurd_delay)], am).is_err());
         // Same event from a different contract, and a receipt without events, are not trusted.
         assert_eq!(
-            decode_direct_minting_outcome(&[log(other, executed), log(other, delayed)], am),
+            decode_direct_minting_outcome(&[log(other, executed), log(other, delayed)], am)
+                .unwrap(),
             DirectMintOutcome::Unknown
         );
         assert_eq!(
-            decode_direct_minting_outcome(&[], am),
+            decode_direct_minting_outcome(&[], am).unwrap(),
             DirectMintOutcome::Unknown
         );
     }
@@ -2258,14 +2479,23 @@ mod tests {
         // Hourly limit 100 XRP, granule 1 drop, 40 XRP minted in the window that started at 3600.
         let used = 40_000_000;
         let limit = 100_000_000;
-        assert_eq!(window_max_now(3700, 3600, used, 1, limit, 3600), 59_999_999);
+        assert_eq!(
+            window_max_now(3700, 3600, used, 1, limit, 3600),
+            Ok(59_999_999)
+        );
         // Two whole windows later the 40 XRP has drained (unused capacity does not roll over).
         assert_eq!(
             window_max_now(3600 + 7200, 3600, used, 1, limit, 3600),
-            99_999_999
+            Ok(99_999_999)
         );
         // Over-full window (150 XRP minted) leaves nothing; never underflows.
-        assert_eq!(window_max_now(3700, 3600, 150_000_000, 1, limit, 3600), 0);
+        assert_eq!(
+            window_max_now(3700, 3600, 150_000_000, 1, limit, 3600),
+            Ok(0)
+        );
+        assert!(window_max_now(3700, 3600, used, u128::MAX, limit, 3600).is_err());
+        assert!(window_max_now(u64::MAX, u64::MAX, used, 1, limit, 1).is_err());
+        assert!(window_max_now(3700, 3600, used, 1, limit, 0).is_err());
 
         let limits = MintLimits {
             cap_uba: 1_000_000_000,
@@ -2341,7 +2571,7 @@ mod tests {
             .get_transaction_receipt(hash)
             .await?
             .ok_or_else(|| color_eyre::eyre::eyre!("smoke receipt not found on Coston2"))?;
-        let outcome = decode_direct_minting_outcome(receipt.inner.logs(), am);
+        let outcome = decode_direct_minting_outcome(receipt.inner.logs(), am)?;
         println!("{outcome}");
         assert!(
             matches!(outcome, DirectMintOutcome::Minted { .. }),
@@ -2373,8 +2603,21 @@ mod tests {
             summarize_queue(&[(a, u128::MAX), (a, 1)], 1)["total_uba"],
             u128::MAX.to_string()
         );
+        assert_eq!(
+            redemption_queue_page_size(U256::from(1)).unwrap(),
+            U256::from(1)
+        );
+        assert_eq!(
+            redemption_queue_page_size(U256::from(REDEMPTION_QUEUE_MAX_PAGE_SIZE)).unwrap(),
+            U256::from(REDEMPTION_QUEUE_MAX_PAGE_SIZE)
+        );
+        assert!(redemption_queue_page_size(U256::ZERO).is_err());
+        assert!(
+            redemption_queue_page_size(U256::from(REDEMPTION_QUEUE_MAX_PAGE_SIZE + 1)).is_err()
+        );
+        assert!(redemption_queue_page_size(U256::MAX).is_err());
 
-        let mut raw = vec![0u8; 32 * 40];
+        let mut raw = vec![0u8; SETTINGS_ABI_BYTES];
         raw[31] = 32;
         raw[32 * (1 + SETTINGS_MAX_REDEEMED_TICKETS_WORD) + 31] = 20;
         assert_eq!(
@@ -2382,6 +2625,11 @@ mod tests {
             U256::from(20)
         );
         assert!(settings_word(&raw[..64], SETTINGS_MAX_REDEEMED_TICKETS_WORD).is_err());
+        assert!(settings_word(&raw, SETTINGS_FIELD_COUNT).is_err());
+        assert!(settings_word(&raw, usize::MAX).is_err());
+        let mut dynamic = raw.clone();
+        dynamic.extend_from_slice(&[0; 32]);
+        assert!(settings_word(&dynamic, SETTINGS_MINTING_CAP_AMG_WORD).is_err());
         raw[31] = 64;
         assert!(
             settings_word(&raw, 0)

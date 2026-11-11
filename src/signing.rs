@@ -241,6 +241,10 @@ pub fn normalize_eth_address_hex(addr: &str) -> color_eyre::Result<String> {
 /// Build 32-byte Direct Mint `MemoData` hex (no `0x`): prefix + 4 zero bytes + recipient.
 pub fn build_direct_mint_memo_data(recipient_eth: &str) -> color_eyre::Result<String> {
     let recipient = normalize_eth_address_hex(recipient_eth)?;
+    // Minting to 0x0 is legal on-chain but burns the FXRP, and the XRP leg is irreversible.
+    if recipient == "0".repeat(40) {
+        color_eyre::eyre::bail!("Flare recipient must not be the zero address");
+    }
     Ok(format!("{DIRECT_MINT_MEMO_PREFIX}00000000{recipient}"))
 }
 
@@ -534,14 +538,24 @@ thread_local! {
     static SIGN_NETWORK_ID: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
 }
 
+struct SignNetworkIdGuard {
+    previous: u32,
+}
+
+impl Drop for SignNetworkIdGuard {
+    fn drop(&mut self) {
+        SIGN_NETWORK_ID.set(self.previous);
+    }
+}
+
 /// Run the (synchronous) signing closure `f` for a network with `network_id`: `sign_blob!` then
 /// sets `NetworkID` when it is > 1024 (Xahau, whose nodes require it in every tx). Mainnet/testnet
-/// (0/1) and devnet never carry it.
+/// (0/1) and devnet never carry it. The guard also restores nested scopes during panic unwinding.
 pub(crate) fn with_network_id<T>(network_id: u32, f: impl FnOnce() -> T) -> T {
-    let prev = SIGN_NETWORK_ID.replace(network_id);
-    let out = f();
-    SIGN_NETWORK_ID.set(prev);
-    out
+    let _guard = SignNetworkIdGuard {
+        previous: SIGN_NETWORK_ID.replace(network_id),
+    };
+    f()
 }
 
 /// `NetworkID` the current signing scope must carry (`None` below the 1024 cut-off).
@@ -549,9 +563,19 @@ pub(crate) fn signing_network_id() -> Option<u32> {
     Some(SIGN_NETWORK_ID.get()).filter(|id| *id > 1024)
 }
 
+/// Validate the fill actually embedded in a transaction. Keeping this in the shared macro covers
+/// every current and future signing helper, including helpers defined outside this module.
+#[doc(hidden)]
+pub(crate) fn validate_transaction_fill<T: serde::Serialize>(tx: &T) -> color_eyre::Result<()> {
+    let tx_json = serde_json::to_value(tx)
+        .map_err(|e| color_eyre::eyre::eyre!("transaction serialization for signing: {e}"))?;
+    sequence_fee_ledger_from_simulate(&tx_json).map(|_| ())
+}
+
 /// Sign `tx` with `wallet` and return the binary-encoded blob (hex).
 macro_rules! sign_blob {
     ($tx:ident, $wallet:expr) => {{
+        crate::signing::validate_transaction_fill(&$tx)?;
         if let Some(id) = crate::signing::signing_network_id() {
             xrpl::models::transactions::Transaction::get_mut_common_fields(&mut $tx).network_id =
                 Some(id);
@@ -717,6 +741,27 @@ pub struct SimulatedFill {
     pub last_ledger_sequence: u32,
 }
 
+impl SimulatedFill {
+    /// Invariants required at the signing boundary, not just on the usual simulate parsing path.
+    pub(crate) fn validate(&self) -> color_eyre::Result<()> {
+        if self.fee_drops > MAX_NODE_FEE_DROPS {
+            color_eyre::eyre::bail!(
+                "refusing to sign: node-chosen Fee {} drops exceeds the {MAX_NODE_FEE_DROPS} drops cap",
+                self.fee_drops
+            );
+        }
+        if self.sequence == 0 {
+            color_eyre::eyre::bail!("refusing to sign: Sequence must be greater than zero");
+        }
+        if self.last_ledger_sequence == 0 {
+            color_eyre::eyre::bail!(
+                "refusing to sign: LastLedgerSequence must be greater than zero"
+            );
+        }
+        Ok(())
+    }
+}
+
 /// Extract `Sequence`, `Fee`, and `LastLedgerSequence` from a successful simulate response.
 /// A node-chosen `Fee` above [`MAX_NODE_FEE_DROPS`] is rejected before signing.
 pub fn sequence_fee_ledger_from_simulate(tx_json: &Value) -> color_eyre::Result<SimulatedFill> {
@@ -730,17 +775,13 @@ pub fn sequence_fee_ledger_from_simulate(tx_json: &Value) -> color_eyre::Result<
             .ok_or_else(|| color_eyre::eyre::eyre!("simulate tx_json invalid {key}"))?;
         u32::try_from(n).map_err(|_| color_eyre::eyre::eyre!("simulate tx_json {key} out of range"))
     }
-    let fee = field_u32(tx_json, "Fee")?;
-    if fee > MAX_NODE_FEE_DROPS {
-        color_eyre::eyre::bail!(
-            "refusing to sign: node-chosen Fee {fee} drops exceeds the {MAX_NODE_FEE_DROPS} drops cap"
-        );
-    }
-    Ok(SimulatedFill {
+    let fill = SimulatedFill {
         sequence: field_u32(tx_json, "Sequence")?,
-        fee_drops: fee,
+        fee_drops: field_u32(tx_json, "Fee")?,
         last_ledger_sequence: field_u32(tx_json, "LastLedgerSequence")?,
-    })
+    };
+    fill.validate()?;
+    Ok(fill)
 }
 
 /// Transaction ID of a signed blob: SHA-512Half(`TXN\0` ‖ blob), uppercase hex. Computed locally
@@ -791,13 +832,20 @@ pub fn create_and_sign_set_regular_key(
     use xrpl::models::transactions::set_regular_key::SetRegularKey;
     use xrpl::models::transactions::{CommonFields, TransactionType};
 
+    // Same rule as the simulate twin: an irreversible authority handoff must not be signed
+    // with an unvalidated (or whitespace-only) key.
+    let key = regular_key.map(str::trim).filter(|s| !s.is_empty());
+    if let Some(k) = key {
+        require_classic_address_shape("regular_key", k)?;
+    }
+
     let mut tx = SetRegularKey {
         common_fields: CommonFields::from_account(account.to_string())
             .with_transaction_type(TransactionType::SetRegularKey)
             .with_sequence(fill.sequence)
             .with_fee(XRPAmount::from(fill.fee_drops.to_string()))
             .with_last_ledger_sequence(fill.last_ledger_sequence),
-        regular_key: regular_key.map(|k| k.to_string().into()),
+        regular_key: key.map(|k| k.to_string().into()),
     };
 
     sign_blob!(tx, wallet)
@@ -1660,7 +1708,7 @@ mod tests {
     }
 
     fn sample_family_seed() -> String {
-        "sEdSkooMk31MeTjbHVE7vLvgCpEMAdB".to_string()
+        crate::test_support::TEST_SEED.to_string()
     }
 
     /// Signed helpers are called with (seq, fee, lls) = (5, 12, 100); a swapped positional arg fails.
@@ -1714,7 +1762,7 @@ mod tests {
         assert!(err.to_string().contains("invalid BIP39 mnemonic"), "{err}");
 
         // signing credential debug never prints secrets
-        let seed = "sEdSkooMk31MeTjbHVE7vLvgCpEMAdB";
+        let seed = crate::test_support::TEST_SEED;
         let mnemonic = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
         for credential in [
             SigningCredential::FamilySeed(secrecy::SecretString::from(seed)),
@@ -1832,6 +1880,84 @@ mod tests {
         });
         let err = sequence_fee_ledger_from_simulate(&over).expect_err("fee over cap");
         assert!(err.to_string().contains("exceeds"));
+    }
+
+    #[test]
+    fn invalid_simulated_fill_is_rejected_at_signing_boundary() {
+        let wallet = wallet_from_family_seed(&sample_family_seed(), 0).expect("wallet");
+        let cases = [
+            (
+                SimulatedFill {
+                    sequence: 0,
+                    fee_drops: 12,
+                    last_ledger_sequence: 100,
+                },
+                "Sequence",
+            ),
+            (
+                SimulatedFill {
+                    sequence: 5,
+                    fee_drops: MAX_NODE_FEE_DROPS + 1,
+                    last_ledger_sequence: 100,
+                },
+                "Fee",
+            ),
+            (
+                SimulatedFill {
+                    sequence: 5,
+                    fee_drops: 12,
+                    last_ledger_sequence: 0,
+                },
+                "LastLedgerSequence",
+            ),
+        ];
+
+        for (fill, expected) in cases {
+            let err = create_and_sign_offer_cancel(&wallet, &wallet.classic_address, 42, fill)
+                .expect_err("invalid fill must fail before signing");
+            assert!(err.to_string().contains(expected), "{err}");
+        }
+    }
+
+    #[test]
+    fn signing_network_id_is_restored_after_panic() {
+        let result = std::panic::catch_unwind(|| {
+            with_network_id(21_337, || {
+                panic!("force signing-scope unwinding");
+            });
+        });
+        assert!(result.is_err());
+        assert_eq!(signing_network_id(), None);
+
+        let wallet = wallet_from_family_seed(&sample_family_seed(), 0).expect("wallet");
+        let account = wallet.classic_address.clone();
+        let sign_payment = || {
+            create_and_sign_payment(
+                &wallet,
+                &account,
+                &PaymentSpec {
+                    destination: "rG1QQv2nh2gr7RCZ1P8YYcBUKCCN633jCn",
+                    amount_spec: "1",
+                    ..Default::default()
+                },
+                SimulatedFill {
+                    sequence: 1,
+                    fee_drops: 12,
+                    last_ledger_sequence: 100,
+                },
+            )
+        };
+
+        // A subsequent mainnet signature must not inherit the network from the panicked scope.
+        let blob = sign_payment().expect("sign after panic");
+        let decoded = xrpl::core::binarycodec::decode(&blob).expect("decode mainnet payment");
+        assert!(decoded.get("NetworkID").is_none(), "{decoded}");
+
+        // A different scoped network still signs correctly and restores the original value.
+        let blob = with_network_id(21_338, sign_payment).expect("sign on another network");
+        let decoded = xrpl::core::binarycodec::decode(&blob).expect("decode scoped payment");
+        assert_eq!(decoded["NetworkID"], 21_338);
+        assert_eq!(signing_network_id(), None);
     }
 
     /// TC-207: tx hash = SHA-512Half(TXN\0 ‖ blob)
