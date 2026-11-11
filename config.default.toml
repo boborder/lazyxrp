@@ -1,5 +1,5 @@
-# Built-in defaults merged by `Config::new` under the user config.toml: only keybindings and
-# styles are read from this file. Every other setting default lives in src/config/defaults.rs.
+# Built-in defaults merged by `Config::new` under the user config.toml: only keybindings are
+# read from this file. Every other setting default lives in src/config/defaults.rs.
 [keybindings.Splash]
 "<q>" = "Quit"  # Quit the application
 "<Ctrl-d>" = "Quit"  # Another way to quit

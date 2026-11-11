@@ -16,12 +16,12 @@ network = "mainnet"
 # XRPL account to monitor.
 account = "r3kmLJN5D28dHuH8vZNUZpMC43pEHpaocV"
 # Issuer account for IOU/book queries.
-# Default fallback is Bitstamp USD issuer on mainnet.
+# Defaults to the RLUSD issuer (rMxCK…) to match the default currency.
 issuer = "rMxCKbEDwqr76QuheSUMdEGf4B9xJ8m5De"
 # Human-readable currency symbol for display.
 currency = "RLUSD"
 # 160-bit hexadecimal currency code used in XRPL RPC book_offers/price requests.
-# Default fallback is "USD" (3-letter code) if left empty.
+# When left empty, the code is derived from `currency` (RLUSD → 524C555344…).
 currency_code = "524C555344000000000000000000000000000000"
 # Number of offers to display in book/summary views.
 offer_limit = 5
@@ -36,3 +36,8 @@ poll_interval_ms = 5000
 [[xrpl.oracles]]
 account = "rP24Lp7bcUHvEW7T7c8xkxtQKKd9fZyra7"
 oracle_document_id = 42
+
+[flare.fassets]
+# Minting Tag Manager EVM address, verified out of band.
+# Tag-manager writes are refused until this pin is set and matches the Flare RPC answer.
+# expected_tag_manager = "0x..."

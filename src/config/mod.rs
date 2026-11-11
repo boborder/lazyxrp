@@ -5,22 +5,21 @@ use std::{
 };
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use directories::ProjectDirs;
-use ratatui::style::{Color, Modifier, Style};
 use serde::{Deserialize, de::Deserializer, de::Error as _};
 
 use crate::{action::Action, network::Network};
 
 mod defaults;
 mod keybindings;
-mod styles;
 
+#[cfg(test)]
+pub(crate) use defaults::DEFAULT_FLARE_EVM_KEY_ENV;
 pub use defaults::{FALLBACK_CURRENCY_CODE, FALLBACK_ISSUER};
 use defaults::{
-    default_flare_evm_key_env, default_oracle_pairs, default_slippage_bps, fallback_issuer,
+    default_account, default_currency, default_flare_evm_key_env, default_issuer,
+    default_offer_limit, default_oracle_pairs, default_poll_interval_ms, default_slippage_bps,
 };
 pub use keybindings::KeyBindings;
-pub use styles::Styles;
 
 const CONFIG: &str = include_str!("../../config.default.toml");
 const CONFIG_DIR_BASENAME: &str = "lazyxrp";
@@ -91,6 +90,10 @@ pub struct FlareFassetsConfig {
     /// refused unless the Flare RPC answer equals it (the RPC alone is not trusted for funds).
     #[serde(default)]
     pub expected_core_vault: Option<String>,
+    /// Minting Tag Manager EVM address verified out of band. Tag-manager writes are refused until
+    /// this pin is set and the Flare RPC answer equals it.
+    #[serde(default)]
+    pub expected_tag_manager: Option<String>,
 }
 
 /// `[flare.smart_accounts]` — Smart Account instruction Payments (XRPL → operator → Flare).
@@ -155,8 +158,6 @@ pub struct Config {
     pub paths: PathConfig,
     #[serde(default)]
     pub keybindings: KeyBindings,
-    #[serde(default)]
-    pub styles: Styles,
     #[serde(default)]
     pub xrpl: LedgerConfig,
     #[serde(default)]
@@ -235,15 +236,19 @@ impl fmt::Debug for RawSigningConfig {
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct LedgerConfig {
+    #[serde(default = "default_account")]
     pub account: String,
-    #[serde(default = "fallback_issuer")]
+    #[serde(default = "default_issuer")]
     pub issuer: String,
+    #[serde(default = "default_currency")]
     pub currency: String,
     /// 160-bit hex (or 3-letter ISO) for `book_offers`. Only needed when it cannot be derived
     /// from `currency` (e.g. an AMM LP token); unset means derive.
     #[serde(default)]
     pub currency_code: Option<String>,
+    #[serde(default = "default_offer_limit")]
     pub offer_limit: u16,
+    #[serde(default = "default_poll_interval_ms")]
     pub poll_interval_ms: u64,
     /// Network preset (mainnet / testnet / devnet / xahau / xahau-test). Determines default RPC/WS endpoints.
     #[serde(default)]
@@ -353,6 +358,96 @@ fn layer_credentials(low: Credentials, high: Credentials) -> Credentials {
     }
 }
 
+/// Serde cannot combine `deny_unknown_fields` with the flattened path config. Walk the raw TOML
+/// instead so new or misspelled keys remain forward-compatible but are visible to the operator.
+fn allowed_config_keys(path: &str) -> Option<&'static [&'static str]> {
+    Some(match path {
+        "" => &["data_dir", "config_dir", "keybindings", "xrpl", "flare"],
+        "xrpl" => &[
+            "account",
+            "issuer",
+            "currency",
+            "currency_code",
+            "offer_limit",
+            "poll_interval_ms",
+            "network",
+            "rpc_server",
+            "ws_server",
+            "signing",
+            "oracles",
+            "oracle_pairs",
+            "slippage_bps",
+        ],
+        "xrpl.signing" => &["seed", "mnemonic"],
+        "xrpl.oracles[]" => &["account", "oracle_document_id"],
+        "xrpl.oracle_pairs[]" => &["base_asset", "quote_asset"],
+        "flare" => &["network", "display", "fassets", "wallet", "smart_accounts"],
+        "flare.fassets" => &[
+            "execute",
+            "evm_key_env",
+            "expected_core_vault",
+            "expected_tag_manager",
+        ],
+        "flare.wallet" => &["address"],
+        "flare.smart_accounts" => &["expected_operator"],
+        _ => return None,
+    })
+}
+
+fn collect_config_key_warnings(
+    table: &toml::value::Table,
+    parent: &str,
+    warnings: &mut Vec<String>,
+) {
+    let Some(allowed) = allowed_config_keys(parent) else {
+        return;
+    };
+    for (key, value) in table {
+        let path = if parent.is_empty() {
+            key.clone()
+        } else {
+            format!("{parent}.{key}")
+        };
+        if !allowed.contains(&key.as_str()) {
+            warnings.push(format!("unknown config key `{path}`; it will be ignored"));
+            continue;
+        }
+        if path == "keybindings" {
+            if let Some(sections) = value.as_table() {
+                for section in sections.keys() {
+                    if !section.eq_ignore_ascii_case("splash") {
+                        warnings.push(format!(
+                            "keybinding section `keybindings.{section}` is discarded; only `Splash` is read"
+                        ));
+                    }
+                }
+            }
+            continue;
+        }
+        if let Some(child) = value.as_table() {
+            collect_config_key_warnings(child, &path, warnings);
+        } else if matches!(path.as_str(), "xrpl.oracles" | "xrpl.oracle_pairs")
+            && let Some(entries) = value.as_array()
+        {
+            for entry in entries.iter().filter_map(toml::Value::as_table) {
+                collect_config_key_warnings(entry, &format!("{path}[]"), warnings);
+            }
+        }
+    }
+}
+
+/// Return warnings containing key paths only, never TOML values (which may be credentials).
+fn config_key_warnings(text: &str) -> Vec<String> {
+    let Ok(value) = toml::from_str::<toml::Value>(text) else {
+        return Vec::new();
+    };
+    let mut warnings = Vec::new();
+    if let Some(table) = value.as_table() {
+        collect_config_key_warnings(table, "", &mut warnings);
+    }
+    warnings
+}
+
 impl Config {
     /// Effective data directory: the config file's `data_dir`, else [`data_dir`] (env / platform default).
     pub fn resolved_data_dir(&self) -> PathBuf {
@@ -407,8 +502,14 @@ impl Config {
         let config_file = config_dir.join("config.toml");
         // Empty / missing `paths` fall back to `data_dir()` / `config_dir()` in `resolved_*_dir`.
         let mut config: Self = match std::fs::read_to_string(&config_file) {
-            Ok(text) => toml::from_str(&text)
-                .wrap_err_with(|| format!("parsing {}", config_file.display()))?,
+            Ok(text) => {
+                let parsed = toml::from_str(&text)
+                    .wrap_err_with(|| format!("parsing {}", config_file.display()))?;
+                for warning in config_key_warnings(&text) {
+                    eprintln!("lazyxrp: warning: {warning}");
+                }
+                parsed
+            }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 // Before `logging::init`, tracing may have no subscriber — surface this on stderr.
                 eprintln!(
@@ -459,7 +560,7 @@ impl Config {
         config.flare_evm_key = take_secret_env(&config.flare.fassets.evm_key_env, str::trim);
 
         if let Ok(v) = env::var(XRPL_NETWORK_ENV)
-            && let Ok(n) = <Network as clap::ValueEnum>::from_str(&v, true)
+            && let Ok(n) = <Network as clap::ValueEnum>::from_str(v.trim(), true)
         {
             config.xrpl.network = n;
         }
@@ -482,9 +583,6 @@ impl Config {
                 .0
                 .entry(key.clone())
                 .or_insert_with(|| cmd.clone());
-        }
-        for (style_key, style) in default_config.styles.0.iter() {
-            config.styles.0.entry(style_key.clone()).or_insert(*style);
         }
 
         Ok(config)
@@ -525,8 +623,8 @@ fn warn_if_config_world_readable(path: &std::path::Path) {
 pub fn data_dir() -> PathBuf {
     if let Some(s) = env_data_folder() {
         s
-    } else if let Some(proj_dirs) = project_directory() {
-        proj_dirs.data_local_dir().to_path_buf()
+    } else if let Some(base_dirs) = directories::BaseDirs::new() {
+        base_dirs.data_local_dir().join(CONFIG_DIR_BASENAME)
     } else {
         PathBuf::from(".").join(".data")
     }
@@ -537,25 +635,32 @@ pub fn config_dir() -> PathBuf {
         s
     } else if let Some(xdg) = xdg_config_home() {
         xdg.join(CONFIG_DIR_BASENAME)
-    } else if let Some(proj_dirs) = project_directory() {
-        proj_dirs
-            .config_local_dir()
-            .parent()
-            .map(|p| p.join(CONFIG_DIR_BASENAME))
-            .unwrap_or_else(|| proj_dirs.config_local_dir().to_path_buf())
+    } else if let Some(base_dirs) = directories::BaseDirs::new() {
+        base_dirs.config_local_dir().join(CONFIG_DIR_BASENAME)
     } else {
         PathBuf::from(".").join(".config")
     }
-}
-
-fn project_directory() -> Option<ProjectDirs> {
-    ProjectDirs::from("com", "kdheepak", env!("CARGO_PKG_NAME"))
 }
 
 #[cfg(test)]
 mod tests {
     use super::{keybindings::parse_key_sequence, *};
     use crate::test_support::{TempRootGuard, TestEnvGuard, env_lock};
+
+    /// A partial `[xrpl]` table (only `network` here) merges with the built-in defaults instead
+    /// of failing the whole startup with "missing field `account`".
+    #[test]
+    fn partial_xrpl_table_falls_back_per_field() {
+        let cfg: Config =
+            toml::from_str("[xrpl]\nnetwork = \"testnet\"\n").expect("partial [xrpl] parses");
+        let d = LedgerConfig::default();
+        assert_eq!(cfg.xrpl.network, Network::Testnet);
+        assert_eq!(cfg.xrpl.account, d.account);
+        assert_eq!(cfg.xrpl.issuer, d.issuer);
+        assert_eq!(cfg.xrpl.currency, d.currency);
+        assert_eq!(cfg.xrpl.offer_limit, d.offer_limit);
+        assert_eq!(cfg.xrpl.poll_interval_ms, d.poll_interval_ms);
+    }
 
     /// The quote code follows `currency` unless `currency_code` overrides it: a 3-letter code
     /// stays as is, a longer symbol becomes zero-padded hex, and an explicit LP-token code wins.
@@ -624,6 +729,17 @@ mod tests {
         assert_eq!(cfg.network, FlareNetwork::Flare);
         assert_eq!(cfg.display, FlareDisplay::Full);
 
+        let cfg: FlareConfig = toml::from_str(
+            "[fassets]\nexpected_tag_manager = \"0xabcdef0123456789abcdef0123456789abcdef01\"",
+        )
+        .unwrap();
+        assert_eq!(
+            cfg.fassets.expected_tag_manager.as_deref(),
+            Some("0xabcdef0123456789abcdef0123456789abcdef01")
+        );
+        let cfg: FlareConfig = toml::from_str("").unwrap();
+        assert_eq!(cfg.fassets.expected_tag_manager, None);
+
         // smart accounts expected operator parses
         let cfg: FlareConfig =
             toml::from_str("[smart_accounts]\nexpected_operator = \"rOperator\"").unwrap();
@@ -654,6 +770,102 @@ mod tests {
             address = "0xshort"
         "#;
         assert!(toml::from_str::<FlareConfig>(bad).is_err());
+    }
+
+    #[test]
+    fn config_key_warnings_accept_known_keys() {
+        let known = format!(
+            r#"
+data_dir = "~/data"
+config_dir = "~/config"
+[keybindings.Splash]
+"<q>" = "Quit"
+[xrpl]
+account = "rAccount"
+issuer = "rIssuer"
+currency = "USD"
+currency_code = "USD"
+offer_limit = 5
+poll_interval_ms = 5000
+network = "mainnet"
+rpc_server = "https://rpc.example"
+ws_server = "wss://rpc.example"
+slippage_bps = 100
+[xrpl.signing]
+seed = "sNotPrinted"
+mnemonic = "not printed either"
+[[xrpl.oracles]]
+account = "rOracle"
+oracle_document_id = 1
+[[xrpl.oracle_pairs]]
+base_asset = "XRP"
+quote_asset = "USD"
+[flare]
+network = "flare"
+display = "full"
+[flare.fassets]
+execute = false
+evm_key_env = "{DEFAULT_FLARE_EVM_KEY_ENV}"
+expected_core_vault = "rVault"
+expected_tag_manager = "0xabcdef0123456789abcdef0123456789abcdef01"
+[flare.wallet]
+address = "0xabcdef0123456789abcdef0123456789abcdef01"
+[flare.smart_accounts]
+expected_operator = "rOperator"
+"#
+        );
+        assert_eq!(config_key_warnings(&known), Vec::<String>::new());
+    }
+
+    #[test]
+    fn config_key_warnings_are_compatible_and_never_include_values() {
+        let text = r#"
+future_top_level = "sSecretTopLevel"
+[styles]
+selected = "sSecretStyle"
+[xrpl]
+acct = "rNotPrinted"
+[xrpl.signing]
+seed = "sSecretSeed"
+future_signing = "sSecretSigning"
+[[xrpl.oracles]]
+account = "rOracle"
+oracle_document_id = 1
+future_oracle = "sSecretOracle"
+[flare.fassets]
+expected_tag_manager = "0xabcdef0123456789abcdef0123456789abcdef01"
+future_flare = "sSecretFlare"
+[keybindings.Composer]
+"<x>" = "Quit"
+"#;
+        let warnings = config_key_warnings(text);
+        for expected in [
+            "unknown config key `future_top_level`",
+            "unknown config key `styles`",
+            "unknown config key `xrpl.acct`",
+            "unknown config key `xrpl.signing.future_signing`",
+            "unknown config key `xrpl.oracles[].future_oracle`",
+            "unknown config key `flare.fassets.future_flare`",
+            "keybinding section `keybindings.Composer` is discarded; only `Splash` is read",
+        ] {
+            assert!(
+                warnings.iter().any(|warning| warning.contains(expected)),
+                "missing {expected:?} in {warnings:?}"
+            );
+        }
+        let output = warnings.join("\n");
+        for secret in [
+            "sSecretTopLevel",
+            "sSecretStyle",
+            "rNotPrinted",
+            "sSecretSeed",
+            "sSecretSigning",
+            "sSecretOracle",
+            "sSecretFlare",
+        ] {
+            assert!(!output.contains(secret), "warning leaked {secret}");
+        }
+        toml::from_str::<Config>(text).expect("unknown keys and sections must not reject config");
     }
 
     fn sample_xrpl_config_toml(poll_interval_ms: u64) -> String {
@@ -768,7 +980,7 @@ rpc_server = "https://from-file.example"
             "LAZYXRP_CONFIG",
             "XDG_CONFIG_HOME",
             crate::signing::SEED_ENV,
-            "FLARE_EVM_KEY",
+            DEFAULT_FLARE_EVM_KEY_ENV,
         ]);
         let toml = r#"[xrpl]
 account = "r3kmLJN5D28dHuH8vZNUZpMC43pEHpaocV"
@@ -786,7 +998,7 @@ seed = "sEdFileSeedValueNotReal1234567890"
         _test_env.remove("XDG_CONFIG_HOME");
         _test_env.set("LAZYXRP_CONFIG", root.to_str().unwrap());
         _test_env.set(crate::signing::SEED_ENV, "sEdEnvSeedOverride9876543210");
-        _test_env.set("FLARE_EVM_KEY", " 0xabc ");
+        _test_env.set(DEFAULT_FLARE_EVM_KEY_ENV, " 0xabc ");
         let c = Config::new()?;
         assert_eq!(
             c.xrpl
@@ -805,7 +1017,7 @@ seed = "sEdFileSeedValueNotReal1234567890"
             c.flare_evm_key.as_ref().map(|s| s.expose_secret()),
             Some("0xabc")
         );
-        assert!(std::env::var("FLARE_EVM_KEY").is_err());
+        assert!(std::env::var(DEFAULT_FLARE_EVM_KEY_ENV).is_err());
         Ok(())
     }
 
@@ -866,10 +1078,12 @@ network = "mainnet"
             assert_eq!(Config::new()?.xrpl.network, Network::XahauTest);
             _test_env.set(XRPL_NETWORK_ENV, "testnet");
             assert_eq!(Config::new()?.xrpl.network, Network::Testnet);
-            for bad in ["not-a-network", " testnet"] {
-                _test_env.set(XRPL_NETWORK_ENV, bad);
-                assert_eq!(Config::new()?.xrpl.network, Network::XahauTest, "{bad:?}");
-            }
+            // Whitespace is trimmed like the sibling endpoint overrides: a stray space must
+            // not silently select another (production) network.
+            _test_env.set(XRPL_NETWORK_ENV, " testnet ");
+            assert_eq!(Config::new()?.xrpl.network, Network::Testnet);
+            _test_env.set(XRPL_NETWORK_ENV, "not-a-network");
+            assert_eq!(Config::new()?.xrpl.network, Network::XahauTest);
         }
 
         // server env merge
@@ -959,6 +1173,25 @@ network = "mainnet"
         }
     }
 
+    #[test]
+    fn default_data_dir_uses_lazyxrp_without_upstream_identifier() {
+        let _env_lock = env_lock();
+        let test_env = TestEnvGuard::new(&["LAZYXRP_DATA", "HOME", "XDG_DATA_HOME"]);
+        let home = std::env::temp_dir().join(format!("lazyxrp-data-home-{}", std::process::id()));
+        test_env.remove("LAZYXRP_DATA");
+        test_env.set("HOME", home.to_str().unwrap());
+        test_env.set("XDG_DATA_HOME", home.join("data").to_str().unwrap());
+
+        if directories::BaseDirs::new().is_some() {
+            let path = data_dir();
+            assert_eq!(path.file_name(), Some(std::ffi::OsStr::new("lazyxrp")));
+            assert!(
+                !path.to_string_lossy().contains("kdheepak"),
+                "unexpected upstream identifier in {path:?}"
+            );
+        }
+    }
+
     /// TC-359: only bindable actions allowed
     /// Keybindings may only bind payload-free safe actions; write/payload variants are
     /// rejected at load.
@@ -991,7 +1224,7 @@ network = "mainnet"
             "XDG_CONFIG_HOME",
             crate::signing::SEED_ENV,
             crate::signing::MNEMONIC_ENV,
-            "FLARE_EVM_KEY",
+            DEFAULT_FLARE_EVM_KEY_ENV,
         ]);
         let toml = format!(
             "{}\n[xrpl.signing]\nmnemonic = \"file words\"\n",
@@ -1016,7 +1249,7 @@ network = "mainnet"
         };
         _test_env.remove(crate::signing::SEED_ENV);
         _test_env.remove(crate::signing::MNEMONIC_ENV);
-        _test_env.remove("FLARE_EVM_KEY");
+        _test_env.remove(DEFAULT_FLARE_EVM_KEY_ENV);
         // file only
         assert_eq!(kinds(&Config::new()?), (None, Some("file words".into())));
         // env seed beats file mnemonic (file mnemonic dropped)
