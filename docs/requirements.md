@@ -48,7 +48,7 @@ Product **requirements** (what). Behavioral design: [`architecture.md`](architec
 ### FR-07: Config loading
 
 - Settings are loaded from a file; defaults are used when unspecified.
-- The config file is looked up at `$XDG_CONFIG_HOME/lazyxrp/config.toml` first, and at `~/.config/lazyxrp/config.toml` when that is unset.
+- `$LAZYXRP_CONFIG/config.toml` is used when `LAZYXRP_CONFIG` is set. Otherwise the lookup uses `$XDG_CONFIG_HOME/lazyxrp/config.toml` when `XDG_CONFIG_HOME` is set, then the platform default: `~/.config/lazyxrp/config.toml` on Linux/XDG systems, `~/Library/Application Support/lazyxrp/config.toml` on macOS, or `%LOCALAPPDATA%\lazyxrp\config.toml` on Windows.
 - Key bindings (global defaults in `config.default.toml`, details in [`DESIGN.md`](../DESIGN.md)) and XRPL connection settings (RPC/WS, currency, issuer, poll interval) are supported.
 
 ## 4. Non-Functional Requirements
@@ -147,7 +147,7 @@ Product **requirements** (what). Behavioral design: [`architecture.md`](architec
 - Signing credentials can be loaded with the following precedence:
   1. CLI `--seed` / `--mnemonic`
   2. The matching environment variables `XRPL_SEED` / `XRPL_MNEMONIC`
-  3. `[xrpl.signing] seed` / `mnemonic` in the config file `~/.config/lazyxrp/config.toml`
+  3. `[xrpl.signing] seed` / `mnemonic` in the resolved platform-specific `config.toml`
 - BIP39 mnemonics support secp256k1, BIP44 account index 0. Existing family seed behavior is preserved.
 - The risk of storing credentials in plain text in the config file is documented explicitly.
 - Running a write command with no credentials configured returns an explicit error message.

@@ -156,7 +156,9 @@ WebSocket の ledger close は poll トリガーを集約する（`MIN_POLL_INTE
 
 ### 設定ファイル（`Config::xrpl`）
 
-- パス: `$XDG_CONFIG_HOME/lazyxrp/config.toml` → `~/.config/lazyxrp/config.toml`
+- 設定ファイル探索: `LAZYXRP_CONFIG` 設定時は `$LAZYXRP_CONFIG/config.toml`。未設定なら `XDG_CONFIG_HOME` 設定時は `$XDG_CONFIG_HOME/lazyxrp/config.toml`、その他は Linux/XDG が `~/.config/lazyxrp/config.toml`、macOS が `~/Library/Application Support/lazyxrp/config.toml`、Windows が `%LOCALAPPDATA%\lazyxrp\config.toml`。最終フォールバックは `./.config/config.toml`
+- `[paths]`（`Config::paths`。TOML ではルートに flatten）: 任意の `data_dir` / `config_dir`。既定は Linux/XDG のデータが `$XDG_DATA_HOME/lazyxrp` または `~/.local/share/lazyxrp`、設定は上記の探索先、macOS はともに `~/Library/Application Support/lazyxrp`、Windows はともに `%LOCALAPPDATA%\lazyxrp`。`LAZYXRP_DATA` / `LAZYXRP_CONFIG` が優先
+- 不明なキーは stderr に警告するが、ファイルを拒否しない。非 `Splash` keybinding section は破棄される旨を警告する
 - フィールド: `network`、`account`、`issuer`、`currency`、`currency_code`、`offer_limit`、`poll_interval_ms`（既定 5000。24/7 ダッシュボードでは上げる）、`slippage_bps`（Payment quote、既定 100 = 1%）、`oracles`、`oracle_pairs`、`[xrpl.signing]`、任意の `rpc_server` / `ws_server`
 - 既定 issuer のフォールバック（mainnet Bitstamp USD）: `rvYAfWj5gh67oV6fW32ZzP3Aw4Eubs59B`
 - `currency_code`: 任意。`book_offers` 用の 160 ビット hex（または 3 文字 ISO）。未指定なら `currency` から導出（`quote_code()`）。AMM の LP トークン（`03…`）など導出できない場合のみ指定する
@@ -170,6 +172,7 @@ WebSocket の ledger close は poll トリガーを集約する（`MIN_POLL_INTE
 | `fassets.execute` | `false` | C3 `executeDirectMinting` と全 Flare EVM write には true が必要 |
 | `fassets.evm_key_env` | `FLARE_EVM_KEY` | Flare EVM 鍵を持つ env 変数名（起動時に読み取って除去） |
 | `fassets.expected_core_vault` | _（未設定）_ | C2 / `sa-memo` / `sa-call` Payment 用の XRPL Core Vault pin。Flare RPC の回答がこれと等しくなければならない（未設定／不一致 → 拒否） |
+| `fassets.expected_tag_manager` | _（未設定）_ | 帯域外で検証する Minting Tag Manager EVM address（`0x…`）の pin。未設定時は tag-manager write を拒否し、設定後も Flare RPC の回答との一致が必須 |
 | `wallet.address` | _（未設定）_ | 任意の `0x…` EVM アドレス — Overview の読み取りパネル（ネイティブ FLR + FXRP）。不正な hex は設定ロードに失敗する |
 | `smart_accounts.expected_operator` | _（未設定）_ | Smart Account 命令 Payment 用の XRPL `r…` operator pin。Flare RPC の `getXrplProviderWallets()[0]` がこれと等しくなければならない（未設定／不一致 → 拒否）。帯域外で検証すること |
 

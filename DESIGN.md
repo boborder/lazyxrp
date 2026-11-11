@@ -132,7 +132,7 @@ Guard: `TAB_TITLES.len() == panels.len() == 4` (`debug_assert_eq!` in `App::new`
 
 ## 6. Keys (operated)
 
-Defaults: [`config.default.toml`](config.default.toml) `keybindings.Splash`. User merge: `~/.config/lazyxrp/config.toml` — same-key entries override, new keys add, unlisted defaults stay (no unbind). `Tab` / `Shift+Tab` / `1`–`4` and panel-local keys below are hard-coded.
+Defaults: [`config.default.toml`](config.default.toml) `keybindings.Splash`. User merge: the platform-specific `config.toml` documented in `README.md` — same-key entries override, new keys add, unlisted defaults stay (no unbind). `Tab` / `Shift+Tab` / `1`–`4` and panel-local keys below are hard-coded.
 
 ```toml
 [keybindings.Splash]
@@ -143,7 +143,7 @@ Defaults: [`config.default.toml`](config.default.toml) `keybindings.Splash`. Use
 | Key | Action |
 |-----|--------|
 | `q` | Quit (disabled while `keymap_suppressed`) |
-| `Ctrl-c`, `Ctrl-d` | Quit (always) |
+| `Ctrl-c`, `Ctrl-d` | Hardcoded always-quit only while a modal sets `keymap_suppressed`; otherwise these are configurable `[keybindings.Splash]` bindings (Quit by default) |
 | `Ctrl-z` | Suspend |
 | `Ctrl-n` | Cycle network badge: mainnet→testnet→devnet→xahau→xahau-test (session only) |
 | `r` / `b` / `o` | Refresh account / book / ledger objects |

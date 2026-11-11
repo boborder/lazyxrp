@@ -7,10 +7,25 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 ### Added
 
 - README demo: `docs/demo.tape` (vhs) renders `docs/demo.gif` with `mise run demo`; it runs the debug binary read-only with a scrubbed environment and throwaway config/data dirs. `vhs` is added to the mise tools.
+- `[flare.fassets] expected_tag_manager`: payable tag reservations require this out-of-band address pin and a 10 FLR fee ceiling. Unknown config keys and discarded keybinding sections now produce stderr warnings without exposing values.
+- Focused regressions for field-less transaction composers, malformed balances, typed connectivity errors, FDC proof binding, signing invariants and panic-safe network-id restoration.
+
+### Fixed
+
+- The Wallet composer no longer panics on the field-less `DIDDelete` form; a dropped network-watch sender no longer spins the poll task at 100% CPU; multi-key bindings are consumed after a match.
+- dUNL expiry uses Euclidean days and shows `expired` instead of a negative/zero day count; NFT/AMM fees from malformed node data cannot wrap through `as u16`; XRP-labelled issued objects are not divided by 1e6.
+- `TicketCount=00` cannot produce a zero-ticket transaction, and NFT/MPT `TransferFee=00` is treated as zero. `XRPL_NETWORK` is trimmed, and a partial `[xrpl]` table merges with defaults instead of aborting startup.
+- Account balances are parsed strictly in drops, so malformed node data cannot become a zero-balance refusal; `account_tx` not-found handling has one conversion layer.
+- FDC DA proofs are bound to the requested transaction, owner and voting round. Direct-mint writes fail closed when pause/limit reads fail. The signing boundary validates fee/sequence/ledger invariants, and Xahau's thread-local network id is restored even on panic.
+- Direct Mint rejects a zero FXRP recipient; SetRegularKey signing applies the same address validation as simulate; FDC API keys are redacted and remote error text is sanitized.
+- Transaction/validator overlays clamp scrolling to wrapped content without cloning every line each frame. Status-bar state is updated outside render, and composite panels no longer drop sibling actions.
+- `--self-uninstall` works with a broken config and warns when a separate `rp` binary remains. A terminal event-stream error is logged instead of disappearing silently.
 
 ### Changed
 
-- `config.default.toml` no longer carries the `[xrpl]` block: `Config::new` only ever merged its keybindings and styles, so the block (account, issuer, oracles, pairs) had no effect and could drift from `config/defaults.rs`. The I-5 precedence row in `docs/security*.md` now says so.
+- `config.default.toml` no longer carries the `[xrpl]` block: `Config::new` only ever merged its keybindings, so the block (account, issuer, oracles, pairs) had no effect and could drift from `config/defaults.rs`. The I-5 precedence row in `docs/security*.md` now says so.
+- Removed the unused `[styles]` config surface. Default config/data directories no longer contain the upstream `com.kdheepak` identifier; platform paths and the fact that `.env` is not auto-loaded are documented.
+- `--account` is TUI-only and rejected for `-x` commands rather than ignored. `xrpl::txspec` now shares one set of helpers/macros and uses strict drops parsing and exact decimal AMM comparisons.
 
 ## [0.10.1] - 2026-11-08
 

@@ -47,9 +47,6 @@ cargo deny check
 | TC-016 | P2 | `src/xrpl/parse.rs` | account_tx — parse response into TxRow vec (with direction) |
 | TC-017 | P1 | `src/xrpl/parse.rs` | book_offers — parse response into OfferRow vec |
 | TC-018 | P2 | `src/xrpl/parse.rs` | server_info/fee — parse response into summary structs |
-| TC-019-022 | P2 | `src/config/styles.rs` | parse_style — empty yields default, foreground/background mapping, modifiers combined, gray==grey |
-| TC-023 | P2 | `src/config/styles.rs` | extract_color_and_modifiers — exercised through `parse_style_spec_mapping` (TC-019-022); no dedicated test |
-| TC-024-025 | P2 | `src/config/styles.rs` | parse_color — RGB shorthand; unknown returns None; out-of-range `rgb`/`grayNN`/`bright colorNN` return None (no u8 overflow) |
 | TC-026 | P0 | `src/config/mod.rs` | Config::new — loads default keybindings (untouched `<q>` → Quit asserted in `user_keybindings_override_and_extend_defaults`, TC-195) |
 | TC-027-029,031-032 | P1 | `src/config/keybindings.rs` | parse_key_event — modifier composition, case insensitivity, invalid keys error |
 | TC-033-035, TC-092 | P1 | `src/config/mod.rs` | Config source precedence — file overrides default, `XRPL_RPC_SERVER` env overrides file, XDG resolution, `~/.config` fallback |

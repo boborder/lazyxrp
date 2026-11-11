@@ -47,9 +47,6 @@ cargo deny check
 | TC-016 | P2 | `src/xrpl/parse.rs` | account_tx — レスポンスを TxRow の Vec にパース（direction 付き） |
 | TC-017 | P1 | `src/xrpl/parse.rs` | book_offers — レスポンスを OfferRow の Vec にパース |
 | TC-018 | P2 | `src/xrpl/parse.rs` | server_info/fee — レスポンスをサマリー構造体にパース |
-| TC-019-022 | P2 | `src/config/styles.rs` | parse_style — 空はデフォルト、前景／背景のマッピング、修飾子の組み合わせ、gray==grey |
-| TC-023 | P2 | `src/config/styles.rs` | extract_color_and_modifiers — `parse_style_spec_mapping`（TC-019-022）経由で検証。専用テストは無い |
-| TC-024-025 | P2 | `src/config/styles.rs` | parse_color — RGB 短縮形。不明は None を返す。範囲外の `rgb`/`grayNN`/`bright colorNN` は None を返す（u8 オーバーフローなし） |
 | TC-026 | P0 | `src/config/mod.rs` | Config::new — デフォルトのキーバインドを読み込む（未変更の `<q>` → Quit を `user_keybindings_override_and_extend_defaults`、TC-195 で検証） |
 | TC-027-029,031-032 | P1 | `src/config/keybindings.rs` | parse_key_event — 修飾キーの組み合わせ、大文字小文字非依存、不正なキーはエラー |
 | TC-033-035, TC-092 | P1 | `src/config/mod.rs` | Config ソース優先順位 — ファイルがデフォルトを上書き、`XRPL_RPC_SERVER` 環境変数がファイルを上書き、XDG 解決、`~/.config` フォールバック |

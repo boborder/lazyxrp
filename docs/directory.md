@@ -22,6 +22,8 @@ lazyxrp/
 ├── .env.example
 ├── install.sh
 ├── mise.toml
+├── mise.lock               # mise tool lockfile (tracked)
+├── .graphifyignore         # graphify local structural-report exclusions (read directly by graphify CLI; no repo references)
 ├── deny.toml
 ├── AGENTS.md
 ├── LICENSE
@@ -30,7 +32,7 @@ lazyxrp/
 ├── .gitignore
 ├── .cargo/audit.toml      # cargo-audit ignores; mirror of deny.toml
 ├── .config/
-│   ├── lazyxrp/config.toml                # sample user config (README: copy to ~/.config/lazyxrp/)
+│   ├── lazyxrp/config.toml                # sample user config (README: copy to the resolved config dir)
 │   └── lazyxrp-test/config.toml.example   # testnet rehearsal template (the copy is gitignored)
 ├── .github/workflows/     # ci.yml / cd.yml / benchmark.yml
 ├── src/
@@ -44,8 +46,7 @@ lazyxrp/
 │   ├── config/
 │   │   ├── mod.rs             # Config / load+merge / env / paths
 │   │   ├── defaults.rs        # fallback constants, serde defaults
-│   │   ├── keybindings.rs     # KeyBindings, key parsing, `is_bindable`
-│   │   └── styles.rs          # Styles, style/color parsing
+│   │   └── keybindings.rs     # KeyBindings, key parsing, `is_bindable`
 │   ├── network.rs
 │   ├── signing.rs
 │   ├── flare.rs
@@ -167,7 +168,7 @@ lazyxrp/
 - `ROADMAP.md` / `ROADMAP-ja.md`: goal hierarchy (final goal / long / mid / short term) and milestones (progress SSOT); the Japanese file is its twin. Cautions and pivot records are in `roadmap-log.md`.
 - `CHANGELOG.md`: user-facing change history (Keep a Changelog). Add entries under `[Unreleased]`; finalize to a version number at release. Also bundled in the crates.io package.
 - `SECURITY.md`: vulnerability reporting channel (GitHub private vulnerability reporting) and a summary of the safety model. Details and history are in `docs/security.md`.
-- `.env.example`: example `XRPL_*` environment variables (optional; see `docs/tech.md` and the implementation for the full list).
+- `.env.example`: example `XRPL_*` environment variables. The app does not load `.env`; export values in the shell (optional; see `docs/tech.md` and the implementation for the full list).
 - `install.sh`: interactive installer (requires `curl` **or** `wget`). Prompts and messages are in English. `--help` lists the CLI (`--method cargo|binary`, `--install-rust` / `--no-install-rust`, `--install-mise` / `--no-install-mise`, `-q`). `CI=1` is equivalent to `-q`. Can append to the shell profile if PATH is not set. If the release archive contains `rp` it is installed; otherwise an `rp` → `lazyxrp` symlink is created. **Manual uninstall** is described by `--uninstall-help` (`lazyxrp --self-uninstall`, removing `INSTALL_DIR/rp`, etc.).
 - `mise.toml`: [mise](https://mise.jdx.dev/) tasks (`install`, `tags` (list), `tag-push` (manual tag fallback for emergencies), `bench` / `bench-fast` / `bench-ci` (benchmarks)). For the publish flow (CI detects the `Cargo.toml` version → auto-tag → CD publish) see [`maintenance.md`](maintenance.md).
 - `AGENTS.md`: project operating rules and execution contract (prohibitions, reading order). graphify structure output (`graphify-out/`) is gitignored and generated locally only.

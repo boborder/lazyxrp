@@ -20,7 +20,7 @@
 
 ### ~~P-005: `config.rs` remains one file~~ → resolved (2026-10-28)
 
-- Split `src/config.rs` (about 1530 lines) into `src/config/mod.rs` (Config, load/merge, env, paths, Flare sections, cross-area tests), `config/defaults.rs` (fallback constants, serde defaults, `Default` for `LedgerConfig` / `FlareFassetsConfig`), `config/keybindings.rs` and `config/styles.rs`. Pure move; `crate::config::*` paths unchanged.
+- Split `src/config.rs` (about 1530 lines) into `src/config/mod.rs` (Config, load/merge, env, paths, Flare sections, cross-area tests), `config/defaults.rs` (fallback constants, serde defaults, `Default` for `LedgerConfig` / `FlareFassetsConfig`), `config/keybindings.rs`. Pure move; `crate::config::*` paths unchanged.
 
 ### P-007: Xahau `NetworkID` acceptance by simulate is unverified
 

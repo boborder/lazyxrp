@@ -23,3 +23,5 @@ node_modules/
 # Flare skill scratch scripts (local probes)
 .agents/skills/flare-fassets/scripts/_*.ts
 .agents/skills/flare-fassets/scripts/_*.json
+# Lockfile from the local probe `npm install` (package.json is tracked; node_modules is not)
+.agents/skills/flare-fassets/scripts/package-lock.json

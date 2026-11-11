@@ -22,6 +22,8 @@ lazyxrp/
 ├── .env.example
 ├── install.sh
 ├── mise.toml
+├── mise.lock               # mise ツールのロックファイル（追跡対象）
+├── .graphifyignore         # graphify ローカル構造レポートの除外（graphify CLI が直接読む。repo 内参照なし）
 ├── deny.toml
 ├── AGENTS.md
 ├── LICENSE
@@ -30,7 +32,7 @@ lazyxrp/
 ├── .gitignore
 ├── .cargo/audit.toml      # cargo-audit ignores; mirror of deny.toml
 ├── .config/
-│   ├── lazyxrp/config.toml                # sample user config (README: copy to ~/.config/lazyxrp/)
+│   ├── lazyxrp/config.toml                # sample user config (README: copy to the resolved config dir)
 │   └── lazyxrp-test/config.toml.example   # testnet rehearsal template (the copy is gitignored)
 ├── .github/workflows/     # ci.yml / cd.yml / benchmark.yml
 ├── src/
@@ -44,8 +46,7 @@ lazyxrp/
 │   ├── config/
 │   │   ├── mod.rs             # Config / load+merge / env / paths
 │   │   ├── defaults.rs        # フォールバック定数・serde 既定値
-│   │   ├── keybindings.rs     # KeyBindings・キー解析, `is_bindable`
-│   │   └── styles.rs          # Styles・style/色の解析
+│   │   └── keybindings.rs     # KeyBindings・キー解析, `is_bindable`
 │   ├── network.rs
 │   ├── signing.rs
 │   ├── flare.rs
@@ -167,7 +168,7 @@ lazyxrp/
 - `ROADMAP.md` / `ROADMAP-ja.md`: ゴール階層（最終ゴール / 長期 / 中期 / 短期）とマイルストーン（進捗 SSOT）。日本語版が `ROADMAP-ja.md`。注意点・進路変更記録は `roadmap-log.md`。
 - `CHANGELOG.md`: 利用者向けの変更履歴（Keep a Changelog）。`[Unreleased]` に追記し、リリース時に版番号へ確定。crates.io パッケージにも同梱。
 - `SECURITY.md`: 脆弱性の報告窓口（GitHub private vulnerability reporting）と安全モデルの要約。詳細と履歴は `docs/security.md`。
-- `.env.example`: `XRPL_*` 環境変数の例（任意。一覧は `docs/tech.md` と実装を参照）。
+- `.env.example`: `XRPL_*` 環境変数の例。アプリは `.env` を読み込まないため、shell で export すること（任意。一覧は `docs/tech.md` と実装を参照）。
 - `install.sh`: インタラクティブインストーラ（必須は `curl` **または** `wget`）。プロンプトとメッセージは英語。`--help` で CLI 一覧（`--method cargo|binary`、`--install-rust` / `--no-install-rust`、`--install-mise` / `--no-install-mise`、`-q`）。`CI=1` は `-q` 相当。PATH 未設定時は shell profile へ追記可。リリースアーカイブに `rp` があればそれを入れ、無ければ `rp` → `lazyxrp` symlink。**手動アンインストール**は `--uninstall-help`（`lazyxrp --self-uninstall`、`INSTALL_DIR/rp` 削除など）。
 - `mise.toml`: [mise](https://mise.jdx.dev/) タスク（`install`、`tags`（一覧）、`tag-push`（緊急時の手動タグフォールバック）、`bench` / `bench-fast` / `bench-ci`（ベンチマーク））。公開フロー（CI の `Cargo.toml` version 検知 → auto-tag → CD 公開）の詳細は [`maintenance-ja.md`](maintenance-ja.md)。
 - `AGENTS.md`: プロジェクト運用ルールと実行ルール（禁止事項・読み順）。graphify の構造情報（`graphify-out/`）は gitignore で、ローカル生成のみ。

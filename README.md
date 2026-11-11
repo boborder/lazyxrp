@@ -61,7 +61,7 @@ lazyxrp --self-uninstall          # prompts for confirmation
 lazyxrp --self-uninstall --yes    # skip confirmation
 ```
 
-That removes the current binary, `{name}.bak`, and the resolved config/data directories (same path rules as `Config::new`, including `LAZYXRP_*` overrides).
+That removes the current binary, `{name}.bak`, and the resolved config/data directories (same path rules as `Config::new`, including `LAZYXRP_*` overrides). A sibling `rp` is removed only when it is a symlink; a separately installed, non-symlink `rp` binary is left in place and must be removed manually.
 
 Manual alternatives:
 
@@ -71,10 +71,9 @@ cargo uninstall lazyxrp --root "$HOME/.local"   # install.sh → ~/.local
 cargo uninstall lazyxrp                         # default cargo prefix / --path .
 
 # Config / data only (when the binary is already gone; no LAZYXRP_* overrides)
-rm -rf ~/.config/lazyxrp ~/.local/share/com.kdheepak.lazyxrp   # Linux / typical XDG
+rm -rf ~/.config/lazyxrp ~/.local/share/lazyxrp   # Linux / typical XDG
 # macOS:
-# rm -rf "$HOME/Library/Application Support/lazyxrp" \
-#        "$HOME/Library/Application Support/com.kdheepak.lazyxrp"
+# rm -rf "$HOME/Library/Application Support/lazyxrp"
 ```
 
 `cargo uninstall` also clears Cargo’s install metadata for that prefix; `--self-uninstall` only deletes files and directories. See `./install.sh --uninstall-help` for the same reference.
@@ -135,7 +134,7 @@ rc book --base XRP --quote USD --issuer <r-issuer>
 | `fxrp [--tag N]` | Read-only Flare FXRP report (JSON; Flare RPC from `FLARE_RPC_URL`, else the `[flare] network` default, mainnet): Direct Mint fees / pause / limits, MintingTagManager (reservation fee, next tag, cooldown; with `--tag`: owner, recipient, allowed executor, pending executor change), Core Vault holdings, agent vaults and the global redemption queue (tickets, total XRP / lots, 10 largest agents) |
 | `fxrp-execute <TXHASH> [--data HEX] [--round N]` | Prove the XRPL Payment to the Core Vault with the Flare Data Connector and run `executeDirectMinting` (`…WithData` with `--data`). Pays the attestation fee (about 20 FLR on mainnet) + gas from the Flare EVM key; needs `[flare.fassets] execute = true`, `FLARE_EVM_KEY`, and `--yes` on Flare mainnet. The voting round is printed once the fee is paid; if the run dies, `--round N` resumes without paying again. Env: `FDC_VERIFIER_URL`, `FDC_DA_URL`, `FDC_VERIFIER_API_KEY` (https only) |
 | `fxrp-redeem <XRP> <ADDR> [--tag N]` | Burn FXRP and have an agent pay XRP to the classic address `ADDR` (`redeemAmount`; `redeemWithTag` with `--tag`). Checks `minimumRedeemAmountUBA` and your FXRP balance, estimates gas first. Same gating as `fxrp-execute` |
-| `fxrp-tag-reserve` · `fxrp-tag-set <TAG> [--recipient A] [--executor A]` · `fxrp-tag-transfer <TAG> <TO>` | Minting tags: reserve one (pays the reservation fee in FLR), set its recipient / allowed executor (owner only; executor changes activate after the cooldown), or transfer it (irreversible). Same gating as `fxrp-execute` |
+| `fxrp-tag-reserve` · `fxrp-tag-set <TAG> [--recipient A] [--executor A]` · `fxrp-tag-transfer <TAG> <TO>` | Minting tags: reserve one (pays the reservation fee in FLR), set its recipient / allowed executor (owner only; executor changes activate after the cooldown), or transfer it (irreversible). Same gating as `fxrp-execute`; these writes are refused until `[flare.fassets] expected_tag_manager` pins the `0x…` Minting Tag Manager address verified out of band |
 | `sa-vault <firelight\|upshift> <deposit\|request-redeem\|claim> <VAULT_ID> <VALUE>` | Smart Account vault instruction as an XRPL Payment to the operator (pinned by `[flare.smart_accounts] expected_operator`; simulate first; `--yes` on mainnet). `VALUE` is the instruction's value field verbatim; per upstream `Instructions.sol`: deposit = FXRP base units (6 decimals), redeem = vault shares, claim = Firelight period / Upshift `YYYYMMDD`. The memo hex is printed first |
 | `sa-memo <ignore-memo\|set-nonce\|replace-fee\|set-executor\|remove-executor> <XRP> [--fee UBA] [--target TX] [--nonce N] [--new-fee UBA] [--executor ADDR]` | Smart Account memo instruction (`0xE0` / `0xE1` / `0xE2` / `0xD0` / `0xD1`) as a Direct Mint Payment to the Core Vault (needs `[flare.fassets] expected_core_vault`; the amount must leave a positive net mint; simulate first; `--yes` on mainnet). Every op mints the net amount to your personal account and has a precondition or side effect (executor pin / nonce). After it validates, waits up to 5 min (`--no-wait` skips) for a public executor to finalize it; otherwise `fxrp-execute <tx> --data 0x` finalizes it yourself |
 | `sa-call <XRP> --call TARGET:0xDATA [--call …] [--fee UBA]` | Smart Account custom instruction `0xFE`: contract calls run from your personal account (value 0). Sends the 42-byte memo (keccak256 of the user operation) as a Direct Mint Payment to the Core Vault and prints the user-operation bytes. A public executor cannot finalize it (it needs those bytes): run `fxrp-execute <tx> --data 0x<userOp>` yourself or hand them to an executor you trust. Same gating as `sa-memo` |
@@ -159,7 +158,7 @@ rp --network testnet -t <txid|r-address>
 
 ## Key Bindings
 
-Global defaults: [`config.default.toml`](config.default.toml) (merged into `~/.config/lazyxrp/config.toml`). **Full keymap** (global + panel-local, composer, TX overlay): [`DESIGN.md`](DESIGN.md).
+Global defaults: [`config.default.toml`](config.default.toml) (merged into the user `config.toml` found as described below). **Full keymap** (global + panel-local, composer, TX overlay): [`DESIGN.md`](DESIGN.md).
 
 Highlights: `Tab` / `1`–`4` tabs · `h`/`l` focus · `j`/`k` rows · `Enter` TX detail · `t` composer · `Ctrl-n` cycle network (session) · `?` help · `q` quit.
 
@@ -186,16 +185,24 @@ Flare Smart Accounts: the Overview FXRP panel shows your XRPL address's Flare pe
 
 ## Configuration
 
-Config lookup follows the XDG Base Directory spec:
+`LAZYXRP_CONFIG` overrides the config directory directly. Otherwise, `XDG_CONFIG_HOME/lazyxrp/config.toml` is used when `XDG_CONFIG_HOME` is set; without that override, the platform defaults are:
 
-- `$XDG_CONFIG_HOME/lazyxrp/config.toml`
-- `~/.config/lazyxrp/config.toml` (fallback)
+| Platform | Config file |
+|----------|-------------|
+| Linux / XDG systems | `~/.config/lazyxrp/config.toml` |
+| macOS | `~/Library/Application Support/lazyxrp/config.toml` |
+| Windows | `%LOCALAPPDATA%\lazyxrp\config.toml` |
+
+If no platform config directory is available, the final fallback is `./.config/config.toml`. The data directory uses `LAZYXRP_DATA` when set, then `$XDG_DATA_HOME/lazyxrp` or `~/.local/share/lazyxrp` on Linux/XDG systems, `~/Library/Application Support/lazyxrp` on macOS, and `%LOCALAPPDATA%\lazyxrp` on Windows (`./.data` if no platform directory is available).
+
+For Linux / XDG systems, install the optional sample overrides with:
 
 ```bash
 mkdir -p "${XDG_CONFIG_HOME:-$HOME/.config}/lazyxrp"
-# Optional sample overrides from the repo:
 cp .config/lazyxrp/config.toml "${XDG_CONFIG_HOME:-$HOME/.config}/lazyxrp/config.toml"
 ```
+
+Unknown keys are ignored with a warning on stderr. Non-`Splash` keybinding sections are likewise discarded with a warning; `[keybindings.Splash]` remains the active section.
 
 ## Environment Variables
 
@@ -214,7 +221,7 @@ cp .config/lazyxrp/config.toml "${XDG_CONFIG_HOME:-$HOME/.config}/lazyxrp/config
 | `LAZYXRP_DATA` | Override data directory |
 | `LAZYXRP_LOG_LEVEL` | Default file log filter (`tracing` `EnvFilter`) |
 
-> **Security:** `--seed` / `--mnemonic` appear in process listings (`ps`) and shell history. Prefer `XRPL_SEED` / `XRPL_MNEMONIC`. Copy `.env.example` to a local `.env` only — **never commit** `.env` (gitignored).
+> **Security:** `--seed` / `--mnemonic` appear in process listings (`ps`) and shell history. Prefer `XRPL_SEED` / `XRPL_MNEMONIC`. lazyxrp **does not load `.env` files**: values from `.env.example` (or a copied local `.env`) must be exported by your shell or an external shell tool. **Never commit** `.env` (gitignored).
 
 ## Development
 

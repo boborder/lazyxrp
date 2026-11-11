@@ -20,7 +20,7 @@
 
 ### ~~P-005: `config.rs` が 1 ファイルのまま~~ → 解決（2026-10-28）
 
-- `src/config.rs`（約 1530 行）を `src/config/mod.rs`（Config・ロード/マージ・env・パス・Flare セクション・複数領域にまたがるテスト）、`config/defaults.rs`（フォールバック定数・serde 既定値・`LedgerConfig` / `FlareFassetsConfig` の `Default`）、`config/keybindings.rs`、`config/styles.rs` に分割。純粋な移動のみで `crate::config::*` のパスは不変。
+- `src/config.rs`（約 1530 行）を `src/config/mod.rs`（Config・ロード/マージ・env・パス・Flare セクション・複数領域にまたがるテスト）、`config/defaults.rs`（フォールバック定数・serde 既定値・`LedgerConfig` / `FlareFassetsConfig` の `Default`）、`config/keybindings.rs` に分割。純粋な移動のみで `crate::config::*` のパスは不変。
 
 ### P-007: Xahau `NetworkID` の simulate 受理は未検証
 

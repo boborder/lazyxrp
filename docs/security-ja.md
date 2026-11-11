@@ -14,7 +14,7 @@ Generated: 2026-05-01 | Scope: コードベース全体（`src/`、`install.sh`�
 | I-2 | mainnet（`Network::is_production()`）の write は `--yes` または `skip_mainnet_prompt: true` が必須 | `poll.rs` / `submit.rs` の各 submit |
 | I-3 | write は必ず simulate → `tesSUCCESS` → `Sequence`/`Fee` 取得 → sign → submit。simulate なしで署名しない | `poll.rs` / `submit.rs` |
 | I-4 | `XRPL_SEED` / `XRPL_MNEMONIC` は `Config::new()` が poll / UI タスクを spawn する前に一度だけ取り出して env から除去（`take_secret_env`）。以降 `remove_var` は呼ばれない。Linux では起動時の `/proc/self/environ` ブロックは書き換わらず、同一 uid の読み手には見え続ける（既知の限界） | `config/mod.rs` |
-| I-5 | 設定優先順位: CLI > env > user `config.toml` > 組み込みデフォルト（`config/defaults.rs`。`config.default.toml` が供給するのはキーバインドとスタイルのみ）。資格情報は上位ソースが seed / mnemonic のどちらかを設定したら下位ソースの両方を破棄（同一階層で両方設定は `credential_from_secrets` がエラー） | `lib.rs` resolve 関数 + `config/mod.rs` (`layer_credentials`, `apply_cli_credentials`) |
+| I-5 | 設定優先順位: CLI > env > user `config.toml` > 組み込みデフォルト（`config/defaults.rs`。`config.default.toml` が供給するのはキーバインドのみ）。資格情報は上位ソースが seed / mnemonic のどちらかを設定したら下位ソースの両方を破棄（同一階層で両方設定は `credential_from_secrets` がエラー） | `lib.rs` resolve 関数 + `config/mod.rs` (`layer_credentials`, `apply_cli_credentials`) |
 | I-6 | WebSocket の ledger close トリガーは直前の poll から `MIN_POLL_INTERVAL`（10 s）以内なら poll しない。定期 tick は `poll_interval_ms`（下限 500 ms）に従う | `poll.rs` `drive_poll_loop` |
 | I-7 | `account_tx` の not-found は空リスト（エラーにしない） | `poll.rs` |
 | I-8 | `Tui::drop` は端末を復元し、drop 中に panic しない | `tui.rs` |
@@ -121,7 +121,7 @@ Generated: 2026-05-01 | Scope: コードベース全体（`src/`、`install.sh`�
 
 ソース監査のリード 14 件を順に確認し、以下を修正した（各テストは `docs/test.md` TC-175〜TC-182）。
 
-- **Flare RPC の https 強制・署名拒否（S-015 拡張, R-014）**: `FLARE_RPC_URL` / preset を `lib.rs::check_flare_endpoint` で検査。`http://` は `--allow-insecure-rpc` なしで拒否、署名資格情報（XRPL seed/mnemonic または Flare EVM 鍵 env）がある場合は `--allow-insecure-rpc` でも拒否。Core Vault 宛先は Flare RPC の応答が決めるため、2026-10-11 から `[flare.fassets] expected_core_vault`（運用者が別経路で確認した値）と一致しない限り署名しない（`flare::check_core_vault`、未設定も拒否）。
+- **Flare RPC の https 強制・署名拒否（S-015 拡張, R-014）**: `FLARE_RPC_URL` / preset を `lib.rs::check_flare_endpoint` で検査。`http://` は `--allow-insecure-rpc` なしで拒否、署名資格情報（XRPL seed/mnemonic または Flare EVM 鍵 env）がある場合は `--allow-insecure-rpc` でも拒否。Core Vault 宛先は Flare RPC の応答が決めるため、2026-10-11 から `[flare.fassets] expected_core_vault`（運用者が別経路で確認した値）と一致しない限り署名しない（`flare::check_core_vault`、未設定も拒否）。Minting Tag Manager の write も同様に `[flare.fassets] expected_tag_manager`（帯域外で検証した EVM address）を必須とし、未設定または RPC の回答との不一致を拒否する（`flare::check_tag_manager`）。
 - **node が決める Fee の上限**: `signing::MAX_NODE_FEE_DROPS`（2 XRP = 2,000,000 drops）超の Fee は署名前に拒否（TUI・CLI `Send` とも simulate 経路の `sequence_fee_ledger_from_simulate`）。CLI `Send` も simulate 必須（`tesSUCCESS` 以外は署名しない）、残高検査は `amount + fee` を `checked_add`。2026-10-11 から `parse::check_simulate_bound_to_request`（全 write 共通の `simulate_tx_requiring_tes_success` 内）で simulate の `Sequence` が要求値と一致し、`LastLedgerSequence` が `ledger_index` 超 `+ MAX_LLS_WINDOW`（100）以下であることも検査。残余: 窓は node 自身の `ledger_index` 基準。
 - **`xrp-ledger.toml` 取得（S-012 拡張）**: manifest 由来 domain を ASCII ホスト名のみに制限し、NFT 画像と同じガード付き取得（`nft_image::fetch_via`/`client_for_url`: private/loopback 拒否・DNS 固定・redirect 毎に再検査・上限 1 MiB）を使用。
 - **proxy 経由の DNS 固定バイパス**: `client_for_url` は `.no_proxy()`。**HTTP(S)_PROXY 必須環境では NFT 画像・toml の取得は失敗する（fail closed）**。private 判定に `100.64/10`・`192.0.0.0/24`・`198.18/15`・`240/4` を追加。

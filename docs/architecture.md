@@ -156,7 +156,9 @@ WebSocket ledger close coalesces poll triggers (`MIN_POLL_INTERVAL`). Scheduled 
 
 ### Config file (`Config::xrpl`)
 
-- Paths: `$XDG_CONFIG_HOME/lazyxrp/config.toml` → `~/.config/lazyxrp/config.toml`
+- Config file lookup: `$LAZYXRP_CONFIG/config.toml` when `LAZYXRP_CONFIG` is set; otherwise `$XDG_CONFIG_HOME/lazyxrp/config.toml` when `XDG_CONFIG_HOME` is set; otherwise `~/.config/lazyxrp/config.toml` on Linux/XDG systems, `~/Library/Application Support/lazyxrp/config.toml` on macOS, or `%LOCALAPPDATA%\lazyxrp\config.toml` on Windows. Final fallback: `./.config/config.toml`
+- `[paths]` (`Config::paths`, flattened at the TOML root): optional `data_dir` / `config_dir`. Defaults on Linux/XDG are `$XDG_DATA_HOME/lazyxrp` or `~/.local/share/lazyxrp` for data and the lookup above for config; both use `~/Library/Application Support/lazyxrp` on macOS and `%LOCALAPPDATA%\lazyxrp` on Windows. `LAZYXRP_DATA` / `LAZYXRP_CONFIG` take priority
+- Unknown keys warn on stderr but do not reject the file. Non-`Splash` keybinding sections warn that their bindings are discarded
 - Fields: `network`, `account`, `issuer`, `currency`, `currency_code`, `offer_limit`, `poll_interval_ms` (default 5000; raise for 24/7 dashboards), `slippage_bps` (Payment quote, default 100 = 1%), `oracles`, `oracle_pairs`, `[xrpl.signing]`, optional `rpc_server` / `ws_server`
 - Default issuer fallback (mainnet Bitstamp USD): `rvYAfWj5gh67oV6fW32ZzP3Aw4Eubs59B`
 - `currency_code`: optional; 160-bit hex (or 3-letter ISO) for `book_offers`. Unset = derived from `currency` (`quote_code()`); set it only when the code cannot be derived, e.g. an AMM LP token (`03…`)
@@ -170,6 +172,7 @@ WebSocket ledger close coalesces poll triggers (`MIN_POLL_INTERVAL`). Scheduled 
 | `fassets.execute` | `false` | Must be true for C3 `executeDirectMinting` and every Flare EVM write |
 | `fassets.evm_key_env` | `FLARE_EVM_KEY` | Env var name holding the Flare EVM key (read and removed at startup) |
 | `fassets.expected_core_vault` | _(unset)_ | XRPL Core Vault pin for C2 / `sa-memo` / `sa-call` Payments; the Flare RPC answer must equal it (unset / mismatch → refused) |
+| `fassets.expected_tag_manager` | _(unset)_ | `0x…` Minting Tag Manager EVM address pin, verified out of band; tag-manager writes are refused until set and the Flare RPC answer must equal it |
 | `wallet.address` | _(unset)_ | Optional `0x…` EVM address — Overview read panel (native FLR + FXRP); invalid hex fails config load |
 | `smart_accounts.expected_operator` | _(unset)_ | XRPL `r…` operator pin for Smart Account instruction Payments. Flare RPC's `getXrplProviderWallets()[0]` must equal it (unset / mismatch → refused). Verify out of band |
 

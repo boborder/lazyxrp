@@ -112,11 +112,10 @@ Cargo default prefix (~/.cargo/bin), including `cargo install --path .`:
 Optional — config and data (only if you want them gone):
 
   Linux / *BSD (typical XDG; no LAZYXRP_* overrides):
-    rm -rf ~/.config/lazyxrp ~/.local/share/com.kdheepak.lazyxrp
+    rm -rf ~/.config/lazyxrp ~/.local/share/lazyxrp
 
   macOS:
-    rm -rf "$HOME/Library/Application Support/lazyxrp" \
-           "$HOME/Library/Application Support/com.kdheepak.lazyxrp"
+    rm -rf "$HOME/Library/Application Support/lazyxrp"
 
   Custom paths: LAZYXRP_CONFIG / LAZYXRP_DATA, or data_dir / config_dir in config.toml.
 
@@ -216,13 +215,11 @@ fi
 if [ "$IS_TTY" = 1 ]; then
     BOLD="\033[1m"
     DIM="\033[2m"
-    ITALIC="\033[3m"
     GREEN="\033[32m"
     YELLOW="\033[33m"
     RED="\033[31m"
     CYAN="\033[36m"
     MAGENTA="\033[35m"
-    BLUE="\033[34m"
     WHITE="\033[97m"
     BG_BLUE="\033[44m"
     BG_GREEN="\033[42m"
@@ -232,8 +229,8 @@ if [ "$IS_TTY" = 1 ]; then
     HIDE_CURSOR="\033[?25l"
     SHOW_CURSOR="\033[?25h"
 else
-    BOLD="" DIM="" ITALIC=""
-    GREEN="" YELLOW="" RED="" CYAN="" MAGENTA="" BLUE="" WHITE=""
+    BOLD="" DIM=""
+    GREEN="" YELLOW="" RED="" CYAN="" MAGENTA="" WHITE=""
     BG_BLUE="" BG_GREEN="" BG_RED=""
     RESET="" CLEAR_LINE="" HIDE_CURSOR="" SHOW_CURSOR=""
 fi
@@ -924,7 +921,6 @@ detect_shell_profile() {
 # Interactive: ask. Non-interactive/CI: auto-append (CodeRabbit-style).
 setup_path() {
     local path_export fish_path_export
-    PATH_UPDATE_STATUS="not_needed"
     install_dir_in_path && return 0
 
     detect_shell_profile
@@ -932,7 +928,6 @@ setup_path() {
 
     if [ "$IS_TTY" = 1 ]; then
         if ! prompt_yn "Add ${BOLD}${INSTALL_DIR}${RESET} to PATH in ${SHELL_PROFILE}?" "y"; then
-            PATH_UPDATE_STATUS="skipped"
             printf '\n'
             printf '  %b%b ⚠  NOTE %b  %s is not in your PATH.\n' "$BG_BLUE" "$WHITE" "$RESET" "$INSTALL_DIR"
             printf '  Add manually:\n'
@@ -948,14 +943,12 @@ setup_path() {
             if [ ! -f "$SHELL_PROFILE" ]; then
                 touch "$SHELL_PROFILE" 2>/dev/null || {
                     warn "Failed to update PATH in $SHELL_PROFILE"
-                    PATH_UPDATE_STATUS="failed"
                     return 1
                 }
             fi
             if ! grep -qF "$fish_path_export" "$SHELL_PROFILE" 2>/dev/null; then
                 if ! printf '%s\n' "$fish_path_export" >> "$SHELL_PROFILE" 2>/dev/null; then
                     warn "Failed to update PATH in $SHELL_PROFILE"
-                    PATH_UPDATE_STATUS="failed"
                     return 1
                 fi
             fi
@@ -964,7 +957,6 @@ setup_path() {
             if [ ! -f "$SHELL_PROFILE" ]; then
                 touch "$SHELL_PROFILE" 2>/dev/null || {
                     warn "Failed to update PATH in $SHELL_PROFILE"
-                    PATH_UPDATE_STATUS="failed"
                     return 1
                 }
             fi
@@ -975,14 +967,12 @@ setup_path() {
                     printf '%s\n' "$path_export" >> "$SHELL_PROFILE"
                 ) 2>/dev/null; then
                     warn "Failed to update PATH in $SHELL_PROFILE"
-                    PATH_UPDATE_STATUS="failed"
                     return 1
                 fi
             fi
             ;;
     esac
 
-    PATH_UPDATE_STATUS="updated"
     ok "Added ${INSTALL_DIR} to PATH in ${SHELL_PROFILE}"
     warn "Restart your shell or run: ${SHELL_RELOAD_COMMAND}"
     return 0

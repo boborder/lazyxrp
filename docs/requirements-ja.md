@@ -48,7 +48,7 @@
 ### FR-07: 設定読み込み
 
 - 設定はファイルから読み込み、未指定時は既定値を利用すること。
-- 設定ファイル探索先は `$XDG_CONFIG_HOME/lazyxrp/config.toml` を優先し、未設定時は `~/.config/lazyxrp/config.toml` を利用すること。
+- `LAZYXRP_CONFIG` 設定時は `$LAZYXRP_CONFIG/config.toml` を利用すること。未設定時は `XDG_CONFIG_HOME` があれば `$XDG_CONFIG_HOME/lazyxrp/config.toml`、なければ OS 既定（Linux/XDG は `~/.config/lazyxrp/config.toml`、macOS は `~/Library/Application Support/lazyxrp/config.toml`、Windows は `%LOCALAPPDATA%\lazyxrp\config.toml`）を探索すること。
 - キーバインド（グローバル既定は `config.default.toml`、詳細は [`DESIGN.md`](../DESIGN.md)）と XRPL 接続情報（RPC/WS、通貨、issuer、poll 間隔）を扱えること。
 
 ## 4. 非機能要件（Non-Functional Requirements）
@@ -147,7 +147,7 @@
 - 署名用資格情報は次の優先順位で読み込めること。
   1. CLI `--seed` / `--mnemonic`
   2. 対応する環境変数 `XRPL_SEED` / `XRPL_MNEMONIC`
-  3. 設定ファイル `~/.config/lazyxrp/config.toml` の `[xrpl.signing] seed` / `mnemonic`
+  3. 解決された OS 別の `config.toml` にある `[xrpl.signing] seed` / `mnemonic`
 - BIP39 mnemonic は secp256k1、BIP44 account index 0 に対応すること。family seed の既存動作を維持すること。
 - 設定ファイルに平文保存する場合のリスクをドキュメントに明記すること。
 - 資格情報が設定されていない状態で書き込み系コマンドを実行した場合、明示的なエラーメッセージを返すこと。
